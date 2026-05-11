@@ -1,0 +1,4 @@
+widgets/
+*.pyc
+__pycache__/
+.venv/

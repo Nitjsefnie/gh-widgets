@@ -1,0 +1,13 @@
+[Unit]
+Description=Render self-hosted GitHub stat SVGs
+
+[Service]
+Type=oneshot
+Environment=GH_USER=YOUR_GH_USERNAME
+Environment=GH_TOKEN_FILE=/etc/gh-widgets.token
+Environment=OUT_DIR=/var/www/example.com/widgets
+Environment=THEME=tokyonight
+ExecStart=/usr/local/bin/render.py
+Nice=10
+StandardOutput=journal
+StandardError=journal
