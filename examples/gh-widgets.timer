@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly render of GitHub stat SVGs
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=2min
+Unit=gh-widgets.service
+
+[Install]
+WantedBy=timers.target
