@@ -108,9 +108,19 @@ every minute.
 
 - The streak counter walks newest→oldest contribution days and skips a single
   leading zero (today might not be logged yet, or your timezone is ahead of
-  UTC). It does **not** try to be cleverer than that.
+  UTC). A **second** zero is a real gap and ends the streak. It does **not**
+  try to be cleverer than that.
 - Token only needs read access. If you accidentally grant `repo` write
   scope, that's on you.
+
+## Tests
+
+```sh
+python3 -m unittest discover -v
+```
+
+Stdlib `unittest`, no network — the streak and external-contribution maths run
+against hand-built calendars. Nothing to install.
 
 ## License
 
