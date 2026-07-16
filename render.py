@@ -2,10 +2,12 @@
 """
 gh-widgets — render self-hosted GitHub stat SVGs.
 
-Writes three SVGs to OUT_DIR:
+Writes four SVGs to OUT_DIR:
   stats.svg      followers, repos, stars, last-year contributions
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
+  external.svg   PRs opened to repos outside your own account and orgs,
+                 how many merged, and how many repos you reached
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -87,7 +89,8 @@ def fetch(token, login):
         login
         name
         followers { totalCount }
-        repositories(first: 100, ownerAffiliations: OWNER, isFork: false) {
+        organizations(first: 100) { nodes { login } }
+        repositories(first: 100, ownerAffiliations: OWNER, isFork: false, privacy: PUBLIC) {
           totalCount
           nodes {
             stargazerCount
@@ -106,6 +109,57 @@ def fetch(token, login):
     }
     """
     return gql(token, q, {"login": login})["user"]
+
+
+def fetch_pull_requests(token, login, max_pages=50):
+    """Page through every PR the user has authored.
+
+    There is no server-side "not in these orgs" filter, so we pull the list
+    and filter locally. max_pages is a runaway guard, not a real limit.
+    """
+    q = """
+    query($login: String!, $cursor: String) {
+      user(login: $login) {
+        pullRequests(first: 100, after: $cursor,
+                     states: [OPEN, CLOSED, MERGED],
+                     orderBy: {field: CREATED_AT, direction: DESC}) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            merged
+            repository { nameWithOwner isPrivate owner { login } }
+          }
+        }
+      }
+    }
+    """
+    prs = []
+    cursor = None
+    for _ in range(max_pages):
+        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
+        prs.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        cursor = page["pageInfo"]["endCursor"]
+    return prs
+
+
+def external_contributions(prs, login, orgs):
+    """Count PRs to repos owned by neither the user nor any org they belong to.
+
+    Private repos are excluded: they can't be shown off, and a viewer of the
+    SVG can't verify them.
+    """
+    insiders = {login.casefold()} | {o.casefold() for o in orgs}
+    opened = merged = 0
+    repos = set()
+    for pr in prs:
+        repo = pr["repository"]
+        if repo["isPrivate"] or repo["owner"]["login"].casefold() in insiders:
+            continue
+        opened += 1
+        merged += bool(pr["merged"])
+        repos.add(repo["nameWithOwner"])
+    return opened, merged, len(repos)
 
 
 def compute_streak(weeks):
@@ -222,6 +276,29 @@ def render_streak(C, current, longest, total):
     return base_card(C, 420, 170, body)
 
 
+def render_external(C, opened, merged, repos):
+    col_centers = (84, 210, 336)
+    sep_xs = (147, 273)
+    rate = f"{merged / opened * 100:.0f}% merged" if opened else "no external PRs yet"
+
+    def big(x_center, label, value, color):
+        return f"""
+    <text x="{x_center}" y="112" text-anchor="middle" fill="{color}" font-size="36" font-weight="600">{value}</text>
+    <text x="{x_center}" y="138" text-anchor="middle" fill="{C['dim']}" font-size="11">{label}</text>"""
+
+    body = f"""
+  <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external contributions</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">pull requests to other people's repos</text>
+  <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
+  {big(col_centers[0], 'opened', fmt_short(opened), C['blue'])}
+  {big(col_centers[1], 'merged', fmt_short(merged), C['green'])}
+  {big(col_centers[2], 'repos', fmt_short(repos), C['purple'])}
+  <line x1="{sep_xs[0]}" y1="90" x2="{sep_xs[0]}" y2="135" stroke="{C['border']}"/>
+  <line x1="{sep_xs[1]}" y1="90" x2="{sep_xs[1]}" y2="135" stroke="{C['border']}"/>
+  <text x="210" y="160" text-anchor="middle" fill="{C['dim']}" font-size="11">{rate}</text>"""
+    return base_card(C, 420, 178, body)
+
+
 def render_languages(C, langs):
     top = langs[:5]
     pct_sum = sum(p for _, _, p, _ in top) or 1
@@ -285,15 +362,22 @@ def main():
     current, longest = compute_streak(cal["weeks"])
     langs = aggregate_languages(user["repositories"]["nodes"])
 
+    orgs = [o["login"] for o in user["organizations"]["nodes"]]
+    prs = fetch_pull_requests(token, args.user)
+    ext_opened, ext_merged, ext_repos = external_contributions(prs, user["login"], orgs)
+
     (out / "stats.svg").write_text(render_stats(C, user, total_stars, year_contribs))
     (out / "streak.svg").write_text(render_streak(C, current, longest, year_contribs))
     (out / "languages.svg").write_text(render_languages(C, langs))
+    (out / "external.svg").write_text(
+        render_external(C, ext_opened, ext_merged, ext_repos))
     (out / "last-updated.txt").write_text(
         datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
 
-    print(f"wrote {out}/{{stats,streak,languages}}.svg "
-          f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest})")
+    print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
+          f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
+          f"external={ext_merged}/{ext_opened} in {ext_repos} repos)")
 
 
 if __name__ == "__main__":

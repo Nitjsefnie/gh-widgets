@@ -1,12 +1,13 @@
 # gh-widgets
 
-Self-hosted alternative to `github-readme-stats` and friends. Renders three
+Self-hosted alternative to `github-readme-stats` and friends. Renders four
 static SVGs about your GitHub profile on a cron — no JavaScript, no third-party
 service, no flakiness.
 
 ![stats](https://nitjsefni.eu/widgets/stats.svg)
 ![streak](https://nitjsefni.eu/widgets/streak.svg)
 ![languages](https://nitjsefni.eu/widgets/languages.svg)
+![external](https://nitjsefni.eu/widgets/external.svg)
 
 ## Why
 
@@ -77,10 +78,31 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 <img src="https://your-domain/widgets/stats.svg"     width="420" alt="GitHub stats" />
 <img src="https://your-domain/widgets/streak.svg"    width="420" alt="Contribution streak" />
 <img src="https://your-domain/widgets/languages.svg" width="420" alt="Top languages" />
+<img src="https://your-domain/widgets/external.svg"  width="420" alt="External contributions" />
 ```
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
 caches images for ~10 minutes, so README updates lag by that much).
+
+## The `external` widget
+
+`external.svg` answers "what have I done in *other people's* repos" — the
+number profile stats usually bury, since a repo you own and a repo you
+contributed to both just count as "a repo".
+
+- **opened** — PRs you authored in repos owned by neither you nor any org you
+  belong to.
+- **merged** — how many of those were merged. Not "accepted": merged is what
+  the API actually records, so that's what it says.
+- **repos** — how many distinct external repos you reached.
+
+Your orgs are read from the API and excluded automatically, so it keeps working
+when you join or leave one. Private repos are left out — nobody looking at the
+SVG could verify them.
+
+It pages through your whole PR history (100 per request), so a run costs a few
+extra API calls. A non-issue on an hourly timer; worth knowing if you run it
+every minute.
 
 ## Caveats
 
