@@ -163,21 +163,24 @@ def external_contributions(prs, login, orgs):
 
 
 def compute_streak(weeks):
-    """Walk newest->oldest; skip leading zeros (today/tz quirks), then
-    count consecutive non-zero days. Also returns longest streak."""
+    """Walk newest->oldest; skip at most ONE leading zero (today may not be
+    logged yet, or the calendar's UTC day is ahead of yours), then count
+    consecutive non-zero days. Also returns longest streak."""
     days = []
     for w in weeks:
         for d in w["contributionDays"]:
             days.append((d["date"], d["contributionCount"]))
     days.sort()
+    counts = [c for _, c in reversed(days)]
+    # Exactly one zero is forgiven, and only at the newest end. A second zero
+    # is a real gap: the streak ended, so the current streak is 0.
+    if counts and counts[0] == 0:
+        counts = counts[1:]
     current = 0
-    counting = False
-    for _, count in reversed(days):
-        if count > 0:
-            counting = True
-            current += 1
-        elif counting:
+    for count in counts:
+        if count == 0:
             break
+        current += 1
     longest = 0
     run = 0
     for _, count in days:
