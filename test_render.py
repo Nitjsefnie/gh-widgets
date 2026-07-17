@@ -129,31 +129,40 @@ class ExternalIssues(unittest.TestCase):
             ("MyOrg/thing", "CLOSED", "COMPLETED", False),    # own org
             ("someone/theirs", "CLOSED", "COMPLETED", False), # external
         )
-        # one external issue, and it's completed
+        # one external issue, in one external repo, maintainer-accepted
         self.assertEqual(
-            render.external_issues(issues, "me", ["MyOrg"]), (1, 1))
+            render.external_issues(issues, "me", ["MyOrg"]), (1, 1, 1))
 
     def test_org_match_is_case_insensitive(self):
         issues = self.issues(("MYORG/thing", "CLOSED", "COMPLETED", False))
         self.assertEqual(
-            render.external_issues(issues, "me", ["myorg"]), (0, 0))
+            render.external_issues(issues, "me", ["myorg"]), (0, 0, 0))
 
     def test_excludes_private_repos(self):
         issues = self.issues(("someone/secret", "CLOSED", "COMPLETED", True))
-        self.assertEqual(render.external_issues(issues, "me", []), (0, 0))
+        self.assertEqual(render.external_issues(issues, "me", []), (0, 0, 0))
 
-    def test_only_completed_closures_count_as_completed(self):
-        # OPEN and NOT_PLANNED issues are opened-but-not-completed; only a
-        # CLOSED issue with stateReason COMPLETED is the merged-PR analog.
+    def test_only_completed_closures_count_as_accepted(self):
+        # OPEN and NOT_PLANNED issues are opened-but-not-accepted; only a
+        # CLOSED issue with stateReason COMPLETED counts as maintainer-
+        # accepted (the merged-PR analog).
         issues = self.issues(
             ("a/x", "CLOSED", "COMPLETED", False),
             ("a/y", "CLOSED", "NOT_PLANNED", False),
             ("a/z", "OPEN", None, False),
         )
-        self.assertEqual(render.external_issues(issues, "me", []), (3, 1))
+        opened, accepted, _ = render.external_issues(issues, "me", [])
+        self.assertEqual((opened, accepted), (3, 1))
+
+    def test_repos_are_deduplicated(self):
+        issues = self.issues(
+            ("a/x", "CLOSED", "COMPLETED", False),
+            ("a/x", "OPEN", None, False),
+        )
+        self.assertEqual(render.external_issues(issues, "me", [])[2], 1)
 
     def test_no_external_issues(self):
-        self.assertEqual(render.external_issues([], "me", []), (0, 0))
+        self.assertEqual(render.external_issues([], "me", []), (0, 0, 0))
 
 
 if __name__ == "__main__":

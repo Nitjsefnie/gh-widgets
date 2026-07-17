@@ -6,9 +6,9 @@ Writes four SVGs to OUT_DIR:
   stats.svg      followers, repos, stars, last-year contributions
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
-  external.svg   PRs opened to repos outside your own account and orgs,
-                 how many merged, how many repos you reached, and how
-                 many issues you filed there got marked completed
+  external.svg   PRs opened to repos outside your own account and orgs
+                 (how many merged, how many repos) and issues filed there
+                 (how many the maintainers accepted, how many repos)
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -204,20 +204,25 @@ def external_issues(issues, login, orgs):
     belong to. Same external predicate as external_contributions: private
     repos excluded, insiders (self + orgs) excluded.
 
-    Returns (opened, completed): total external issues authored, and how many
-    of those were closed with stateReason COMPLETED (i.e. accepted/resolved,
-    the issue analog of a merged PR — as opposed to NOT_PLANNED closures).
+    Returns (opened, accepted, repos), mirroring external_contributions:
+    total external issues authored, how many the MAINTAINER closed as
+    completed (state CLOSED + stateReason COMPLETED — the issue analog of a
+    merged PR, as opposed to NOT_PLANNED closures), and how many distinct
+    external repos they touched. "maintainer-accepted" names the maintainer
+    closing the report as done; it does not claim the author did the fixing.
     """
     insiders = {login.casefold()} | {o.casefold() for o in orgs}
-    opened = completed = 0
+    opened = accepted = 0
+    repos = set()
     for issue in issues:
         repo = issue["repository"]
         if repo["isPrivate"] or repo["owner"]["login"].casefold() in insiders:
             continue
         opened += 1
+        repos.add(repo["nameWithOwner"])
         if issue["state"] == "CLOSED" and issue["stateReason"] == "COMPLETED":
-            completed += 1
-    return opened, completed
+            accepted += 1
+    return opened, accepted, len(repos)
 
 
 def compute_streak(weeks):
@@ -337,28 +342,44 @@ def render_streak(C, current, longest, total):
     return base_card(C, 420, 170, body)
 
 
-def render_external(C, opened, merged, repos, issues_completed):
+def render_external(C, pr_opened, pr_merged, pr_repos,
+                    iss_opened, iss_accepted, iss_repos):
     col_centers = (84, 210, 336)
     sep_xs = (147, 273)
-    rate = f"{merged / opened * 100:.0f}% merged" if opened else "no external PRs yet"
-    footer = f"{rate}  ·  {fmt_short(issues_completed)} issues completed"
+    merge_rate = f"{pr_merged / pr_opened * 100:.0f}% merged" if pr_opened else "no external PRs yet"
+    accept_rate = (f"{iss_accepted / iss_opened * 100:.0f}% maintainer-accepted"
+                   if iss_opened else "no external issues yet")
+    footer = f"{merge_rate}  ·  {accept_rate}"
 
-    def big(x_center, label, value, color):
+    def big(x_center, label, value, color, vy):
         return f"""
-    <text x="{x_center}" y="112" text-anchor="middle" fill="{color}" font-size="36" font-weight="600">{value}</text>
-    <text x="{x_center}" y="138" text-anchor="middle" fill="{C['dim']}" font-size="11">{label}</text>"""
+    <text x="{x_center}" y="{vy}" text-anchor="middle" fill="{color}" font-size="36" font-weight="600">{value}</text>
+    <text x="{x_center}" y="{vy + 26}" text-anchor="middle" fill="{C['dim']}" font-size="11">{label}</text>"""
+
+    def seps(y1, y2):
+        # Bracket only the big numbers, ending well above the label row so a
+        # wide label (e.g. "maintainer-accepted") never crosses a divider.
+        return (f"""
+  <line x1="{sep_xs[0]}" y1="{y1}" x2="{sep_xs[0]}" y2="{y2}" stroke="{C['border']}"/>
+  <line x1="{sep_xs[1]}" y1="{y1}" x2="{sep_xs[1]}" y2="{y2}" stroke="{C['border']}"/>""")
 
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external contributions</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">pull requests &amp; issues to other people's repos</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">to repos outside your own account and orgs</text>
   <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
-  {big(col_centers[0], 'opened', fmt_short(opened), C['blue'])}
-  {big(col_centers[1], 'merged', fmt_short(merged), C['green'])}
-  {big(col_centers[2], 'repos', fmt_short(repos), C['purple'])}
-  <line x1="{sep_xs[0]}" y1="90" x2="{sep_xs[0]}" y2="135" stroke="{C['border']}"/>
-  <line x1="{sep_xs[1]}" y1="90" x2="{sep_xs[1]}" y2="135" stroke="{C['border']}"/>
-  <text x="210" y="160" text-anchor="middle" fill="{C['dim']}" font-size="11">{footer}</text>"""
-    return base_card(C, 420, 178, body)
+  <text x="20" y="86" fill="{C['dim']}" font-size="11" font-weight="600">pull requests</text>
+  {big(col_centers[0], 'opened', fmt_short(pr_opened), C['blue'], 124)}
+  {big(col_centers[1], 'merged', fmt_short(pr_merged), C['green'], 124)}
+  {big(col_centers[2], 'repos', fmt_short(pr_repos), C['purple'], 124)}
+  {seps(98, 136)}
+  <text x="20" y="182" fill="{C['dim']}" font-size="11" font-weight="600">issues</text>
+  {big(col_centers[0], 'opened', fmt_short(iss_opened), C['blue'], 220)}
+  {big(col_centers[1], 'maintainer-accepted', fmt_short(iss_accepted), C['green'], 220)}
+  {big(col_centers[2], 'repos', fmt_short(iss_repos), C['purple'], 220)}
+  {seps(194, 232)}
+  <line x1="20" y1="262" x2="400" y2="262" stroke="{C['border']}"/>
+  <text x="210" y="282" text-anchor="middle" fill="{C['dim']}" font-size="11">{footer}</text>"""
+    return base_card(C, 420, 298, body)
 
 
 def render_languages(C, langs):
@@ -428,13 +449,15 @@ def main():
     prs = fetch_pull_requests(token, args.user)
     ext_opened, ext_merged, ext_repos = external_contributions(prs, user["login"], orgs)
     issues = fetch_issues(token, args.user)
-    ext_issues_opened, ext_issues_completed = external_issues(issues, user["login"], orgs)
+    ext_iss_opened, ext_iss_accepted, ext_iss_repos = external_issues(
+        issues, user["login"], orgs)
 
     (out / "stats.svg").write_text(render_stats(C, user, total_stars, year_contribs))
     (out / "streak.svg").write_text(render_streak(C, current, longest, year_contribs))
     (out / "languages.svg").write_text(render_languages(C, langs))
     (out / "external.svg").write_text(
-        render_external(C, ext_opened, ext_merged, ext_repos, ext_issues_completed))
+        render_external(C, ext_opened, ext_merged, ext_repos,
+                        ext_iss_opened, ext_iss_accepted, ext_iss_repos))
     (out / "last-updated.txt").write_text(
         datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
@@ -442,7 +465,7 @@ def main():
     print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
           f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
           f"external={ext_merged}/{ext_opened} in {ext_repos} repos "
-          f"issues={ext_issues_completed}/{ext_issues_opened})")
+          f"issues={ext_iss_accepted}/{ext_iss_opened} in {ext_iss_repos} repos)")
 
 
 if __name__ == "__main__":

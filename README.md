@@ -88,20 +88,31 @@ caches images for ~10 minutes, so README updates lag by that much).
 
 `external.svg` answers "what have I done in *other people's* repos" — the
 number profile stats usually bury, since a repo you own and a repo you
-contributed to both just count as "a repo".
+contributed to both just count as "a repo". It has two parallel rows,
+**pull requests** and **issues**, each with three figures.
+
+Pull requests:
 
 - **opened** — PRs you authored in repos owned by neither you nor any org you
   belong to.
-- **merged** — how many of those were merged. Not "accepted": merged is what
-  the API actually records, so that's what it says.
+- **merged** — how many of those were merged. Merged is what the API actually
+  records, so that's what it says.
 - **repos** — how many distinct external repos you reached.
 
-The footer pairs the PR merge rate with **issues completed** — issues you
-filed in those same external repos that got closed with a `COMPLETED` state
-reason (the issue analog of a merged PR; `NOT_PLANNED` closures don't count).
+Issues (the same external predicate — repos owned by neither you nor your
+orgs, private repos excluded):
+
+- **opened** — issues you filed in those external repos.
+- **maintainer-accepted** — how many the maintainer closed as completed
+  (state `CLOSED` + stateReason `COMPLETED`; `NOT_PLANNED` closures don't
+  count). It's the issue analog of a merged PR — and the wording is
+  deliberate: *you* opened the report, the *maintainer* accepted it, so it
+  doesn't claim you did the fixing.
+- **repos** — how many distinct external repos those issues touched.
+
 Issues come from the GraphQL `user.issues` connection, which returns issues
-only, so pull requests are never double-counted. The same external predicate
-applies (repos owned by neither you nor your orgs; private repos excluded).
+only, so pull requests are never double-counted. The footer pairs the two
+rows' success rates: PR merge rate and the maintainer-accepted rate.
 
 Your orgs are read from the API and excluded automatically, so it keeps working
 when you join or leave one. Private repos are left out — nobody looking at the
