@@ -96,13 +96,20 @@ contributed to both just count as "a repo".
   the API actually records, so that's what it says.
 - **repos** — how many distinct external repos you reached.
 
+The footer pairs the PR merge rate with **issues completed** — issues you
+filed in those same external repos that got closed with a `COMPLETED` state
+reason (the issue analog of a merged PR; `NOT_PLANNED` closures don't count).
+Issues come from the GraphQL `user.issues` connection, which returns issues
+only, so pull requests are never double-counted. The same external predicate
+applies (repos owned by neither you nor your orgs; private repos excluded).
+
 Your orgs are read from the API and excluded automatically, so it keeps working
 when you join or leave one. Private repos are left out — nobody looking at the
 SVG could verify them.
 
-It pages through your whole PR history (100 per request), so a run costs a few
-extra API calls. A non-issue on an hourly timer; worth knowing if you run it
-every minute.
+It pages through your whole PR *and* issue history (100 per request), so a run
+costs a few extra API calls. A non-issue on an hourly timer; worth knowing if
+you run it every minute.
 
 ## Caveats
 

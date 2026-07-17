@@ -7,7 +7,8 @@ Writes four SVGs to OUT_DIR:
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
   external.svg   PRs opened to repos outside your own account and orgs,
-                 how many merged, and how many repos you reached
+                 how many merged, how many repos you reached, and how
+                 many issues you filed there got marked completed
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -162,6 +163,63 @@ def external_contributions(prs, login, orgs):
     return opened, merged, len(repos)
 
 
+def fetch_issues(token, login, max_pages=50):
+    """Page through every ISSUE the user has authored.
+
+    Mirrors fetch_pull_requests: no server-side "not in these orgs" filter,
+    so we pull the list and filter locally. The GraphQL `issues` connection
+    returns issues ONLY (pull requests live under `pullRequests`), so there
+    is no PR double-counting to guard against here. max_pages is a runaway
+    guard, not a real limit.
+    """
+    q = """
+    query($login: String!, $cursor: String) {
+      user(login: $login) {
+        issues(first: 100, after: $cursor,
+               states: [OPEN, CLOSED],
+               orderBy: {field: CREATED_AT, direction: DESC}) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            state
+            stateReason
+            repository { nameWithOwner isPrivate owner { login } }
+          }
+        }
+      }
+    }
+    """
+    issues = []
+    cursor = None
+    for _ in range(max_pages):
+        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["issues"]
+        issues.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        cursor = page["pageInfo"]["endCursor"]
+    return issues
+
+
+def external_issues(issues, login, orgs):
+    """Count issues filed in repos owned by neither the user nor any org they
+    belong to. Same external predicate as external_contributions: private
+    repos excluded, insiders (self + orgs) excluded.
+
+    Returns (opened, completed): total external issues authored, and how many
+    of those were closed with stateReason COMPLETED (i.e. accepted/resolved,
+    the issue analog of a merged PR — as opposed to NOT_PLANNED closures).
+    """
+    insiders = {login.casefold()} | {o.casefold() for o in orgs}
+    opened = completed = 0
+    for issue in issues:
+        repo = issue["repository"]
+        if repo["isPrivate"] or repo["owner"]["login"].casefold() in insiders:
+            continue
+        opened += 1
+        if issue["state"] == "CLOSED" and issue["stateReason"] == "COMPLETED":
+            completed += 1
+    return opened, completed
+
+
 def compute_streak(weeks):
     """Walk newest->oldest; skip at most ONE leading zero (today may not be
     logged yet, or the calendar's UTC day is ahead of yours), then count
@@ -279,10 +337,11 @@ def render_streak(C, current, longest, total):
     return base_card(C, 420, 170, body)
 
 
-def render_external(C, opened, merged, repos):
+def render_external(C, opened, merged, repos, issues_completed):
     col_centers = (84, 210, 336)
     sep_xs = (147, 273)
     rate = f"{merged / opened * 100:.0f}% merged" if opened else "no external PRs yet"
+    footer = f"{rate}  ·  {fmt_short(issues_completed)} issues completed"
 
     def big(x_center, label, value, color):
         return f"""
@@ -291,14 +350,14 @@ def render_external(C, opened, merged, repos):
 
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external contributions</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">pull requests to other people's repos</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">pull requests &amp; issues to other people's repos</text>
   <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
   {big(col_centers[0], 'opened', fmt_short(opened), C['blue'])}
   {big(col_centers[1], 'merged', fmt_short(merged), C['green'])}
   {big(col_centers[2], 'repos', fmt_short(repos), C['purple'])}
   <line x1="{sep_xs[0]}" y1="90" x2="{sep_xs[0]}" y2="135" stroke="{C['border']}"/>
   <line x1="{sep_xs[1]}" y1="90" x2="{sep_xs[1]}" y2="135" stroke="{C['border']}"/>
-  <text x="210" y="160" text-anchor="middle" fill="{C['dim']}" font-size="11">{rate}</text>"""
+  <text x="210" y="160" text-anchor="middle" fill="{C['dim']}" font-size="11">{footer}</text>"""
     return base_card(C, 420, 178, body)
 
 
@@ -368,19 +427,22 @@ def main():
     orgs = [o["login"] for o in user["organizations"]["nodes"]]
     prs = fetch_pull_requests(token, args.user)
     ext_opened, ext_merged, ext_repos = external_contributions(prs, user["login"], orgs)
+    issues = fetch_issues(token, args.user)
+    ext_issues_opened, ext_issues_completed = external_issues(issues, user["login"], orgs)
 
     (out / "stats.svg").write_text(render_stats(C, user, total_stars, year_contribs))
     (out / "streak.svg").write_text(render_streak(C, current, longest, year_contribs))
     (out / "languages.svg").write_text(render_languages(C, langs))
     (out / "external.svg").write_text(
-        render_external(C, ext_opened, ext_merged, ext_repos))
+        render_external(C, ext_opened, ext_merged, ext_repos, ext_issues_completed))
     (out / "last-updated.txt").write_text(
         datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
 
     print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
           f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
-          f"external={ext_merged}/{ext_opened} in {ext_repos} repos)")
+          f"external={ext_merged}/{ext_opened} in {ext_repos} repos "
+          f"issues={ext_issues_completed}/{ext_issues_opened})")
 
 
 if __name__ == "__main__":
