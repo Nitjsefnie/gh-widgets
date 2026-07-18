@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ THEMES = {
 }
 
 
-def gql(token, query, variables=None):
+def gql(token, query, variables=None, retries=3):
     req = urllib.request.Request(
         "https://api.github.com/graphql",
         method="POST",
@@ -76,15 +77,40 @@ def gql(token, query, variables=None):
             "User-Agent": "gh-widgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
-        body = json.loads(r.read())
-    if "errors" in body:
-        raise RuntimeError(f"GraphQL errors: {body['errors']}")
-    return body["data"]
+    # GitHub intermittently answers the contribution-calendar query with
+    # RESOURCE_LIMITS_EXCEEDED under load (observed 2026-07-18: four hourly
+    # runs red, then the identical query succeeded minutes later). Transient
+    # server-side conditions get a few retries; real errors fail fast.
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = json.loads(r.read())
+        except urllib.error.URLError:
+            if attempt == retries:
+                raise
+            time.sleep(5 * (attempt + 1))
+            continue
+        if "errors" in body:
+            transient = all(
+                e.get("type") in ("RESOURCE_LIMITS_EXCEEDED", "SERVICE_UNAVAILABLE")
+                for e in body["errors"]
+            )
+            if transient and attempt < retries:
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise RuntimeError(f"GraphQL errors: {body['errors']}")
+        return body["data"]
+    raise RuntimeError("unreachable: gql retry loop exhausted")
 
 
 def fetch(token, login):
-    q = """
+    # Two requests, not one: GitHub's GraphQL node-limit estimator started
+    # rejecting the combined repos×languages + full-calendar query with
+    # RESOURCE_LIMITS_EXCEEDED (first seen 2026-07-18, every hourly run red).
+    # Splitting the calendar into its own request keeps each query far below
+    # the limit; the results are merged into the same shape the renderers
+    # already consume.
+    q_core = """
     query($login: String!) {
       user(login: $login) {
         login
@@ -100,6 +126,12 @@ def fetch(token, login):
             }
           }
         }
+      }
+    }
+    """
+    q_calendar = """
+    query($login: String!) {
+      user(login: $login) {
         contributionsCollection {
           contributionCalendar {
             totalContributions
@@ -109,7 +141,10 @@ def fetch(token, login):
       }
     }
     """
-    return gql(token, q, {"login": login})["user"]
+    user = gql(token, q_core, {"login": login})["user"]
+    user["contributionsCollection"] = gql(token, q_calendar, {"login": login})[
+        "user"]["contributionsCollection"]
+    return user
 
 
 def fetch_pull_requests(token, login, max_pages=50):
