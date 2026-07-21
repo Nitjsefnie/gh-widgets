@@ -15,24 +15,34 @@ Configuration (env vars or CLI flags, in that order of precedence):
   GH_TOKEN    (required) Personal access token with `read:user` + `public_repo`
               (can also be read from a file via --token-file or GH_TOKEN_FILE)
   OUT_DIR     where to write the SVGs (default: ./widgets)
+  CACHE_FILE  JSON cache of immutable data (default: /var/lib/gh-widgets/cache.json)
   THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
+
+  --resync    discard the cache and refetch everything (wired to run weekly,
+              so no correctness claim rests permanently on MERGED being one-way)
 
 The SVGs are static files — serve them from any web server with
 `Cache-Control: must-revalidate` or similar, and embed by URL.
 
-Designed to fail gracefully: if a run fails (API rate limit, network),
-existing SVGs keep serving and the next cron run will recover.
+Designed to fail gracefully. Settled calendar days and MERGED PRs are
+immutable, so they are cached and only the mutable slice (the trailing 7
+days, OPEN/CLOSED PRs, issues) is refetched each run — the full-year
+calendar query was getting killed with RESOURCE_LIMITS_EXCEEDED. A run
+whose fetches still fail renders from the cache, stamps the cache
+timestamp on every card, and exits 0; with no cache to fall back on it
+exits non-zero and the existing SVGs keep serving.
 
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 FONT = ('font-family="JetBrains Mono, ui-monospace, '
@@ -64,6 +74,66 @@ THEMES = {
         "pink":   "#ff7b72", "green": "#3fb950", "gold":   "#d29922",
     },
 }
+
+
+CACHE_VERSION = 1
+DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
+
+
+def load_cache(path):
+    """Read the JSON cache. A missing, unreadable, corrupt, or
+    schema-mismatched cache is not an error: it degrades to a full fetch."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
+        return {}
+    return data
+
+
+def save_cache(path, payload):
+    """Best-effort atomic write: temp file in the same directory, then
+    os.replace onto the target. A failed save must not fail the run."""
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload))
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
+
+
+def cache_complete(cache):
+    """The durability fallback can render only if every input is cached."""
+    return all(k in cache
+               for k in ("fetched_at", "user", "calendar_days", "prs", "issues"))
+
+
+def prune_days(days, now):
+    """Drop days older than the trailing year so the merged history matches
+    what a full calendar fetch (GitHub's default one-year window) returns."""
+    try:
+        cutoff = now.date().replace(year=now.year - 1)
+    except ValueError:  # Feb 29 -> Feb 28
+        cutoff = now.date().replace(year=now.year - 1, day=28)
+    return {d: c for d, c in days.items() if date.fromisoformat(d) >= cutoff}
+
+
+def calendar_from_days(days):
+    """Rebuild the contributionCalendar structure the renderers consume
+    ({totalContributions, weeks}) from a date -> count map. Weeks start on
+    Sunday, matching GitHub's payload; compute_streak only reads the days."""
+    weeks = []
+    week = None
+    for d in sorted(days):
+        if week is None or date.fromisoformat(d).weekday() == 6:
+            week = {"contributionDays": []}
+            weeks.append(week)
+        week["contributionDays"].append(
+            {"date": d, "contributionCount": days[d]})
+    return {"totalContributions": sum(days.values()), "weeks": weeks}
 
 
 def gql(token, query, variables=None, retries=3):
@@ -103,13 +173,17 @@ def gql(token, query, variables=None, retries=3):
     raise RuntimeError("unreachable: gql retry loop exhausted")
 
 
-def fetch(token, login):
+def fetch(token, login, cached_days=None):
     # Two requests, not one: GitHub's GraphQL node-limit estimator started
     # rejecting the combined repos×languages + full-calendar query with
     # RESOURCE_LIMITS_EXCEEDED (first seen 2026-07-18, every hourly run red).
-    # Splitting the calendar into its own request keeps each query far below
-    # the limit; the results are merged into the same shape the renderers
-    # already consume.
+    # Splitting the calendar into its own request was not enough — the
+    # full-year calendar query alone now trips the limit — so with a warm
+    # cache the calendar is fetched as a trailing 7-day window (the only days
+    # that can still move) and merged onto the cached day history keyed by
+    # date. The merged structure keeps the exact shape the renderers already
+    # consume. Returns (user, days); `days` is the merged date -> count map
+    # to persist in the cache.
     q_core = """
     query($login: String!) {
       user(login: $login) {
@@ -129,54 +203,110 @@ def fetch(token, login):
       }
     }
     """
-    q_calendar = """
-    query($login: String!) {
-      user(login: $login) {
-        contributionsCollection {
-          contributionCalendar {
-            totalContributions
-            weeks { contributionDays { date contributionCount } }
+    user = gql(token, q_core, {"login": login})["user"]
+    now = datetime.now(timezone.utc)
+    if cached_days is None:
+        # Cold cache (or --resync): full one-year calendar, the default
+        # contributionsCollection window.
+        q_calendar = """
+        query($login: String!) {
+          user(login: $login) {
+            contributionsCollection {
+              contributionCalendar {
+                totalContributions
+                weeks { contributionDays { date contributionCount } }
+              }
+            }
           }
         }
+        """
+        cal = gql(token, q_calendar, {"login": login})[
+            "user"]["contributionsCollection"]["contributionCalendar"]
+        days = {d["date"]: d["contributionCount"]
+                for w in cal["weeks"] for d in w["contributionDays"]}
+    else:
+        q_window = """
+        query($login: String!, $from: DateTime!, $to: DateTime!) {
+          user(login: $login) {
+            contributionsCollection(from: $from, to: $to) {
+              contributionCalendar {
+                totalContributions
+                weeks { contributionDays { date contributionCount } }
+              }
+            }
+          }
+        }
+        """
+        cal = gql(token, q_window, {
+            "login": login,
+            "from": (now - timedelta(days=7)).isoformat(timespec="seconds"),
+            "to": now.isoformat(timespec="seconds"),
+        })["user"]["contributionsCollection"]["contributionCalendar"]
+        days = dict(cached_days)
+        for w in cal["weeks"]:
+            for d in w["contributionDays"]:
+                days[d["date"]] = d["contributionCount"]
+    days = prune_days(days, now)
+    user["contributionsCollection"] = {
+        "contributionCalendar": calendar_from_days(days)}
+    return user, days
+
+
+PR_QUERY = """
+query($login: String!, $cursor: String) {
+  user(login: $login) {
+    pullRequests(first: 100, after: $cursor,
+                 states: %s,
+                 orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        merged
+        repository { nameWithOwner isPrivate owner { login } }
       }
     }
-    """
-    user = gql(token, q_core, {"login": login})["user"]
-    user["contributionsCollection"] = gql(token, q_calendar, {"login": login})[
-        "user"]["contributionsCollection"]
-    return user
+  }
+}
+"""
 
 
-def fetch_pull_requests(token, login, max_pages=50):
-    """Page through every PR the user has authored.
+def fetch_pull_requests(token, login, cached_prs=None, max_pages=50):
+    """Fetch the user's authored PRs and merge with the cached set.
 
     There is no server-side "not in these orgs" filter, so we pull the list
     and filter locally. max_pages is a runaway guard, not a real limit.
+
+    MERGED is the only one-way PR state, so with a warm cache only
+    [OPEN, CLOSED] are queried live and unioned with the cached set keyed by
+    PR id, which guarantees a PR appears exactly once. A PR stays in the
+    live half until it merges: merging is the only way to leave the
+    OPEN/CLOSED result set, so a previously live PR that is now absent is
+    recorded as merged and moves to the cached half. On a cold cache (or
+    --resync) all three states are queried and the set is rebuilt.
+
+    Returns (prs, prs_by_id): the union list for external_contributions and
+    the keyed mapping to persist in the cache.
     """
-    q = """
-    query($login: String!, $cursor: String) {
-      user(login: $login) {
-        pullRequests(first: 100, after: $cursor,
-                     states: [OPEN, CLOSED, MERGED],
-                     orderBy: {field: CREATED_AT, direction: DESC}) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            merged
-            repository { nameWithOwner isPrivate owner { login } }
-          }
-        }
-      }
-    }
-    """
-    prs = []
+    states = "[OPEN, CLOSED]" if cached_prs is not None else "[OPEN, CLOSED, MERGED]"
+    q = PR_QUERY % states
+    live = []
     cursor = None
     for _ in range(max_pages):
         page = gql(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
-        prs.extend(page["nodes"])
+        live.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break
         cursor = page["pageInfo"]["endCursor"]
-    return prs
+    known = dict(cached_prs or {})
+    live_ids = set()
+    for node in live:
+        live_ids.add(node["id"])
+        known[node["id"]] = node
+    if cached_prs is not None:
+        for pid, node in known.items():
+            if not node["merged"] and pid not in live_ids:
+                known[pid] = {**node, "merged": True}
+    return list(known.values()), known
 
 
 def external_contributions(prs, login, orgs):
@@ -446,6 +576,17 @@ def render_languages(C, langs):
     return base_card(C, 420, 230, body)
 
 
+def stamp_cache_notice(C, svg, fetched_at):
+    """A card rendered from cache must show it: tag the cache's own fetch
+    time bottom-left so staleness is visible rather than silent. Done as a
+    post-pass so the renderer signatures stay unchanged."""
+    m = re.search(r'height="(\d+)"', svg)
+    y = int(m.group(1)) - 8 if m else 12
+    note = (f'<text x="10" y="{y}" fill="{C["dim"]}" font-size="10">'
+            f'cached data from {xml_escape(fetched_at)}</text>')
+    return svg.replace("</svg>", f"  {note}\n</svg>")
+
+
 def main():
     p = argparse.ArgumentParser(description="Render self-hosted GitHub stat SVGs.")
     p.add_argument("--user", default=os.environ.get("GH_USER"),
@@ -459,6 +600,8 @@ def main():
     p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
                    choices=list(THEMES),
                    help="Color theme (env: THEME)")
+    p.add_argument("--resync", action="store_true",
+                   help="Discard the cache and refetch everything")
     args = p.parse_args()
 
     if not args.user:
@@ -473,7 +616,36 @@ def main():
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    user = fetch(token, args.user)
+    cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
+    cache = {} if args.resync else load_cache(cache_file)
+
+    stale = None
+    try:
+        user, days = fetch(token, args.user, cache.get("calendar_days") or None)
+        prs, prs_by_id = fetch_pull_requests(token, args.user, cache.get("prs") or None)
+        issues = fetch_issues(token, args.user)
+    except Exception:
+        # Durability layer: a failed fetch (after gql's retries) renders from
+        # cache and exits 0 — but only with a complete cache. Without one,
+        # exiting non-zero is still correct.
+        if not cache_complete(cache):
+            raise
+        user = dict(cache["user"])
+        user["contributionsCollection"] = {
+            "contributionCalendar": calendar_from_days(cache["calendar_days"])}
+        prs = list(cache["prs"].values())
+        issues = cache["issues"]
+        stale = cache["fetched_at"]
+    else:
+        save_cache(cache_file, {
+            "version": CACHE_VERSION,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "user": {k: v for k, v in user.items() if k != "contributionsCollection"},
+            "calendar_days": days,
+            "prs": prs_by_id,
+            "issues": issues,
+        })
+
     total_stars = sum(r["stargazerCount"] for r in user["repositories"]["nodes"])
     cal = user["contributionsCollection"]["contributionCalendar"]
     year_contribs = cal["totalContributions"]
@@ -481,26 +653,34 @@ def main():
     langs = aggregate_languages(user["repositories"]["nodes"])
 
     orgs = [o["login"] for o in user["organizations"]["nodes"]]
-    prs = fetch_pull_requests(token, args.user)
     ext_opened, ext_merged, ext_repos = external_contributions(prs, user["login"], orgs)
-    issues = fetch_issues(token, args.user)
     ext_iss_opened, ext_iss_accepted, ext_iss_repos = external_issues(
         issues, user["login"], orgs)
 
-    (out / "stats.svg").write_text(render_stats(C, user, total_stars, year_contribs))
-    (out / "streak.svg").write_text(render_streak(C, current, longest, year_contribs))
-    (out / "languages.svg").write_text(render_languages(C, langs))
-    (out / "external.svg").write_text(
-        render_external(C, ext_opened, ext_merged, ext_repos,
-                        ext_iss_opened, ext_iss_accepted, ext_iss_repos))
+    svgs = {
+        "stats.svg": render_stats(C, user, total_stars, year_contribs),
+        "streak.svg": render_streak(C, current, longest, year_contribs),
+        "languages.svg": render_languages(C, langs),
+        "external.svg": render_external(
+            C, ext_opened, ext_merged, ext_repos,
+            ext_iss_opened, ext_iss_accepted, ext_iss_repos),
+    }
+    for name, svg in svgs.items():
+        if stale:
+            svg = stamp_cache_notice(C, svg, stale)
+        (out / name).write_text(svg)
     (out / "last-updated.txt").write_text(
-        datetime.now(timezone.utc).isoformat(timespec="seconds")
+        stale or datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
 
-    print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
-          f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
-          f"external={ext_merged}/{ext_opened} in {ext_repos} repos "
-          f"issues={ext_iss_accepted}/{ext_iss_opened} in {ext_iss_repos} repos)")
+    if stale:
+        print(f"fetch failed; rendered {out}/{{stats,streak,languages,external}}.svg "
+              f"from cache (fetched_at={stale})")
+    else:
+        print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
+              f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
+              f"external={ext_merged}/{ext_opened} in {ext_repos} repos "
+              f"issues={ext_iss_accepted}/{ext_iss_opened} in {ext_iss_repos} repos)")
 
 
 if __name__ == "__main__":

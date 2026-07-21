@@ -7,8 +7,14 @@ No network: every case is a hand-built contribution calendar.
 """
 import datetime
 import importlib.util
+import json
+import os
+import re
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "render", Path(__file__).with_name("render.py"))
@@ -163,6 +169,229 @@ class ExternalIssues(unittest.TestCase):
 
     def test_no_external_issues(self):
         self.assertEqual(render.external_issues([], "me", []), (0, 0, 0))
+
+
+CORE_USER = {
+    "login": "me",
+    "name": "Me",
+    "followers": {"totalCount": 5},
+    "organizations": {"nodes": []},
+    "repositories": {"totalCount": 1, "nodes": [{
+        "stargazerCount": 3,
+        "languages": {"edges": [
+            {"size": 100, "node": {"name": "Python", "color": "#3572A5"}}]},
+    }]},
+}
+
+EXTERNAL_REPO = {"nameWithOwner": "other/proj", "isPrivate": False,
+                 "owner": {"login": "other"}}
+
+
+def weeks_of(days):
+    """A one-week contributionCalendar payload from a date -> count map."""
+    return [{"contributionDays": [
+        {"date": d, "contributionCount": c} for d, c in sorted(days.items())]}]
+
+
+class FakeAPI:
+    """Scriptable replacement for render.gql; routes on the query text."""
+
+    def __init__(self):
+        self.calls = []           # (query, variables) actually sent
+        self.full_calendar = {}   # served when the calendar query has no from/to
+        self.window_calendar = {}  # served for the from/to (7-day) query
+        self.pr_pages = []        # one nodes list per pullRequests call
+        self.issues = []
+        self.fail = False
+
+    def __call__(self, token, query, variables=None, retries=3):
+        if self.fail:
+            raise RuntimeError("simulated fetch failure")
+        variables = variables or {}
+        self.calls.append((query, variables))
+        if "pullRequests" in query:
+            nodes = self.pr_pages.pop(0) if self.pr_pages else []
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": nodes}}}
+        if "issues" in query:
+            return {"user": {"issues": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": self.issues}}}
+        if "contributionCalendar" in query:
+            days = self.window_calendar if "from" in variables else self.full_calendar
+            return {"user": {"contributionsCollection": {
+                "contributionCalendar": {
+                    "totalContributions": sum(days.values()),
+                    "weeks": weeks_of(days)}}}}
+        return {"user": json.loads(json.dumps(CORE_USER))}  # fresh copy per call
+
+
+def run_main(api, out_dir, cache_file):
+    """Invoke render.main() against the fake API with argv/env patched in."""
+    argv = ["render.py", "--user", "me", "--token", "fake",
+            "--theme", "tokyonight", "--out-dir", str(out_dir)]
+    with mock.patch.object(render, "gql", api), \
+            mock.patch.object(sys, "argv", argv), \
+            mock.patch.dict(os.environ, {"CACHE_FILE": str(cache_file)}):
+        render.main()
+
+
+def recent_days(n):
+    """date -> count for the n days ending today (UTC)."""
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    return {(today - datetime.timedelta(days=i)).isoformat(): (i * 7 + 3) % 5
+            for i in range(n)}
+
+
+class CacheFile(unittest.TestCase):
+    def test_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "cache.json"
+            payload = {"version": render.CACHE_VERSION, "fetched_at": "x",
+                       "calendar_days": {"2026-01-01": 1}}
+            render.save_cache(f, payload)
+            self.assertEqual(render.load_cache(f), payload)
+
+    def test_version_mismatch_is_discarded(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "cache.json"
+            f.write_text(json.dumps({"version": render.CACHE_VERSION + 1}))
+            self.assertEqual(render.load_cache(f), {})
+
+    def test_missing_file_is_not_an_error(self):
+        self.assertEqual(render.load_cache("/nonexistent/dir/cache.json"), {})
+
+
+class WindowedCalendar(unittest.TestCase):
+    def test_merged_window_equals_full_fetch(self):
+        all_days = recent_days(30)
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+        cutoff = (today - datetime.timedelta(days=6)).isoformat()
+        window = {d: c for d, c in all_days.items() if d >= cutoff}
+        cached = {d: c for d, c in all_days.items() if d < cutoff}
+
+        api = FakeAPI()
+        api.full_calendar = all_days
+        api.window_calendar = window
+        with mock.patch.object(render, "gql", api):
+            user_cold, cold_days = render.fetch("t", "me")
+            user_warm, warm_days = render.fetch("t", "me", cached)
+
+        # The cached history plus a 7-day window must rebuild exactly what a
+        # full fetch returns — same days, same structure for the renderers.
+        self.assertEqual(cold_days, warm_days)
+        self.assertEqual(user_cold["contributionsCollection"],
+                         user_warm["contributionsCollection"])
+
+        # The warm path must actually ask for a trailing 7-day window.
+        window_vars = [v for q, v in api.calls
+                       if "contributionCalendar" in q and "from" in v]
+        self.assertEqual(len(window_vars), 1)
+        span = (datetime.datetime.fromisoformat(window_vars[0]["to"])
+                - datetime.datetime.fromisoformat(window_vars[0]["from"]))
+        self.assertEqual(span.days, 7)
+
+
+class DurabilityFallback(unittest.TestCase):
+    def snapshot(self):
+        return {
+            "version": render.CACHE_VERSION,
+            "fetched_at": "2026-07-20T06:00:00+00:00",
+            "user": json.loads(json.dumps(CORE_USER)),
+            "calendar_days": recent_days(3),
+            "prs": {"P1": {"id": "P1", "merged": True,
+                           "repository": EXTERNAL_REPO}},
+            "issues": [],
+        }
+
+    def test_failed_fetch_renders_from_cache_and_exits_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "cache.json"
+            out = Path(td) / "out"
+            render.save_cache(cache_file, self.snapshot())
+            api = FakeAPI()
+            api.fail = True
+            # main() returning normally (not propagating the fetch error) is
+            # the exit-0 path; the __main__ wrapper only exits non-zero when
+            # an exception escapes.
+            run_main(api, out, cache_file)
+            for name in ("stats.svg", "streak.svg", "languages.svg", "external.svg"):
+                svg = (out / name).read_text()
+                self.assertIn("cached data from 2026-07-20T06:00:00+00:00", svg)
+            self.assertEqual((out / "last-updated.txt").read_text(),
+                             "2026-07-20T06:00:00+00:00")
+            # A fallback run must not refresh the cache's timestamp.
+            self.assertEqual(render.load_cache(cache_file)["fetched_at"],
+                             "2026-07-20T06:00:00+00:00")
+
+    def test_failed_fetch_without_cache_still_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            api = FakeAPI()
+            api.fail = True
+            with self.assertRaises(RuntimeError):
+                run_main(api, Path(td) / "out", Path(td) / "cache.json")
+
+
+class PullRequestCache(unittest.TestCase):
+    def big_numbers(self, svg):
+        # The six 36px figures on external.svg, in render order:
+        # PR opened/merged/repos, then issue opened/accepted/repos.
+        return re.findall(r'font-size="36"[^>]*>([^<]+)</text>', svg)
+
+    def test_open_to_merged_transition_counts_exactly_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "cache.json"
+            out = Path(td) / "out"
+            api = FakeAPI()
+            api.full_calendar = recent_days(3)
+            pr = {"id": "P1", "merged": False, "repository": EXTERNAL_REPO}
+
+            # Run 1 (cold): the PR is OPEN, queried with all three states.
+            api.pr_pages = [[pr]]
+            run_main(api, out, cache_file)
+            nums = self.big_numbers((out / "external.svg").read_text())
+            self.assertEqual(nums[:3], ["1", "0", "1"])
+
+            # Run 2 (warm): the PR has merged, so the OPEN/CLOSED query no
+            # longer returns it. It must move to the cached half and be
+            # counted exactly once: still 1 opened, now 1 merged.
+            api.calls.clear()
+            api.pr_pages = [[]]
+            run_main(api, out, cache_file)
+            nums = self.big_numbers((out / "external.svg").read_text())
+            self.assertEqual(nums[:3], ["1", "1", "1"])
+
+            pr_queries = [q for q, _ in api.calls if "pullRequests" in q]
+            self.assertEqual(len(pr_queries), 1)
+            self.assertIn("[OPEN, CLOSED]", pr_queries[0])
+            self.assertNotIn("MERGED", pr_queries[0])
+            self.assertTrue(render.load_cache(cache_file)["prs"]["P1"]["merged"])
+
+
+class CorruptCache(unittest.TestCase):
+    def test_corrupt_cache_falls_back_to_full_fetch(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "cache.json"
+            cache_file.write_text("{not valid json")
+            out = Path(td) / "out"
+            api = FakeAPI()
+            api.full_calendar = recent_days(3)
+            api.pr_pages = [[{"id": "P1", "merged": True,
+                              "repository": EXTERNAL_REPO}]]
+            run_main(api, out, cache_file)
+
+            calendar_vars = [v for q, v in api.calls
+                             if "contributionCalendar" in q]
+            self.assertEqual(len(calendar_vars), 1)
+            self.assertNotIn("from", calendar_vars[0])  # full-year fetch
+            pr_queries = [q for q, _ in api.calls if "pullRequests" in q]
+            self.assertIn("MERGED", pr_queries[0])  # all states refetched
+            for name in ("stats.svg", "streak.svg", "languages.svg", "external.svg"):
+                self.assertTrue((out / name).exists())
+            # The successful run rewrites a clean, current-version cache.
+            self.assertEqual(render.load_cache(cache_file)["version"],
+                             render.CACHE_VERSION)
 
 
 if __name__ == "__main__":
