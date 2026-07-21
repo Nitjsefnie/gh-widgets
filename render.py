@@ -27,14 +27,16 @@ The SVGs are static files — serve them from any web server with
 Designed to fail gracefully. Settled calendar days and MERGED PRs are
 immutable, so they are cached and only the mutable slice (the trailing 7
 days, OPEN/CLOSED PRs, issues) is refetched each run — the full-year
-calendar query was getting killed with RESOURCE_LIMITS_EXCEEDED. A run
-whose fetches still fail renders from the cache, stamps the cache
+calendar query was getting killed with RESOURCE_LIMITS_EXCEEDED, so a
+cold cache backfills the year in 12 monthly windowed queries instead.
+A run whose fetches still fail renders from the cache, stamps the cache
 timestamp on every card, and exits 0; with no cache to fall back on it
 exits non-zero and the existing SVGs keep serving.
 
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import argparse
+from calendar import monthrange
 import json
 import os
 import re
@@ -111,13 +113,20 @@ def cache_complete(cache):
                for k in ("fetched_at", "user", "calendar_days", "prs", "issues"))
 
 
+def one_year_ago(now):
+    """The trailing-year boundary date: this date one year back
+    (Feb 29 -> Feb 28). Shared by prune_days and the cold backfill so the
+    fetched period and the kept period are the same by construction."""
+    try:
+        return now.date().replace(year=now.year - 1)
+    except ValueError:  # Feb 29 -> Feb 28
+        return now.date().replace(year=now.year - 1, day=28)
+
+
 def prune_days(days, now):
     """Drop days older than the trailing year so the merged history matches
     what a full calendar fetch (GitHub's default one-year window) returns."""
-    try:
-        cutoff = now.date().replace(year=now.year - 1)
-    except ValueError:  # Feb 29 -> Feb 28
-        cutoff = now.date().replace(year=now.year - 1, day=28)
+    cutoff = one_year_ago(now)
     return {d: c for d, c in days.items() if date.fromisoformat(d) >= cutoff}
 
 
@@ -134,6 +143,26 @@ def calendar_from_days(days):
         week["contributionDays"].append(
             {"date": d, "contributionCount": days[d]})
     return {"totalContributions": sum(days.values()), "weeks": weeks}
+
+
+def monthly_windows(now):
+    """Split the trailing year into 12 adjacent monthly (from, to) windows
+    for the cold-cache backfill. The first window starts at the same
+    boundary prune_days keeps from (this date one year back, at midnight)
+    and the last ends at `now`; interior boundaries fall on the same
+    day-of-month as the start, clamped to the month's length. Consecutive
+    windows share the boundary instant, so under GitHub's to-exclusive
+    counting ("only contributions made before `to`") every contribution
+    lands in exactly one window and no date is skipped or duplicated."""
+    start = one_year_ago(now)
+    bounds = []
+    for i in range(13):
+        m = start.month - 1 + i
+        y, m = start.year + m // 12, m % 12 + 1
+        bounds.append(datetime(y, m, min(start.day, monthrange(y, m)[1]),
+                               tzinfo=now.tzinfo))
+    bounds[-1] = now  # the old full-year query also counted up to "now"
+    return list(zip(bounds, bounds[1:]))
 
 
 def gql(token, query, variables=None, retries=3):
@@ -174,16 +203,20 @@ def gql(token, query, variables=None, retries=3):
 
 
 def fetch(token, login, cached_days=None):
-    # Two requests, not one: GitHub's GraphQL node-limit estimator started
-    # rejecting the combined repos×languages + full-calendar query with
-    # RESOURCE_LIMITS_EXCEEDED (first seen 2026-07-18, every hourly run red).
-    # Splitting the calendar into its own request was not enough — the
-    # full-year calendar query alone now trips the limit — so with a warm
-    # cache the calendar is fetched as a trailing 7-day window (the only days
-    # that can still move) and merged onto the cached day history keyed by
-    # date. The merged structure keeps the exact shape the renderers already
-    # consume. Returns (user, days); `days` is the merged date -> count map
-    # to persist in the cache.
+    # The repos×languages core and the contribution calendar are fetched
+    # separately: GitHub's GraphQL node-limit estimator started rejecting
+    # the combined query with RESOURCE_LIMITS_EXCEEDED (first seen
+    # 2026-07-18, every hourly run red). Splitting the calendar into its
+    # own request was not enough — the full-year calendar query alone now
+    # trips the limit — so the calendar is always fetched windowed and
+    # merged into a date -> count map: with a warm cache, a single
+    # trailing 7-day window (the only days that can still move) merged
+    # onto the cached history; on a cold cache (or --resync), 12
+    # sequential monthly windows backfilling the whole year, each far
+    # below the node limit, so bootstrap is deterministic instead of
+    # lucky. The merged structure keeps the exact shape the renderers
+    # already consume. Returns (user, days); `days` is the merged
+    # date -> count map to persist in the cache.
     q_core = """
     query($login: String!) {
       user(login: $login) {
@@ -205,38 +238,35 @@ def fetch(token, login, cached_days=None):
     """
     user = gql(token, q_core, {"login": login})["user"]
     now = datetime.now(timezone.utc)
+    q_window = """
+    query($login: String!, $from: DateTime!, $to: DateTime!) {
+      user(login: $login) {
+        contributionsCollection(from: $from, to: $to) {
+          contributionCalendar {
+            totalContributions
+            weeks { contributionDays { date contributionCount } }
+          }
+        }
+      }
+    }
+    """
     if cached_days is None:
-        # Cold cache (or --resync): full one-year calendar, the default
-        # contributionsCollection window.
-        q_calendar = """
-        query($login: String!) {
-          user(login: $login) {
-            contributionsCollection {
-              contributionCalendar {
-                totalContributions
-                weeks { contributionDays { date contributionCount } }
-              }
-            }
-          }
-        }
-        """
-        cal = gql(token, q_calendar, {"login": login})[
-            "user"]["contributionsCollection"]["contributionCalendar"]
-        days = {d["date"]: d["contributionCount"]
-                for w in cal["weeks"] for d in w["contributionDays"]}
+        # Cold cache (or --resync): backfill the trailing year in 12
+        # monthly windows (spec change 3b) instead of one full-year query.
+        # Windows share midnight boundaries and are merged oldest-first,
+        # so a boundary day reported by two windows keeps the newer
+        # window's count and no day is skipped.
+        days = {}
+        for from_, to in monthly_windows(now):
+            cal = gql(token, q_window, {
+                "login": login,
+                "from": from_.isoformat(timespec="seconds"),
+                "to": to.isoformat(timespec="seconds"),
+            })["user"]["contributionsCollection"]["contributionCalendar"]
+            for w in cal["weeks"]:
+                for d in w["contributionDays"]:
+                    days[d["date"]] = d["contributionCount"]
     else:
-        q_window = """
-        query($login: String!, $from: DateTime!, $to: DateTime!) {
-          user(login: $login) {
-            contributionsCollection(from: $from, to: $to) {
-              contributionCalendar {
-                totalContributions
-                weeks { contributionDays { date contributionCount } }
-              }
-            }
-          }
-        }
-        """
         cal = gql(token, q_window, {
             "login": login,
             "from": (now - timedelta(days=7)).isoformat(timespec="seconds"),

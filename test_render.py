@@ -198,8 +198,8 @@ class FakeAPI:
 
     def __init__(self):
         self.calls = []           # (query, variables) actually sent
-        self.full_calendar = {}   # served when the calendar query has no from/to
-        self.window_calendar = {}  # served for the from/to (7-day) query
+        self.full_calendar = {}   # the whole year's date -> count map
+        self.served = []          # sorted dates returned per calendar call
         self.pr_pages = []        # one nodes list per pullRequests call
         self.issues = []
         self.fail = False
@@ -219,7 +219,16 @@ class FakeAPI:
                 "pageInfo": {"hasNextPage": False, "endCursor": None},
                 "nodes": self.issues}}}
         if "contributionCalendar" in query:
-            days = self.window_calendar if "from" in variables else self.full_calendar
+            days = self.full_calendar
+            if "from" in variables:
+                # Serve the slice the real API would: half-open [from, to),
+                # matching "to: only contributions made before this time".
+                frm = datetime.datetime.fromisoformat(variables["from"])
+                to = datetime.datetime.fromisoformat(variables["to"])
+                days = {d: c for d, c in days.items()
+                        if frm <= datetime.datetime.fromisoformat(d)
+                        .replace(tzinfo=datetime.timezone.utc) < to}
+            self.served.append(sorted(days))
             return {"user": {"contributionsCollection": {
                 "contributionCalendar": {
                     "totalContributions": sum(days.values()),
@@ -264,30 +273,84 @@ class CacheFile(unittest.TestCase):
 
 
 class WindowedCalendar(unittest.TestCase):
-    def test_merged_window_equals_full_fetch(self):
+    def calendar_vars(self, api):
+        return [v for q, v in api.calls if "contributionCalendar" in q]
+
+    def test_cold_backfill_merges_12_monthly_windows(self):
+        # The cold path must rebuild, from 12 monthly windowed responses,
+        # exactly the day map the old single full-year query produced:
+        # same dates, same counts (the fake serves window-correct slices
+        # of the one full-year map, so equality is the whole point, not
+        # the call count).
+        all_days = recent_days(365)
+        api = FakeAPI()
+        api.full_calendar = all_days
+        with mock.patch.object(render, "gql", api):
+            _, cold_days = render.fetch("t", "me")
+
+        self.assertEqual(cold_days, all_days)
+
+        window_vars = self.calendar_vars(api)
+        self.assertEqual(len(window_vars), 12)
+        for v in window_vars:
+            self.assertIn("from", v)
+            self.assertIn("to", v)
+            span = (datetime.datetime.fromisoformat(v["to"])
+                    - datetime.datetime.fromisoformat(v["from"]))
+            # Monthly windows: each far below the node limit. (On a
+            # Feb-29 run the prune cutoff lands on Feb 28, so the final
+            # window absorbs the extra day and spans 32.)
+            self.assertGreaterEqual(span.days, 28)
+            self.assertLessEqual(span.days, 32)
+
+    def test_windows_cover_the_year_without_gaps_or_duplicates(self):
+        all_days = recent_days(366)  # reaches the prune cutoff date itself
+        api = FakeAPI()
+        api.full_calendar = all_days
+        with mock.patch.object(render, "gql", api):
+            render.fetch("t", "me")
+
+        served = api.served  # one sorted date list per calendar call
+        self.assertEqual(len(served), 12)
+
+        # Consecutive windows share their boundary instant exactly.
+        window_vars = self.calendar_vars(api)
+        for prev, cur in zip(window_vars, window_vars[1:]):
+            self.assertEqual(prev["to"], cur["from"])
+
+        # No date is served by two windows...
+        flat = [d for dates in served for d in dates]
+        self.assertEqual(len(flat), len(set(flat)))
+        # ...the union is the full year the single query would return...
+        self.assertEqual(set(flat), set(all_days))
+        # ...and coverage is contiguous: no skipped day anywhere.
+        dates = [datetime.date.fromisoformat(d) for d in sorted(flat)]
+        for prev, cur in zip(dates, dates[1:]):
+            self.assertEqual((cur - prev).days, 1)
+
+    def test_warm_path_still_fetches_a_single_7_day_window(self):
         all_days = recent_days(30)
         today = datetime.datetime.now(datetime.timezone.utc).date()
         cutoff = (today - datetime.timedelta(days=6)).isoformat()
-        window = {d: c for d, c in all_days.items() if d >= cutoff}
         cached = {d: c for d, c in all_days.items() if d < cutoff}
 
         api = FakeAPI()
         api.full_calendar = all_days
-        api.window_calendar = window
         with mock.patch.object(render, "gql", api):
             user_cold, cold_days = render.fetch("t", "me")
+            api.calls.clear()
             user_warm, warm_days = render.fetch("t", "me", cached)
 
-        # The cached history plus a 7-day window must rebuild exactly what a
-        # full fetch returns — same days, same structure for the renderers.
+        # The cached history plus a 7-day window must rebuild exactly what
+        # the cold backfill returns — same days, same renderer structure.
         self.assertEqual(cold_days, warm_days)
         self.assertEqual(user_cold["contributionsCollection"],
                          user_warm["contributionsCollection"])
 
-        # The warm path must actually ask for a trailing 7-day window.
-        window_vars = [v for q, v in api.calls
-                       if "contributionCalendar" in q and "from" in v]
+        # The warm path must ask for exactly one trailing 7-day window.
+        window_vars = self.calendar_vars(api)
         self.assertEqual(len(window_vars), 1)
+        self.assertIn("from", window_vars[0])
         span = (datetime.datetime.fromisoformat(window_vars[0]["to"])
                 - datetime.datetime.fromisoformat(window_vars[0]["from"]))
         self.assertEqual(span.days, 7)
@@ -383,8 +446,10 @@ class CorruptCache(unittest.TestCase):
 
             calendar_vars = [v for q, v in api.calls
                              if "contributionCalendar" in q]
-            self.assertEqual(len(calendar_vars), 1)
-            self.assertNotIn("from", calendar_vars[0])  # full-year fetch
+            # A cold cache backfills the whole year in 12 monthly windows.
+            self.assertEqual(len(calendar_vars), 12)
+            for v in calendar_vars:
+                self.assertIn("from", v)
             pr_queries = [q for q, _ in api.calls if "pullRequests" in q]
             self.assertIn("MERGED", pr_queries[0])  # all states refetched
             for name in ("stats.svg", "streak.svg", "languages.svg", "external.svg"):
