@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design spec — gh-widgets incremental cache</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+
+      --radius: 12px;
+      --border: 1.5px solid var(--gray-300);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.58;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; }
+
+    header.page-head { margin-bottom: 40px; max-width: 840px; }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.14;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+    .context-box {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .context-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    /* ---------- table of contents ---------- */
+    .toc {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin-bottom: 48px;
+      max-width: 840px;
+    }
+    .toc .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 10px;
+    }
+    .toc ol { list-style: none; counter-reset: toc; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 24px; }
+    @media (max-width: 720px) { .toc ol { grid-template-columns: 1fr; } }
+    .toc li { counter-increment: toc; font-size: 14px; }
+    .toc li:before {
+      content: counter(toc, decimal-leading-zero);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--clay);
+      margin-right: 10px;
+    }
+    .toc a { color: var(--gray-700); text-decoration: none; border-bottom: 1px solid var(--gray-300); }
+    .toc a:hover { color: var(--slate); border-bottom-color: var(--clay); }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent  { color: var(--clay); }
+    .summary .v.ok      { color: var(--olive); }
+
+    .decision {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--clay);
+      border-radius: var(--radius);
+      padding: 22px 26px;
+      margin-bottom: 56px;
+    }
+    .decision .d-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--clay);
+      margin-bottom: 8px;
+    }
+    .decision .d-head {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .decision .d-body { font-size: 14.5px; color: var(--gray-700); max-width: 760px; }
+    .decision .d-body + .d-body { margin-top: 8px; }
+
+    section { margin-bottom: 60px; scroll-margin-top: 24px; }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 740px;
+      margin-bottom: 24px;
+    }
+    p.body { font-size: 14.5px; max-width: 760px; margin-bottom: 14px; }
+    p.body strong { color: var(--slate); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #C9B98A;
+    }
+    pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      overflow-x: auto;
+      color: var(--gray-700);
+      margin-bottom: 16px;
+      max-width: 860px;
+    }
+
+    .tbl {
+      width: 100%;
+      border: var(--border);
+      border-radius: var(--radius);
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      font-size: 13.5px;
+    }
+    .tbl th, .tbl td {
+      text-align: left;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--gray-300);
+      vertical-align: top;
+    }
+    .tbl th {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--gray-500);
+      background: var(--gray-150);
+      font-weight: 600;
+    }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl td { color: var(--gray-700); }
+    .tbl td.slate { color: var(--slate); font-weight: 600; }
+    .tbl tbody tr:hover { background: var(--gray-150); }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+    .compare .col {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .compare .col-head {
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: var(--border);
+    }
+    .compare .col.bad  .col-head { background: #2E211C; color: var(--rust); }
+    .compare .col.good .col-head { background: #232A1C; color: var(--olive); }
+    .compare .col-body { padding: 16px 18px; font-size: 13.5px; }
+    .compare .col-body ul { list-style: none; }
+    .compare .col-body li { margin: 7px 0; padding-left: 18px; position: relative; }
+    .compare .col.bad  li:before { content: '\2715'; position: absolute; left: 0; color: var(--rust); }
+    .compare .col.good li:before { content: '\2713'; position: absolute; left: 0; color: var(--olive); }
+
+    .changes { display: flex; flex-direction: column; gap: 12px; }
+    .change {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 4px 24px;
+    }
+    @media (max-width: 720px) { .change { grid-template-columns: 1fr; } }
+    .change .file {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--clay);
+      word-break: break-all;
+    }
+    .change .what { font-size: 14px; color: var(--gray-700); }
+    .change .what .lead { color: var(--slate); font-weight: 600; }
+
+    .checklist { display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    .check .box {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 2px solid var(--gray-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .check .ck-text { font-size: 14px; color: var(--gray-700); }
+    .check .ck-text strong { color: var(--slate); }
+    .check .ck-text code { display: inline-block; margin-top: 2px; }
+
+    .risks {
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--white);
+    }
+    .risks .row { display: grid; grid-template-columns: 1.6fr 90px 1.6fr; }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: var(--border); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: var(--border); }
+    @media (max-width: 780px) {
+      .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); }
+    }
+    .risks .head {
+      background: var(--gray-150);
+      font-weight: 600;
+      color: var(--slate);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .sev {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .sev.high { background: #4A2A1C; color: #F0B79C; }
+    .sev.med  { background: var(--oat);  color: var(--slate); }
+    .sev.low  { background: #2D3A24; color: #B6CC96; }
+
+    .deferred { display: flex; flex-direction: column; gap: 14px; max-width: 840px; }
+    .defer {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--gray-500);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .defer .dt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .defer .dd { font-size: 13.5px; color: var(--gray-500); }
+
+    .footer {
+      color: var(--gray-500);
+      font-size: 13px;
+      margin-top: 64px;
+      padding-top: 22px;
+      border-top: 1px solid var(--gray-300);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="page-head">
+      <div class="eyebrow">Design spec · gh-widgets</div>
+      <h1>Cache what is genuinely immutable, refetch everything else</h1>
+      <div class="context-box">
+        <span class="label">Context</span>
+        <code>render.py</code> is stateless: every hourly run refetches a full year of
+        contribution calendar, every authored PR, and every authored issue. GitHub now
+        rejects the calendar query with <code>RESOURCE_LIMITS_EXCEEDED</code> on most
+        runs — 5 of 6 runs failed on 2026-07-21 — so the profile widgets survive on
+        intermittent luck. This spec replaces the stateless fetch with an incremental
+        cache, keyed on <em>real</em> immutability rather than age alone.
+      </div>
+    </header>
+
+    <nav class="toc">
+      <div class="k">Contents</div>
+      <ol>
+        <li><a href="#s1">Background — the observed failure</a></li>
+        <li><a href="#s2">Assumed vs. verified</a></li>
+        <li><a href="#s3">Change inventory</a></li>
+        <li><a href="#s4">What is cacheable, and why</a></li>
+        <li><a href="#s5">Verification</a></li>
+        <li><a href="#s6">Risks</a></li>
+        <li><a href="#s7">Out of scope</a></li>
+      </ol>
+    </nav>
+
+    <div class="summary">
+      <div class="cell"><div class="k">Scope</div><div class="v accent">5 changes</div></div>
+      <div class="cell"><div class="k">Files touched</div><div class="v">3</div></div>
+      <div class="cell"><div class="k">Risk</div><div class="v ok">Low</div></div>
+      <div class="cell"><div class="k">Deferred</div><div class="v">2 items</div></div>
+    </div>
+
+    <div class="decision">
+      <div class="d-tag">Decision</div>
+      <div class="d-head">Persist a JSON cache; treat only settled calendar days and <code>MERGED</code> PRs as immutable; refetch everything mutable each run.</div>
+      <div class="d-body">Two layers, deliberately ordered. <strong>Durability</strong>: a
+        successful fetch is written to a cache file, and a failed fetch renders from that
+        cache instead of exiting non-zero — the widgets stop breaking immediately,
+        whatever GitHub's limiter does. <strong>Reduction</strong>: the calendar is fetched
+        as a trailing 7-day window merged onto cached history, and PRs are split so that
+        the 192 <code>MERGED</code> ones are never refetched.</div>
+      <div class="d-body">The cutoff is <em>state</em>, not age, everywhere except the
+        calendar. <code>CLOSED</code> is explicitly not treated as settled: a closed PR can
+        be reopened and later merged, and the GraphQL schema's
+        <code>IssueStateReason</code> enum contains <code>REOPENED</code>, so the issue
+        analog is reopenable too. An age-based cutoff would silently undercount the late
+        merges that make up most of this profile's contributions.</div>
+    </div>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>Background — the observed failure</h2></div>
+      <p class="sec-intro">Evidence from the box, not inference.</p>
+      <p class="body"><code>journalctl -u render-gh-widgets.service</code> for 2026-07-21
+        shows the hourly timer failing on five of six runs, each identically:</p>
+      <pre>RESOURCE_LIMITS_EXCEEDED  path: user.contributionsCollection.contributionCalendar.weeks
+07:06 FAIL   08:06 FAIL   09:06 FAIL   10:08 FAIL   11:08 <strong>ok</strong>   12:10 FAIL</pre>
+      <p class="body">The single 11:08 success is the only reason a current SVG exists on
+        disk. Commit <code>5d66691</code> already split the calendar into its own request
+        and added transient-error retries; the retries are now exhausting. <strong>Splitting
+        the query further is not a fix — the calendar-only query alone exceeds the node
+        limit.</strong> The failing path is the calendar, not the PR or issue queries.</p>
+      <p class="body">Separately, <code>render.py</code> holds no state of any kind: a
+        <code>grep</code> for cache/state handling returns only unrelated matches. Every
+        run pays full price for a year of history that cannot change.</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>Assumed vs. verified</h2></div>
+      <p class="sec-intro">Three assumptions were tested against the live API before this design settled. Two failed.</p>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">Assumed</div>
+          <div class="col-body"><ul>
+            <li><code>CLOSED</code> is a terminal state, so closed PRs and completed issues can be cached forever.</li>
+            <li>PRs can be windowed by date server-side, the same way the calendar can.</li>
+            <li>An "older than one week" rule can apply uniformly to calendar, PRs and issues.</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">Verified</div>
+          <div class="col-body"><ul>
+            <li>Closed items reopen. <code>IssueStateReason</code> contains <code>REOPENED</code>; only <code>MERGED</code> is plausibly one-way.</li>
+            <li>The <code>pullRequests</code> connection takes only <code>states, labels, headRefName, baseRefName, orderBy, first/last/after/before</code> — no date argument exists.</li>
+            <li><code>contributionsCollection(from: DateTime, to: DateTime)</code> does exist, so the age rule is correct for the calendar and only the calendar.</li>
+          </ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>Change inventory</h2></div>
+      <p class="sec-intro">Every file the implementation touches, and the precise change.</p>
+      <div class="changes">
+        <div class="change">
+          <div class="file">render.py — new cache module</div>
+          <div class="what"><span class="lead">Add load/save of a JSON cache.</span>
+            Path from <code>CACHE_FILE</code>, defaulting to
+            <code>/var/lib/gh-widgets/cache.json</code>. Schema-versioned, so a future
+            shape change invalidates cleanly rather than mis-merging. A missing or
+            unreadable cache is not an error — it degrades to a full fetch.</div>
+        </div>
+        <div class="change">
+          <div class="file">render.py — durability layer</div>
+          <div class="what"><span class="lead">Render from cache when a fetch fails.</span>
+            Any fetch raising after retries falls back to the cached values and renders
+            normally, exiting 0. The rendered card carries the cache timestamp so staleness
+            is visible rather than silent — a permanently-broken fetch must not present
+            confident stale numbers.</div>
+        </div>
+        <div class="change">
+          <div class="file">render.py — <code>fetch()</code></div>
+          <div class="what"><span class="lead">Window the calendar.</span>
+            Request <code>contributionsCollection(from:, to:)</code> for the trailing 7
+            days only, and merge those days onto the cached history keyed by date. Days
+            older than 7 days are read from cache and never refetched.</div>
+        </div>
+        <div class="change">
+          <div class="file">render.py — <code>fetch_pull_requests()</code></div>
+          <div class="what"><span class="lead">Split by state.</span>
+            Query <code>states:[OPEN, CLOSED]</code> live each run (a server-side filter,
+            ~40 external items) and union with the cached <code>MERGED</code> set. A PR
+            transitioning into <code>MERGED</code> is picked up because it appears in the
+            live half until the run that first sees it merged, at which point it moves to
+            the cached half.</div>
+        </div>
+        <div class="change">
+          <div class="file">render.py — <code>--resync</code> flag</div>
+          <div class="what"><span class="lead">Full rebuild, weekly.</span>
+            Discards the cache and refetches everything, so no correctness claim rests
+            permanently on the assumption that <code>MERGED</code> is one-way. Wired as a
+            second systemd timer, or a day-of-week check in the existing unit.</div>
+        </div>
+        <div class="change">
+          <div class="file">test_render.py</div>
+          <div class="what"><span class="lead">Cover merge and fallback.</span>
+            Cases: cached-day merge produces the same calendar as a full fetch; a
+            fetch failure renders from cache and exits 0; a PR moving
+            <code>OPEN → MERGED</code> is counted exactly once; a corrupt cache falls back
+            to full fetch. Stdlib <code>unittest</code>, no network, matching the existing
+            suite.</div>
+        </div>
+        <div class="change">
+          <div class="file">render-gh-widgets.service</div>
+          <div class="what"><span class="lead">Grant a state directory.</span>
+            Add <code>StateDirectory=gh-widgets</code> so <code>/var/lib/gh-widgets</code>
+            exists with correct ownership, and set <code>CACHE_FILE</code> alongside the
+            existing environment block.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head"><span class="num">04</span><h2>What is cacheable, and why</h2></div>
+      <p class="sec-intro">Counts are live figures for this profile, external contributions only, taken with the widget's own token.</p>
+      <table class="tbl">
+        <thead><tr><th>Data</th><th>Count</th><th>Cacheable</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td class="slate">Calendar days older than 7d</td><td>~358</td><td>Yes — permanently</td><td>A past day's contribution count cannot change.</td></tr>
+          <tr><td class="slate">Calendar days within 7d</td><td>7</td><td>No</td><td>Today's count still moves; the window is cheap.</td></tr>
+          <tr><td class="slate">PRs — <code>MERGED</code></td><td>192</td><td>Yes, with weekly resync</td><td>Merge is believed one-way; the resync removes the need to be sure.</td></tr>
+          <tr><td class="slate">PRs — <code>CLOSED</code></td><td>21</td><td>No</td><td>Reopenable, and a reopened PR can still merge.</td></tr>
+          <tr><td class="slate">PRs — <code>OPEN</code></td><td>19</td><td>No</td><td>The mutable set by definition.</td></tr>
+          <tr><td class="slate">Issues — all states</td><td>66</td><td>No</td><td><code>REOPENED</code> exists; <code>accepted</code> is defined as CLOSED+COMPLETED, so it can flip back. One page, not worth the risk.</td></tr>
+        </tbody>
+      </table>
+      <p class="body" style="margin-top:18px">Net effect per hourly run: a full year of
+        calendar plus every PR and issue becomes <strong>7 days of calendar, ~1 page of
+        PRs, 1 page of issues</strong>. The external total must remain
+        <strong>232 opened / 192 merged</strong> — the figures the live SVG carried before
+        this change.</p>
+    </section>
+
+    <section id="s5">
+      <div class="sec-head"><span class="num">05</span><h2>Verification</h2></div>
+      <p class="sec-intro">Concrete and runnable. The parity check is the one that matters: the numbers must not move.</p>
+      <div class="checklist">
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Unit suite passes.</strong> <code>cd /root/gh-widgets &amp;&amp; python3 -m unittest discover</code> — stdlib only, no network.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Cold-cache parity.</strong> Render to a scratch <code>OUT_DIR</code> with no cache file; external widget shows 232 opened / 192 merged, matching the pre-change SVG.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Warm-cache parity.</strong> Render again against the populated cache; byte-identical SVGs to the cold run, apart from the timestamp.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Failure fallback.</strong> Point <code>GH_TOKEN_FILE</code> at an invalid token; the run exits 0, renders from cache, and the card shows the cache age.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Query size.</strong> The calendar request covers 7 days, confirmed by logging the <code>from</code>/<code>to</code> arguments — the run must not reproduce <code>RESOURCE_LIMITS_EXCEEDED</code>.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Deploy discipline.</strong> <code>install -m 755 render.py /usr/local/bin/render-gh-widgets.py</code>, then <code>diff</code> the two — deployment is a copied file under a different name, and repo/production have drifted silently before.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Live timer green.</strong> After deploy, two consecutive scheduled runs succeed in <code>journalctl -u render-gh-widgets.service</code>.</div></div>
+      </div>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head"><span class="num">06</span><h2>Risks</h2></div>
+      <div class="risks">
+        <div class="row">
+          <div class="cell head">Risk</div>
+          <div class="cell head">Sev</div>
+          <div class="cell head">Mitigation</div>
+        </div>
+        <div class="row">
+          <div class="cell"><code>MERGED</code> is not actually one-way, so an unmerged PR stays counted. Two GitHub doc pages failed to confirm reopen semantics (one silent, one 404); this is <em>unverified</em>.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">The weekly <code>--resync</code> rebuilds from scratch, bounding any drift to seven days instead of forever. The design deliberately does not depend on the assumption.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Durability layer masks a permanently broken fetch — widgets show confident but frozen numbers.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">The cache timestamp is rendered on the card, so staleness is visible to any viewer rather than silent.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Cache file corrupted or partially written, producing wrong totals.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Write to a temp file and rename atomically; a schema version guards shape changes; an unreadable cache degrades to a full fetch rather than failing.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Repo and production drift again — the deployed copy diverging from <code>render.py</code>.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Explicit <code>diff</code> step in the verification checklist, before and after deploy.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head"><span class="num">07</span><h2>Out of scope</h2></div>
+      <p class="sec-intro">Considered and deliberately excluded.</p>
+      <div class="deferred">
+        <div class="defer">
+          <div class="dt">Caching issue outcomes</div>
+          <div class="dd">Ruled out on evidence, not effort: <code>REOPENED</code> in the
+            schema means no issue outcome is safe to freeze, and 66 items is already a
+            single page. Revisit only if issue volume grows enough to matter.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Caching repository, star and language data</div>
+          <div class="dd">The <code>stats</code> and <code>languages</code> widgets query
+            <code>repositories(isFork: false)</code>, which is not the failing path and is
+            small. Out of scope until it demonstrably costs something.</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Design spec · gh-widgets · 2026-07-21 · follows commit <code>5d66691</code>
+        ("Survive GitHub's transient RESOURCE_LIMITS_EXCEEDED on the calendar query"),
+        which this supersedes as the fix for that failure.</p>
+    </div>
+
+  </div>
+</body>
+</html>
