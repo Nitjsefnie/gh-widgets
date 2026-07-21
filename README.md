@@ -61,6 +61,25 @@ GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
 GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widgets.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
 ```
 
+## Caching
+
+GitHub rejects a full-year contribution-calendar query with
+`RESOURCE_LIMITS_EXCEEDED` once an account's history is large enough, so the
+renderer caches the data that cannot change and refetches only what can.
+
+- `CACHE_FILE` — cache location, default `/var/lib/gh-widgets/cache.json`.
+  Missing, unreadable, corrupt, or schema-mismatched caches are not errors: the
+  run falls back to a full fetch.
+- Settled calendar days and `MERGED` pull requests are cached. Open and closed
+  PRs, issues, and the trailing 7 days of calendar are refetched every run —
+  closed items can be reopened, so they are never treated as final.
+- A cold cache backfills the year in 12 monthly windows rather than one
+  full-year request, so the first run cannot trip the node limit.
+- If a fetch fails and a cache exists, the widgets render from cache and the
+  card shows the cache timestamp, so staleness is visible rather than silent.
+- `--resync` discards the cache and rebuilds it. Run it periodically (a weekly
+  timer is enough) so nothing depends indefinitely on `MERGED` being one-way.
+
 ## Themes
 
 Four built-in palettes. Pick one in `THEME=` or via `--theme`:
