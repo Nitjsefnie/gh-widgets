@@ -65,6 +65,16 @@ before this change.
    visible rather than silent.
 3. **`render.py` — `fetch()`.** Calendar via `contributionsCollection(from:, to:)`
    for the trailing 7 days, merged onto cached days keyed by date.
+
+3b. **`render.py` — cold-start backfill (amendment, 2026-07-21).** A cold cache
+   has no history to merge, so the run must fetch a full year — which is exactly
+   the query that fails on ~5 of 6 runs. Bootstrapping by luck is not acceptable,
+   and every `--resync` re-enters the cold state. **On a cold cache, fetch the
+   year in sequential `contributionsCollection(from:, to:)` windows** (monthly,
+   12 requests) rather than one full-year request, and merge them into the day
+   map. Each window is far below the node limit, making bootstrap deterministic.
+   The 7-day warm path is unchanged. Surfaced by the implementer during the first
+   dispatch; the original spec omitted the bootstrap path entirely.
 4. **`render.py` — `fetch_pull_requests()`.** Query `states:[OPEN, CLOSED]` live
    (~40 external items) and union with the cached `MERGED` set. A PR entering
    `MERGED` appears in the live half until first seen merged, then moves to cache.
@@ -92,7 +102,9 @@ before this change.
 
 | Risk | Sev | Mitigation |
 |---|---|---|
+| Cold cache cannot bootstrap — the full-year calendar query is the failing one | HIGH | **Amended:** monthly windowed backfill on cold start (change 3b). Was unmitigated in v1 |
 | `MERGED` not actually one-way (unverified — two doc pages failed to confirm) | MED | Weekly `--resync` bounds drift to 7 days; design does not depend on it |
+| Vanished-from-OPEN/CLOSED treated as merged; a deleted PR or repo-gone-private misclassifies | LOW | Weekly `--resync` rebuilds the set; same bound as the `MERGED` assumption |
 | Durability masks a permanently broken fetch | MED | Cache timestamp rendered on the card |
 | Cache corrupt / partially written | LOW | Atomic write, schema version, degrade to full fetch |
 | Repo/production drift | LOW | Explicit `diff` step before and after deploy |

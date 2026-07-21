@@ -391,9 +391,9 @@
     </nav>
 
     <div class="summary">
-      <div class="cell"><div class="k">Scope</div><div class="v accent">5 changes</div></div>
+      <div class="cell"><div class="k">Scope</div><div class="v accent">6 changes</div></div>
       <div class="cell"><div class="k">Files touched</div><div class="v">3</div></div>
-      <div class="cell"><div class="k">Risk</div><div class="v ok">Low</div></div>
+      <div class="cell"><div class="k">Revision</div><div class="v">v2 — bootstrap</div></div>
       <div class="cell"><div class="k">Deferred</div><div class="v">2 items</div></div>
     </div>
 
@@ -482,6 +482,18 @@
             older than 7 days are read from cache and never refetched.</div>
         </div>
         <div class="change">
+          <div class="file">render.py — cold-start backfill <em>(amended 2026-07-21)</em></div>
+          <div class="what"><span class="lead">Backfill the year in monthly windows.</span>
+            A cold cache has no history to merge, so the run must fetch a full year —
+            which is precisely the query that fails on ~5 of 6 runs, and every
+            <code>--resync</code> re-enters that state. Bootstrapping by luck is not
+            acceptable. On a cold cache, issue 12 sequential
+            <code>contributionsCollection(from:, to:)</code> monthly windows and merge
+            them into the day map; each sits far below the node limit. The 7-day warm
+            path is unchanged. <strong>The original spec omitted the bootstrap path
+            entirely</strong> — surfaced by the implementer during the first dispatch.</div>
+        </div>
+        <div class="change">
           <div class="file">render.py — <code>fetch_pull_requests()</code></div>
           <div class="what"><span class="lead">Split by state.</span>
             Query <code>states:[OPEN, CLOSED]</code> live each run (a server-side filter,
@@ -558,6 +570,11 @@
           <div class="cell head">Risk</div>
           <div class="cell head">Sev</div>
           <div class="cell head">Mitigation</div>
+        </div>
+        <div class="row">
+          <div class="cell">Cold cache cannot bootstrap: with no history to merge, the run falls back to the full-year calendar query — the one that is failing. Every <code>--resync</code> re-enters this state. <strong>Unmitigated in v1 of this spec.</strong></div>
+          <div class="cell"><span class="sev high">HIGH</span></div>
+          <div class="cell">Amended — monthly windowed backfill on cold start (change 04 above), making bootstrap deterministic rather than luck.</div>
         </div>
         <div class="row">
           <div class="cell"><code>MERGED</code> is not actually one-way, so an unmerged PR stays counted. Two GitHub doc pages failed to confirm reopen semantics (one silent, one 404); this is <em>unverified</em>.</div>
