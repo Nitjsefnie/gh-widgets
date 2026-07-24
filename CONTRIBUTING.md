@@ -31,11 +31,17 @@ was. That is fine in both directions.
 
 ## The two constraints that reject the most patches
 
-- **Standard library only.** `render.py` imports nothing outside the Python
-  stdlib, and `test_render.py` does the same. A patch that adds `requests`,
-  `jinja2`, an SVG library, or a `requirements.txt` will be declined — the
-  point of this project is that it drops onto a server and runs. If you need
-  HTTP, use `urllib.request`; if you need templating, use f-strings.
+- **`render.py` is standard library only**, and `test_render.py` is too. A
+  patch that adds `requests`, `jinja2`, or an SVG library to that path will
+  be declined — the point is that it drops onto a server and runs. If you
+  need HTTP, use `urllib.request`; if you need templating, use f-strings.
+
+  `render-impact.py` is the documented exception: its blame pass shells out
+  to the **`git` CLI** and to **git-fame** (pip). That is the whole reason
+  it is a separate script with separate units and its own cache, rather
+  than another card in `render.py`. Keep the boundary — new dependencies
+  belong on the impact side, if anywhere, and `render.py` must stay
+  installable by copying one file.
 - **No request-time work.** The renderer runs on a timer and writes files.
   Nothing in this repo may fetch, compute, or phone home when a browser
   loads the SVG. That is the failure mode of the hosted services this
