@@ -6,7 +6,7 @@ Writes four SVGs to OUT_DIR:
   stats.svg      followers, repos, stars, last-year contributions
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
-  external.svg   PRs opened to repos outside your own account and orgs
+  external.svg   PRs opened to repos outside my own account and orgs
                  (how many merged, how many repos) and issues filed there
                  (how many the maintainers accepted, how many repos)
 
@@ -560,7 +560,7 @@ def render_external(C, pr_opened, pr_merged, pr_repos,
 
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external contributions</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">to repos outside your own account and orgs</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">to repos outside my own account and orgs</text>
   <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
   <text x="20" y="86" fill="{C['dim']}" font-size="11" font-weight="600">pull requests</text>
   {big(col_centers[0], 'opened', fmt_short(pr_opened), C['blue'], 124)}
