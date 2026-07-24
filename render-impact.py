@@ -14,12 +14,29 @@ Writes ONE SVG to OUT_DIR:
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
-  GH_TOKEN    (required) Personal access token with `read:user` + `public_repo`
+  GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
+              is NOT needed: identity comes from login + databaseId + orgs,
+              never the email field (which that scope gates).
               (can also be read from a file via --token-file or GH_TOKEN_FILE)
   OUT_DIR     where to write the SVG (default: ./widgets)
   CACHE_FILE  JSON cache of immutable data
               (default: /var/lib/gh-widgets/impact-cache.json)
   THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
+
+  GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
+  GH_EXTRA_EMAILS    extra commit-author addresses that are ours (comma-sep)
+  IMPACT_Z           Wilson lower-bound z score        (default 2.58)
+  IMPACT_PR_GAMMA    volume exponent, PR table         (default 1.0)
+  IMPACT_ISSUE_GAMMA volume exponent, issue table      (default 1.75)
+  IMPACT_LOC_GAMMA   volume exponent, live-code table  (default 0.5)
+
+Who counts as "us" is DERIVED from the token's own account (login, databaseId,
+orgs) rather than hardcoded, so joining an org needs no code change. The two
+GH_EXTRA_* vars can only ADD to the derived sets — an override would let a
+stale value silently reintroduce the drift that derivation removes. Line
+ownership is an EXACT match against the account's noreply addresses: in a
+third-party repo the commit-author email is attacker-controllable, so a
+substring test there was wrong in kind.
 
   --resync    discard the cache and refetch/re-blame everything (wired to run
               weekly, so no correctness claim rests permanently on MERGED
@@ -46,97 +63,77 @@ Deps: Python stdlib + the `git` CLI + git-fame (pip) for the blame pass.
 Requires Python 3.9+.
 """
 import argparse
+import importlib.util
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
-FONT = ('font-family="JetBrains Mono, ui-monospace, '
-        'SFMono-Regular, Menlo, monospace"')
 
-THEMES = {
-    "tokyonight": {
-        "bg":     "#1a1b26", "bg2":   "#16161e", "border": "#2a2e42",
-        "fg":     "#c0caf5", "dim":   "#565f89",
-        "blue":   "#7aa2f7", "cyan":  "#7dcfff", "purple": "#bb9af7",
-        "pink":   "#f7768e", "green": "#9ece6a", "gold":   "#e0af68",
-    },
-    "catppuccin": {
-        "bg":     "#1e1e2e", "bg2":   "#181825", "border": "#313244",
-        "fg":     "#cdd6f4", "dim":   "#7f849c",
-        "blue":   "#89b4fa", "cyan":  "#94e2d5", "purple": "#cba6f7",
-        "pink":   "#f5c2e7", "green": "#a6e3a1", "gold":   "#f9e2af",
-    },
-    "gruvbox": {
-        "bg":     "#282828", "bg2":   "#1d2021", "border": "#3c3836",
-        "fg":     "#ebdbb2", "dim":   "#928374",
-        "blue":   "#83a598", "cyan":  "#8ec07c", "purple": "#d3869b",
-        "pink":   "#fb4934", "green": "#b8bb26", "gold":   "#fabd2f",
-    },
-    "github-dark": {
-        "bg":     "#0d1117", "bg2":   "#010409", "border": "#30363d",
-        "fg":     "#e6edf3", "dim":   "#7d8590",
-        "blue":   "#58a6ff", "cyan":  "#39c5cf", "purple": "#bc8cff",
-        "pink":   "#ff7b72", "green": "#3fb950", "gold":   "#d29922",
-    },
-}
+def _load_common():
+    """Load ghwidgets_common.py from beside this script — see render.py."""
+    path = Path(__file__).resolve().with_name("ghwidgets_common.py")
+    if not path.exists():
+        raise SystemExit(
+            f"error: {path} is missing — it must sit beside this script "
+            f"(install.sh copies both; a partial copy is not usable)")
+    spec = importlib.util.spec_from_file_location("ghwidgets_common", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
+
+common = _load_common()
+
+REQUIRED_COMMON = 1
+if common.COMMON_VERSION != REQUIRED_COMMON:
+    raise SystemExit(
+        f"error: ghwidgets_common.py is version {common.COMMON_VERSION}, "
+        f"this script needs {REQUIRED_COMMON} — copy both files together")
+
+FONT = common.FONT
+THEMES = common.THEMES
+gql = common.gql
+save_cache = common.save_cache
+fmt_short = common.fmt_short
+xml_escape = common.xml_escape
+base_card = common.base_card
+stamp_cache_notice = common.stamp_cache_notice
 
 CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 
-# Locked metric knobs (validated in impact_stats.py — do not retune).
-Z = 2.58
-PR_GAMMA = 1.0
-ISSUE_GAMMA = 1.75
-LOC_GAMMA = 0.5
-
-# A repo counts only if it is public AND its owner is not one of these.
-INSIDERS = {s.casefold() for s in [
-    "Nitjsefnie", "BrainByteQuiz", "Consultest-CZ", "West-Scripts",
-    "Nitjsefnie-Games", "Nitjsefnie-OSC"]}
-
-# GitHub rewrites the commit author on merge to the noreply email
-# (75166987+Nitjsefnie@users.noreply.github.com) and drops the login, so a
-# git-fame row (keyed by email) is OURS if it carries the login OR is the
-# raw box email. Matching only the box email returns zero for most repos.
-OUR_EMAIL = "zmatek.peter@gmail.com"
-
 TOP_N = 5
 
 
+def metric_knobs():
+    """The ranking knobs, read from the environment at call time.
+
+    Defaults are the values validated when the metric was designed; they are
+    configurable so a run can be re-scored without editing source, NOT because
+    they are expected to change. An unparseable value aborts the run rather
+    than silently reverting to the default — see common.env_float.
+    """
+    return {
+        "z":           common.env_float("IMPACT_Z", 2.58),
+        "pr_gamma":    common.env_float("IMPACT_PR_GAMMA", 1.0),
+        "issue_gamma": common.env_float("IMPACT_ISSUE_GAMMA", 1.75),
+        "loc_gamma":   common.env_float("IMPACT_LOC_GAMMA", 0.5),
+    }
+
+
 def load_cache(path):
-    """Read the JSON cache. A missing, unreadable, corrupt, or
-    schema-mismatched cache is not an error: it degrades to a full fetch."""
-    try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
-        return {}
-    return data
-
-
-def save_cache(path, payload):
-    """Best-effort atomic write: temp file in the same directory, then
-    os.replace onto the target. A failed save must not fail the run."""
-    path = Path(path)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, path)
-    except Exception as e:
-        print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
+    """Read the JSON cache, checked against THIS script's schema version."""
+    return common.load_cache(path, CACHE_VERSION)
 
 
 def cache_complete(cache):
@@ -145,138 +142,19 @@ def cache_complete(cache):
                for k in ("fetched_at", "prs", "issues", "totals", "ourloc"))
 
 
-def gql(token, query, variables=None, retries=3):
-    req = urllib.request.Request(
-        "https://api.github.com/graphql",
-        method="POST",
-        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "gh-widgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)",
-        },
-    )
-    # Same retry contract as render.py: transient server-side conditions get
-    # a few retries; real errors fail fast.
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                body = json.loads(r.read())
-        except urllib.error.URLError:
-            if attempt == retries:
-                raise
-            time.sleep(5 * (attempt + 1))
-            continue
-        if "errors" in body:
-            transient = all(
-                e.get("type") in ("RESOURCE_LIMITS_EXCEEDED", "SERVICE_UNAVAILABLE")
-                for e in body["errors"]
-            )
-            if transient and attempt < retries:
-                time.sleep(5 * (attempt + 1))
-                continue
-            raise RuntimeError(f"GraphQL errors: {body['errors']}")
-        return body["data"]
-    raise RuntimeError("unreachable: gql retry loop exhausted")
-
-
-PR_QUERY = """
-query($login: String!, $cursor: String) {
-  user(login: $login) {
-    pullRequests(first: 100, after: $cursor,
-                 states: %s,
-                 orderBy: {field: CREATED_AT, direction: DESC}) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        merged
-        repository { nameWithOwner isPrivate owner { login } }
-      }
-    }
-  }
-}
-"""
+PR_QUERY = common.PR_QUERY
 
 
 def fetch_pull_requests(token, login, cached_prs=None, max_pages=50):
-    """Fetch the user's authored PRs and merge with the cached set.
-
-    Identical incremental contract to render.py's fetch_pull_requests:
-    MERGED is the only one-way PR state, so with a warm cache only
-    [OPEN, CLOSED] are queried live and unioned with the cached set keyed by
-    PR id, which guarantees a PR appears exactly once. A PR stays in the
-    live half until it merges: merging is the only way to leave the
-    OPEN/CLOSED result set, so a previously live PR that is now absent is
-    recorded as merged and moves to the cached half. On a cold cache (or
-    --resync) all three states are queried and the set is rebuilt.
-    max_pages is a runaway guard, not a real limit.
-
-    Returns (prs, prs_by_id): the union list and the keyed mapping to
-    persist in the cache.
-    """
-    states = "[OPEN, CLOSED]" if cached_prs is not None else "[OPEN, CLOSED, MERGED]"
-    q = PR_QUERY % states
-    live = []
-    cursor = None
-    for _ in range(max_pages):
-        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
-        live.extend(page["nodes"])
-        if not page["pageInfo"]["hasNextPage"]:
-            break
-        cursor = page["pageInfo"]["endCursor"]
-    known = dict(cached_prs or {})
-    live_ids = set()
-    for node in live:
-        live_ids.add(node["id"])
-        known[node["id"]] = node
-    if cached_prs is not None:
-        for pid, node in known.items():
-            if not node["merged"] and pid not in live_ids:
-                known[pid] = {**node, "merged": True}
-    return list(known.values()), known
+    """Thin wrapper over the shared implementation, passing THIS module's
+    `gql` so a test patch of it still intercepts the calls."""
+    return common.fetch_pull_requests(token, login, cached_prs, max_pages,
+                                      gql_fn=gql)
 
 
 def fetch_issues(token, login, max_pages=50):
-    """Page through every ISSUE the user has authored, every run.
-
-    Issues can be REOPENED, so unlike PRs there is no immutable slice to
-    freeze: no incremental caching here, the full [OPEN, CLOSED] list is
-    re-paged each run and the metrics recomputed. (The list is persisted in
-    the cache only as a stale-fallback snapshot for the durability layer.)
-    The GraphQL `issues` connection returns issues ONLY, so there is no PR
-    double-counting to guard against. max_pages is a runaway guard.
-    """
-    q = """
-    query($login: String!, $cursor: String) {
-      user(login: $login) {
-        issues(first: 100, after: $cursor,
-               states: [OPEN, CLOSED],
-               orderBy: {field: CREATED_AT, direction: DESC}) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            state
-            stateReason
-            repository { nameWithOwner isPrivate owner { login } }
-          }
-        }
-      }
-    }
-    """
-    issues = []
-    cursor = None
-    for _ in range(max_pages):
-        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["issues"]
-        issues.extend(page["nodes"])
-        if not page["pageInfo"]["hasNextPage"]:
-            break
-        cursor = page["pageInfo"]["endCursor"]
-    return issues
-
-
-def is_external(node):
-    """Public repo whose owner is not in INSIDERS (casefold)."""
-    r = node["repository"]
-    return not r["isPrivate"] and r["owner"]["login"].casefold() not in INSIDERS
+    """Thin wrapper over the shared implementation — see fetch_pull_requests."""
+    return common.fetch_issues(token, login, max_pages, gql_fn=gql)
 
 
 def fetch_repo_totals(token, repos):
@@ -312,11 +190,17 @@ def fetch_repo_totals(token, repos):
     return totals
 
 
-def blame_repo(repo, branch, dest):
+def blame_repo(repo, branch, dest, emails):
     """Full-clone the default branch into `dest` (blame needs history, so
     NOT --depth 1), aggregate surviving LOC per author email with git-fame,
     and return (ours, total). The clone is deleted by the caller. Raises on
-    any failure."""
+    any failure.
+
+    `emails` is the derived set of addresses that count as ours, matched
+    EXACTLY. This used to be a substring test, which was wrong in kind: in a
+    third-party repo the commit-author email is attacker-controllable, so any
+    address merely containing our login was counted as ours.
+    """
     cmd = ["git", "clone", "--single-branch"]
     if branch:
         cmd += ["--branch", branch]
@@ -331,13 +215,12 @@ def blame_repo(repo, branch, dest):
     total = data.get("total", {}).get("loc", 0)
     ours = 0
     for row in data.get("data", []):
-        em = str(row[0]).strip().lower()
-        if "nitjsefnie" in em or em == OUR_EMAIL:
+        if str(row[0]).strip().lower() in emails:
             ours += row[1]
     return ours, total
 
 
-def update_loc(candidate_repos, totals, cached_ourloc, resync):
+def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
     """Refresh the per-repo live-line counts. Only repos we have a merged PR
     in can carry our lines (external lines land only via merges), so only
     those are cloned — matching the validated clone_fame.py. A repo is
@@ -365,7 +248,7 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync):
     for i, (repo, t) in enumerate(moved, 1):
         tmp = Path(tempfile.mkdtemp(prefix="impact-fame-"))
         try:
-            ours, total = blame_repo(repo, t["branch"], tmp)
+            ours, total = blame_repo(repo, t["branch"], tmp, emails)
             ourloc[repo] = {"ours": ours, "total": total,
                             "branch": t["branch"], "head": t["head"]}
             sh = ours / total * 100 if total else 0
@@ -393,8 +276,8 @@ def wilson(w, n, z):
     return (p + z * z / (2 * n) - z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)) / d
 
 
-def impact_rows(our_counts, total_of, gamma):
-    """Rank repos by WilsonLowerBound(our/total, Z) * our**gamma.
+def impact_rows(our_counts, total_of, gamma, z):
+    """Rank repos by WilsonLowerBound(our/total, z) * our**gamma.
     our_counts: {repo: our}; total_of: repo -> total. Returns rows of
     (score, share_pct, our, total, repo), best first; our==0 rows (no
     contribution) are excluded."""
@@ -402,40 +285,40 @@ def impact_rows(our_counts, total_of, gamma):
     for repo, w in our_counts.items():
         n = total_of(repo)
         if w and n:
-            rows.append((wilson(w, n, Z) * (w ** gamma),
+            rows.append((wilson(w, n, z) * (w ** gamma),
                          w / n * 100, w, n, repo))
     rows.sort(reverse=True)
     return rows
 
 
-def pr_table(prs, totals):
+def pr_table(prs, totals, insiders, knobs):
     our_merged = {}
     for pr in prs:
-        if pr["merged"] and is_external(pr):
+        if pr["merged"] and common.is_external(pr, insiders):
             r = pr["repository"]["nameWithOwner"]
             our_merged[r] = our_merged.get(r, 0) + 1
     return impact_rows(our_merged,
                        lambda r: (totals.get(r) or {}).get("merged_prs", 0),
-                       PR_GAMMA)
+                       knobs["pr_gamma"], knobs["z"])
 
 
-def issue_table(issues, totals):
+def issue_table(issues, totals, insiders, knobs):
     our_completed = {}
     for it in issues:
         if (it["state"] == "CLOSED" and it["stateReason"] == "COMPLETED"
-                and is_external(it)):
+                and common.is_external(it, insiders)):
             r = it["repository"]["nameWithOwner"]
             our_completed[r] = our_completed.get(r, 0) + 1
     return impact_rows(our_completed,
                        lambda r: (totals.get(r) or {}).get("issues", 0),
-                       ISSUE_GAMMA)
+                       knobs["issue_gamma"], knobs["z"])
 
 
-def loc_table(ourloc):
+def loc_table(ourloc, knobs):
     our_lines = {r: v["ours"] for r, v in ourloc.items() if "ours" in v}
     return impact_rows(our_lines,
                        lambda r: (ourloc.get(r) or {}).get("total", 0),
-                       LOC_GAMMA)
+                       knobs["loc_gamma"], knobs["z"])
 
 
 def fmt_short(n):
@@ -540,17 +423,6 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
     return base_card(C, CARD_W, y + 10, body)
 
 
-def stamp_cache_notice(C, svg, fetched_at):
-    """A card rendered from cache must show it: tag the cache's own fetch
-    time bottom-left so staleness is visible rather than silent. Done as a
-    post-pass so the renderer signatures stay unchanged."""
-    m = re.search(r'height="(\d+)"', svg)
-    y = int(m.group(1)) - 8 if m else 12
-    note = (f'<text x="10" y="{y}" fill="{C["dim"]}" font-size="10">'
-            f'cached data from {xml_escape(fetched_at)}</text>')
-    return svg.replace("</svg>", f"  {note}\n</svg>")
-
-
 def main():
     p = argparse.ArgumentParser(
         description="Render the self-hosted External Impact SVG.")
@@ -585,20 +457,27 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     cache = {} if args.resync else load_cache(args.cache_file)
+    knobs = metric_knobs()
 
     stale = None
     try:
+        # Identity first: everything downstream depends on knowing who we are
+        # and which owners are insiders. Derived from the token's own account,
+        # so joining an org needs no code or config change.
+        me = common.fetch_identity(token, args.user, gql_fn=gql)
+        insiders = me.insiders
         prs, prs_by_id = fetch_pull_requests(
-            token, args.user, None if args.resync else cache.get("prs") or None)
-        issues = fetch_issues(token, args.user)
+            token, me.login, None if args.resync else cache.get("prs") or None)
+        issues = fetch_issues(token, me.login)
         repos = sorted({n["repository"]["nameWithOwner"]
-                        for n in prs + issues if is_external(n)})
+                        for n in prs + issues
+                        if common.is_external(n, insiders)})
         totals = fetch_repo_totals(token, repos)
         merged_repos = {n["repository"]["nameWithOwner"] for n in prs
-                        if n["merged"] and is_external(n)}
+                        if n["merged"] and common.is_external(n, insiders)}
         ourloc = update_loc(merged_repos, totals,
                             {} if args.resync else cache.get("ourloc") or {},
-                            args.resync)
+                            args.resync, me.emails)
     except Exception:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
@@ -610,19 +489,26 @@ def main():
         totals = cache["totals"]
         ourloc = cache["ourloc"]
         stale = cache["fetched_at"]
+        # Identity is cached alongside the data precisely so this path does
+        # not need the network. A cache written before identity was cached
+        # degrades to "the account itself", which can over-report externals
+        # for one render; the next successful run repairs it.
+        insiders = (frozenset(cache["insiders"]) if cache.get("insiders")
+                    else common.insider_set(args.user, []))
     else:
         save_cache(args.cache_file, {
             "version": CACHE_VERSION,
             "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "insiders": sorted(insiders),
             "prs": prs_by_id,
             "issues": issues,
             "totals": totals,
             "ourloc": ourloc,
         })
 
-    pr_rows = pr_table(prs, totals)
-    issue_rows = issue_table(issues, totals)
-    loc_rows = loc_table(ourloc)
+    pr_rows = pr_table(prs, totals, insiders, knobs)
+    issue_rows = issue_table(issues, totals, insiders, knobs)
+    loc_rows = loc_table(ourloc, knobs)
 
     svg = render_impact(C, pr_rows, issue_rows, loc_rows)
     if stale:

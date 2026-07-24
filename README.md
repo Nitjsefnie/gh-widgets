@@ -32,11 +32,10 @@ Render the SVGs yourself instead:
 ## Install
 
 ```sh
-sudo cp render.py /usr/local/bin/render.py
-sudo chmod +x /usr/local/bin/render.py
+sudo ./install.sh              # -> /usr/local/bin, or pass a directory
 
-# token: classic PAT with read:user + public_repo, or a fine-grained token
-# with read-only profile access. Save to a file with mode 600.
+# token: a classic PAT with public_repo is enough; read:user is NOT required
+# (nothing here reads your email). Save it to a file with mode 600.
 echo "ghp_xxx..." | sudo tee /etc/gh-widgets.token
 sudo chmod 600 /etc/gh-widgets.token
 
@@ -54,6 +53,52 @@ ls -la /var/www/example.com/widgets/
 ```
 
 Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
+
+### Why `install.sh` rather than `cp`
+
+Both renderers share `ghwidgets_common.py` and assert its `COMMON_VERSION` on
+startup, so the three files have to travel together. `install.sh` stages them
+into the destination and moves them into place, then starts both entry points
+to prove the install is coherent. A hand-rolled `cp` of one file leaves a
+renderer that refuses to run — deliberately, since the alternative is rendering
+wrong numbers from a stale module.
+
+Note the rename: `render.py` installs as `render-gh-widgets.py` (the name the
+units use). The scripts find the shared module relative to their own path, so
+the rename is safe.
+
+## Who counts as "you"
+
+The external-contribution and impact cards need to know which repos are
+*yours* and which lines are *yours*. Both are **derived from the token's own
+account** — `login`, `databaseId`, and the org list — so joining an
+organisation needs no config change. Ownership of a line is decided by exact
+match against the account's GitHub noreply addresses, not by pattern-matching
+a name.
+
+Two escape hatches, both **additive** — neither can remove something the API
+reported, because a stale override is exactly the drift this replaced:
+
+| Variable | Use it for |
+|---|---|
+| `GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
+| `GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
+
+## Tuning the impact score (`render-impact.py`)
+
+Each table ranks repos by `WilsonLowerBound(mine/total, z) * mine**gamma`. The
+defaults are the validated values; override only if you know why.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |
+| `IMPACT_PR_GAMMA` | `1.0` | How much raw PR volume counts against share. |
+| `IMPACT_ISSUE_GAMMA` | `1.75` | Same, for issues. |
+| `IMPACT_LOC_GAMMA` | `0.5` | Same, for surviving lines. |
+
+An unparseable value aborts the run rather than silently reverting to the
+default — a mis-typed knob that quietly renders wrong numbers is worse than a
+failed run.
 
 ## Usage (manual run)
 

@@ -40,8 +40,20 @@ was. That is fine in both directions.
   to the **`git` CLI** and to **git-fame** (pip). That is the whole reason
   it is a separate script with separate units and its own cache, rather
   than another card in `render.py`. Keep the boundary — new dependencies
-  belong on the impact side, if anywhere, and `render.py` must stay
-  installable by copying one file.
+  belong on the impact side, if anywhere.
+- **Identity is derived, never configured.** Whose repos count as insider,
+  and whose lines count as ours, come from the token's own account via
+  `fetch_identity`. `GH_EXTRA_INSIDERS` / `GH_EXTRA_EMAILS` may only *add*
+  to that set. A patch that lets configuration *replace* the fetched set
+  will be declined: it reintroduces the staleness this design removed, just
+  in a new location.
+- **Ownership matching is exact.** Commit-author email in a third-party repo
+  is attacker-controllable, so it is matched by exact set membership. Do not
+  reintroduce a substring, prefix, or regex test.
+- **Shared code lives in `ghwidgets_common.py`**, loaded by path and
+  version-checked via `COMMON_VERSION`. If you change that module's
+  interface, bump `COMMON_VERSION` and both scripts' `REQUIRED_COMMON` —
+  `test_common.py` fails if they drift apart.
 - **No request-time work.** The renderer runs on a timer and writes files.
   Nothing in this repo may fetch, compute, or phone home when a browser
   loads the SVG. That is the failure mode of the hosted services this

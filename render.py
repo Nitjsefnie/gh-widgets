@@ -12,7 +12,8 @@ Writes four SVGs to OUT_DIR:
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
-  GH_TOKEN    (required) Personal access token with `read:user` + `public_repo`
+  GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
+              is NOT needed: nothing here reads the account's email.
               (can also be read from a file via --token-file or GH_TOKEN_FILE)
   OUT_DIR     where to write the SVGs (default: ./widgets)
   CACHE_FILE  JSON cache of immutable data (default: /var/lib/gh-widgets/cache.json)
@@ -36,75 +37,69 @@ exits non-zero and the existing SVGs keep serving.
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import argparse
-from calendar import monthrange
-import json
+import importlib.util
 import os
-import re
 import sys
-import time
-import urllib.request
 import urllib.error
+from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-FONT = ('font-family="JetBrains Mono, ui-monospace, '
-        'SFMono-Regular, Menlo, monospace"')
 
-THEMES = {
-    "tokyonight": {
-        "bg":     "#1a1b26", "bg2":   "#16161e", "border": "#2a2e42",
-        "fg":     "#c0caf5", "dim":   "#565f89",
-        "blue":   "#7aa2f7", "cyan":  "#7dcfff", "purple": "#bb9af7",
-        "pink":   "#f7768e", "green": "#9ece6a", "gold":   "#e0af68",
-    },
-    "catppuccin": {
-        "bg":     "#1e1e2e", "bg2":   "#181825", "border": "#313244",
-        "fg":     "#cdd6f4", "dim":   "#7f849c",
-        "blue":   "#89b4fa", "cyan":  "#94e2d5", "purple": "#cba6f7",
-        "pink":   "#f5c2e7", "green": "#a6e3a1", "gold":   "#f9e2af",
-    },
-    "gruvbox": {
-        "bg":     "#282828", "bg2":   "#1d2021", "border": "#3c3836",
-        "fg":     "#ebdbb2", "dim":   "#928374",
-        "blue":   "#83a598", "cyan":  "#8ec07c", "purple": "#d3869b",
-        "pink":   "#fb4934", "green": "#b8bb26", "gold":   "#fabd2f",
-    },
-    "github-dark": {
-        "bg":     "#0d1117", "bg2":   "#010409", "border": "#30363d",
-        "fg":     "#e6edf3", "dim":   "#7d8590",
-        "blue":   "#58a6ff", "cyan":  "#39c5cf", "purple": "#bc8cff",
-        "pink":   "#ff7b72", "green": "#3fb950", "gold":   "#d29922",
-    },
-}
+def _load_common():
+    """Load ghwidgets_common.py from beside this script.
 
+    By path rather than by name: deployment renames this file to
+    render-gh-widgets.py, so an `import ghwidgets_common` would depend on the
+    script's own filename and on sys.path. This does not.
+    """
+    path = Path(__file__).resolve().with_name("ghwidgets_common.py")
+    if not path.exists():
+        raise SystemExit(
+            f"error: {path} is missing — it must sit beside this script "
+            f"(install.sh copies both; a partial copy is not usable)")
+    spec = importlib.util.spec_from_file_location("ghwidgets_common", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+common = _load_common()
+
+# The interface version this script was written against. A mismatch means one
+# file was copied without the other: fail loudly here rather than render
+# wrong numbers from a stale module.
+REQUIRED_COMMON = 1
+if common.COMMON_VERSION != REQUIRED_COMMON:
+    raise SystemExit(
+        f"error: ghwidgets_common.py is version {common.COMMON_VERSION}, "
+        f"this script needs {REQUIRED_COMMON} — copy both files together")
+
+# Re-exported so this module's surface is unchanged for callers and tests.
+# Internal call sites resolve these through module globals, which keeps them
+# patchable (the test suite swaps out `gql`).
+FONT = common.FONT
+THEMES = common.THEMES
+gql = common.gql
+save_cache = common.save_cache
+fmt_short = common.fmt_short
+xml_escape = common.xml_escape
+base_card = common.base_card
+stamp_cache_notice = common.stamp_cache_notice
 
 CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
 
 
 def load_cache(path):
-    """Read the JSON cache. A missing, unreadable, corrupt, or
-    schema-mismatched cache is not an error: it degrades to a full fetch."""
-    try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
-        return {}
-    return data
+    """Read the JSON cache, checked against THIS script's schema version.
 
-
-def save_cache(path, payload):
-    """Best-effort atomic write: temp file in the same directory, then
-    os.replace onto the target. A failed save must not fail the run."""
-    path = Path(path)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, path)
-    except Exception as e:
-        print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
+    (The impact renderer keeps its own cache and its own version, which is why
+    the shared loader takes the version as a parameter.)
+    """
+    return common.load_cache(path, CACHE_VERSION)
 
 
 def cache_complete(cache):
@@ -163,43 +158,6 @@ def monthly_windows(now):
                                tzinfo=now.tzinfo))
     bounds[-1] = now  # the old full-year query also counted up to "now"
     return list(zip(bounds, bounds[1:]))
-
-
-def gql(token, query, variables=None, retries=3):
-    req = urllib.request.Request(
-        "https://api.github.com/graphql",
-        method="POST",
-        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "gh-widgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)",
-        },
-    )
-    # GitHub intermittently answers the contribution-calendar query with
-    # RESOURCE_LIMITS_EXCEEDED under load (observed 2026-07-18: four hourly
-    # runs red, then the identical query succeeded minutes later). Transient
-    # server-side conditions get a few retries; real errors fail fast.
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                body = json.loads(r.read())
-        except urllib.error.URLError:
-            if attempt == retries:
-                raise
-            time.sleep(5 * (attempt + 1))
-            continue
-        if "errors" in body:
-            transient = all(
-                e.get("type") in ("RESOURCE_LIMITS_EXCEEDED", "SERVICE_UNAVAILABLE")
-                for e in body["errors"]
-            )
-            if transient and attempt < retries:
-                time.sleep(5 * (attempt + 1))
-                continue
-            raise RuntimeError(f"GraphQL errors: {body['errors']}")
-        return body["data"]
-    raise RuntimeError("unreachable: gql retry loop exhausted")
 
 
 def fetch(token, login, cached_days=None):
@@ -282,116 +240,38 @@ def fetch(token, login, cached_days=None):
     return user, days
 
 
-PR_QUERY = """
-query($login: String!, $cursor: String) {
-  user(login: $login) {
-    pullRequests(first: 100, after: $cursor,
-                 states: %s,
-                 orderBy: {field: CREATED_AT, direction: DESC}) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        merged
-        repository { nameWithOwner isPrivate owner { login } }
-      }
-    }
-  }
-}
-"""
+PR_QUERY = common.PR_QUERY
 
 
 def fetch_pull_requests(token, login, cached_prs=None, max_pages=50):
-    """Fetch the user's authored PRs and merge with the cached set.
+    """Thin wrapper over the shared implementation, passing THIS module's
+    `gql` so the test suite's patch of it still intercepts the calls."""
+    return common.fetch_pull_requests(token, login, cached_prs, max_pages,
+                                      gql_fn=gql)
 
-    There is no server-side "not in these orgs" filter, so we pull the list
-    and filter locally. max_pages is a runaway guard, not a real limit.
 
-    MERGED is the only one-way PR state, so with a warm cache only
-    [OPEN, CLOSED] are queried live and unioned with the cached set keyed by
-    PR id, which guarantees a PR appears exactly once. A PR stays in the
-    live half until it merges: merging is the only way to leave the
-    OPEN/CLOSED result set, so a previously live PR that is now absent is
-    recorded as merged and moves to the cached half. On a cold cache (or
-    --resync) all three states are queried and the set is rebuilt.
-
-    Returns (prs, prs_by_id): the union list for external_contributions and
-    the keyed mapping to persist in the cache.
-    """
-    states = "[OPEN, CLOSED]" if cached_prs is not None else "[OPEN, CLOSED, MERGED]"
-    q = PR_QUERY % states
-    live = []
-    cursor = None
-    for _ in range(max_pages):
-        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
-        live.extend(page["nodes"])
-        if not page["pageInfo"]["hasNextPage"]:
-            break
-        cursor = page["pageInfo"]["endCursor"]
-    known = dict(cached_prs or {})
-    live_ids = set()
-    for node in live:
-        live_ids.add(node["id"])
-        known[node["id"]] = node
-    if cached_prs is not None:
-        for pid, node in known.items():
-            if not node["merged"] and pid not in live_ids:
-                known[pid] = {**node, "merged": True}
-    return list(known.values()), known
+def fetch_issues(token, login, max_pages=50):
+    """Thin wrapper over the shared implementation — see fetch_pull_requests."""
+    return common.fetch_issues(token, login, max_pages, gql_fn=gql)
 
 
 def external_contributions(prs, login, orgs):
     """Count PRs to repos owned by neither the user nor any org they belong to.
 
     Private repos are excluded: they can't be shown off, and a viewer of the
-    SVG can't verify them.
+    SVG can't verify them. The insider predicate is shared with the impact
+    renderer so the two cards cannot disagree about what "external" means.
     """
-    insiders = {login.casefold()} | {o.casefold() for o in orgs}
+    insiders = common.insider_set(login, orgs)
     opened = merged = 0
     repos = set()
     for pr in prs:
-        repo = pr["repository"]
-        if repo["isPrivate"] or repo["owner"]["login"].casefold() in insiders:
+        if not common.is_external(pr, insiders):
             continue
         opened += 1
         merged += bool(pr["merged"])
-        repos.add(repo["nameWithOwner"])
+        repos.add(pr["repository"]["nameWithOwner"])
     return opened, merged, len(repos)
-
-
-def fetch_issues(token, login, max_pages=50):
-    """Page through every ISSUE the user has authored.
-
-    Mirrors fetch_pull_requests: no server-side "not in these orgs" filter,
-    so we pull the list and filter locally. The GraphQL `issues` connection
-    returns issues ONLY (pull requests live under `pullRequests`), so there
-    is no PR double-counting to guard against here. max_pages is a runaway
-    guard, not a real limit.
-    """
-    q = """
-    query($login: String!, $cursor: String) {
-      user(login: $login) {
-        issues(first: 100, after: $cursor,
-               states: [OPEN, CLOSED],
-               orderBy: {field: CREATED_AT, direction: DESC}) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            state
-            stateReason
-            repository { nameWithOwner isPrivate owner { login } }
-          }
-        }
-      }
-    }
-    """
-    issues = []
-    cursor = None
-    for _ in range(max_pages):
-        page = gql(token, q, {"login": login, "cursor": cursor})["user"]["issues"]
-        issues.extend(page["nodes"])
-        if not page["pageInfo"]["hasNextPage"]:
-            break
-        cursor = page["pageInfo"]["endCursor"]
-    return issues
 
 
 def external_issues(issues, login, orgs):
@@ -406,15 +286,14 @@ def external_issues(issues, login, orgs):
     external repos they touched. "maintainer-accepted" names the maintainer
     closing the report as done; it does not claim the author did the fixing.
     """
-    insiders = {login.casefold()} | {o.casefold() for o in orgs}
+    insiders = common.insider_set(login, orgs)
     opened = accepted = 0
     repos = set()
     for issue in issues:
-        repo = issue["repository"]
-        if repo["isPrivate"] or repo["owner"]["login"].casefold() in insiders:
+        if not common.is_external(issue, insiders):
             continue
         opened += 1
-        repos.add(repo["nameWithOwner"])
+        repos.add(issue["repository"]["nameWithOwner"])
         if issue["state"] == "CLOSED" and issue["stateReason"] == "COMPLETED":
             accepted += 1
     return opened, accepted, len(repos)
@@ -462,39 +341,6 @@ def aggregate_languages(repos):
     return sorted(((n, s, s / grand * 100, colors[n])
                    for n, s in totals.items()),
                   key=lambda x: -x[1])
-
-
-def fmt_short(n):
-    n = int(n)
-    if abs(n) < 1000:
-        return str(n)
-    if abs(n) < 1_000_000:
-        return f"{n/1000:.1f}".rstrip("0").rstrip(".") + "k"
-    return f"{n/1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
-
-
-def xml_escape(s):
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;")
-            .replace("'", "&apos;"))
-
-
-def base_card(C, w, h, body):
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" {FONT}>
-  <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="{C['bg']}"/>
-      <stop offset="1" stop-color="{C['bg2']}"/>
-    </linearGradient>
-    <pattern id="grain" patternUnits="userSpaceOnUse" width="3" height="3">
-      <rect width="3" height="1" fill="white" fill-opacity="0.012"/>
-    </pattern>
-  </defs>
-  <rect width="{w}" height="{h}" rx="8" fill="url(#bgGrad)"/>
-  <rect width="{w}" height="{h}" rx="8" fill="url(#grain)"/>
-  <rect width="{w}" height="{h}" rx="8" fill="none" stroke="{C['border']}" stroke-width="1"/>
-  {body}
-</svg>"""
 
 
 def render_stats(C, user, total_stars, year_contribs):
@@ -604,17 +450,6 @@ def render_languages(C, langs):
   {''.join(rects)}
   {''.join(legend)}"""
     return base_card(C, 420, 230, body)
-
-
-def stamp_cache_notice(C, svg, fetched_at):
-    """A card rendered from cache must show it: tag the cache's own fetch
-    time bottom-left so staleness is visible rather than silent. Done as a
-    post-pass so the renderer signatures stay unchanged."""
-    m = re.search(r'height="(\d+)"', svg)
-    y = int(m.group(1)) - 8 if m else 12
-    note = (f'<text x="10" y="{y}" fill="{C["dim"]}" font-size="10">'
-            f'cached data from {xml_escape(fetched_at)}</text>')
-    return svg.replace("</svg>", f"  {note}\n</svg>")
 
 
 def main():
