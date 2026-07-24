@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design spec — fetched identity, env-driven knobs, shared helpers</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+
+      --radius: 12px;
+      --border: 1.5px solid var(--gray-300);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.58;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; max-width: 1080px; }
+
+    header.page-head { margin-bottom: 40px; max-width: 840px; }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.14;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+    .context-box {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .context-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    nav.toc {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 48px;
+      max-width: 840px;
+    }
+    nav.toc .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 10px;
+    }
+    nav.toc ol { list-style: none; display: flex; flex-wrap: wrap; gap: 8px 22px; }
+    nav.toc a { color: var(--gray-700); text-decoration: none; font-size: 13.5px; }
+    nav.toc a:hover { color: var(--clay); }
+    nav.toc .n { font-family: var(--mono); font-size: 11px; color: var(--gray-500); margin-right: 6px; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent  { color: var(--clay); }
+    .summary .v.ok      { color: var(--olive); }
+
+    .decision {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--clay);
+      border-radius: var(--radius);
+      padding: 22px 26px;
+      margin-bottom: 56px;
+    }
+    .decision .d-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--clay);
+      margin-bottom: 8px;
+    }
+    .decision .d-head {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .decision .d-body { font-size: 14.5px; color: var(--gray-700); max-width: 760px; }
+    .decision .d-body + .d-body { margin-top: 8px; }
+    .decision ol { margin: 10px 0 0 20px; font-size: 14.5px; }
+    .decision ol li { margin: 6px 0; }
+
+    section { margin-bottom: 60px; scroll-margin-top: 24px; }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 740px;
+      margin-bottom: 24px;
+    }
+    p.body { font-size: 14.5px; max-width: 760px; margin-bottom: 14px; }
+    p.body strong { color: var(--slate); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #C9B98A;
+    }
+    pre {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: #C9B98A;
+      max-width: 840px;
+      line-height: 1.7;
+    }
+    pre code { background: none; border: none; padding: 0; }
+
+    .tbl-wrap { overflow-x: auto; }
+    .tbl {
+      width: 100%;
+      border: var(--border);
+      border-radius: var(--radius);
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      font-size: 13.5px;
+    }
+    .tbl th, .tbl td {
+      text-align: left;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--gray-300);
+      vertical-align: top;
+    }
+    .tbl th {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--gray-500);
+      background: var(--gray-150);
+      font-weight: 600;
+    }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl td { color: var(--gray-700); }
+    .tbl td.slate { color: var(--slate); font-weight: 600; }
+    .tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
+    .tbl tbody tr:hover { background: var(--gray-150); }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+    .compare .col {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .compare .col-head {
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: var(--border);
+    }
+    .compare .col.bad  .col-head { background: #2E211C; color: var(--rust); }
+    .compare .col.good .col-head { background: #232A1C; color: var(--olive); }
+    .compare .col-body { padding: 16px 18px; font-size: 13.5px; }
+    .compare .col-body ul { list-style: none; }
+    .compare .col-body li { margin: 7px 0; padding-left: 18px; position: relative; }
+    .compare .col.bad  li:before { content: '\2715'; position: absolute; left: 0; color: var(--rust); }
+    .compare .col.good li:before { content: '\2713'; position: absolute; left: 0; color: var(--olive); }
+
+    .changes { display: flex; flex-direction: column; gap: 12px; }
+    .change {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 4px 24px;
+    }
+    @media (max-width: 720px) { .change { grid-template-columns: 1fr; } }
+    .change .file {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--clay);
+      word-break: break-all;
+    }
+    .change .what { font-size: 14px; color: var(--gray-700); }
+    .change .what .lead { color: var(--slate); font-weight: 600; }
+
+    .checklist { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    .check .box {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 2px solid var(--gray-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .check .ck-text { font-size: 14px; color: var(--gray-700); }
+    .check .ck-text strong { color: var(--slate); }
+
+    .risks {
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--white);
+    }
+    .risks .row { display: grid; grid-template-columns: 1.6fr 90px 1.6fr; }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: var(--border); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: var(--border); }
+    @media (max-width: 780px) {
+      .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); }
+    }
+    .risks .head {
+      background: var(--gray-150);
+      font-weight: 600;
+      color: var(--slate);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .sev {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .sev.high { background: #4A2A1C; color: #F0B79C; }
+    .sev.med  { background: var(--oat);  color: var(--slate); }
+    .sev.low  { background: #2D3A24; color: #B6CC96; }
+
+    .deferred { display: flex; flex-direction: column; gap: 14px; max-width: 840px; }
+    .defer {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--gray-500);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .defer .dt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .defer .dd { font-size: 13.5px; color: var(--gray-500); }
+
+    .footer {
+      color: var(--gray-500);
+      font-size: 13px;
+      margin-top: 64px;
+      padding-top: 22px;
+      border-top: 1px solid var(--gray-300);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="page-head">
+      <div class="eyebrow">Design spec · gh-widgets</div>
+      <h1>Fetched identity, env-driven knobs, shared helpers</h1>
+      <div class="context-box">
+        <span class="label">Context</span>
+        <code>render-impact.py</code> hardcodes the facts that decide <em>whose</em>
+        impact it measures — a literal set of five org names and a literal email
+        matched by substring — while <code>render.py</code> derives the same
+        concept from the API. The two scripts also carry roughly 200 lines of
+        byte-identical duplicated code. This spec replaces the constants with
+        fetched identity, moves the metric knobs to the environment, and extracts
+        the duplication into one shared module.
+      </div>
+    </header>
+
+    <nav class="toc">
+      <span class="label">Contents</span>
+      <ol>
+        <li><a href="#s1"><span class="n">01</span>Background</a></li>
+        <li><a href="#s2"><span class="n">02</span>Before vs. after</a></li>
+        <li><a href="#s3"><span class="n">03</span>Verified facts</a></li>
+        <li><a href="#s4"><span class="n">04</span>Identity model</a></li>
+        <li><a href="#s5"><span class="n">05</span>Environment variables</a></li>
+        <li><a href="#s6"><span class="n">06</span>Change inventory</a></li>
+        <li><a href="#s7"><span class="n">07</span>Module boundary</a></li>
+        <li><a href="#s8"><span class="n">08</span>Verification</a></li>
+        <li><a href="#s9"><span class="n">09</span>Risks</a></li>
+        <li><a href="#s10"><span class="n">10</span>Out of scope</a></li>
+      </ol>
+    </nav>
+
+    <div class="summary">
+      <div class="cell"><div class="k">Scope</div><div class="v accent">4 decisions</div></div>
+      <div class="cell"><div class="k">Files touched</div><div class="v">7</div></div>
+      <div class="cell"><div class="k">Rendered output</div><div class="v ok">Unchanged</div></div>
+      <div class="cell"><div class="k">Deferred</div><div class="v">3 items</div></div>
+    </div>
+
+    <div class="decision">
+      <div class="d-tag">Decision</div>
+      <div class="d-head">Identity is derived from the token's own account; configuration may only add to it.</div>
+      <div class="d-body">
+        <ol>
+          <li><strong>Identity is fetched, not configured.</strong> Env vars may
+            only <em>add</em> to the derived set, never replace it.</li>
+          <li><strong>The four metric knobs become env-driven</strong>, with the
+            current values as defaults.</li>
+          <li><strong>The duplication moves to <code>ghwidgets_common.py</code></strong>,
+            loaded by path, with a version constant both scripts assert against.</li>
+          <li><strong><code>install.sh</code> copies all three files</strong>, so a
+            partial copy stops being possible.</li>
+        </ol>
+      </div>
+      <div class="d-body">Why not simply move the constants into env vars: a new
+        org would still count as external until someone edits a unit file. That is
+        the same failure in a different location, not a fix.</div>
+    </div>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>Background</h2></div>
+      <p class="sec-intro">What the reader needs to know to evaluate the rest.</p>
+      <p class="body">The impact renderer decides which repositories are
+        <strong>external</strong> by comparing a repo owner against a hardcoded
+        <code>INSIDERS</code> set, and decides which lines are
+        <strong>ours</strong> by testing whether a commit-author email contains
+        the substring <code>"nitjsefnie"</code>. Both are constants in source.</p>
+      <p class="body">The substring test is the weaker of the two: in a
+        third-party repository, commit author email is attacker-controllable, so
+        any address containing that substring is counted as ours. The impact is
+        cosmetic — an inflated line count — but the check is wrong in kind, not
+        just in degree.</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>Before vs. after</h2></div>
+      <p class="sec-intro">The behaviour being replaced, against what takes its place.</p>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">Before</div>
+          <div class="col-body"><ul>
+            <li>Five org names hardcoded in <code>INSIDERS</code>; joining a sixth org silently counts it as external.</li>
+            <li>Ownership decided by <code>"nitjsefnie" in email</code> — a substring test on untrusted input.</li>
+            <li><code>Z</code> and three gammas fixed in source, citing a validation script that is not in the repo.</li>
+            <li>~200 lines duplicated across two scripts, drifting independently.</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">After</div>
+          <div class="col-body"><ul>
+            <li>Insiders derived from <code>user.organizations</code> + <code>login</code>; new orgs are picked up automatically.</li>
+            <li>Ownership decided by exact membership in a derived address set.</li>
+            <li>Knobs read from the environment, current values as defaults, unparseable input exits non-zero.</li>
+            <li>One shared module, version-asserted at startup.</li>
+          </ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>Verified facts</h2></div>
+      <p class="sec-intro">Everything below was confirmed by query on 2026-07-24, not assumed.</p>
+      <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Fact</th><th>Value</th><th>How verified</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="slate">databaseId</td>
+            <td class="mono">75166987</td>
+            <td>GraphQL query against the live account</td>
+          </tr>
+          <tr>
+            <td class="slate">Constructed noreply</td>
+            <td class="mono">75166987+Nitjsefnie@users.noreply.github.com</td>
+            <td>Matches the address recorded in <code>/root/CLAUDE.md</code></td>
+          </tr>
+          <tr>
+            <td class="slate">Fetched org list</td>
+            <td class="mono">BrainByteQuiz, Consultest-CZ, West-Scripts, Nitjsefnie-Games, Nitjsefnie-OSC</td>
+            <td><strong>Identical</strong> to the current <code>INSIDERS</code> literal</td>
+          </tr>
+          <tr>
+            <td class="slate">user.email</td>
+            <td class="mono">not fetchable</td>
+            <td>Production token lacks <code>read:user</code>; requesting the field fails the entire query with <code>INSUFFICIENT_SCOPES</code></td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="body" style="margin-top:16px">Row three is the load-bearing one:
+        the fetched set reproduces the hardcoded set exactly, so this refactor
+        <strong>changes no rendered number today</strong>. Row four constrains the
+        design — <code>email</code> must not appear in the query at all.</p>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head"><span class="num">04</span><h2>Identity model</h2></div>
+      <p class="sec-intro">Two derived sets, both additive-only from configuration.</p>
+      <pre><code>insiders = casefold({login} ∪ fetched_orgs ∪ split(GH_EXTRA_INSIDERS))
+
+our_emails = lower(
+    {f"{databaseId}+{login}@users.noreply.github.com",   # modern noreply
+     f"{login}@users.noreply.github.com"}                # legacy noreply
+    ∪ split(GH_EXTRA_EMAILS)
+)</code></pre>
+      <p class="body">Matching is <strong>exact set membership</strong>, replacing
+        the substring test. The box address moves from a source constant to
+        <code>GH_EXTRA_EMAILS</code> in the unit files.</p>
+      <p class="body">A repo is external iff it is public <strong>and</strong> its
+        owner's login (casefolded) is not in <code>insiders</code> — one
+        predicate, shared by both scripts.</p>
+    </section>
+
+    <section id="s5">
+      <div class="sec-head"><span class="num">05</span><h2>Environment variables</h2></div>
+      <p class="sec-intro">Defaults preserve today's behaviour exactly.</p>
+      <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="slate mono">GH_EXTRA_INSIDERS</td><td class="mono">—</td><td>Comma-separated extra owner logins treated as insiders. Additive.</td></tr>
+          <tr><td class="slate mono">GH_EXTRA_EMAILS</td><td class="mono">—</td><td>Comma-separated extra addresses counted as ours in the blame pass. Additive.</td></tr>
+          <tr><td class="slate mono">IMPACT_Z</td><td class="mono">2.58</td><td>Wilson lower-bound z score.</td></tr>
+          <tr><td class="slate mono">IMPACT_PR_GAMMA</td><td class="mono">1.0</td><td>Volume exponent, PR table.</td></tr>
+          <tr><td class="slate mono">IMPACT_ISSUE_GAMMA</td><td class="mono">1.75</td><td>Volume exponent, issue table.</td></tr>
+          <tr><td class="slate mono">IMPACT_LOC_GAMMA</td><td class="mono">0.5</td><td>Volume exponent, live-code table.</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="body" style="margin-top:16px">Unparseable numeric values
+        <strong>exit non-zero</strong>. Silently falling back to the default would
+        render wrong numbers with no signal — the exact failure mode this spec
+        exists to remove.</p>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head"><span class="num">06</span><h2>Change inventory</h2></div>
+      <p class="sec-intro">Every file the implementation touches.</p>
+      <div class="changes">
+        <div class="change">
+          <div class="file">ghwidgets_common.py</div>
+          <div class="what"><span class="lead">New file.</span> Shared code, identity derivation, and <code>COMMON_VERSION</code>.</div>
+        </div>
+        <div class="change">
+          <div class="file">render.py</div>
+          <div class="what"><span class="lead">Import shared code by path.</span> Derive insiders via the shared predicate; drop local duplicates. Stays stdlib-only.</div>
+        </div>
+        <div class="change">
+          <div class="file">render-impact.py</div>
+          <div class="what"><span class="lead">Delete the constants.</span> Fetch identity, read knobs from env, exact email matching, import shared code.</div>
+        </div>
+        <div class="change">
+          <div class="file">test_render.py</div>
+          <div class="what"><span class="lead">Point at the new layout.</span> Existing cases keep passing unchanged.</div>
+        </div>
+        <div class="change">
+          <div class="file">test_common.py</div>
+          <div class="what"><span class="lead">New file.</span> Identity derivation, env parsing, exact-match ownership — including the case the substring test got wrong.</div>
+        </div>
+        <div class="change">
+          <div class="file">install.sh</div>
+          <div class="what"><span class="lead">New file.</span> Copies all three files to <code>/usr/local/bin</code> and refuses a partial copy.</div>
+        </div>
+        <div class="change">
+          <div class="file">README.md · CONTRIBUTING.md</div>
+          <div class="what"><span class="lead">Document the three-file deploy</span> and the new environment variables.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head"><span class="num">07</span><h2>Module boundary</h2></div>
+      <p class="sec-intro">Only what both scripts genuinely share moves.</p>
+      <p class="body">The shared module holds the theme table and
+        <code>FONT</code>; <code>gql()</code> with its retry contract;
+        <code>PR_QUERY</code>, <code>fetch_pull_requests()</code> and
+        <code>fetch_issues()</code>; <code>load_cache()</code> /
+        <code>save_cache()</code>; <code>fmt_short()</code>,
+        <code>xml_escape()</code>, <code>base_card()</code> and
+        <code>stamp_cache_notice()</code>; plus the new identity functions.</p>
+      <p class="body">Card rendering, the metric math, and the blame pass
+        <strong>stay in their own scripts</strong>.</p>
+      <p class="body">Both scripts load the module by explicit path relative to
+        their own <code>__file__</code> via
+        <code>importlib.util.spec_from_file_location</code> — the pattern already
+        used by <code>test_render.py</code>. No <code>sys.path</code> mutation, no
+        packaging, no build step. Deployment renames <code>render.py</code> to
+        <code>render-gh-widgets.py</code>, so import-by-name would break;
+        import-by-path does not care about the script's own filename.</p>
+    </section>
+
+    <section id="s8">
+      <div class="sec-head"><span class="num">08</span><h2>Verification</h2></div>
+      <p class="sec-intro">How the implementer confirms the change is correct.</p>
+      <div class="checklist">
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>python3 -m unittest discover -v</strong> passes.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>render.py imports nothing outside the stdlib.</strong> Grep its imports.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Live run reproduces the 15:39 tables.</strong> The fetched insider set equals the old literal, so the SVG must not change.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Corrupt COMMON_VERSION deliberately.</strong> Both scripts must refuse to start.</div></div>
+      </div>
+    </section>
+
+    <section id="s9">
+      <div class="sec-head"><span class="num">09</span><h2>Risks</h2></div>
+      <div class="risks">
+        <div class="row">
+          <div class="cell head">Risk</div>
+          <div class="cell head">Sev</div>
+          <div class="cell head">Mitigation</div>
+        </div>
+        <div class="row">
+          <div class="cell">An email used historically is in neither derived form nor <code>GH_EXTRA_EMAILS</code>, undercounting owned lines.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">Additive <code>GH_EXTRA_EMAILS</code>; the weekly <code>--resync</code> re-blames everything, so a corrected list takes effect within a week.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Partial copy to <code>/usr/local/bin</code> leaves a stale module beside a new script.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell"><code>COMMON_VERSION</code> assertion at startup, plus <code>install.sh</code> copying all three.</div>
+        </div>
+        <div class="row">
+          <div class="cell">A private org membership is invisible to the token, so its repos count as external.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Pre-existing in <code>render.py</code>; <code>GH_EXTRA_INSIDERS</code> covers it.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Three files instead of one weakens the copy-deploy story.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell"><code>install.sh</code> becomes the documented path; the manual <code>cp</code> remains possible.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s10">
+      <div class="sec-head"><span class="num">10</span><h2>Out of scope</h2></div>
+      <p class="sec-intro">Named so the reader knows these were considered, not missed.</p>
+      <div class="deferred">
+        <div class="defer">
+          <div class="dt">The <code>max_pages=50</code> truncation interacting with the "absent ⇒ merged" inference</div>
+          <div class="dd">Real but latent, repaired weekly by <code>--resync</code>, and unrelated to constants. Tracked separately.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Retuning <code>Z</code> or the gammas</div>
+          <div class="dd">They become configurable; their values do not change.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Vendoring <code>impact_stats.py</code> / <code>clone_fame.py</code></div>
+          <div class="dd">The validation scripts the knob comment cites live only in an ephemeral scratchpad. Worth recovering into the repo, but that is its own change.</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Design spec · gh-widgets · 2026-07-24 · relates to: 2026-07-21 widget cache design</p>
+    </div>
+
+  </div>
+</body>
+</html>
