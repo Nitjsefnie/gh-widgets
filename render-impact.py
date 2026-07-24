@@ -3,7 +3,7 @@
 gh-widgets — render the self-hosted "External Impact" SVG.
 
 Writes ONE SVG to OUT_DIR:
-  impact.svg    three ranked tables (top 10 external repos each) of your
+  impact.svg    three ranked tables (top 5 external repos each) of your
                 contribution to repos outside your own account and orgs:
                 pull requests (your merged / all merged), issues (your
                 maintainer-accepted / all issues) and live code (your
@@ -111,7 +111,7 @@ INSIDERS = {s.casefold() for s in [
 # raw box email. Matching only the box email returns zero for most repos.
 OUR_EMAIL = "zmatek.peter@gmail.com"
 
-TOP_N = 10
+TOP_N = 5
 
 
 def load_cache(path):
@@ -471,11 +471,14 @@ def base_card(C, w, h, body):
 </svg>"""
 
 
-CARD_W = 480
-COL_MT = 330   # mine/total, right-anchored
-COL_SHARE = 395  # share, right-anchored
-COL_SCORE = 460  # impact score, right-anchored
-REPO_CHARS = 42  # owner/name truncation budget (~280px at font-size 11 mono)
+CARD_W = 520
+COL_MINE = 290   # mine, right-anchored
+COL_TOTAL = 340  # total, right-anchored
+COL_SHARE = 390  # share, right-anchored
+COL_SCORE = 500  # impact score, right-anchored (long header clears share)
+BAR_X = 20
+BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score in section
+REPO_CHARS = 34  # owner/name truncation budget (~225px at font-size 11 mono)
 
 
 def truncate(s, n):
@@ -483,27 +486,37 @@ def truncate(s, n):
 
 
 def render_section(C, y, title, rows, accent):
-    parts = [f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11" '
+    parts = [f'<text x="20" y="{y}" fill="{accent}" font-size="11" '
              f'font-weight="600">{title}</text>']
     y += 16
     parts.append(
         f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
-        f'<text x="{COL_MT}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">mine/total</text>'
+        f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">mine</text>'
+        f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">total</text>'
         f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">share</text>'
         f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">impact score</text>')
     y += 17
-    if not rows:
+    top = rows[:TOP_N]
+    if not top:
         parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
                      f'no external contributions yet</text>')
         y += 16
-    for score, share, w, n, repo in rows[:TOP_N]:
+        return parts, y
+    best = top[0][0] or 1
+    for score, share, w, n, repo in top:
+        bar_w = max(score / best * BAR_MAX_W, 2)
         parts.append(
             f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">'
             f'{xml_escape(truncate(repo, REPO_CHARS))}</text>'
-            f'<text x="{COL_MT}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{w}/{fmt_short(n)}</text>'
-            f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{share:.1f}%</text>'
-            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{score:.2f}</text>')
-        y += 16
+            f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{w}</text>'
+            f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{fmt_short(n)}</text>'
+            f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{share:.1f}%</text>'
+            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{score:.2f}</text>'
+            # rating bar: length = score normalized to the section's top
+            # score (row #1 = full width), Dota-hero-stats style
+            f'<rect x="{BAR_X}" y="{y + 5}" width="{BAR_MAX_W}" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
+            f'<rect x="{BAR_X}" y="{y + 5}" width="{bar_w:.1f}" height="3" rx="1.5" fill="{accent}"/>')
+        y += 22
     return parts, y
 
 
@@ -520,11 +533,11 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
         parts, y = render_section(C, y, title, rows, accent)
         body += "\n  " + "\n  ".join(parts)
         if i < len(sections) - 1:
-            y += 10
+            y += 12
             body += (f'\n  <line x1="20" y1="{y}" x2="{CARD_W - 20}" y2="{y}" '
                      f'stroke="{C["border"]}"/>')
             y += 24
-    return base_card(C, CARD_W, y + 12, body)
+    return base_card(C, CARD_W, y + 10, body)
 
 
 def stamp_cache_notice(C, svg, fetched_at):
