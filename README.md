@@ -1,13 +1,14 @@
 # gh-widgets
 
-Self-hosted alternative to `github-readme-stats` and friends. Renders four
+Self-hosted alternative to `github-readme-stats` and friends. Renders five
 static SVGs about your GitHub profile on a cron — no JavaScript, no third-party
 service, no flakiness.
 
-![stats](https://nitjsefni.eu/widgets/stats.svg)
-![streak](https://nitjsefni.eu/widgets/streak.svg)
-![languages](https://nitjsefni.eu/widgets/languages.svg)
-![external](https://nitjsefni.eu/widgets/external.svg)
+<img src="https://nitjsefni.eu/widgets/stats.svg" width="720" alt="stats" /><br/>
+<img src="https://nitjsefni.eu/widgets/streak.svg" width="720" alt="streak" /><br/>
+<img src="https://nitjsefni.eu/widgets/languages.svg" width="720" alt="languages" /><br/>
+<img src="https://nitjsefni.eu/widgets/external.svg" width="720" alt="external" /><br/>
+<img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="impact" /><br/>
 
 ## Why
 
@@ -94,10 +95,11 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 ## Embedding
 
 ```html
-<img src="https://your-domain/widgets/stats.svg"     width="420" alt="GitHub stats" />
-<img src="https://your-domain/widgets/streak.svg"    width="420" alt="Contribution streak" />
-<img src="https://your-domain/widgets/languages.svg" width="420" alt="Top languages" />
-<img src="https://your-domain/widgets/external.svg"  width="420" alt="External contributions" />
+<img src="https://your-domain/widgets/stats.svg"     width="720" alt="GitHub stats" />
+<img src="https://your-domain/widgets/streak.svg"    width="720" alt="Contribution streak" />
+<img src="https://your-domain/widgets/languages.svg" width="720" alt="Top languages" />
+<img src="https://your-domain/widgets/external.svg"  width="720" alt="External contributions" />
+<img src="https://your-domain/widgets/impact.svg"    width="720" alt="External impact" />
 ```
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
