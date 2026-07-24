@@ -4,8 +4,8 @@ gh-widgets — render the self-hosted "External Impact" SVG.
 
 Writes ONE SVG to OUT_DIR:
   impact.svg    three ranked tables (top 5 external repos each) of your
-                contribution to repos outside your own account and orgs:
-                pull requests (your merged / all merged), issues (your
+                contribution to repos outside my own account and orgs:
+                pull requests (my merged / all merged), issues (my
                 maintainer-accepted / all issues) and live code (your
                 surviving default-branch lines / all lines, via git blame).
                 Each repo is ranked by an impact score:
@@ -524,7 +524,7 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
     y = 88
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external impact</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">contribution to repos outside your own account and orgs</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">contribution to repos outside my own account and orgs</text>
   <line x1="20" y1="64" x2="{CARD_W - 20}" y2="64" stroke="{C['border']}"/>"""
     sections = (("Pull Requests", pr_rows, C["blue"]),
                 ("Issues", issue_rows, C["green"]),
