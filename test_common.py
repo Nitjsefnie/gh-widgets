@@ -293,6 +293,60 @@ class XmlEscape(unittest.TestCase):
         self.assertEqual(common.xml_escape(42), "42")
 
 
+class FmtShort(unittest.TestCase):
+    # Shown on every card; a wrong magnitude renders a plausible-looking
+    # wrong number that nobody notices.
+
+    def test_below_a_thousand_is_plain(self):
+        self.assertEqual(common.fmt_short(0), "0")
+        self.assertEqual(common.fmt_short(999), "999")
+        self.assertEqual(common.fmt_short(-999), "-999")
+
+    def test_thousands_get_a_k_suffix(self):
+        self.assertEqual(common.fmt_short(1234), "1.2k")
+        self.assertEqual(common.fmt_short(1500), "1.5k")
+        self.assertEqual(common.fmt_short(-1234), "-1.2k")
+
+    def test_millions_get_an_m_suffix(self):
+        self.assertEqual(common.fmt_short(2_500_000), "2.5M")
+
+    def test_trailing_zero_is_dropped(self):
+        self.assertEqual(common.fmt_short(1000), "1k")
+        self.assertEqual(common.fmt_short(1_000_000), "1M")
+
+    def test_just_under_a_million_rounds_up_to_1000k(self):
+        # Rounding artifact locked in as documentation: 999_999 renders as
+        # "1000k", not "1M" — the k/M boundary is checked before rounding.
+        self.assertEqual(common.fmt_short(999_999), "1000k")
+
+    def test_non_int_input_is_coerced(self):
+        self.assertEqual(common.fmt_short("42"), "42")
+        self.assertEqual(common.fmt_short(1234.0), "1.2k")
+
+
+class BaseCard(unittest.TestCase):
+    # The shared SVG chrome every card is built on; a breakage here breaks
+    # every widget at once.
+    C = common.THEMES["tokyonight"]
+
+    def test_wraps_the_body_in_a_sized_svg(self):
+        svg = common.base_card(self.C, 420, 180, "<text>hi</text>")
+        self.assertTrue(svg.startswith(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="420" height="180" viewBox="0 0 420 180"'))
+        self.assertIn("<text>hi</text>", svg)
+        self.assertTrue(svg.rstrip().endswith("</svg>"))
+
+    def test_theme_colors_are_applied(self):
+        svg = common.base_card(self.C, 420, 180, "")
+        self.assertIn(f'stop-color="{self.C["bg"]}"', svg)
+        self.assertIn(f'stop-color="{self.C["bg2"]}"', svg)
+        self.assertIn(f'stroke="{self.C["border"]}"', svg)
+
+    def test_font_is_declared(self):
+        self.assertIn(common.FONT, common.base_card(self.C, 420, 180, ""))
+
+
 class NoreplyAddresses(unittest.TestCase):
     # A miss here silently under-counts contributions: the commit author is
     # matched exactly against this set.
