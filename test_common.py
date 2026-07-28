@@ -13,6 +13,8 @@ from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", Path(__file__).with_name("ghwidgets_common.py"))
+if spec is None or spec.loader is None:
+    raise SystemExit("error: cannot load ghwidgets_common.py")
 common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
 
@@ -137,7 +139,9 @@ class FetchPullRequests(unittest.TestCase):
         # two canned single pages, counting sweep invocations. The cold-cache
         # [OPEN, CLOSED, MERGED] query matches neither branch on purpose:
         # "[MERGED]" is not a substring of "[OPEN, CLOSED, MERGED]".
-        self.merged_calls = 0
+        # Deliberately set outside __init__: fixture state owned by the fake
+        # factory, mirroring the FetchPullRequests style (triaged, see #5).
+        self.merged_calls = 0  # pylint: disable=attribute-defined-outside-init
 
         def _gql(token, query, variables=None, **kw):
             if "[MERGED]" in query:
@@ -213,7 +217,9 @@ class FetchIssues(unittest.TestCase):
 
     def paged_gql(self, pages):
         """Serve canned issue pages in order, recording every call."""
-        self.calls = []
+        # Deliberately set outside __init__: fixture state owned by the fake
+        # factory, mirroring the FetchPullRequests style (triaged, see #5).
+        self.calls = []  # pylint: disable=attribute-defined-outside-init
 
         def _gql(token, query, variables=None, **kw):
             self.calls.append(variables)

@@ -18,6 +18,8 @@ from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "render", Path(__file__).with_name("render.py"))
+if spec is None or spec.loader is None:
+    raise SystemExit("error: cannot load render.py")
 render = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render)
 
@@ -133,7 +135,7 @@ class ExternalIssues(unittest.TestCase):
         issues = self.issues(
             ("me/mine", "CLOSED", "COMPLETED", False),        # own account
             ("MyOrg/thing", "CLOSED", "COMPLETED", False),    # own org
-            ("someone/theirs", "CLOSED", "COMPLETED", False), # external
+            ("someone/theirs", "CLOSED", "COMPLETED", False),  # external
         )
         # one external issue, in one external repo, maintainer-accepted
         self.assertEqual(

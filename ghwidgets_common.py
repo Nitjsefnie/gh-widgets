@@ -42,6 +42,18 @@ from pathlib import Path
 COMMON_VERSION = 1
 
 
+def check_version(required):
+    """Fail loudly if this module is not the version the caller pins.
+
+    A mismatch means one file was copied without the other; aborting here is
+    better than rendering wrong numbers from a stale module.
+    """
+    if COMMON_VERSION != required:
+        raise SystemExit(
+            f"error: ghwidgets_common.py is version {COMMON_VERSION}, "
+            f"this script needs {required} — copy both files together")
+
+
 FONT = ('font-family="JetBrains Mono, ui-monospace, '
         'SFMono-Regular, Menlo, monospace"')
 
@@ -93,8 +105,8 @@ def env_float(name, default):
         return default
     try:
         return float(raw)
-    except ValueError:
-        raise SystemExit(f"error: {name}={raw!r} is not a number")
+    except ValueError as exc:
+        raise SystemExit(f"error: {name}={raw!r} is not a number") from exc
 
 
 # --------------------------------------------------------------------- cache
@@ -103,7 +115,7 @@ def load_cache(path, version):
     """Read the JSON cache. A missing, unreadable, corrupt, or
     schema-mismatched cache is not an error: it degrades to a full fetch."""
     try:
-        data = json.loads(Path(path).read_text())
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict) or data.get("version") != version:
@@ -118,7 +130,7 @@ def save_cache(path, payload):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload))
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, path)
     except Exception as e:
         print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
@@ -312,8 +324,8 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
     Returns (prs, prs_by_id): the union list and the keyed mapping to persist.
     """
     g = gql_fn or gql
-    states = "[OPEN, CLOSED]" if cached_prs is not None else "[OPEN, CLOSED, MERGED]"
-    q = PR_QUERY % states
+    q = PR_QUERY % ("[OPEN, CLOSED]" if cached_prs is not None
+                    else "[OPEN, CLOSED, MERGED]")
     live = []
     cursor = None
     for _ in range(max_pages):

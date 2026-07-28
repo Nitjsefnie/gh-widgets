@@ -42,6 +42,7 @@ import os
 import sys
 import urllib.error
 from calendar import monthrange
+from collections import namedtuple
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -72,10 +73,7 @@ common = _load_common()
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
 REQUIRED_COMMON = 1
-if common.COMMON_VERSION != REQUIRED_COMMON:
-    raise SystemExit(
-        f"error: ghwidgets_common.py is version {common.COMMON_VERSION}, "
-        f"this script needs {REQUIRED_COMMON} — copy both files together")
+common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
 # Internal call sites resolve these through module globals, which keeps them
@@ -400,9 +398,9 @@ def render_external(C, pr_opened, pr_merged, pr_repos,
     def seps(y1, y2):
         # Bracket only the big numbers, ending well above the label row so a
         # wide label (e.g. "maintainer-accepted") never crosses a divider.
-        return (f"""
+        return f"""
   <line x1="{sep_xs[0]}" y1="{y1}" x2="{sep_xs[0]}" y2="{y2}" stroke="{C['border']}"/>
-  <line x1="{sep_xs[1]}" y1="{y1}" x2="{sep_xs[1]}" y2="{y2}" stroke="{C['border']}"/>""")
+  <line x1="{sep_xs[1]}" y1="{y1}" x2="{sep_xs[1]}" y2="{y2}" stroke="{C['border']}"/>"""
 
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external contributions</text>
@@ -423,6 +421,20 @@ def render_external(C, pr_opened, pr_merged, pr_repos,
     return base_card(C, 420, 298, body)
 
 
+def language_legend(C, top):
+    """One legend row per language: color swatch, name, share percent."""
+    legend = []
+    ly = 124
+    for name, _, pct, color in top:
+        legend.append(
+            f'<rect x="20" y="{ly-9}" width="9" height="9" fill="{color}"/>'
+            f'<text x="34" y="{ly}" fill="{C["fg"]}" font-size="12">{xml_escape(name)}</text>'
+            f'<text x="400" y="{ly}" text-anchor="end" fill="{C["dim"]}" font-size="11">{pct:.1f}%</text>'
+        )
+        ly += 18
+    return "".join(legend)
+
+
 def render_languages(C, langs):
     top = langs[:5]
     pct_sum = sum(p for _, _, p, _ in top) or 1
@@ -433,26 +445,17 @@ def render_languages(C, langs):
         seg = (pct / pct_sum) * bar_w
         rects.append(f'<rect x="{rect_x:.1f}" y="{y}" width="{seg:.1f}" height="10" fill="{color}"/>')
         rect_x += seg
-    legend = []
-    ly = 124
-    for name, _, pct, color in top:
-        legend.append(
-            f'<rect x="20" y="{ly-9}" width="9" height="9" fill="{color}"/>'
-            f'<text x="34" y="{ly}" fill="{C["fg"]}" font-size="12">{xml_escape(name)}</text>'
-            f'<text x="400" y="{ly}" text-anchor="end" fill="{C["dim"]}" font-size="11">{pct:.1f}%</text>'
-        )
-        ly += 18
     body = f"""
   <text x="20" y="34" fill="{C['cyan']}" font-size="14" font-weight="600">top languages</text>
   <text x="20" y="52" fill="{C['dim']}" font-size="11">by bytes of code, public repos</text>
   <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
   <rect x="{bar_x}" y="{y}" width="{bar_w}" height="10" rx="2" fill="{C['border']}"/>
   {''.join(rects)}
-  {''.join(legend)}"""
+  {language_legend(C, top)}"""
     return base_card(C, 420, 230, body)
 
 
-def main():
+def parse_args():
     p = argparse.ArgumentParser(description="Render self-hosted GitHub stat SVGs.")
     p.add_argument("--user", default=os.environ.get("GH_USER"),
                    help="GitHub username (env: GH_USER)")
@@ -473,18 +476,17 @@ def main():
         p.error("--user (or env GH_USER) is required")
     token = args.token
     if not token and args.token_file:
-        token = Path(args.token_file).read_text().strip()
+        token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
         p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+    return args, token
 
-    C = THEMES[args.theme]
-    out = Path(args.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
 
-    cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
+def load_inputs(args, token, cache_file):
+    """Fetch (or, on failure, recover from the cache) every input the cards
+    need. Returns (user, prs, issues, stale), where `stale` is the cache's
+    fetched_at when rendering from cache and None on a successful fetch."""
     cache = {} if args.resync else load_cache(cache_file)
-
-    stale = None
     try:
         user, days = fetch(token, args.user, cache.get("calendar_days") or None)
         prs, prs_by_id = fetch_pull_requests(token, args.user, cache.get("prs") or None)
@@ -510,26 +512,49 @@ def main():
             "prs": prs_by_id,
             "issues": issues,
         })
+        stale = None
+    return user, prs, issues, stale
 
+
+ExternalCounts = namedtuple(
+    "ExternalCounts",
+    "pr_opened pr_merged pr_repos iss_opened iss_accepted iss_repos")
+
+
+def external_counts(user, prs, issues):
+    """The six external-contribution figures: PR opened/merged/repos, then
+    issue opened/accepted/repos."""
+    orgs = [o["login"] for o in user["organizations"]["nodes"]]
+    opened, merged, repos = external_contributions(prs, user["login"], orgs)
+    iss_opened, iss_accepted, iss_repos = external_issues(
+        issues, user["login"], orgs)
+    return ExternalCounts(opened, merged, repos,
+                          iss_opened, iss_accepted, iss_repos)
+
+
+def build_svgs(C, user, prs, issues):
+    """Render the four cards. Returns (svgs, summary), where summary carries
+    the figures the final log line reports."""
     total_stars = sum(r["stargazerCount"] for r in user["repositories"]["nodes"])
     cal = user["contributionsCollection"]["contributionCalendar"]
     year_contribs = cal["totalContributions"]
     current, longest = compute_streak(cal["weeks"])
     langs = aggregate_languages(user["repositories"]["nodes"])
-
-    orgs = [o["login"] for o in user["organizations"]["nodes"]]
-    ext_opened, ext_merged, ext_repos = external_contributions(prs, user["login"], orgs)
-    ext_iss_opened, ext_iss_accepted, ext_iss_repos = external_issues(
-        issues, user["login"], orgs)
-
+    ext = external_counts(user, prs, issues)
     svgs = {
         "stats.svg": render_stats(C, user, total_stars, year_contribs),
         "streak.svg": render_streak(C, current, longest, year_contribs),
         "languages.svg": render_languages(C, langs),
-        "external.svg": render_external(
-            C, ext_opened, ext_merged, ext_repos,
-            ext_iss_opened, ext_iss_accepted, ext_iss_repos),
+        "external.svg": render_external(C, *ext),
     }
+    return svgs, (total_stars, year_contribs, current, longest, ext)
+
+
+def write_cards(C, out, user, prs, issues, stale):
+    """Write the four SVGs (stamping the cache fetch time on each when
+    stale) plus last-updated.txt, and print the summary line."""
+    svgs, (total_stars, year_contribs, current, longest, ext) = \
+        build_svgs(C, user, prs, issues)
     for name, svg in svgs.items():
         if stale:
             svg = stamp_cache_notice(C, svg, stale)
@@ -544,8 +569,20 @@ def main():
     else:
         print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
               f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
-              f"external={ext_merged}/{ext_opened} in {ext_repos} repos "
-              f"issues={ext_iss_accepted}/{ext_iss_opened} in {ext_iss_repos} repos)")
+              f"external={ext.pr_merged}/{ext.pr_opened} in {ext.pr_repos} repos "
+              f"issues={ext.iss_accepted}/{ext.iss_opened} in {ext.iss_repos} repos)")
+
+
+def main():
+    args, token = parse_args()
+
+    C = THEMES[args.theme]
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
+    user, prs, issues, stale = load_inputs(args, token, cache_file)
+    write_cards(C, out, user, prs, issues, stale)
 
 
 if __name__ == "__main__":

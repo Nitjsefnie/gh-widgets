@@ -82,8 +82,8 @@ def _load_common():
     path = Path(__file__).resolve().with_name("ghwidgets_common.py")
     if not path.exists():
         raise SystemExit(
-            f"error: {path} is missing — it must sit beside this script "
-            f"(install.sh copies both; a partial copy is not usable)")
+            f"error: render-impact.py cannot find its ghwidgets_common.py at "
+            f"{path} (install.sh copies both; a partial copy is not usable)")
     spec = importlib.util.spec_from_file_location("ghwidgets_common", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"error: cannot load {path}")
@@ -95,11 +95,14 @@ def _load_common():
 common = _load_common()
 
 REQUIRED_COMMON = 1
-if common.COMMON_VERSION != REQUIRED_COMMON:
-    raise SystemExit(
-        f"error: ghwidgets_common.py is version {common.COMMON_VERSION}, "
-        f"this script needs {REQUIRED_COMMON} — copy both files together")
+common.check_version(REQUIRED_COMMON)
 
+CACHE_VERSION = 1
+DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
+
+TOP_N = 5
+
+# Re-exported so call sites stay short and patchable, same as render.py.
 FONT = common.FONT
 THEMES = common.THEMES
 gql = common.gql
@@ -108,11 +111,6 @@ fmt_short = common.fmt_short
 xml_escape = common.xml_escape
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
-
-CACHE_VERSION = 1
-DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
-
-TOP_N = 5
 
 
 def metric_knobs():
@@ -206,11 +204,12 @@ def blame_repo(repo, branch, dest, emails):
         cmd += ["--branch", branch]
     cmd += [f"https://github.com/{repo}.git", str(dest)]
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=300)
+                       timeout=300, check=False)
     if r.returncode != 0 or not dest.exists():
         raise RuntimeError("clone_failed")
     fm = subprocess.run(["git", "fame", "-e", "-w", "--format", "json"],
-                        cwd=str(dest), capture_output=True, text=True, timeout=600)
+                        cwd=str(dest), capture_output=True, text=True,
+                        timeout=600, check=False)
     data = json.loads(fm.stdout) if fm.stdout.strip() else {}
     total = data.get("total", {}).get("loc", 0)
     ours = 0
@@ -245,6 +244,13 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
                 and ("ours" in entry or "error" in entry)):
             continue
         moved.append((repo, t))
+    blame_moved(moved, ourloc, emails)
+    return ourloc
+
+
+def blame_moved(moved, ourloc, emails):
+    """Clone, blame, and record each repo in `moved`, updating `ourloc` in
+    place. The failure contract described in update_loc lives here."""
     for i, (repo, t) in enumerate(moved, 1):
         tmp = Path(tempfile.mkdtemp(prefix="impact-fame-"))
         try:
@@ -265,7 +271,6 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
                       flush=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    return ourloc
 
 
 def wilson(w, n, z):
@@ -390,7 +395,7 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
     return base_card(C, CARD_W, y + 10, body)
 
 
-def main():
+def parse_args():
     p = argparse.ArgumentParser(
         description="Render the self-hosted External Impact SVG.")
     p.add_argument("--user", default=os.environ.get("GH_USER"),
@@ -415,36 +420,63 @@ def main():
         p.error("--user (or env GH_USER) is required")
     token = args.token
     if not token and args.token_file:
-        token = Path(args.token_file).read_text().strip()
+        token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
         p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+    return args, token
+
+
+def fetch_all(token, user, cache, resync):
+    """Fetch every input the impact card needs. Returns
+    (insiders, prs, prs_by_id, issues, totals, ourloc)."""
+    # Identity first: everything downstream depends on knowing who we are
+    # and which owners are insiders. Derived from the token's own account,
+    # so joining an org needs no code or config change.
+    me = common.fetch_identity(token, user, gql_fn=gql)
+    insiders = me.insiders
+    prs, prs_by_id = fetch_pull_requests(
+        token, me.login, None if resync else cache.get("prs") or None)
+    issues = fetch_issues(token, me.login)
+    repos = sorted({n["repository"]["nameWithOwner"]
+                    for n in prs + issues
+                    if common.is_external(n, insiders)})
+    totals = fetch_repo_totals(token, repos)
+    merged_repos = {n["repository"]["nameWithOwner"] for n in prs
+                    if n["merged"] and common.is_external(n, insiders)}
+    ourloc = update_loc(merged_repos, totals,
+                        {} if resync else cache.get("ourloc") or {},
+                        resync, me.emails)
+    return insiders, prs, prs_by_id, issues, totals, ourloc
+
+
+def write_card(C, out, prs, issues, totals, ourloc, insiders, stale):
+    """Render impact.svg from the inputs and write it, stamping the cache
+    fetch time when stale. Returns the three section row lists."""
+    knobs = metric_knobs()
+    pr_rows = pr_table(prs, totals, insiders, knobs)
+    issue_rows = issue_table(issues, totals, insiders, knobs)
+    loc_rows = loc_table(ourloc, knobs)
+
+    svg = render_impact(C, pr_rows, issue_rows, loc_rows)
+    if stale:
+        svg = stamp_cache_notice(C, svg, stale)
+    (out / "impact.svg").write_text(svg)
+    return pr_rows, issue_rows, loc_rows
+
+
+def main():
+    args, token = parse_args()
 
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     cache = {} if args.resync else load_cache(args.cache_file)
-    knobs = metric_knobs()
 
     stale = None
     try:
-        # Identity first: everything downstream depends on knowing who we are
-        # and which owners are insiders. Derived from the token's own account,
-        # so joining an org needs no code or config change.
-        me = common.fetch_identity(token, args.user, gql_fn=gql)
-        insiders = me.insiders
-        prs, prs_by_id = fetch_pull_requests(
-            token, me.login, None if args.resync else cache.get("prs") or None)
-        issues = fetch_issues(token, me.login)
-        repos = sorted({n["repository"]["nameWithOwner"]
-                        for n in prs + issues
-                        if common.is_external(n, insiders)})
-        totals = fetch_repo_totals(token, repos)
-        merged_repos = {n["repository"]["nameWithOwner"] for n in prs
-                        if n["merged"] and common.is_external(n, insiders)}
-        ourloc = update_loc(merged_repos, totals,
-                            {} if args.resync else cache.get("ourloc") or {},
-                            args.resync, me.emails)
+        insiders, prs, prs_by_id, issues, totals, ourloc = fetch_all(
+            token, args.user, cache, args.resync)
     except Exception:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
@@ -473,14 +505,8 @@ def main():
             "ourloc": ourloc,
         })
 
-    pr_rows = pr_table(prs, totals, insiders, knobs)
-    issue_rows = issue_table(issues, totals, insiders, knobs)
-    loc_rows = loc_table(ourloc, knobs)
-
-    svg = render_impact(C, pr_rows, issue_rows, loc_rows)
-    if stale:
-        svg = stamp_cache_notice(C, svg, stale)
-    (out / "impact.svg").write_text(svg)
+    pr_rows, issue_rows, loc_rows = write_card(
+        C, out, prs, issues, totals, ourloc, insiders, stale)
 
     if stale:
         print(f"fetch failed; rendered {out}/impact.svg from cache "
