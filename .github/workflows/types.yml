@@ -31,6 +31,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          # There is no requirements.txt here (runtime is pure stdlib), so
+          # the cache must be keyed off the dev pins explicitly or
+          # setup-python fails the job looking for one.
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install pyright
         run: |
