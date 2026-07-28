@@ -286,13 +286,24 @@ query($login: String!, $cursor: String) {
 def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None):
     """Fetch the user's authored PRs and merge with the cached set.
 
-    MERGED is the only one-way PR state, so with a warm cache only
-    [OPEN, CLOSED] are queried live and unioned with the cached set keyed by
+    MERGED is the only one-way PR state, so with a warm cache the live query
+    covers [OPEN, CLOSED] only and is unioned with the cached set keyed by
     PR id, which guarantees a PR appears exactly once. A PR stays in the live
     half until it merges: merging is the only way to leave the OPEN/CLOSED
     result set, so a previously live PR that is now absent is recorded as
     merged and moves to the cached half. On a cold cache (or --resync) all
     three states are queried and the set is rebuilt.
+
+    The live set alone permanently misses a PR that is opened AND merged
+    between two renders: it never appears in [OPEN, CLOSED], so nothing ever
+    discovers it (issue #3). A warm run therefore also fetches ONE page of
+    the most recent MERGED PRs and unions it into the same keyed map. The
+    sweep is deliberately a single page, never paginated: PR_QUERY orders by
+    CREATED_AT DESC, so 100 PRs covers everything authored since the last
+    render unless more than 100 were authored in between, and paging further
+    would walk the entire merged history every run — the cost the cache
+    exists to avoid. Known bound: PRs authored beyond that first page since
+    the last run are still missed until a --resync.
 
     There is no server-side "not in these orgs" filter, so callers pull the
     list and filter locally with is_external. max_pages is a runaway guard,
@@ -317,6 +328,10 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
         live_ids.add(node["id"])
         known[node["id"]] = node
     if cached_prs is not None:
+        sweep = g(token, PR_QUERY % "[MERGED]",
+                  {"login": login, "cursor": None})["user"]["pullRequests"]
+        for node in sweep["nodes"]:
+            known[node["id"]] = node
         for pid, node in known.items():
             if not node["merged"] and pid not in live_ids:
                 known[pid] = {**node, "merged": True}

@@ -131,6 +131,47 @@ class FetchIdentity(unittest.TestCase):
         self.assertNotIn("email", common.IDENTITY_QUERY)
 
 
+class FetchPullRequests(unittest.TestCase):
+    def fake_gql(self, live_nodes, merged_nodes):
+        # Serves the [OPEN, CLOSED] live query and the [MERGED] sweep from
+        # two canned single pages, counting sweep invocations. The cold-cache
+        # [OPEN, CLOSED, MERGED] query matches neither branch on purpose:
+        # "[MERGED]" is not a substring of "[OPEN, CLOSED, MERGED]".
+        self.merged_calls = 0
+
+        def _gql(token, query, variables=None, **kw):
+            if "[MERGED]" in query:
+                self.merged_calls += 1
+                nodes = merged_nodes
+            else:
+                nodes = live_nodes
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": nodes}}}
+        return _gql
+
+    def test_warm_cache_discovers_pr_seen_only_in_merged_sweep(self):
+        # Issue #3: a PR opened and merged between two renders never enters
+        # the [OPEN, CLOSED] live set, so without the sweep it is lost.
+        sweep_only = {"id": "PR_sweep", "merged": True,
+                      **repo("stranger", "blazedb")}
+        g = self.fake_gql(live_nodes=[], merged_nodes=[sweep_only])
+        prs, by_id = common.fetch_pull_requests("t", "me", cached_prs={},
+                                                gql_fn=g)
+        self.assertIn("PR_sweep", by_id)
+        self.assertTrue(by_id["PR_sweep"]["merged"])
+        self.assertIn(sweep_only, prs)
+        self.assertEqual(self.merged_calls, 1,
+                         "merged sweep must be a single page, not paginated")
+
+    def test_cold_cache_runs_no_merged_sweep(self):
+        # On a cold cache / --resync the [OPEN, CLOSED, MERGED] rebuild
+        # already covers everything; sweeping again would double-fetch.
+        g = self.fake_gql(live_nodes=[], merged_nodes=[{"id": "PR_m"}])
+        common.fetch_pull_requests("t", "me", cached_prs=None, gql_fn=g)
+        self.assertEqual(self.merged_calls, 0)
+
+
 class EnvKnobs(unittest.TestCase):
     def test_default_when_unset(self):
         with mock.patch.dict(os.environ, {}, clear=True):

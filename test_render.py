@@ -426,9 +426,12 @@ class PullRequestCache(unittest.TestCase):
             self.assertEqual(nums[:3], ["1", "1", "1"])
 
             pr_queries = [q for q, _ in api.calls if "pullRequests" in q]
-            self.assertEqual(len(pr_queries), 1)
+            self.assertEqual(len(pr_queries), 2)
             self.assertIn("[OPEN, CLOSED]", pr_queries[0])
             self.assertNotIn("MERGED", pr_queries[0])
+            # A warm run additionally makes ONE single-page MERGED sweep so a
+            # PR opened and merged between renders is not lost (issue #3).
+            self.assertIn("[MERGED]", pr_queries[1])
             self.assertTrue(render.load_cache(cache_file)["prs"]["P1"]["merged"])
 
 
