@@ -206,5 +206,142 @@ class VersionContract(unittest.TestCase):
                           f"{name} does not pin COMMON_VERSION")
 
 
+class FetchIssues(unittest.TestCase):
+    # The untested twin of fetch_pull_requests, which harboured a permanent
+    # data-loss bug (#3) while 58 tests passed. Same paging shape, same
+    # injectable gql_fn.
+
+    def paged_gql(self, pages):
+        """Serve canned issue pages in order, recording every call."""
+        self.calls = []
+
+        def _gql(token, query, variables=None, **kw):
+            self.calls.append(variables)
+            page = pages[min(len(self.calls) - 1, len(pages) - 1)]
+            return {"user": {"issues": page}}
+        return _gql
+
+    def test_paging_terminates_on_has_next_page_false(self):
+        pages = [
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+             "nodes": [{"id": "I_1"}, {"id": "I_2"}]},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None},
+             "nodes": [{"id": "I_3"}]},
+        ]
+        issues = common.fetch_issues("t", "me", gql_fn=self.paged_gql(pages))
+        self.assertEqual([i["id"] for i in issues], ["I_1", "I_2", "I_3"])
+        self.assertEqual(len(self.calls), 2,
+                         "must stop at hasNextPage: false, not max_pages")
+
+    def test_cursor_from_one_page_feeds_the_next(self):
+        pages = [
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+             "nodes": []},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None},
+             "nodes": []},
+        ]
+        common.fetch_issues("t", "me", gql_fn=self.paged_gql(pages))
+        self.assertIsNone(self.calls[0]["cursor"],
+                          "first page must start from no cursor")
+        self.assertEqual(self.calls[1]["cursor"], "c1")
+
+    def test_repages_every_run_rather_than_caching(self):
+        # The docstring says issues are re-paged each run because they can be
+        # REOPENED — there is no cached_* parameter and no module state that
+        # lets a second run skip the fetch. Nothing checked that until now.
+        page = [{"pageInfo": {"hasNextPage": False, "endCursor": None},
+                 "nodes": [{"id": "I_1"}]}]
+        g = self.paged_gql(page)
+        first = common.fetch_issues("t", "me", gql_fn=g)
+        second = common.fetch_issues("t", "me", gql_fn=g)
+        self.assertEqual(len(self.calls), 2,
+                         "second run must hit the API again, not a cache")
+        self.assertEqual(first, second)
+
+    def test_max_pages_is_a_runaway_guard(self):
+        # A server that never says hasNextPage: false must not loop forever.
+        endless = [{"pageInfo": {"hasNextPage": True, "endCursor": "c"},
+                    "nodes": [{"id": "I"}]}]
+        common.fetch_issues("t", "me", max_pages=3,
+                            gql_fn=self.paged_gql(endless))
+        self.assertEqual(len(self.calls), 3)
+
+
+class XmlEscape(unittest.TestCase):
+    # These values are interpolated into SVG; a repo name or title with
+    # markup characters must not produce malformed XML.
+
+    def test_all_five_specials_are_escaped(self):
+        self.assertEqual(common.xml_escape('a&b<c>d"e\'f'),
+                         "a&amp;b&lt;c&gt;d&quot;e&apos;f")
+
+    def test_ampersand_is_escaped_first_not_doubled(self):
+        # If & were escaped after the others, their entities would be
+        # double-escaped ("&lt;" -> "&amp;lt;" applied twice).
+        self.assertEqual(common.xml_escape("&lt;"), "&amp;lt;")
+
+    def test_clean_text_is_unchanged(self):
+        self.assertEqual(common.xml_escape("repo-name_1.2"), "repo-name_1.2")
+
+    def test_non_string_input_is_stringified(self):
+        self.assertEqual(common.xml_escape(42), "42")
+
+
+class NoreplyAddresses(unittest.TestCase):
+    # A miss here silently under-counts contributions: the commit author is
+    # matched exactly against this set.
+
+    def test_both_forms_when_database_id_known(self):
+        self.assertEqual(
+            common.noreply_addresses("octocat", 75166987),
+            {"octocat@users.noreply.github.com",
+             "75166987+octocat@users.noreply.github.com"})
+
+    def test_bare_form_only_when_database_id_missing(self):
+        self.assertEqual(common.noreply_addresses("octocat", None),
+                         {"octocat@users.noreply.github.com"})
+
+    def test_addresses_are_lowercased(self):
+        # GitHub logins are case-insensitive; email comparison here is exact,
+        # so the set must be lowercase for the .lower() match to work.
+        self.assertEqual(
+            common.noreply_addresses("OctoCat", 75166987),
+            {"octocat@users.noreply.github.com",
+             "75166987+octocat@users.noreply.github.com"})
+
+
+class StampCacheNotice(unittest.TestCase):
+    # The stale-cache banner is the only signal a rendered card is not
+    # fresh; a silent failure here means a card looks fresh when it is not.
+    C = {"dim": "#8b949e"}
+
+    def test_stale_card_gets_the_banner(self):
+        svg = '<svg xmlns="x" width="400" height="120"></svg>'
+        out = common.stamp_cache_notice(self.C, svg, "2026-07-28 09:00 UTC")
+        self.assertIn("cached data from 2026-07-28 09:00 UTC", out)
+
+    def test_banner_sits_above_the_bottom_edge(self):
+        svg = '<svg xmlns="x" width="400" height="120"></svg>'
+        out = common.stamp_cache_notice(self.C, svg, "now")
+        self.assertIn('y="112"', out)  # height - 8
+
+    def test_banner_lands_inside_the_svg_element(self):
+        svg = '<svg xmlns="x" width="400" height="120"></svg>'
+        out = common.stamp_cache_notice(self.C, svg, "now")
+        self.assertLess(out.index("cached data from"), out.index("</svg>"),
+                        "notice must render inside the closing tag")
+
+    def test_fetched_at_is_escaped_for_svg(self):
+        svg = '<svg height="60"></svg>'
+        out = common.stamp_cache_notice(self.C, svg, 'a<b&"c')
+        self.assertIn("a&lt;b&amp;&quot;c", out)
+        self.assertNotIn('a<b&"c', out)
+
+    def test_missing_height_still_stamps_visibly(self):
+        out = common.stamp_cache_notice(self.C, "<svg></svg>", "now")
+        self.assertIn('y="12"', out)
+        self.assertIn("cached data from now", out)
+
+
 if __name__ == "__main__":
     unittest.main()
