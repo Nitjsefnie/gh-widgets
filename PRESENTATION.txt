@@ -7,9 +7,6 @@ MESSAGE 1 — main post
 
 `github-readme-stats` and friends render on *request* — someone opens your README, a box somewhere calls the GitHub API with your token. gh-widgets inverts it: a systemd timer renders SVG files to disk, nginx serves them as files. No runtime API calls, no JS, no third party holding a token, no rate limit tied to how many people view your profile.
 
-## :globe_with_meridians: They're live right now
-**https://nitjsefni.eu/widgets/** — `stats.svg` · `streak.svg` · `languages.svg` · `external.svg` · `impact.svg`
-
 Real files off my own account, regenerated hourly. Hotlink one into a README and it just works — it's an image.
 
 ## :chart_with_upwards_trend: The five widgets
@@ -18,18 +15,10 @@ Real files off my own account, regenerated hourly. Hotlink one into a README and
 **external** — 306 PRs opened, 263 merged, across 73 repos · 109 issues, 76 maintainer-accepted, across 49 · **86% merged · 70% maintainer-accepted**.
 **impact** — below. It's the interesting one.
 
-## :bullseye: impact.svg — share, not volume
+## impact.svg — share, not volume
 Contribution graphs reward noise. `impact.svg` asks a harder question: *of the work in this repo, how much is mine?* Three ranked tables — Pull Requests, Issues, and **Live Code** — each scored `WilsonLowerBound(mine/total, z) * mine^gamma`, so a 1-of-1 repo can't outrank a sustained relationship.
 
 Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone. Top row: **2,749 of 11.3k lines in `envaar/vaar` — 24.3%**. Top PR row: 24 of 64 in `warior456/Sculk-Depths`, 37.5%.
-
-## :bug: The parts that were actually hard
-:warning: **Line ownership has to be an exact match.** GitHub gives you two noreply forms (`login@` and `id+login@users.noreply.github.com`); a substring test over-counts silently. It's set membership on the derived addresses now — and if you commit from a non-noreply address you have to declare it, or those lines stop counting as yours *as a smaller number, never an error*.
-
-:warning: **PRs opened and merged between two renders never entered the cache at all** — a real data-loss bug that produced a completely plausible-looking widget for weeks. Fixed by a bounded single-page MERGED sweep each run.
-
-## :test_tube: Correctness, honestly
-**60 tests** (stdlib `unittest`). And no CI — they only run when someone remembers, which is exactly as bad as it sounds. That's open issue #4, with #5 for linting and type checking. Neither is done; I'd rather say so than let you find out.
 
 ## :tools: Stack
 Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. GraphQL throughout. One exception: `render-impact.py` shells out to `git` and `git-fame` for the blame pass.
@@ -57,7 +46,7 @@ Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. 
 
 
 ═══════════════════════════════════════════════════════════════
-MESSAGE 2 — follow-up
+MESSAGE 2 — follow-up (HELD, NOT POSTED)
 ═══════════════════════════════════════════════════════════════
 
 ## :zap: Follow-up: why "live code" is expensive, and how it stays cheap
