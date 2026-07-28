@@ -5,7 +5,7 @@ MESSAGE 1 — main post
 # :bar_chart: gh-widgets
 ### GitHub stat SVGs that render on a timer, not on every page load
 
-`github-readme-stats` and the services like it render on *request* — someone opens your README, and a box somewhere calls the GitHub API with your token. gh-widgets inverts that: a systemd timer renders plain SVG files to disk, and nginx serves them as files. No runtime API calls, no JS, no third party holding a token, no rate limit tied to how many people look at your profile.
+`github-readme-stats` and friends render on *request* — someone opens your README, a box somewhere calls the GitHub API with your token. gh-widgets inverts it: a systemd timer renders SVG files to disk, nginx serves them as files. No runtime API calls, no JS, no third party holding a token, no rate limit tied to how many people view your profile.
 
 ## :globe_with_meridians: They're live right now
 **https://nitjsefni.eu/widgets/** — `stats.svg` · `streak.svg` · `languages.svg` · `external.svg` · `impact.svg`
@@ -13,33 +13,26 @@ MESSAGE 1 — main post
 Real files off my own account, regenerated hourly. Hotlink one into a README and it just works — it's an image.
 
 ## :chart_with_upwards_trend: The five widgets
-**stats** — followers, public repos, stars, rolling-year contributions (20,273 at time of writing).
-**streak** — current 30, longest 93.
-**languages** — top languages by bytes: Python 56.5%, JavaScript 37.1%, CSS 4.0%, HTML 2.2%, Shell 0.1%.
-**external** — the one I actually built this for: work in *other people's* repos. 306 PRs opened, 263 merged, across 73 repos · 109 issues opened, 76 maintainer-accepted, across 49 repos · **86% merged · 70% maintainer-accepted**.
-**impact** — see below. It's the interesting one.
+`stats`, `streak` and `languages` are the usual profile cards. The two I built this for are about *other people's* repos:
+
+**external** — 306 PRs opened, 263 merged, across 73 repos · 109 issues, 76 maintainer-accepted, across 49 · **86% merged · 70% maintainer-accepted**.
+**impact** — below. It's the interesting one.
 
 ## :bullseye: impact.svg — share, not volume
 Contribution graphs reward noise. `impact.svg` asks a harder question: *of the work in this repo, how much is mine?* Three ranked tables — Pull Requests, Issues, and **Live Code** — each scored `WilsonLowerBound(mine/total, z) * mine^gamma`, so a 1-of-1 repo can't outrank a sustained relationship.
 
-Live Code means what it says: the renderer `git clone`s each candidate repo (full history — blame needs it), runs a blame pass, counts the lines still surviving under my authorship, and deletes the clone. Current top row: **2,749 of 11.3k lines in `envaar/vaar` — 24.3%**. Top PR row: 24 of 64 in `warior456/Sculk-Depths`, 37.5%.
+Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone. Top row: **2,749 of 11.3k lines in `envaar/vaar` — 24.3%**. Top PR row: 24 of 64 in `warior456/Sculk-Depths`, 37.5%.
 
 ## :bug: The parts that were actually hard
-:warning: **Line ownership has to be an exact match.** GitHub gives you two noreply forms (`login@users.noreply.github.com` and `id+login@users.noreply.github.com`); a substring test on either one over-counts silently. It's a set-membership check on the derived addresses now — and if you commit from an address that isn't a noreply, you must declare it, or those lines stop counting as yours *as a smaller number, never an error*.
-
-:warning: **A full-year contribution query gets you `RESOURCE_LIMITS_EXCEEDED`.** Cold cache walks 12 sequential monthly windows instead; a warm one refetches only the trailing 7 days and merges.
+:warning: **Line ownership has to be an exact match.** GitHub gives you two noreply forms (`login@` and `id+login@users.noreply.github.com`); a substring test over-counts silently. It's set membership on the derived addresses now — and if you commit from a non-noreply address you have to declare it, or those lines stop counting as yours *as a smaller number, never an error*.
 
 :warning: **PRs opened and merged between two renders never entered the cache at all** — a real data-loss bug that produced a completely plausible-looking widget for weeks. Fixed by a bounded single-page MERGED sweep each run.
 
-:gear: The three Python files ship as a matched set: each renderer asserts the shared module's `COMMON_VERSION` at startup and hard-exits on mismatch, so a half-finished `cp` produces a renderer that refuses to run rather than one that quietly renders from a stale module.
-
-:shield: Fail-soft by design — a corrupt or schema-mismatched cache falls back to a full fetch; a failed live fetch with a good cache renders from cache and shows you the cache timestamp instead of breaking the image.
-
 ## :test_tube: Correctness, honestly
-**60 tests** (stdlib `unittest`, `python3 -m unittest discover`). And no CI — they only run when someone remembers, which is exactly as bad as it sounds. That's open issue #4, alongside #5 for linting and type checking. Both are on the list; neither is done. I'd rather say so than let you find out.
+**60 tests** (stdlib `unittest`). And no CI — they only run when someone remembers, which is exactly as bad as it sounds. That's open issue #4, with #5 for linting and type checking. Neither is done; I'd rather say so than let you find out.
 
 ## :tools: Stack
-Python **3.9+**, **standard library only** — no `requirements.txt`, no `pyproject.toml`, nothing to install. GraphQL for everything. `render-impact.py` is the one exception: it shells out to `git` and `git-fame` for the blame pass.
+Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. GraphQL throughout. One exception: `render-impact.py` shells out to `git` and `git-fame` for the blame pass.
 
 ```
 ┌──────────────┬─────────────────────┬──────────────────┐
@@ -90,3 +83,11 @@ impact-cache.json   264 KB   PRs, issues, totals, per-repo line counts
 ```
 
 Two caches, deliberately separate — pointing both renderers at one file was a mistake I made once and would rather nobody repeat.
+
+Two more things that keep a scheduled renderer from lying to you quietly:
+
+:gear: **The three Python files ship as a matched set.** Each renderer asserts the shared module's `COMMON_VERSION` at startup and hard-exits on mismatch, so a half-finished `cp` gives you a renderer that refuses to run instead of one that quietly renders from a stale module.
+
+:shield: **Fail-soft, in the right direction.** A corrupt or schema-mismatched cache falls back to a full fetch; a failed live fetch with a good cache renders from cache and *shows you the cache timestamp* rather than breaking the image. A stat widget that silently serves stale numbers is worse than one that visibly does.
+
+:calendar: And the reason a full-year contribution query isn't one query: GitHub answers it with `RESOURCE_LIMITS_EXCEEDED`. A cold cache walks 12 sequential monthly windows; a warm one refetches only the trailing 7 days and merges onto the cached ones.
