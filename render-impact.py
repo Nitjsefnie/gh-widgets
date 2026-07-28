@@ -321,39 +321,6 @@ def loc_table(ourloc, knobs):
                        knobs["loc_gamma"], knobs["z"])
 
 
-def fmt_short(n):
-    n = int(n)
-    if abs(n) < 1000:
-        return str(n)
-    if abs(n) < 1_000_000:
-        return f"{n/1000:.1f}".rstrip("0").rstrip(".") + "k"
-    return f"{n/1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
-
-
-def xml_escape(s):
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;")
-            .replace("'", "&apos;"))
-
-
-def base_card(C, w, h, body):
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" {FONT}>
-  <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="{C['bg']}"/>
-      <stop offset="1" stop-color="{C['bg2']}"/>
-    </linearGradient>
-    <pattern id="grain" patternUnits="userSpaceOnUse" width="3" height="3">
-      <rect width="3" height="1" fill="white" fill-opacity="0.012"/>
-    </pattern>
-  </defs>
-  <rect width="{w}" height="{h}" rx="8" fill="url(#bgGrad)"/>
-  <rect width="{w}" height="{h}" rx="8" fill="url(#grain)"/>
-  <rect width="{w}" height="{h}" rx="8" fill="none" stroke="{C['border']}" stroke-width="1"/>
-  {body}
-</svg>"""
-
-
 CARD_W = 520
 COL_MINE = 290   # mine, right-anchored
 COL_TOTAL = 340  # total, right-anchored
