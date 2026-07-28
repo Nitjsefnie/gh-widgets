@@ -3,7 +3,7 @@
 gh-widgets — render self-hosted GitHub stat SVGs.
 
 Writes four SVGs to OUT_DIR:
-  stats.svg      followers, repos, stars, last-year contributions
+  stats.svg      followers, repos, stars, forks, last-year contributions
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
   external.svg   PRs opened to repos outside my own account and orgs
@@ -87,7 +87,9 @@ xml_escape = common.xml_escape
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 
-CACHE_VERSION = 1
+# v2: the core query gained forkCount; a v1 cache has no fork data, so it
+# must be discarded and refetched rather than trusted.
+CACHE_VERSION = 2
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
 
 
@@ -184,6 +186,7 @@ def fetch(token, login, cached_days=None):
           totalCount
           nodes {
             stargazerCount
+            forkCount
             languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
               edges { size node { name color } }
             }
@@ -341,7 +344,7 @@ def aggregate_languages(repos):
                   key=lambda x: -x[1])
 
 
-def render_stats(C, user, total_stars, year_contribs):
+def render_stats(C, user, total_stars, total_forks, year_contribs):
     name = user.get("name") or user["login"]
     body = f"""
   <text x="20" y="34" fill="{C['blue']}" font-size="16" font-weight="600">{xml_escape(name)}</text>
@@ -354,10 +357,12 @@ def render_stats(C, user, total_stars, year_contribs):
     <text x="200" y="115" fill="{C['gold']}" font-weight="500">{user['repositories']['totalCount']}</text>
     <text x="20"  y="138" fill="{C['dim']}">stars received</text>
     <text x="200" y="138" fill="{C['gold']}" font-weight="500">{total_stars}</text>
-    <text x="20"  y="161" fill="{C['dim']}">contributions (1y)</text>
-    <text x="200" y="161" fill="{C['gold']}" font-weight="500">{year_contribs:,}</text>
+    <text x="20"  y="161" fill="{C['dim']}">forks received</text>
+    <text x="200" y="161" fill="{C['gold']}" font-weight="500">{total_forks}</text>
+    <text x="20"  y="184" fill="{C['dim']}">contributions (1y)</text>
+    <text x="200" y="184" fill="{C['gold']}" font-weight="500">{year_contribs:,}</text>
   </g>"""
-    return base_card(C, 420, 180, body)
+    return base_card(C, 420, 203, body)
 
 
 def render_streak(C, current, longest, total):
@@ -536,24 +541,25 @@ def build_svgs(C, user, prs, issues):
     """Render the four cards. Returns (svgs, summary), where summary carries
     the figures the final log line reports."""
     total_stars = sum(r["stargazerCount"] for r in user["repositories"]["nodes"])
+    total_forks = sum(r["forkCount"] for r in user["repositories"]["nodes"])
     cal = user["contributionsCollection"]["contributionCalendar"]
     year_contribs = cal["totalContributions"]
     current, longest = compute_streak(cal["weeks"])
     langs = aggregate_languages(user["repositories"]["nodes"])
     ext = external_counts(user, prs, issues)
     svgs = {
-        "stats.svg": render_stats(C, user, total_stars, year_contribs),
+        "stats.svg": render_stats(C, user, total_stars, total_forks, year_contribs),
         "streak.svg": render_streak(C, current, longest, year_contribs),
         "languages.svg": render_languages(C, langs),
         "external.svg": render_external(C, *ext),
     }
-    return svgs, (total_stars, year_contribs, current, longest, ext)
+    return svgs, (total_stars, total_forks, year_contribs, current, longest, ext)
 
 
 def write_cards(C, out, user, prs, issues, stale):
     """Write the four SVGs (stamping the cache fetch time on each when
     stale) plus last-updated.txt, and print the summary line."""
-    svgs, (total_stars, year_contribs, current, longest, ext) = \
+    svgs, (total_stars, total_forks, year_contribs, current, longest, ext) = \
         build_svgs(C, user, prs, issues)
     for name, svg in svgs.items():
         if stale:
@@ -568,7 +574,8 @@ def write_cards(C, out, user, prs, issues, stale):
               f"from cache (fetched_at={stale})")
     else:
         print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
-              f"(stars={total_stars} contribs={year_contribs} streak={current}/{longest} "
+              f"(stars={total_stars} forks={total_forks} contribs={year_contribs} "
+              f"streak={current}/{longest} "
               f"external={ext.pr_merged}/{ext.pr_opened} in {ext.pr_repos} repos "
               f"issues={ext.iss_accepted}/{ext.iss_opened} in {ext.iss_repos} repos)")
 

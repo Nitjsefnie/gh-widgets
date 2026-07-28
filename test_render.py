@@ -180,6 +180,7 @@ CORE_USER = {
     "organizations": {"nodes": []},
     "repositories": {"totalCount": 1, "nodes": [{
         "stargazerCount": 3,
+        "forkCount": 2,
         "languages": {"edges": [
             {"size": 100, "node": {"name": "Python", "color": "#3572A5"}}]},
     }]},
@@ -435,6 +436,72 @@ class PullRequestCache(unittest.TestCase):
             # PR opened and merged between renders is not lost (issue #3).
             self.assertIn("[MERGED]", pr_queries[1])
             self.assertTrue(render.load_cache(cache_file)["prs"]["P1"]["merged"])
+
+
+class ForksReceived(unittest.TestCase):
+    def user_with_forks(self, *fork_counts):
+        """A build_svgs-ready user whose repos carry the given forkCounts."""
+        user = json.loads(json.dumps(CORE_USER))
+        user["repositories"] = {
+            "totalCount": len(fork_counts),
+            "nodes": [{"stargazerCount": 0, "forkCount": n, "languages": {"edges": []}}
+                      for n in fork_counts]}
+        user["contributionsCollection"] = {"contributionCalendar": {
+            "totalContributions": 0, "weeks": calendar([0])}}
+        return user
+
+    def test_forks_are_summed_over_the_repo_nodes(self):
+        # Same route as total_stars: a plain sum over the nodes the filtered
+        # core query returned.
+        svgs, summary = render.build_svgs(
+            render.THEMES["tokyonight"], self.user_with_forks(2, 5, 0), [], [])
+        self.assertIn("forks received", svgs["stats.svg"])
+        self.assertIn(">7</text>", svgs["stats.svg"])
+        self.assertEqual(summary[1], 7)  # total_forks in the summary tuple
+
+    def test_core_query_keeps_its_filters_and_selects_fork_count(self):
+        # Owned-only, non-fork, public repos are filtered server-side; a
+        # forked, private, or not-owned repo never reaches the sum because it
+        # is never in `nodes`. The same filters feed stars and public repos.
+        api = FakeAPI()
+        with mock.patch.object(render, "gql", api):
+            render.fetch("t", "me", {})
+        core = next(q for q, _ in api.calls if "repositories" in q)
+        self.assertIn("forkCount", core)
+        self.assertIn("ownerAffiliations: OWNER", core)
+        self.assertIn("isFork: false", core)
+        self.assertIn("privacy: PUBLIC", core)
+
+    def test_pre_forkcount_cache_is_discarded_and_refetched(self):
+        # A cache written before forkCount existed (previous schema version)
+        # must not render a made-up 0: the version bump discards it, so the
+        # run does a cold refetch (12 monthly calendar windows) and renders
+        # the real fetched figure.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "cache.json"
+            out = Path(td) / "out"
+            stale = {
+                "version": render.CACHE_VERSION - 1,
+                "fetched_at": "2026-07-20T06:00:00+00:00",
+                "user": json.loads(json.dumps(CORE_USER)),
+                "calendar_days": recent_days(3),
+                "prs": {}, "issues": [],
+            }
+            del stale["user"]["repositories"]["nodes"][0]["forkCount"]
+            cache_file.write_text(json.dumps(stale))
+
+            api = FakeAPI()
+            api.full_calendar = recent_days(3)
+            run_main(api, out, cache_file)
+
+            calendar_vars = [v for q, v in api.calls
+                             if "contributionCalendar" in q]
+            self.assertEqual(len(calendar_vars), 12)  # cold backfill, not warm
+            svg = (out / "stats.svg").read_text()
+            self.assertIn("forks received", svg)
+            self.assertIn(">2</text>", svg)  # CORE_USER's forkCount, refetched
+            self.assertEqual(render.load_cache(cache_file)["version"],
+                             render.CACHE_VERSION)
 
 
 class CorruptCache(unittest.TestCase):
