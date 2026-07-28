@@ -1,0 +1,48 @@
+name: lint
+
+# Lint gate (issue #5): pylint + pycodestyle. Style is deliberately NOT
+# enforced (line-too-long off, max-line-length 10000) — this gate exists
+# for real defects, not formatting opinions. import-error and
+# no-name-in-module stay disabled in pylint on purpose: pyright (the
+# `types` workflow) is the one tool that owns unresolved-import reporting.
+# Separate workflow from tests so a lint failure is distinguishable from a
+# test failure at a glance.
+
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: pylint
+        run: git ls-files '*.py' | xargs pylint
+
+      - name: pycodestyle
+        # Runs even when pylint is red, so one push reports both gates.
+        if: ${{ !cancelled() }}
+        run: git ls-files '*.py' | xargs pycodestyle
