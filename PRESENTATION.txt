@@ -1,13 +1,11 @@
 ═══════════════════════════════════════════════════════════════
-MESSAGE 1 — main post
+MESSAGE 1 — main post (posted with the five widget SVGs attached as images)
 ═══════════════════════════════════════════════════════════════
 
 # :bar_chart: gh-widgets
 ### GitHub stat SVGs that render on a timer, not on every page load
 
 `github-readme-stats` and friends render on *request* — someone opens your README, a box somewhere calls the GitHub API with your token. gh-widgets inverts it: a systemd timer renders SVG files to disk, nginx serves them as files. No runtime API calls, no JS, no third party holding a token, no rate limit tied to how many people view your profile.
-
-Real files off my own account, regenerated hourly. Hotlink one into a README and it just works — it's an image.
 
 ## :chart_with_upwards_trend: The five widgets
 `stats`, `streak` and `languages` are the usual profile cards. The two I built this for are about *other people's* repos:
@@ -38,11 +36,9 @@ Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. 
 └──────────────┴─────────────────────┴──────────────────┘
 ```
 
-:robot: Most of the code in the repos `impact.svg` measures was written by agents, and gh-widgets is the thing that keeps score. Turtles most of the way down.
-
 :link: MIT · https://github.com/Nitjsefnie/gh-widgets
 
-:raised_hands: Issues and PRs welcome — especially #4 and #5, and especially if you point it at your own account and the numbers come out wrong.
+:raised_hands: Issues and PRs welcome — especially if you point it at your own account and the numbers come out wrong.
 
 
 ═══════════════════════════════════════════════════════════════
