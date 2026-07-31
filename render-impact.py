@@ -11,6 +11,9 @@ Writes ONE SVG to OUT_DIR:
                 Each repo is ranked by an impact score:
                 WilsonLowerBound(our/total, z=2.58) * our**gamma with
                 gamma 1.0 (PRs), 1.75 (issues), 0.5 (live code).
+                The score is DISPLAYED rescaled so each section's leader
+                reads SCORE_MAX (10.00) and the rest keep their ratios to
+                it; the ranking and the bars are unaffected.
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -333,6 +336,7 @@ COL_SHARE = 390  # share, right-anchored
 COL_SCORE = 500  # impact score, right-anchored (long header clears share)
 BAR_X = 20
 BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score in section
+SCORE_MAX = 10.0  # displayed score of each section's leader; rest scale to it
 REPO_CHARS = 34  # owner/name truncation budget (~225px at font-size 11 mono)
 
 
@@ -360,13 +364,14 @@ def render_section(C, y, title, rows, accent):
     best = top[0][0] or 1
     for score, share, w, n, repo in top:
         bar_w = max(score / best * BAR_MAX_W, 2)
+        scaled = score / best * SCORE_MAX
         parts.append(
             f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">'
             f'{xml_escape(truncate(repo, REPO_CHARS))}</text>'
             f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{w}</text>'
             f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{fmt_short(n)}</text>'
             f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{share:.1f}%</text>'
-            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{score:.2f}</text>'
+            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{scaled:.2f}</text>'
             # rating bar: length = score normalized to the section's top
             # score (row #1 = full width), Dota-hero-stats style
             f'<rect x="{BAR_X}" y="{y + 5}" width="{BAR_MAX_W}" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
