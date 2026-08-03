@@ -367,7 +367,7 @@ COL_SCORE = 500  # impact score, right-anchored (long header clears share)
 BAR_X = 20
 BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score in section
 SCORE_MAX = 10.0  # displayed score of each section's leader; rest scale to it
-REPO_CHARS = 34  # owner/name truncation budget (~225px at font-size 11 mono)
+REPO_CHARS = 34  # owner/name truncation budget
 
 
 def truncate(s, n):

@@ -389,9 +389,9 @@ def full_cache(nodes):
 class CacheMerge(unittest.TestCase):
     """The write is a MERGE into a cache render-impact.py also owns.
 
-    Overwriting it instead would destroy `ourloc` — hours of git blame — and
-    silently render impact.svg wrong until the next weekly resync. That is the
-    primary hazard of this script writing at all.
+    Overwriting it instead would destroy `ourloc` — the git-blame result
+    render-impact.py produces — and silently render impact.svg wrong until the
+    next weekly resync. That is the primary hazard of this script writing at all.
     """
 
     def run_and_read(self, cached_nodes, fetched_nodes):
@@ -405,8 +405,9 @@ class CacheMerge(unittest.TestCase):
         after = self.run_and_read(prs("a/x", [1.0] * 3),
                                   prs("b/y", [2.0] * 3))
         self.assertEqual(after.get("ourloc"), OURLOC,
-                         "the merge lost ourloc — hours of git blame, and "
-                         "impact.svg renders wrong until the weekly resync")
+                         "the merge lost ourloc — the git-blame result "
+                         "render-impact.py produces — and impact.svg renders "
+                         "wrong until the weekly resync")
         self.assertEqual(after.get("issues"), ISSUES)
         self.assertEqual(after.get("totals"), TOTALS)
 

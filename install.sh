@@ -89,8 +89,8 @@ done
 echo "verified: all renderers start and agree on COMMON_VERSION"
 
 # render-impact.py's blame pass needs the parallel-blame git-fame build; stock
-# git-fame blames one file per subprocess serially and turns a 90s run into
-# minutes. Degraded, not broken — so warn rather than fail.
+# git-fame blames one file per subprocess serially. Degraded, not broken — so
+# warn rather than fail.
 if command -v git-fame >/dev/null 2>&1; then
     # git-fame, NOT `git fame`: `git <cmd> --help` is rewritten by git into
     # `man git-<cmd>`, which reports no manual entry and hides the option.

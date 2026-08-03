@@ -163,8 +163,7 @@ def monthly_windows(now):
 def fetch(token, login, cached_days=None):
     # The repos×languages core and the contribution calendar are fetched
     # separately: GitHub's GraphQL node-limit estimator started rejecting
-    # the combined query with RESOURCE_LIMITS_EXCEEDED (first seen
-    # 2026-07-18, every hourly run red). Splitting the calendar into its
+    # the combined query with RESOURCE_LIMITS_EXCEEDED. Splitting the calendar into its
     # own request was not enough — the full-year calendar query alone now
     # trips the limit — so the calendar is always fetched windowed and
     # merged into a date -> count map: with a warm cache, a single

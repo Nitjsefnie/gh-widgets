@@ -10,13 +10,14 @@ MESSAGE 1 — main post (posted with the five widget SVGs attached as images)
 ## :chart_with_upwards_trend: The five widgets
 `stats`, `streak` and `languages` are the usual profile cards. The two I built this for are about *other people's* repos:
 
-**external** — 306 PRs opened, 263 merged, across 73 repos · 109 issues, 76 maintainer-accepted, across 49 · **86% merged · 70% maintainer-accepted**.
+**external** — PRs and issues opened in other people's repos, with merge and
+maintainer-accept rates.
 **impact** — below. It's the interesting one.
 
 ## impact.svg — share, not volume
 Contribution graphs reward noise. `impact.svg` asks a harder question: *of the work in this repo, how much is mine?* Three ranked tables — Pull Requests, Issues, and **Live Code** — each scored `WilsonLowerBound(mine/total, z) * mine^gamma`, so a 1-of-1 repo can't outrank a sustained relationship.
 
-Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone. Top row: **2,749 of 11.3k lines in `envaar/vaar` — 24.3%**. Top PR row: 24 of 64 in `warior456/Sculk-Depths`, 37.5%.
+Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone.
 
 ## :tools: Stack
 Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. GraphQL throughout. One exception: `render-impact.py` shells out to `git` and `git-fame` for the blame pass.
@@ -63,8 +64,8 @@ schedule          twice daily (05:30 / 17:30 UTC), after the hourly pair
 So a normal run blames nothing at all — it checks HEAD oids and reuses counts. Only a repo that actually moved pays for a clone, and only `--resync` re-blames everything at once.
 
 ```
-cache.json          252 KB   366 calendar days, 1,098 PRs
-impact-cache.json   264 KB   PRs, issues, totals, per-repo line counts
+cache.json          profile cache: calendar days, PRs, issues
+impact-cache.json   PRs, issues, totals, per-repo line counts
 ```
 
 Two caches, deliberately separate — pointing both renderers at one file was a mistake I made once and would rather nobody repeat.

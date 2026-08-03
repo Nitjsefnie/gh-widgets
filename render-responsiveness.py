@@ -26,7 +26,7 @@ should wait for it. Runs hourly.
 
 Merging, not overwriting, is the whole hazard of writing to a cache someone
 else owns. This script replaces the PR half and preserves every other key
-byte-for-byte — above all `ourloc`, hours of git blame that render-impact.py
+byte-for-byte — above all `ourloc`, the git-blame result render-impact.py
 cannot cheaply rebuild. common.merge_cache does the load-modify-write inside
 one cache_lock hold so a concurrent render-impact save cannot be discarded,
 and it writes via a temp file plus os.replace so a partial cache is never
@@ -316,7 +316,7 @@ COL_SCORE = 500    # responsiveness score, right-anchored
 BAR_X = 20
 BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score
 SCORE_MAX = 10.0  # displayed score of the leader; the rest scale to it
-REPO_CHARS = 34  # owner/name truncation budget (~225px at font-size 11 mono)
+REPO_CHARS = 34  # owner/name truncation budget
 ROW_H = 22
 
 
@@ -435,9 +435,9 @@ def update_pr_cache(path, insiders, prs_by_id):
     """Merge the freshly fetched PR half into the shared cache.
 
     ONLY the keys this script owns are written; `issues`, `totals` and above
-    all `ourloc` — the git-blame result render-impact.py spends hours on — are
-    carried through untouched by common.merge_cache, which does the whole
-    read-modify-write under the cache lock.
+    all `ourloc` — the git-blame result render-impact.py produces — are carried
+    through untouched by common.merge_cache, which does the whole read-modify-write
+    under the cache lock.
 
     `fetched_at` is one of the keys left alone: it is render-impact.py's stamp
     for the sections THIS script does not refresh, and moving it hourly would

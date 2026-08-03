@@ -2,11 +2,10 @@
 """
 gh-widgets — code shared by render.py and render-impact.py.
 
-This module exists because the two renderers were carrying ~200 lines of
-byte-identical code (theme table, GraphQL client, PR/issue paging, cache
-helpers, SVG chrome) that drifted independently. It also owns the identity
-model both scripts need: who counts as an insider, and which commit-author
-addresses count as ours.
+This module exists because the two renderers were carrying byte-identical
+code (theme table, GraphQL client, PR/issue paging, cache helpers, SVG chrome)
+that drifted independently. It also owns the identity model both scripts need:
+who counts as an insider, and which commit-author addresses count as ours.
 
 Identity is DERIVED, not configured. `fetch_identity` asks the API who the
 token's account is and which orgs it belongs to; the environment can only ADD
@@ -167,7 +166,7 @@ def cache_lock(path, timeout=CACHE_LOCK_TIMEOUT):
     twice a day, render-responsiveness.py reads-modifies-writes its PR half
     every hour. Without a lock spanning that read-modify-write, a whole-file
     save landing between its read and its write is discarded — including
-    `ourloc`, which costs hours of git blame to rebuild.
+    `ourloc`, which is expensive to rebuild.
 
     Yields True when the lock is held, False when it is not (timeout, or a
     lock file that could not be created). The caller decides what that means:
@@ -231,8 +230,8 @@ def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):
     what this writer happened to read.
 
     Failing to update is the safe outcome and is reported, not raised: a cache
-    that missed one refresh is recovered by the next run, one that lost
-    `ourloc` costs hours of git blame.
+    that missed one refresh is recovered by the next run; one that lost
+    `ourloc` must wait for the next `--resync` to rebuild it.
     """
     try:
         with cache_lock(path, timeout) as locked:
@@ -254,10 +253,8 @@ def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):
 def gql(token, query, variables=None, retries=3, timeout=20):
     """POST a GraphQL query, retrying transient server-side conditions.
 
-    GitHub intermittently answers with RESOURCE_LIMITS_EXCEEDED under load
-    (observed 2026-07-18: four hourly runs red, then the identical query
-    succeeded minutes later). Transient conditions get a few retries; real
-    errors fail fast.
+    GitHub intermittently answers with RESOURCE_LIMITS_EXCEEDED under load.
+    Transient conditions get a few retries; real errors fail fast.
     """
     req = urllib.request.Request(
         "https://api.github.com/graphql",

@@ -1,12 +1,10 @@
 # gh-widgets — deployment and unit notes
 
-Moved out of `/root/CLAUDE.md` on 2026-07-26 so it loads only when working in
-this repo.
+Moved out of `/root/CLAUDE.md` so it loads only when working in this repo.
 
-**The units live in this repo now (2026-08-03), in `units/`.** They used to be
-hand-maintained in `/etc/systemd/system` and tracked nowhere, which is the same
-drift trap the renderers themselves have. There are **four** files, and they
-replaced **ten**:
+**The units live in this repo now, in `units/`.** They used to be hand-maintained
+in `/etc/systemd/system` and tracked nowhere, which is the same drift trap the
+renderers themselves have. There are **four** files, and they replaced **ten**:
 
 | unit | when | what |
 |---|---|---|
@@ -38,20 +36,18 @@ cache; `impact-cache.json` is shared by `render-impact.py` and
 re-running it after the impact resync *is* its resync). Check `--help` before
 adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 
-> **Do not drop `GH_EXTRA_EMAILS`.** Since 2026-07-24, line ownership is an
-> exact match against the account's GitHub noreply addresses (derived from
-> `login` + `databaseId`), replacing a substring test. The workstation address
-> never appears as a noreply, so without this var those lines stop counting —
-> **silently**, as a lower number rather than an error. It bites hardest on
-> `--resync`, which re-blames every repo at once. Insiders/orgs need no such
-> var: they are fetched from the account.
+> **Do not drop `GH_EXTRA_EMAILS`.** Line ownership is an exact match against
+> the account's GitHub noreply addresses (derived from `login` + `databaseId`),
+> replacing a substring test. The workstation address never appears as a noreply,
+> so without this var those lines stop counting — **silently**, as a lower number
+> rather than an error. It bites hardest on `--resync`, which re-blames every
+> repo at once. Insiders/orgs need no such var: they are fetched from the
+> account.
 
 > **git-fame is pinned to a fork, not PyPI.** `render-impact.py`'s blame pass
 > runs `git fame` per repo; stock git-fame spawns one serial `git blame`
-> subprocess per file (N+3 processes per repo) and spends ~41% of its wall
-> time on process spawn alone. We install
-> `Nitjsefnie-OSC/git-fame`, pinned by SHA (not the moving branch), which adds
-> `--jobs`:
+> subprocess per file, so the pinned `Nitjsefnie-OSC/git-fame` fork that adds
+> `--jobs` is several times faster:
 >
 > ```
 > pip install --force-reinstall "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
@@ -75,25 +71,26 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > [casperdcl/git-fame#132](https://github.com/casperdcl/git-fame/pull/132),
 > which fixes
 > [#131](https://github.com/casperdcl/git-fame/issues/131) (the serial
-> one-blame-process-per-file measurement above). A pre-existing, unrelated bug
-> found during the work is
-> [#130](https://github.com/casperdcl/git-fame/issues/130).
+> one-blame-process-per-file issue). A pre-existing, unrelated bug found during
+> the work is [#130](https://github.com/casperdcl/git-fame/issues/130).
 >
 > Once the upstream PR merges, re-pin to the PyPI release that contains it and
 > delete this note.
 
-The impact units run at a lower priority than the main pair (`Nice=12` / `15`
-vs `10`), and `render-impact.service` carries
-`After=…render-gh-widgets.service` so it runs last in the widget cycle. The
-long timeouts are load-bearing: a run does a re-fetch **plus a git blame pass**
-over external contributions and takes ~3 min normally, far more on `--resync`.
+The long timeouts are load-bearing. `--resync` ignores the cache and re-blames
+everything, so it takes far longer than an incremental run.
 
 > **Reading `systemctl list-timers` will mislead you here.** The NEXT column is
 > local time *and* includes `RandomizedDelaySec`, so `Sun 04:17 UTC` shows up as
 > `Sun 06:19 CEST` — that is the same schedule, not drift. Check the unit file
 > (`systemctl cat <unit>.timer`) before "fixing" a discrepancy that isn't one.
-> `render-impact-resync.timer` also shows a blank LAST column until its first
+> `gh-widgets-resync.timer` also shows a blank LAST column until its first
 > Sunday fires; blank ≠ broken.
+
+> **Health check in one line:** every render prints
+> `git-fame: 3.1.4.devN+g<sha> with --jobs (patched build)` before the blame
+> pass. If that line is absent from a run's journal, the guard did not run —
+> which is the alarm, not the silence.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
 > scopes incl. `repo`), not a narrow PAT. Safe only because the renderer filters

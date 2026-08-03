@@ -286,8 +286,8 @@ class VersionContract(unittest.TestCase):
 
 class FetchIssues(unittest.TestCase):
     # The untested twin of fetch_pull_requests, which harboured a permanent
-    # data-loss bug (#3) while 58 tests passed. Same paging shape, same
-    # injectable gql_fn.
+    # data-loss bug (#3) in production while the suite stayed green. Same paging
+    # shape, same injectable gql_fn.
 
     def paged_gql(self, pages):
         """Serve canned issue pages in order, recording every call."""

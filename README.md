@@ -213,13 +213,12 @@ how much lands in other people's repos, but **how long it takes to land**. One
 row per repo, ranked by volume × speed — `n` merged PRs with diminishing
 returns, damped by the **trimmed-mean** hours from PR creation to merge.
 
-Trimmed mean, not plain mean, on purpose. Measured over 332 external merged PRs:
-mean 24.3 h, p50 3.2 h, σ 4.9 days, worst 77 days. 83% merge inside a day,
-so a plain mean ranks a repo by its single worst outlier — one PR parked over a
-holiday — rather than by what a contributor should actually expect. The p10..p90
-trim keeps the body of typical PRs while dropping the holiday-weekend tail.
-Repos with fewer than 4 merged PRs fall back to the plain mean so the trim
-cannot collapse to a single value or an empty set.
+Trimmed mean, not plain mean, on purpose. A plain mean ranks a repo by its
+single worst outlier — one PR parked over a holiday — rather than by what a
+contributor should actually expect. The p10..p90 trim keeps the body of typical
+PRs while dropping the holiday-weekend tail. Repos with fewer than 4 merged PRs
+fall back to the plain mean so the trim cannot collapse to a single value or an
+empty set.
 
 A repo needs `RESP_MIN_PRS` merged PRs (default 3) to be ranked: a summary over
 one or two samples is not an estimate of anything. The excluded tail is
@@ -231,7 +230,7 @@ It fetches its own PR data — one paginated GraphQL connection, the same one
 here) rather than trailing `render-impact.py`. It shares that script's cache,
 because that is where the account's authored PRs already live: it **merges**
 its half in and leaves every other section alone, above all `ourloc`, the
-git-blame result `render-impact.py` spends hours on. Both writers take a lock
+git-blame result `render-impact.py` produces. Both writers take a lock
 around the file and write it via a temp file plus `os.replace`, so the two can
 overlap without either observing or leaving a half-written cache. A failed
 fetch renders from the cache and says so, exactly like the other two.

@@ -4,9 +4,8 @@
     python3 -m unittest discover -v
 
 render-impact.py shells out to `git fame` for its blame pass. Stock git-fame
-blames one file per subprocess, serially: measured on a 477-file repository,
-480 processes and 41% of wall time in process spawn alone. We run a patched
-build (Nitjsefnie-OSC/git-fame) that adds `--jobs`.
+blames one file per subprocess serially; the pinned
+Nitjsefnie-OSC/git-fame build adds `--jobs`.
 
 These tests pin the CAPABILITY, not the timing — a timing assertion would be
 flaky on a shared box, and a slow run is not a wrong run. The invariant that
