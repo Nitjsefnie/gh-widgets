@@ -291,10 +291,9 @@ def render_responsiveness(C, scored):
   <line x1="20" y1="64" x2="{CARD_W - 20}" y2="64" stroke="{C['border']}"/>"""
     parts, y = render_rows(C, y, scored)
     body += "\n  " + "\n  ".join(parts)
-    y += 6
-    body += (f'\n  <line x1="20" y1="{y}" x2="{CARD_W - 20}" y2="{y}" '
-             f'stroke="{C["border"]}"/>')
-    return base_card(C, CARD_W, y + 14, body)
+    # No closing rule: the card ends on its last row, like impact.svg. A rule
+    # here separated the rows from a footer that no longer exists.
+    return base_card(C, CARD_W, y + 10, body)
 
 
 def parse_args():
