@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design spec — parallel blame for git-fame</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+
+      --radius: 12px;
+      --border: 1.5px solid var(--gray-300);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.58;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; max-width: 1220px; display: grid; grid-template-columns: minmax(0,1fr) 250px; gap: 48px; }
+    @media (max-width: 1040px) { .page { grid-template-columns: 1fr; } aside { position: static; order: 2; } }
+
+    header.page-head { margin-bottom: 40px; max-width: 840px; }
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.14;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+    .context-box {
+      background: var(--gray-150);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .context-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 56px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent  { color: var(--clay); }
+    .summary .v.ok      { color: var(--olive); }
+
+    .decision {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--clay);
+      border-radius: var(--radius);
+      padding: 22px 26px;
+      margin-bottom: 56px;
+    }
+    .decision .d-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--clay);
+      margin-bottom: 8px;
+    }
+    .decision .d-head {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--slate);
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .decision .d-body { font-size: 14.5px; color: var(--gray-700); max-width: 760px; }
+    .decision .d-body + .d-body { margin-top: 8px; }
+
+    section { margin-bottom: 60px; scroll-margin-top: 24px; }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 740px;
+      margin-bottom: 24px;
+    }
+    p.body { font-size: 14.5px; max-width: 760px; margin-bottom: 14px; }
+    p.body strong { color: var(--slate); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #C9B98A;
+    }
+    pre {
+      background: #121110;
+      border: 1px solid var(--gray-300);
+      border-radius: 10px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      margin: 14px 0;
+      max-width: 800px;
+    }
+    pre code { background: none; border: none; padding: 0; font-size: 12.5px; line-height: 1.6; color: var(--gray-700); }
+
+    .tbl {
+      width: 100%;
+      border: var(--border);
+      border-radius: var(--radius);
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      font-size: 13.5px;
+    }
+    .tbl th, .tbl td {
+      text-align: left;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--gray-300);
+      vertical-align: top;
+    }
+    .tbl th {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--gray-500);
+      background: var(--gray-150);
+      font-weight: 600;
+    }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl td { color: var(--gray-700); }
+    .tbl td.slate { color: var(--slate); font-weight: 600; }
+    .tbl td.num { font-family: var(--mono); text-align: right; }
+    .tbl tbody tr:hover { background: var(--gray-150); }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+    .compare .col {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .compare .col-head {
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: var(--border);
+    }
+    .compare .col.bad  .col-head { background: #2E211C; color: var(--rust); }
+    .compare .col.good .col-head { background: #232A1C; color: var(--olive); }
+    .compare .col-body { padding: 16px 18px; font-size: 13.5px; }
+    .compare .col-body ul { list-style: none; }
+    .compare .col-body li { margin: 7px 0; padding-left: 18px; position: relative; }
+    .compare .col.bad  li:before { content: '\2715'; position: absolute; left: 0; color: var(--rust); }
+    .compare .col.good li:before { content: '\2713'; position: absolute; left: 0; color: var(--olive); }
+
+    .changes { display: flex; flex-direction: column; gap: 12px; }
+    .change {
+      background: var(--white);
+      border: var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 4px 24px;
+    }
+    @media (max-width: 720px) { .change { grid-template-columns: 1fr; } }
+    .change .file {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--clay);
+      word-break: break-all;
+    }
+    .change .what { font-size: 14px; color: var(--gray-700); }
+    .change .what .lead { color: var(--slate); font-weight: 600; }
+
+    .checklist { display: flex; flex-direction: column; gap: 10px; max-width: 800px; }
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--white);
+      border: var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    .check .box {
+      width: 18px; height: 18px;
+      border-radius: 5px;
+      border: 2px solid var(--gray-500);
+      flex-shrink: 0;
+      margin-top: 2px;
+      cursor: pointer;
+    }
+    .check .box.on { background: var(--olive); border-color: var(--olive); }
+    .check .ck-text { font-size: 14px; color: var(--gray-700); }
+    .check .ck-text strong { color: var(--slate); }
+
+    .risks {
+      border: var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--white);
+    }
+    .risks .row { display: grid; grid-template-columns: 1.6fr 90px 1.6fr; }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: var(--border); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: var(--border); }
+    @media (max-width: 780px) {
+      .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); }
+    }
+    .risks .head {
+      background: var(--gray-150);
+      font-weight: 600;
+      color: var(--slate);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .sev {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .sev.high { background: #4A2A1C; color: #F0B79C; }
+    .sev.med  { background: var(--oat);  color: var(--slate); }
+    .sev.low  { background: #2D3A24; color: #B6CC96; }
+
+    .deferred { display: flex; flex-direction: column; gap: 14px; max-width: 840px; }
+    .defer {
+      background: var(--white);
+      border: var(--border);
+      border-left: 4px solid var(--gray-500);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .defer .dt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .defer .dd { font-size: 13.5px; color: var(--gray-500); }
+
+    aside {
+      position: sticky; top: 32px; align-self: start;
+      border: var(--border); border-radius: var(--radius);
+      background: var(--white); padding: 18px;
+    }
+    aside .label {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px;
+    }
+    aside ol { list-style: none; counter-reset: toc; font-size: 12.5px; line-height: 1.5; }
+    aside ol li { counter-increment: toc; margin-bottom: 9px; }
+    aside ol li a { text-decoration: none; color: var(--gray-700); display: block; }
+    aside ol li a:hover { color: var(--slate); }
+    aside ol li a::before {
+      content: counter(toc, decimal-leading-zero) ".";
+      font-family: var(--mono); font-size: 10px; color: var(--gray-500); margin-right: 6px;
+    }
+    aside button {
+      appearance: none; width: 100%; border: var(--border); background: var(--gray-150);
+      color: var(--gray-700); border-radius: 6px; font-family: var(--mono);
+      font-size: 11px; padding: 8px; cursor: pointer; margin-top: 8px;
+    }
+    aside button:hover { background: var(--oat); color: var(--slate); }
+
+    .footer {
+      color: var(--gray-500);
+      font-size: 13px;
+      margin-top: 64px;
+      padding-top: 22px;
+      border-top: 1px solid var(--gray-300);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+  <main>
+    <header class="page-head">
+      <div class="eyebrow">Design spec · gh-widgets → git-fame</div>
+      <h1>Parallel <code style="font-size:0.7em">git blame</code> inside a single repository</h1>
+      <div class="context-box">
+        <span class="label">Context</span>
+        <code>render-impact.py</code> shells out to <code>git fame</code> once per external
+        repository to count surviving lines. Measurement showed git-fame spends
+        <strong>41% of its wall time on process spawn alone</strong>, because it runs one
+        serial <code>git blame</code> subprocess per file. This spec decides to fix the
+        dependency rather than work around it: patch git-fame in a fork, upstream the patch,
+        and pin the patched build.
+      </div>
+    </header>
+
+    <div class="summary">
+      <div class="cell"><div class="k">Speedup measured</div><div class="v accent">~5×</div></div>
+      <div class="cell"><div class="k">Files touched</div><div class="v">8</div></div>
+      <div class="cell"><div class="k">Risk</div><div class="v ok">Low</div></div>
+      <div class="cell"><div class="k">Deferred</div><div class="v">2 items</div></div>
+    </div>
+
+    <div class="decision">
+      <div class="d-tag">Decision</div>
+      <div class="d-head">Add a <code>-j/--jobs</code> option to git-fame that parallelises the per-file blame subprocess, on by default, and consume it from a pinned fork build.</div>
+      <div class="d-body">Chosen over working around it in <code>render-impact.py</code> because the
+        cost lives entirely inside the dependency — a caller-side fix (parallelising the
+        <em>repo</em> loop) would leave the per-file serialisation in place for every other
+        git-fame user and would oversubscribe the box once the real fix landed. Upstream already
+        parallelises <em>across</em> repositories with <code>thread_map</code>
+        (<code>_gitfame.py:441</code>), so intra-repo parallelism is consistent with the project's
+        own precedent, not a novel behaviour.</div>
+      <div class="d-body">The decision deliberately does <em>not</em> change any output. Only the
+        subprocess call is parallelised; parsing and aggregation stay serial in the main thread,
+        consuming results in submission order, so output is byte-identical to
+        <code>-j1</code>.</div>
+    </div>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>Background — the measurement</h2></div>
+      <p class="sec-intro">Every number below was measured on this box (12 cores), not estimated.</p>
+      <p class="body">git-fame spawns <strong>N + 3 processes per repository</strong>, where N is the
+        number of text files: <code>ls-files</code>, <code>git grep -I</code>,
+        <code>shortlog</code>, then one <code>git blame --line-porcelain</code> per file, strictly
+        serially (<code>_gitfame.py:280</code>).</p>
+      <table class="tbl">
+        <thead><tr><th>Repository</th><th>Files blamed</th><th>Processes</th><th>Wall</th><th>Pure spawn</th><th>Python side</th></tr></thead>
+        <tbody>
+          <tr><td class="slate">bamdadd/context-leak</td><td class="num">28</td><td class="num">31</td><td class="num">0.42 s</td><td class="num">91 ms (22%)</td><td class="num">24%</td></tr>
+          <tr><td class="slate">barribob/bosses-of-mass-destruction</td><td class="num">477</td><td class="num">480</td><td class="num">6.7 s</td><td class="num">2.75 s (41%)</td><td class="num">7%</td></tr>
+        </tbody>
+      </table>
+      <p class="body">The fixed per-call cost is <strong>~5.4 ms</strong>, and it is not an artifact of
+        the estimate: blaming a <strong>0-byte file</strong> costs 5.44 ms against a 4.10 ms bare
+        <code>git rev-parse</code>. Median blame in that repo is ~10 ms, so roughly half of every
+        blame call is fork/exec/repo-open rather than blame work.</p>
+      <p class="body">Thread-pooling the same 477 blames confirms the headroom. The prediction before
+        running was 1.0–1.6 s at 8 workers; it came in at 1.615 s.</p>
+      <table class="tbl">
+        <thead><tr><th>Workers</th><th>1</th><th>4</th><th>8</th><th>16</th></tr></thead>
+        <tbody><tr><td class="slate">Blame phase</td><td class="num">8.1 s</td><td class="num">1.9 s</td><td class="num">1.6 s</td><td class="num">1.3 s</td></tr></tbody>
+      </table>
+      <p class="body">Consumer-side impact: <code>render-impact.py</code> re-blames 1–17 repositories per
+        run (journal, last 7 days), with runs taking 22 s to 5 min wall. Extrapolating the measured
+        ~70 loc/file across the 56 cached repositories (5.95 M lines) puts a <code>--resync</code> at
+        <strong>~85,000 blame processes, ~7.5 min of pure fork/exec</strong> before any blaming happens.</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>Approach chosen vs. rejected</h2></div>
+      <p class="sec-intro">Three approaches were considered; the caller-side workarounds were rejected.</p>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">Rejected — caller-side only</div>
+          <div class="col-body"><ul>
+            <li>Thread-pool the repo loop in <code>blame_moved</code> — helps only when several repos move in one run, and does nothing for a single large repo.</li>
+            <li>Leaves per-file serialisation in place for every other git-fame user; the upstream bug goes unreported.</li>
+            <li>Oversubscribes the box if the real fix later lands upstream.</li>
+            <li>Swapping git-fame for another blame aggregator changes semantics with no failing test to say what moved.</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">Chosen — fix the dependency</div>
+          <div class="col-body"><ul>
+            <li>Patch git-fame itself; the win applies to every caller and every repo size.</li>
+            <li>Fork to <code>Nitjsefnie-OSC</code>, open an upstream issue <em>and</em> send the PR, so the fix is not carried privately forever.</li>
+            <li>Pin the patched build and add a regression test that fails on the stock version.</li>
+            <li>Output is byte-identical, so the change is provable rather than merely plausible.</li>
+          </ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>Change inventory</h2></div>
+      <p class="sec-intro">Upstream fork first, consumer second.</p>
+      <div class="changes">
+        <div class="change">
+          <div class="file">gitfame/_gitfame.py (module docstring)</div>
+          <div class="what"><span class="lead">Declare the option.</span> <code>argopt</code> builds the
+            parser from <code>__doc__</code>, so the docstring is the source of truth:
+            <code>-j, --jobs=&lt;n&gt;</code> with <code>[default: 0:int]</code>, 0 meaning auto.</div>
+        </div>
+        <div class="change">
+          <div class="file">gitfame/_gitfame.py:_get_auth_stats</div>
+          <div class="what"><span class="lead">Parallelise the blame subprocess.</span> Accept a
+            <code>jobs</code> parameter. Submit blame calls to a <code>ThreadPoolExecutor</code> with a
+            bounded window of <code>2 × jobs</code> outstanding futures; consume in submission order and
+            parse serially in the calling thread, so <code>stats_append</code> needs no lock and output
+            order is unchanged. Per-file exception handling keeps its current semantics (log, skip file).</div>
+        </div>
+        <div class="change">
+          <div class="file">gitfame/_gitfame.py:run</div>
+          <div class="what"><span class="lead">Resolve and divide the budget.</span> <code>jobs=0</code>
+            resolves to <code>min(32, (os.cpu_count() or 1) + 4)</code> — the stdlib
+            <code>ThreadPoolExecutor</code> heuristic, easy to defend in review. When multiple gitdirs are
+            processed concurrently, pass <code>max(1, jobs // len(gitdirs))</code> inward so total
+            concurrency stays bounded.</div>
+        </div>
+        <div class="change">
+          <div class="file">tests/test_gitfame.py</div>
+          <div class="what"><span class="lead">Cover the flag and the invariant.</span> Add
+            <code>['-j', '4']</code> to the <code>test_options</code> parametrize list, plus a
+            determinism test asserting <code>-j1</code> and <code>-j4</code> produce identical output on
+            the repo itself.</div>
+        </div>
+        <div class="change">
+          <div class="file">git-fame_completion.bash</div>
+          <div class="what"><span class="lead">Offer the new flag.</span> Add <code>-j</code> /
+            <code>--jobs</code> to the completion word list.</div>
+        </div>
+        <div class="change">
+          <div class="file">gitfame/git-fame.1</div>
+          <div class="what"><span class="lead">Regenerate.</span> Produced by the Makefile target from the
+            docstring; must be rebuilt so the man page matches.</div>
+        </div>
+        <div class="change">
+          <div class="file">/root/gh-widgets/test_impact.py (new)</div>
+          <div class="what"><span class="lead">Regression test that fails on stock.</span> Capability
+            probe: assert the installed git-fame accepts <code>-j</code>, and that <code>-j4</code> output
+            equals <code>-j1</code> output. No timing assertion — those are flaky.</div>
+        </div>
+        <div class="change">
+          <div class="file">/root/gh-widgets/CLAUDE.md + install.sh</div>
+          <div class="what"><span class="lead">Record the pin.</span> Note that git-fame is installed from
+            <code>Nitjsefnie-OSC/git-fame</code> at a fixed commit, why, and how to re-pin once the
+            upstream PR merges.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head"><span class="num">04</span><h2>Concurrency semantics</h2></div>
+      <p class="sec-intro">Exactly what each value of <code>--jobs</code> does.</p>
+      <table class="tbl">
+        <thead><tr><th>Value</th><th>Blame workers</th><th>Behaviour</th></tr></thead>
+        <tbody>
+          <tr><td class="slate">0 (default)</td><td><code>min(32, cpu_count+4)</code></td><td>Auto. Matches the stdlib executor heuristic.</td></tr>
+          <tr><td class="slate">1</td><td>1</td><td>Exactly the current serial code path — the escape hatch, and the determinism test's control.</td></tr>
+          <tr><td class="slate">n &gt; 1</td><td>n</td><td>Explicit cap.</td></tr>
+          <tr><td class="slate">multiple gitdirs</td><td><code>max(1, jobs // len(gitdirs))</code></td><td>Outer <code>thread_map</code> already parallelises across repos; inner budget is divided so the product stays bounded.</td></tr>
+        </tbody>
+      </table>
+      <p class="body">Memory is the constraint that forces the bounded window rather than a plain
+        <code>executor.map</code>: <code>--line-porcelain</code> emits roughly 250–400 bytes per source
+        line, so buffering every file's blame output at once would reach gigabytes on a 1.3 M-line
+        repository like <code>packit/ogr</code>. Peak memory stays
+        <strong>O(jobs × per-file output)</strong>, not O(repo).</p>
+    </section>
+
+    <section id="s5">
+      <div class="sec-head"><span class="num">05</span><h2>Verification</h2></div>
+      <p class="sec-intro">Concrete and runnable. The first item is the one that makes the change provable.</p>
+      <div class="checklist">
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Byte-identical output.</strong> <code>git fame -e -w --format json -j1</code> and <code>-j8</code> produce identical JSON on at least three real repositories of differing size.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Upstream suite green.</strong> <code>pytest</code> in the fork passes, including <code>-W=error</code> and <code>--cov-fail-under=85</code>.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Speedup reproduced.</strong> <code>-j8</code> beats <code>-j1</code> by ≥3× on the 477-file repo; recorded, not asserted in a test.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Regression test fails on stock.</strong> The new gh-widgets test passes against the pinned fork build and fails against git-fame 3.1.2 from PyPI.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>End-to-end unchanged.</strong> <code>render-impact.py</code> against a copied cache produces the same <code>ourloc</code> counts as the current production cache for repos whose HEAD has not moved.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Deployed copies match.</strong> <code>diff /usr/local/bin/render-impact.py /root/gh-widgets/render-impact.py</code> is empty after <code>install.sh</code>.</div></div>
+      </div>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head"><span class="num">06</span><h2>Risks</h2></div>
+      <div class="risks">
+        <div class="row">
+          <div class="cell head">Risk</div><div class="cell head">Sev</div><div class="cell head">Mitigation</div>
+        </div>
+        <div class="row">
+          <div class="cell">Memory blow-up on very large repos if the outstanding-future window is unbounded.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">Bounded window of 2 × jobs is a hard requirement of the design, not an optimisation. Verified against a large repo before the PR.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Upstream rejects default-on parallelism as a behaviour change.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Byte-identical output plus the existing <code>thread_map</code> precedent is the argument. If rejected, flip the default to <code>-j1</code> and pass <code>-j</code> explicitly from <code>render-impact.py</code> — a one-line change on our side.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Oversubscription if the caller also parallelises its repo loop.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Caller-side repo parallelism is explicitly out of scope below, precisely for this reason.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Pinning to a fork commit drifts from upstream releases.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Pin recorded in <code>CLAUDE.md</code> with the re-pin instruction; the plan is to return to PyPI once the PR merges.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head"><span class="num">07</span><h2>Out of scope</h2></div>
+      <p class="sec-intro">Considered and deliberately deferred.</p>
+      <div class="deferred">
+        <div class="defer">
+          <div class="dt">Parallelising <code>blame_moved</code> in render-impact.py</div>
+          <div class="dd">Deferred until the git-fame fix is deployed and measured. Doing both would
+            oversubscribe a 12-core box. Revisit only if runs with many moved repos are still slow
+            afterwards.</div>
+        </div>
+        <div class="defer">
+          <div class="dt">Replacing per-file blame with a single <code>git log</code> pass</div>
+          <div class="dd">Would remove the N-process structure entirely, but changes what "surviving
+            lines" means and is a far larger upstream argument. Out of scope for a performance patch.</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Design spec · 2026-08-03 · gh-widgets → git-fame · measurements taken on vmi3458323 (12 cores)</p>
+    </div>
+  </main>
+
+  <aside>
+    <div class="label">Sections</div>
+    <ol>
+      <li><a href="#s1">Background — the measurement</a></li>
+      <li><a href="#s2">Approach chosen vs. rejected</a></li>
+      <li><a href="#s3">Change inventory</a></li>
+      <li><a href="#s4">Concurrency semantics</a></li>
+      <li><a href="#s5">Verification</a></li>
+      <li><a href="#s6">Risks</a></li>
+      <li><a href="#s7">Out of scope</a></li>
+    </ol>
+    <button id="copySpec">copy spec as prompt</button>
+    <button id="copyVerify">copy verification steps</button>
+  </aside>
+
+  </div>
+<script>
+document.querySelectorAll('.check .box').forEach(function (b) {
+  b.onclick = function () { b.classList.toggle('on'); };
+});
+function collect(sel, map) { return Array.from(document.querySelectorAll(sel)).map(map).join("\n"); }
+document.getElementById('copyVerify').onclick = function () {
+  var t = "git-fame parallel blame — verification:\n" +
+    collect('.check .ck-text', function (e) { return "- [ ] " + e.textContent.trim().replace(/\s+/g, ' '); });
+  navigator.clipboard.writeText(t);
+  this.textContent = 'copied ✓';
+  var self = this; setTimeout(function () { self.textContent = 'copy verification steps'; }, 1400);
+};
+document.getElementById('copySpec').onclick = function () {
+  var t = "Spec: " + document.querySelector('h1').textContent.trim() + "\n\n" +
+    "DECISION: " + document.querySelector('.decision .d-head').textContent.trim() + "\n\n" +
+    "CHANGES:\n" + collect('.change', function (c) {
+      return "- " + c.querySelector('.file').textContent.trim() + ": " +
+             c.querySelector('.what').textContent.trim().replace(/\s+/g, ' ');
+    });
+  navigator.clipboard.writeText(t);
+  this.textContent = 'copied ✓';
+  var self = this; setTimeout(function () { self.textContent = 'copy spec as prompt'; }, 1400);
+};
+</script>
+</body>
+</html>
