@@ -25,8 +25,8 @@ render-impact.py.
 
 Merged PRs are frozen in that cache, so a cache written before COMMON_VERSION 2
 yields nodes with no timestamps until `render-impact.py --resync` refetches
-them (the weekly resync timer does). Those PRs are counted as skipped and said
-so on the card, rather than quietly shortening a repo's history.
+them (the weekly resync timer does). Those PRs are counted as skipped and
+reported on stdout, rather than quietly shortening a repo's history.
 
 Configuration (env vars or CLI flags, in that order of precedence):
   OUT_DIR     where to write the SVG (default: ./widgets)
@@ -56,7 +56,7 @@ import os
 import statistics
 import sys
 from collections import namedtuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -88,6 +88,7 @@ IMPACT_CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 
 TOP_N = 10
+STALE_AFTER_H = 24        # cache older than this earns the stamp
 
 # Re-exported so call sites stay short and patchable, same as render-impact.py.
 FONT = common.FONT
@@ -333,6 +334,22 @@ def read_impact_cache(path):
             cache.get("fetched_at"))
 
 
+def cache_is_stale(fetched_at, now=None):
+    """True when the cache is old enough that the card should say so.
+
+    render-impact refreshes twice daily, so anything past a day means its
+    timer has missed at least one run.
+    """
+    if not fetched_at:
+        return False
+    try:
+        stamped = datetime.fromisoformat(fetched_at)
+    except ValueError:
+        return True
+    now = now or datetime.now(stamped.tzinfo)
+    return (now - stamped) > timedelta(hours=STALE_AFTER_H)
+
+
 def build_card(C, prs, insiders, knobs):
     """Score the cached PRs and render the card.
 
@@ -357,9 +374,10 @@ def main():
 
     prs, insiders, fetched_at = read_impact_cache(args.cache_file)
     svg, notes = build_card(C, prs, insiders, metric_knobs())
-    if fetched_at:
-        # Every render of this card comes from the cache, so its age is
-        # always worth showing, not just on a failure path.
+    if cache_is_stale(fetched_at):
+        # Same rule as the other renderers: the stamp is a CAVEAT, shown only
+        # when the data is old enough to mislead. render-impact refreshes this
+        # cache twice a day, so a fresh render carries no stamp at all.
         svg = stamp_cache_notice(C, svg, fetched_at)
     (out / "responsiveness.svg").write_text(svg)
 

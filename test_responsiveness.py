@@ -245,9 +245,10 @@ class RenderCard(unittest.TestCase):
                        "no cached merge time", "untimed"):
             self.assertNotIn(leaked, svg)
 
-    def test_cache_fetch_time_is_stamped(self):
+    def test_a_fresh_cache_is_not_stamped(self):
+        """The stamp is a caveat, not a label — same rule as the other cards."""
         svg = self.render(prs("a/x", [1.0] * 3))
-        self.assertIn("cached data from 2026-08-03T05:36:20+00:00", svg)
+        self.assertNotIn("cached data from", svg)
 
     def test_empty_board_still_renders(self):
         svg = self.render(prs("me/mine", [1.0] * 3))
@@ -291,3 +292,28 @@ class CacheContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CacheStaleness(unittest.TestCase):
+    """The cached-data stamp appears only when the cache is actually old."""
+
+    FRESH = "2026-08-03T05:36:20+00:00"
+
+    def at(self, hours):
+        return resp.parse_ts(self.FRESH) + datetime.timedelta(hours=hours)
+
+    def test_a_recent_cache_is_not_stale(self):
+        self.assertFalse(resp.cache_is_stale(self.FRESH, now=self.at(4)))
+
+    def test_a_day_old_cache_is_stale(self):
+        self.assertTrue(resp.cache_is_stale(self.FRESH, now=self.at(25)))
+
+    def test_the_boundary_is_not_stale(self):
+        self.assertFalse(resp.cache_is_stale(self.FRESH, now=self.at(24)))
+
+    def test_a_missing_stamp_is_not_stale(self):
+        self.assertFalse(resp.cache_is_stale(None))
+
+    def test_an_unparseable_stamp_is_treated_as_stale(self):
+        """Unreadable provenance is a reason to warn, not to stay silent."""
+        self.assertTrue(resp.cache_is_stale("not-a-date"))
