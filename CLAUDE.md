@@ -1,37 +1,42 @@
 # gh-widgets — deployment and unit notes
 
 Moved out of `/root/CLAUDE.md` on 2026-07-26 so it loads only when working in
-this repo. The unit/env enumeration and the render-impact schedule table that
-used to live here were dropped as derivable — read them from the units
-themselves:
+this repo.
 
-```
-systemctl cat render-gh-widgets.service render-gh-widgets.timer
-systemctl cat render-gh-widgets-resync.service render-gh-widgets-resync.timer
-systemctl cat render-impact.service render-impact.timer
-systemctl cat render-impact-resync.service render-impact-resync.timer
-```
+**The units live in this repo now (2026-08-03), in `units/`.** They used to be
+hand-maintained in `/etc/systemd/system` and tracked nowhere, which is the same
+drift trap the renderers themselves have. There are **four** files, and they
+replaced **ten**:
 
-**gh-widgets rendering — restored on this box 2026-07-22.** Repo `/root/gh-widgets`.
-**Deploy with `/root/gh-widgets/install.sh` (2026-07-24) — not `cp`.** Three
-files now ship together: `render.py` → `/usr/local/bin/render-gh-widgets.py`,
-`render-impact.py`, and the shared `ghwidgets_common.py`. Both renderers assert
-its `COMMON_VERSION` at startup, so a partial copy produces a renderer that
-refuses to run (deliberately — the alternative is rendering from a stale
-module). `install.sh` stages all three, moves them into place, and starts both
-entry points to prove the install is coherent. They are still *copies*, so
-`diff` each against the repo before and after touching either side.
+| unit | when | what |
+|---|---|---|
+| `gh-widgets.service` + `.timer` | hourly | all three renderers, in sequence |
+| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | the same, with `--resync` — the only thing that ignores the caches |
 
-**External-impact rendering — a SECOND pair of units from the same repo.**
-`impact.svg` is *not* produced by `render-gh-widgets.py`; it has its own
-script, its own cache, and its own timers. Repo `/root/gh-widgets/render-impact.py`,
-deployed as `/usr/local/bin/render-impact.py` — also a *copy*, so
-`diff /usr/local/bin/render-impact.py /root/gh-widgets/render-impact.py`
-before and after touching either, same as the main renderer.
+The five old `render-*` service/timer pairs are **gone**; ordering that used to
+be expressed with `After=` chains between separate units is now just the order
+of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning —
+do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
-Same env as the main pair except `CACHE_FILE=/var/lib/gh-widgets/impact-cache.json`
-— a **separate cache** from `cache.json`; do not point them at one file — plus
-`GH_EXTRA_EMAILS=zmatek.peter@gmail.com` on **both** impact units.
+**Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
+unit.** Bare, it installs the four Python files to `/usr/local/bin`
+(`render.py` → `render-gh-widgets.py`, `render-impact.py`,
+`render-responsiveness.py`, `ghwidgets_common.py`). Each renderer asserts the
+shared module's `COMMON_VERSION` at startup, so a partial copy yields a renderer
+that refuses to run — deliberately, since the alternative is rendering from a
+stale module. `install.sh --units` additionally installs `units/`, reloads
+systemd, enables both timers and proves they load. Everything it installs is a
+*copy*, so `diff` against the repo before and after touching either side.
+
+**Two caches, and the flags are not symmetric.** `cache.json` is the profile
+cache; `impact-cache.json` is shared by `render-impact.py` and
+`render-responsiveness.py` — do not point them at one file. The unit sets
+`CACHE_FILE=…/cache.json` in its environment and passes `--cache-file
+…/impact-cache.json` explicitly to the two that share the impact cache, because
+**`render.py` has no `--cache-file` flag at all** (env only) and
+**`render-responsiveness.py` has no `--resync`** (it has no cache of its own;
+re-running it after the impact resync *is* its resync). Check `--help` before
+adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 
 > **Do not drop `GH_EXTRA_EMAILS`.** Since 2026-07-24, line ownership is an
 > exact match against the account's GitHub noreply addresses (derived from

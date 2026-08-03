@@ -1,0 +1,50 @@
+# gh-widgets — render every widget SVG, in one pass.
+#
+# This replaced five service/timer pairs (render-gh-widgets, render-impact,
+# render-responsiveness and two -resync variants). One oneshot unit runs the
+# renderers sequentially, so the ordering that used to be expressed with
+# `After=` chains between separate units is now just the order of the
+# ExecStart lines — and a slow renderer delays the next one instead of
+# overlapping with it.
+#
+# Order is load-bearing: render-impact.py refreshes the shared impact cache
+# that render-responsiveness.py then reads, so responsiveness runs last.
+#
+# A unit has ONE environment block but three renderers using TWO caches, so the
+# split is deliberate: CACHE_FILE= below is the profile cache, and the two
+# renderers that share the impact cache get it as an explicit --cache-file flag
+# (the flag overrides the env var). render.py has NO --cache-file flag at all —
+# it reads CACHE_FILE only — which is why the env var carries the profile cache
+# rather than the impact one. Verify with `--help` before changing either.
+#
+# Deploy with install.sh --units, never by editing /etc/systemd/system.
+
+[Unit]
+Description=Render all gh-widgets SVGs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=GH_USER=Nitjsefnie
+Environment=GH_TOKEN_FILE=/etc/gh-widget.token
+Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
+Environment=THEME=tokyonight
+# Line ownership is an exact match against the account's GitHub noreply
+# addresses; the workstation address never appears as one, so without this the
+# blame pass silently under-counts. Read by fetch_identity, which impact and
+# responsiveness both call; render.py does not call it and is unaffected.
+Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
+StateDirectory=gh-widgets
+
+ExecStart=/usr/local/bin/render-gh-widgets.py
+ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
+ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
+
+# Covers all three in sequence. The blame pass dominates: it re-clones and
+# re-blames every external repo whose default-branch HEAD moved.
+TimeoutStartSec=5400
+Nice=12
+StandardOutput=journal
+StandardError=journal

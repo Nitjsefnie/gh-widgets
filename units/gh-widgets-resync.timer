@@ -1,0 +1,22 @@
+# Weekly resync. See gh-widgets-resync.service for why it exists.
+#
+# OnCalendar (not OnUnitActiveSec) so it lands at a predictable quiet hour
+# rather than drifting by however long the previous resync took.
+#
+# Reading `systemctl list-timers` will mislead you here: the NEXT column is
+# local time AND includes RandomizedDelaySec, so `Sun 04:17 UTC` shows up as
+# `Sun 06:19 CEST`. That is the same schedule, not drift. Check this file
+# before "fixing" a discrepancy that isn't one. The LAST column is also blank
+# until the first Sunday fires; blank is not broken.
+
+[Unit]
+Description=Weekly full gh-widgets resync
+
+[Timer]
+OnCalendar=Sun 04:17 UTC
+Persistent=true
+RandomizedDelaySec=5min
+Unit=gh-widgets-resync.service
+
+[Install]
+WantedBy=timers.target

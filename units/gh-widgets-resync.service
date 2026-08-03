@@ -1,0 +1,48 @@
+# gh-widgets — weekly cache-ignoring resync.
+#
+# The hourly unit is incremental: it trusts cached immutable data (merged PRs
+# keyed by id, per-repo line counts keyed by the default branch's HEAD oid).
+# That trust is only sound if something periodically re-derives it from
+# scratch, so no correctness claim rests permanently on MERGED being one-way
+# or on a line count surviving a force-push.
+#
+# This is that something. --resync discards the cache and refetches/re-blames
+# everything. It is the ONLY unit that ignores the cache; the hourly one never
+# passes --resync.
+#
+# Same renderers, same order, same reasoning as gh-widgets.service.
+#
+# Deploy with install.sh --units, never by editing /etc/systemd/system.
+
+[Unit]
+Description=Weekly full gh-widgets resync (ignores all caches)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=GH_USER=Nitjsefnie
+Environment=GH_TOKEN_FILE=/etc/gh-widget.token
+Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
+Environment=THEME=tokyonight
+# Dropping this makes the blame pass under-count silently, and it bites
+# hardest here: --resync re-blames every repo at once.
+Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
+StateDirectory=gh-widgets
+
+# render.py takes no --cache-file (env only); render-responsiveness.py has no
+# --resync at all — it has no cache of its own, it renders from the impact
+# cache that the line above has just rebuilt from scratch, so re-running it
+# plainly IS its resync. Both verified against --help; do not add flags here
+# without checking, an unknown flag exits 2 and fails the whole unit.
+ExecStart=/usr/local/bin/render-gh-widgets.py --resync
+ExecStart=/usr/local/bin/render-impact.py --resync --cache-file /var/lib/gh-widgets/impact-cache.json
+ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
+
+# Far longer than the hourly unit: a resync re-clones and re-blames every
+# external repo rather than only the ones whose HEAD moved.
+TimeoutStartSec=10800
+Nice=15
+StandardOutput=journal
+StandardError=journal

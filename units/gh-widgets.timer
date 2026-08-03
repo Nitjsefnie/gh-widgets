@@ -1,0 +1,18 @@
+# Hourly widget render. See gh-widgets.service for why it is one unit.
+#
+# OnUnitActiveSec (not OnCalendar) so the next run is measured from the END of
+# the previous one: a long blame pass pushes the next render out instead of
+# queueing one behind it.
+
+[Unit]
+Description=Hourly gh-widgets render
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=2min
+Unit=gh-widgets.service
+
+[Install]
+WantedBy=timers.target

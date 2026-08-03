@@ -15,8 +15,23 @@
 # their own file, so the rename is safe.
 set -eu
 
+# --units additionally installs the systemd units from units/ and reloads
+# systemd. It is opt-in because installing the renderers is useful on any box,
+# while the units carry this deployment's paths and schedule and need root.
+WITH_UNITS=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --units) WITH_UNITS=1; shift ;;
+        --)      shift; break ;;
+        -*)      echo "install.sh: unknown option $1" >&2; exit 2 ;;
+        *)       break ;;
+    esac
+done
+
 DEST="${1:-/usr/local/bin}"
 SRC="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+UNIT_DIR=/etc/systemd/system
+UNITS="gh-widgets.service gh-widgets.timer gh-widgets-resync.service gh-widgets-resync.timer"
 
 # source -> installed name
 set -- \
@@ -86,3 +101,55 @@ if command -v git-fame >/dev/null 2>&1; then
 else
     echo "install.sh: WARNING - git-fame is not installed; render-impact cannot blame" >&2
 fi
+
+[ "$WITH_UNITS" -eq 1 ] || exit 0
+
+# ---- systemd units -------------------------------------------------------
+# One hourly unit renders every SVG in sequence; one weekly unit does the same
+# with --resync and is the only thing that ignores the caches. They replaced
+# five service/timer pairs whose ordering lived in `After=` chains.
+if [ "$(id -u)" -ne 0 ]; then
+    echo "install.sh: --units needs root to write $UNIT_DIR" >&2
+    exit 1
+fi
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "install.sh: --units given but systemctl is not available" >&2
+    exit 1
+fi
+
+# Same discipline as the renderers: verify every source before touching the
+# destination, so a missing file aborts rather than half-applying.
+for u in $UNITS; do
+    if [ ! -f "$SRC/units/$u" ]; then
+        echo "install.sh: missing $SRC/units/$u — refusing a partial unit install" >&2
+        exit 1
+    fi
+done
+
+staged=""
+trap 'for f in $staged; do rm -f "$f"; done' EXIT INT TERM
+for u in $UNITS; do
+    cp -- "$SRC/units/$u" "$UNIT_DIR/.$u.new"
+    chmod 0644 "$UNIT_DIR/.$u.new"
+    staged="$staged $UNIT_DIR/.$u.new"
+done
+for u in $UNITS; do
+    mv -- "$UNIT_DIR/.$u.new" "$UNIT_DIR/$u"
+    echo "installed $UNIT_DIR/$u"
+done
+staged=""
+
+systemctl daemon-reload
+systemctl enable --now gh-widgets.timer gh-widgets-resync.timer >/dev/null
+
+# Prove the units are loadable rather than assuming it: a unit with a typo
+# installs fine and only fails when its timer next fires, which may be an hour
+# of silence away.
+for u in $UNITS; do
+    if ! systemctl cat "$u" >/dev/null 2>&1; then
+        echo "install.sh: $u did not load after daemon-reload" >&2
+        exit 1
+    fi
+done
+echo "verified: units loaded; timers enabled"
+systemctl list-timers gh-widgets.timer gh-widgets-resync.timer --no-pager 2>/dev/null | head -4
