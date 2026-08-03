@@ -27,6 +27,8 @@ fails loudly at startup instead of rendering wrong numbers.
 
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -39,7 +41,7 @@ from pathlib import Path
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 2
+COMMON_VERSION = 3
 
 
 def check_version(required):
@@ -123,17 +125,128 @@ def load_cache(path, version):
     return data
 
 
-def save_cache(path, payload):
-    """Best-effort atomic write: temp file in the same directory, then
-    os.replace onto the target. A failed save must not fail the run."""
-    path = Path(path)
+CACHE_LOCK_TIMEOUT = 60.0
+
+
+def _open_lock_file(path):
+    """Open (creating) the lock file beside `path`; None if it cannot be
+    opened. An unwritable cache directory is already reported by the write
+    itself — it must not turn into a second failure mode here."""
+    lock = Path(str(path) + ".lock")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        return os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as e:
+        print(f"warning: could not open cache lock {lock}: {e}",
+              file=sys.stderr)
+        return None
+
+
+def _flock_until(fd, timeout):
+    """Take an exclusive flock on `fd`, polling until `timeout` elapses.
+
+    Polled rather than blocking: a blocking flock has no timeout, and a render
+    must never park forever behind another writer. Returns whether it is held.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
+
+
+@contextlib.contextmanager
+def cache_lock(path, timeout=CACHE_LOCK_TIMEOUT):
+    """Serialise the writers of one cache file against each other.
+
+    Two scripts write the impact cache: render-impact.py replaces it whole
+    twice a day, render-responsiveness.py reads-modifies-writes its PR half
+    every hour. Without a lock spanning that read-modify-write, a whole-file
+    save landing between its read and its write is discarded — including
+    `ourloc`, which costs hours of git blame to rebuild.
+
+    Yields True when the lock is held, False when it is not (timeout, or a
+    lock file that could not be created). The caller decides what that means:
+    a whole-file writer loses nothing by proceeding anyway, a
+    read-modify-write writer must not proceed at all.
+    """
+    fd = _open_lock_file(path)
+    if fd is None:
+        yield False
+        return
+    try:
+        yield _flock_until(fd, timeout)
+    finally:
+        os.close(fd)  # closing the fd releases the flock
+
+
+def _write_cache(path, payload):
+    """Atomic write: temp file beside the target, then os.replace onto it.
+
+    os.replace within one filesystem is atomic, so no reader ever observes a
+    half-written cache. The temp file is removed if the write fails, so a
+    failed save leaves neither a partial cache nor litter behind. Callers hold
+    cache_lock, which is also what makes the fixed temp name safe.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)  # a no-op once os.replace has moved it
+
+
+def save_cache(path, payload, timeout=CACHE_LOCK_TIMEOUT):
+    """Replace the whole cache, atomically and under the writers' lock.
+    A failed save must not fail the run.
+
+    The lock is best-effort here: this caller writes every key it owns from
+    freshly fetched data, so proceeding without it can at worst drop the other
+    writer's PR refresh — which its next hourly run redoes.
+    """
+    try:
+        with cache_lock(path, timeout) as locked:
+            if not locked:
+                print(f"warning: writing {path} without the cache lock",
+                      file=sys.stderr)
+            _write_cache(path, payload)
     except Exception as e:
         print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
+
+
+def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):
+    """Replace `updates`' keys in the cache at `path`, preserving every other
+    key, atomically and under the lock. Returns the payload written, or None
+    if nothing was written.
+
+    For a writer that owns only PART of a shared cache. The load and the write
+    happen inside one lock hold, so the whole-file writer cannot slip in
+    between and have its expensive sections (`ourloc`) silently reverted to
+    what this writer happened to read.
+
+    Failing to update is the safe outcome and is reported, not raised: a cache
+    that missed one refresh is recovered by the next run, one that lost
+    `ourloc` costs hours of git blame.
+    """
+    try:
+        with cache_lock(path, timeout) as locked:
+            if not locked:
+                print(f"warning: cache {path} not updated: lock unavailable",
+                      file=sys.stderr)
+                return None
+            payload = {**load_cache(path, version), **updates,
+                       "version": version}
+            _write_cache(path, payload)
+            return payload
+    except Exception as e:
+        print(f"warning: could not update cache {path}: {e}", file=sys.stderr)
+        return None
 
 
 # ------------------------------------------------------------------- GraphQL
@@ -261,11 +374,12 @@ def is_external(node, insiders):
 # ------------------------------------------------------- PR / issue fetching
 
 # The three timestamps are for render-responsiveness.py, which measures how
-# long an external PR sits before it merges. They ride along on a query that
-# was already being made (free), instead of a second crawl over the same
-# history. All three are immutable once a PR is merged, so caching them
-# alongside `merged` is safe; closedAt is selected because a node cached while
-# the PR was still open, and later inferred merged, has no mergedAt.
+# long an external PR sits before it merges. They are selected here rather
+# than in a query of its own so that a PR node means the same thing whichever
+# renderer last wrote it to the shared cache. All three are immutable once a
+# PR is merged, so caching them alongside `merged` is safe; closedAt is
+# selected because a node cached while the PR was still open, and later
+# inferred merged, has no mergedAt.
 PR_QUERY = """
 query($login: String!, $cursor: String) {
   user(login: $login) {

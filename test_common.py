@@ -6,7 +6,9 @@
 No network: the identity test drives a fake gql.
 """
 import importlib.util
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -197,6 +199,77 @@ class EnvKnobs(unittest.TestCase):
     def test_env_list_trims_and_drops_empties(self):
         with mock.patch.dict(os.environ, {"X": " a , ,b,"}):
             self.assertEqual(common.env_list("X"), ["a", "b"])
+
+
+class CacheWriting(unittest.TestCase):
+    """Two scripts write the impact cache; the lock is what keeps the cheap
+    hourly writer from reverting the expensive twice-daily one."""
+
+    def setUp(self):
+        # pylint: disable=consider-using-with
+        self.td = tempfile.TemporaryDirectory()
+        self.addCleanup(self.td.cleanup)
+        self.path = Path(self.td.name) / "impact-cache.json"
+
+    def write(self, payload):
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def read(self):
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def test_merge_replaces_only_the_listed_keys(self):
+        self.write({"version": 1, "prs": {"old": 1},
+                    "ourloc": {"a/b": {"ours": 7}}})
+        common.merge_cache(self.path, 1, {"prs": {"new": 2}})
+        after = self.read()
+        self.assertEqual(after["prs"], {"new": 2})
+        self.assertEqual(after["ourloc"], {"a/b": {"ours": 7}})
+
+    def test_merge_stamps_the_schema_version(self):
+        common.merge_cache(self.path, 1, {"prs": {}})
+        self.assertEqual(self.read()["version"], 1)
+
+    def test_merge_of_a_version_mismatch_keeps_nothing(self):
+        # load_cache already refuses a foreign schema; carrying its keys into
+        # the new payload would mix two layouts in one file.
+        self.write({"version": 99, "ourloc": {"a/b": {"ours": 7}}})
+        common.merge_cache(self.path, 1, {"prs": {}})
+        self.assertNotIn("ourloc", self.read())
+
+    def test_a_held_lock_stops_a_merge_rather_than_racing_it(self):
+        # The read-modify-write writer must never proceed unlocked: a
+        # whole-file save landing between its read and its write would be
+        # silently reverted, ourloc included.
+        self.write({"version": 1, "ourloc": {"a/b": {"ours": 7}}})
+        with common.cache_lock(self.path) as held:
+            self.assertTrue(held)
+            self.assertIsNone(
+                common.merge_cache(self.path, 1, {"prs": {}}, timeout=0.1))
+        self.assertNotIn("prs", self.read())
+
+    def test_a_held_lock_does_not_stop_a_whole_file_save(self):
+        # Deliberate asymmetry: save_cache's caller owns every key it writes,
+        # so the worst it can drop is a PR refresh the next hourly run redoes.
+        with common.cache_lock(self.path):
+            common.save_cache(self.path, {"version": 1, "prs": {}},
+                              timeout=0.1)
+        self.assertEqual(self.read()["prs"], {})
+
+    def test_the_lock_is_released_when_the_block_ends(self):
+        with common.cache_lock(self.path) as held:
+            self.assertTrue(held)
+        with common.cache_lock(self.path, timeout=0.1) as held:
+            self.assertTrue(held, "lock must not survive its context manager")
+
+    def test_a_failed_write_leaves_neither_a_partial_cache_nor_a_temp_file(self):
+        self.write({"version": 1, "prs": {"old": 1}})
+        before = self.path.read_bytes()
+        with mock.patch.object(common.os, "replace",
+                               side_effect=OSError("no space left")):
+            common.save_cache(self.path, {"version": 1, "prs": {"new": 2}})
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(
+            [p.name for p in Path(self.td.name).glob("*.tmp")], [])
 
 
 class VersionContract(unittest.TestCase):

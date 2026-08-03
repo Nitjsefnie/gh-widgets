@@ -222,10 +222,15 @@ one or two samples is not an estimate of anything. The excluded tail is
 **stated on the card** — repo count and PR count — rather than quietly dropped,
 along with the number of rows the top-N cut hides.
 
-It makes no API calls of its own. It reads `render-impact.py`'s cache, which
-already carries every authored PR with its `createdAt`/`mergedAt`, so run it
-after `render-impact.py`. A missing or stale-schema cache is a hard error, not
-a blank card: the previously rendered SVG keeps serving.
+It fetches its own PR data — one paginated GraphQL connection, the same one
+`render.py` uses — so it needs a token and runs on its own schedule (hourly,
+here) rather than trailing `render-impact.py`. It shares that script's cache,
+because that is where the account's authored PRs already live: it **merges**
+its half in and leaves every other section alone, above all `ourloc`, the
+git-blame result `render-impact.py` spends hours on. Both writers take a lock
+around the file and write it via a temp file plus `os.replace`, so the two can
+overlap without either observing or leaving a half-written cache. A failed
+fetch renders from the cache and says so, exactly like the other two.
 
 Upgrading from a cache written before those timestamps existed: merged PRs are
 frozen in that cache, so their timestamps only arrive on a

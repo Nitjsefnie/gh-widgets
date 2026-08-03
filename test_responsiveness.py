@@ -3,12 +3,14 @@
 
     python3 -m unittest discover -v
 
-No network at all: the renderer reads the impact cache, so every case here is
-a hand-built cache payload.
+No network at all: the renderer now fetches its own PRs, so every end-to-end
+case drives a fake `gql` (see fake_gql) and, where the cache matters, a
+hand-built cache payload.
 """
 import datetime
 import importlib.util
 import json
+import os
 import re
 import sys
 import tempfile
@@ -207,20 +209,42 @@ def cache_payload(nodes, **over):
     return payload
 
 
-def run_main(cache_file, out_dir):
-    argv = ["render-responsiveness.py", "--out-dir", str(out_dir),
-            "--theme", "tokyonight", "--cache-file", str(cache_file)]
-    with mock.patch.object(sys, "argv", argv):
+def fake_gql(nodes=(), orgs=("myorg",), error=None):
+    """Stand in for common.gql: answers the identity query from `orgs` and
+    serves `nodes` as one page of pull requests.
+
+    `error` makes every call raise it, which is how a fetch failure — the
+    whole reason the degraded path exists — is simulated.
+    """
+    def _gql(token, query, variables=None, **kw):
+        if error is not None:
+            raise error
+        if "organizations" in query:
+            return {"user": {"login": "me", "databaseId": 1,
+                             "organizations": {
+                                 "nodes": [{"login": o} for o in orgs]}}}
+        return {"user": {"pullRequests": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": list(nodes)}}}
+    return _gql
+
+
+def run_main(cache_file, out_dir, gql_fn=None, nodes=()):
+    argv = ["render-responsiveness.py", "--user", "me", "--token", "t",
+            "--out-dir", str(out_dir), "--theme", "tokyonight",
+            "--cache-file", str(cache_file)]
+    with mock.patch.object(sys, "argv", argv), \
+            mock.patch.object(resp, "gql", gql_fn or fake_gql(nodes)):
         resp.main()
 
 
 class RenderCard(unittest.TestCase):
-    def render(self, nodes, **over):
+    def render(self, nodes):
+        """One end-to-end run against a cold cache: the fetch supplies every
+        PR, so the card is drawn from what this script itself just fetched."""
         with tempfile.TemporaryDirectory() as td:
-            cache_file = Path(td) / "impact-cache.json"
-            cache_file.write_text(json.dumps(cache_payload(nodes, **over)))
             out = Path(td) / "out"
-            run_main(cache_file, out)
+            run_main(Path(td) / "impact-cache.json", out, nodes=nodes)
             return (out / "responsiveness.svg").read_text()
 
     def test_card_lists_repo_count_turnaround_and_score(self):
@@ -245,7 +269,7 @@ class RenderCard(unittest.TestCase):
                        "no cached merge time", "untimed"):
             self.assertNotIn(leaked, svg)
 
-    def test_a_fresh_cache_is_not_stamped(self):
+    def test_a_live_fetch_is_not_stamped(self):
         """The stamp is a caveat, not a label — same rule as the other cards."""
         svg = self.render(prs("a/x", [1.0] * 3))
         self.assertNotIn("cached data from", svg)
@@ -264,30 +288,240 @@ class RenderCard(unittest.TestCase):
 
 
 class CacheContract(unittest.TestCase):
-    def test_missing_cache_is_a_hard_error(self):
-        # Nothing to render from and no way to fetch: exiting non-zero leaves
-        # the previous SVG serving, same contract as the other renderers.
+    def test_a_missing_cache_is_not_an_error_when_the_fetch_works(self):
+        # This script no longer depends on someone else having written a
+        # cache: a cold start fetches everything and creates one.
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaises(SystemExit):
-                run_main(Path(td) / "nope.json", Path(td) / "out")
+            cache_file = Path(td) / "nope.json"
+            out = Path(td) / "out"
+            run_main(cache_file, out, nodes=prs("a/x", [1.0] * 3))
+            self.assertIn("a/x", (out / "responsiveness.svg").read_text())
+            self.assertEqual(len(json.loads(cache_file.read_text())["prs"]), 3)
 
-    def test_cache_without_insiders_is_a_hard_error(self):
-        # Guessing "just the account" would silently count our own org's
-        # repos as external, and this renderer has no --user to guess from.
+    def test_a_cache_without_insiders_is_usable(self):
+        # It used to be a hard error, because the cached set was the only way
+        # to know who is an insider. Identity now comes from the token, so the
+        # cached set is not consulted at all on the fetch path.
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = cache_payload(prs("a/x", [1.0] * 3))
             del payload["insiders"]
             cache_file.write_text(json.dumps(payload))
-            with self.assertRaises(SystemExit):
-                run_main(cache_file, Path(td) / "out")
+            out = Path(td) / "out"
+            run_main(cache_file, out, nodes=prs("someone/theirs", [1.0] * 3))
+            self.assertIn("someone/theirs",
+                          (out / "responsiveness.svg").read_text())
+
+    def test_insiders_come_from_the_token_not_from_the_cache(self):
+        # The insider set decides what counts as external. A cache naming a
+        # different account must not be able to promote our own org's repos
+        # into the board.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                cache_payload([], insiders=["nobody"])))
+            out = Path(td) / "out"
+            run_main(cache_file, out,
+                     gql_fn=fake_gql(prs("myorg/thing", [1.0] * 3)))
+            self.assertIn("no external merged PRs yet",
+                          (out / "responsiveness.svg").read_text())
 
     def test_schema_version_is_pinned_to_render_impacts_cache(self):
-        # This renderer READS render-impact.py's cache; a version bump there
-        # that is not mirrored here would silently render nothing.
+        # This renderer SHARES render-impact.py's cache; a version bump there
+        # that is not mirrored here would have the two writing incompatible
+        # payloads over each other.
         src = Path(__file__).with_name("render-impact.py").read_text(
             encoding="utf-8")
         self.assertIn(f"CACHE_VERSION = {resp.IMPACT_CACHE_VERSION}", src)
+
+
+OURLOC = {"someone/theirs": {"ours": 4321, "total": 99999,
+                             "branch": "main", "head": "deadbeef"}}
+ISSUES = [{"state": "CLOSED", "stateReason": "COMPLETED",
+           "repository": {"nameWithOwner": "someone/theirs",
+                          "isPrivate": False,
+                          "owner": {"login": "someone"}}}]
+TOTALS = {"someone/theirs": {"issues": 12, "merged_prs": 34,
+                             "branch": "main", "head": "deadbeef"}}
+
+
+def full_cache(nodes):
+    """A cache with every section render-impact.py writes, so a test can tell
+    whether this script preserved the ones it does not own."""
+    return cache_payload(nodes, ourloc=dict(OURLOC), issues=list(ISSUES),
+                         totals=dict(TOTALS))
+
+
+class CacheMerge(unittest.TestCase):
+    """The write is a MERGE into a cache render-impact.py also owns.
+
+    Overwriting it instead would destroy `ourloc` — hours of git blame — and
+    silently render impact.svg wrong until the next weekly resync. That is the
+    primary hazard of this script writing at all.
+    """
+
+    def run_and_read(self, cached_nodes, fetched_nodes):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(full_cache(cached_nodes)))
+            run_main(cache_file, Path(td) / "out", nodes=fetched_nodes)
+            return json.loads(cache_file.read_text())
+
+    def test_the_expensive_sections_survive_the_merge(self):
+        after = self.run_and_read(prs("a/x", [1.0] * 3),
+                                  prs("b/y", [2.0] * 3))
+        self.assertEqual(after.get("ourloc"), OURLOC,
+                         "the merge lost ourloc — hours of git blame, and "
+                         "impact.svg renders wrong until the weekly resync")
+        self.assertEqual(after.get("issues"), ISSUES)
+        self.assertEqual(after.get("totals"), TOTALS)
+
+    def test_the_pr_half_is_replaced_with_what_was_just_fetched(self):
+        fetched = prs("b/y", [2.0] * 3)
+        after = self.run_and_read(prs("a/x", [1.0] * 3), fetched)
+        for node in fetched:
+            self.assertIn(node["id"], after["prs"])
+
+    def test_render_impacts_own_fetch_stamp_is_left_alone(self):
+        # fetched_at dates the sections this script does not refresh. Moving
+        # it hourly would make an `ourloc` from yesterday look minutes old.
+        after = self.run_and_read(prs("a/x", [1.0] * 3), prs("a/x", [1.0] * 3))
+        self.assertEqual(after.get("fetched_at"),
+                         full_cache([])["fetched_at"])
+
+    def test_the_pr_half_gets_its_own_fetch_stamp(self):
+        after = self.run_and_read(prs("a/x", [1.0] * 3), prs("a/x", [1.0] * 3))
+        self.assertIn("prs_fetched_at", after)
+        self.assertIn("fetched_at", after)
+        self.assertGreater(resp.parse_ts(after["prs_fetched_at"]),
+                           resp.parse_ts(after["fetched_at"]))
+
+    def test_the_schema_version_is_preserved(self):
+        after = self.run_and_read(prs("a/x", [1.0] * 3), prs("a/x", [1.0] * 3))
+        self.assertEqual(after["version"], resp.IMPACT_CACHE_VERSION)
+
+    def test_the_derived_insider_set_is_written(self):
+        after = self.run_and_read([], prs("someone/theirs", [1.0] * 3))
+        self.assertEqual(after["insiders"], sorted(INSIDERS))
+
+
+class AtomicWrite(unittest.TestCase):
+    """A cache write that fails midway must leave nothing observable."""
+
+    def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
+        real_write_text = Path.write_text
+
+        def half_written(self, *a, **kw):
+            # Simulate the disk filling up mid-write: the temp file exists and
+            # holds partial JSON, then the write raises.
+            if self.name.endswith(".tmp"):
+                self.write_bytes(b'{"prs": {"partial')
+                raise OSError("no space left on device")
+            return real_write_text(self, *a, **kw)
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            before = json.dumps(full_cache(prs("a/x", [1.0] * 3)))
+            cache_file.write_text(before)
+            out = Path(td) / "out"
+            with mock.patch.object(Path, "write_text", half_written):
+                run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
+            # The cache is exactly what it was: no half-written state is ever
+            # visible at the real path, because os.replace never ran.
+            self.assertEqual(cache_file.read_text(), before)
+            # And no litter: the partial temp file is cleaned up, not left to
+            # be mistaken for a cache or to collide with the next write.
+            self.assertEqual(
+                [f for f in os.listdir(td) if f.endswith(".tmp")], [])
+
+    def test_a_failed_cache_write_still_renders_the_card(self):
+        # The SVG is the product; a cache that could not be updated is a
+        # warning, not a reason to leave the widget stale.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            with mock.patch.object(resp.common, "_write_cache",
+                                   side_effect=OSError("read-only fs")):
+                run_main(Path(td) / "impact-cache.json", out,
+                         nodes=prs("a/x", [1.0] * 3))
+            self.assertIn("a/x", (out / "responsiveness.svg").read_text())
+
+
+class DegradedPath(unittest.TestCase):
+    """A failed fetch renders from the cache and does not touch it."""
+
+    BOOM = RuntimeError("GraphQL errors: [{'type': 'SERVICE_UNAVAILABLE'}]")
+
+    def test_fetch_failure_renders_from_the_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                full_cache(prs("someone/theirs", [1.0] * 3))))
+            out = Path(td) / "out"
+            run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
+            self.assertIn("someone/theirs",
+                          (out / "responsiveness.svg").read_text())
+
+    def test_fetch_failure_leaves_the_cache_byte_identical(self):
+        # The cache is the only data left on this path; writing a
+        # half-fetched PR set over it would throw that away too.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                full_cache(prs("someone/theirs", [1.0] * 3))))
+            snapshot = cache_file.read_bytes()
+            run_main(cache_file, Path(td) / "out",
+                     gql_fn=fake_gql(error=self.BOOM))
+            self.assertEqual(cache_file.read_bytes(), snapshot)
+
+    def test_fetch_failure_with_no_cache_raises_the_fetch_error(self):
+        # Nothing to render from: exiting non-zero leaves the previous SVG
+        # serving, and the message names what actually broke.
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(RuntimeError):
+                run_main(Path(td) / "nope.json", Path(td) / "out",
+                         gql_fn=fake_gql(error=self.BOOM))
+
+    def test_a_long_outage_is_stamped_on_the_card(self):
+        # A card drawn from data this old must say so — the run's stdout line
+        # is for the operator, the stamp is for whoever sees the SVG.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            payload = full_cache(prs("someone/theirs", [1.0] * 3))
+            payload["prs_fetched_at"] = "2020-01-01T00:00:00+00:00"
+            cache_file.write_text(json.dumps(payload))
+            out = Path(td) / "out"
+            run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
+            self.assertIn("cached data from 2020-01-01T00:00:00+00:00",
+                          (out / "responsiveness.svg").read_text())
+
+    def test_a_recent_cache_is_not_stamped_on_the_degraded_path(self):
+        # One failed hourly run is a blip, not a caveat worth printing on a
+        # public card.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            payload = full_cache(prs("someone/theirs", [1.0] * 3))
+            payload["prs_fetched_at"] = datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds")
+            cache_file.write_text(json.dumps(payload))
+            out = Path(td) / "out"
+            run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
+            self.assertNotIn("cached data from",
+                             (out / "responsiveness.svg").read_text())
+
+    def test_a_cache_without_insiders_degrades_to_the_account(self):
+        # render-impact.py makes the same concession on the same path: one
+        # render that can over-report externals beats no render at all.
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            payload = cache_payload(prs("me/mine", [1.0] * 3)
+                                    + prs("someone/theirs", [1.0] * 3))
+            del payload["insiders"]
+            cache_file.write_text(json.dumps(payload))
+            out = Path(td) / "out"
+            run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
+            svg = (out / "responsiveness.svg").read_text()
+            self.assertIn("someone/theirs", svg)
+            self.assertNotIn("me/mine", svg)
 
 
 if __name__ == "__main__":

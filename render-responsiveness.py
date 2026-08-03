@@ -14,39 +14,58 @@ Writes ONE SVG to OUT_DIR:
                        SCORE_MAX (10.00) and the rest keep their ratios to
                        it; the ranking and the bars are unaffected.
 
-This renderer does NOT talk to GitHub. It reads render-impact.py's cache,
-which already carries every authored PR keyed by id, and every one of them
-already carries the repo, its privacy flag, its owner, and (since
-COMMON_VERSION 2) createdAt/mergedAt. Adding two immutable fields to a query
-that was already being made costs nothing; a second crawl of the same PRs
-would cost a full extra pass over the account's history for data we already
-have. So: no token, no network, no cache of its own — run it after
-render-impact.py.
+This renderer OWNS its data. It fetches the account's authored pull requests
+itself — one cheap paginated GraphQL connection, the same
+common.fetch_pull_requests the other two renderers use — and MERGES the result
+into render-impact.py's cache, which is the shared home of that PR set.
+It used to read that cache read-only, which pinned it to render-impact.py's
+twice-daily schedule: the card could never be fresher than a job it did not
+depend on. Nothing here needs render-impact.py's expensive machinery (the
+per-repo git-blame walk is what makes THAT script slow), so nothing here
+should wait for it. Runs hourly.
 
-Merged PRs are frozen in that cache, so a cache written before COMMON_VERSION 2
-yields nodes with no timestamps until `render-impact.py --resync` refetches
-them (the weekly resync timer does). Those PRs are counted as skipped and
-reported on stdout, rather than quietly shortening a repo's history.
+Merging, not overwriting, is the whole hazard of writing to a cache someone
+else owns. This script replaces the PR half and preserves every other key
+byte-for-byte — above all `ourloc`, hours of git blame that render-impact.py
+cannot cheaply rebuild. common.merge_cache does the load-modify-write inside
+one cache_lock hold so a concurrent render-impact save cannot be discarded,
+and it writes via a temp file plus os.replace so a partial cache is never
+observable. render-impact.py's own `fetched_at` is deliberately left alone:
+it stamps THAT script's fetch, and moving it would under-report how old
+`ourloc` is. This script stamps `prs_fetched_at` instead.
+
+Merged PRs are frozen in that cache, so a cache written before their
+timestamps existed yields nodes with no createdAt/mergedAt until
+`render-impact.py --resync` refetches them (the weekly resync timer does).
+Those PRs are counted as skipped and reported on stdout, rather than quietly
+shortening a repo's history.
 
 Configuration (env vars or CLI flags, in that order of precedence):
+  GH_USER     (required) GitHub username
+  GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
+              is NOT needed: identity comes from login + databaseId + orgs.
+              (can also be read from a file via --token-file or GH_TOKEN_FILE)
   OUT_DIR     where to write the SVG (default: ./widgets)
-  CACHE_FILE  render-impact.py's cache, read-only
+  CACHE_FILE  the PR cache, shared with render-impact.py
               (default: /var/lib/gh-widgets/impact-cache.json)
   THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
 
-  RESP_GAMMA        volume exponent                (default 0.5)
-  RESP_HALF_LIFE_H  hours at which speed hits 0.5  (default 24.0)
-  RESP_MIN_PRS      merged PRs needed to be ranked (default 3)
+  GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
+  RESP_GAMMA         volume exponent                (default 0.5)
+  RESP_HALF_LIFE_H   hours at which speed hits 0.5  (default 24.0)
+  RESP_MIN_PRS       merged PRs needed to be ranked (default 3)
 
-Who counts as external is NOT decided here: the cache stores the insider set
-render-impact.py derived from the token's own account (login + orgs +
-GH_EXTRA_INSIDERS), and this script reuses common.is_external against it. A
-cache with no insider set is a hard error rather than a guess — guessing
-"just the account" would count our own orgs' repos as external.
+Who counts as external is DERIVED from the token's own account (login + orgs +
+GH_EXTRA_INSIDERS) via common.fetch_identity, exactly as render-impact.py
+derives it — so a cache carrying no insider set is no longer a hard error, it
+is simply not consulted. Only the degraded path below still reads the cached
+set. GH_EXTRA_INSIDERS must match render-impact.py's, since both write the
+derived set into the same cache key.
 
-A missing, corrupt, or schema-mismatched cache is a hard error too: there is
-nothing to fall back to and no way to fetch, so exiting non-zero leaves the
-previously rendered SVG serving, same contract as the other renderers.
+Fails gracefully, same contract as the other two renderers: a failed fetch
+renders from the cache, prints `fetch failed; rendered ... from cache`, leaves
+the cache untouched, and exits 0. With no usable cache to fall back on it
+exits non-zero and the previously rendered SVG keeps serving.
 
 Deps: Python stdlib only. Requires Python 3.9+.
 """
@@ -55,8 +74,9 @@ import importlib.util
 import os
 import statistics
 import sys
+import urllib.error
 from collections import namedtuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -78,12 +98,13 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 2
+REQUIRED_COMMON = 3
 common.check_version(REQUIRED_COMMON)
 
-# The cache belongs to render-impact.py; this is the schema version THAT
-# script writes. Pinned (and tested) rather than accepted blindly: reading a
-# newer layout would render wrong numbers instead of failing.
+# The cache is shared with render-impact.py; this is the schema version THAT
+# script writes, since it writes the sections this one does not. Pinned (and
+# tested) rather than accepted blindly: writing a newer layout's keys into an
+# older one would corrupt it instead of failing.
 IMPACT_CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 
@@ -93,6 +114,7 @@ STALE_AFTER_H = 24        # cache older than this earns the stamp
 # Re-exported so call sites stay short and patchable, same as render-impact.py.
 FONT = common.FONT
 THEMES = common.THEMES
+gql = common.gql
 xml_escape = common.xml_escape
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
@@ -114,6 +136,27 @@ def metric_knobs():
         "half_life": common.env_float("RESP_HALF_LIFE_H", 24.0),
         "min_prs":   int(common.env_float("RESP_MIN_PRS", 3)),
     }
+
+
+def fetch_pull_requests(token, login, cached_prs=None, max_pages=50):
+    """Thin wrapper over the shared implementation, passing THIS module's
+    `gql` so a test patch of it still intercepts the calls."""
+    return common.fetch_pull_requests(token, login, cached_prs, max_pages,
+                                      gql_fn=gql)
+
+
+def fetch_prs(token, user, cached_prs):
+    """Resolve identity and fetch the account's authored PRs.
+
+    Identity first, and from the token's own account: the insider set decides
+    which repos count as external, and deriving it here is what lets this
+    script run without waiting for render-impact.py to write one into the
+    cache. Returns (insiders, prs, prs_by_id) — the keyed mapping is what gets
+    persisted, matching what render-impact.py stores under the same key.
+    """
+    me = common.fetch_identity(token, user, gql_fn=gql)
+    prs, prs_by_id = fetch_pull_requests(token, me.login, cached_prs)
+    return me.insiders, prs, prs_by_id
 
 
 def parse_ts(s):
@@ -298,8 +341,13 @@ def render_responsiveness(C, scored):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Render the self-hosted External Responsiveness SVG "
-                    "from render-impact.py's cache. No network access.")
+        description="Render the self-hosted External Responsiveness SVG.")
+    p.add_argument("--user", default=os.environ.get("GH_USER"),
+                   help="GitHub username (env: GH_USER)")
+    p.add_argument("--token", default=os.environ.get("GH_TOKEN"),
+                   help="GitHub PAT (env: GH_TOKEN)")
+    p.add_argument("--token-file", default=os.environ.get("GH_TOKEN_FILE"),
+                   help="Read token from a file (env: GH_TOKEN_FILE)")
     p.add_argument("--out-dir", default=os.environ.get("OUT_DIR", "./widgets"),
                    help="Where to write the SVG (env: OUT_DIR)")
     p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
@@ -307,37 +355,73 @@ def parse_args():
                    help="Color theme (env: THEME)")
     p.add_argument("--cache-file",
                    default=os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE),
-                   help="render-impact.py's JSON cache, read-only "
+                   help="JSON cache path, shared with render-impact.py "
                         "(env: CACHE_FILE)")
-    return p.parse_args()
+    args = p.parse_args()
+
+    if not args.user:
+        p.error("--user (or env GH_USER) is required")
+    token = args.token
+    if not token and args.token_file:
+        token = Path(args.token_file).read_text(encoding="utf-8").strip()
+    if not token:
+        p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+    return args, token
 
 
-def read_impact_cache(path):
-    """Return (prs, insiders, fetched_at) from render-impact.py's cache.
+def read_impact_cache(path, user):
+    """(prs, insiders, fetched_at) from the cache, or None when the cache
+    cannot stand in — for the DEGRADED path only, a run whose fetch failed.
 
-    Every failure here is fatal by design: this renderer has no fetch path to
-    degrade to, so a bad cache must leave the last good SVG in place.
+    None rather than an error of its own: the caller re-raises the FETCH's
+    exception, which says what actually went wrong (HTTP 401, a timeout)
+    instead of burying it under a complaint about the cache. Exiting non-zero
+    leaves the last good SVG in place, same contract as the other renderers.
+
+    A cache with no insider set is usable, though it once was not. That was
+    fatal back when the cached set was the ONLY way this script could know who
+    is an insider; now identity is fetched from the token on every successful
+    run, and a fetch failure is not a reason to refuse to render. It degrades
+    to the account itself for one render — which can over-report externals
+    until the next successful run repairs it — exactly as render-impact.py
+    does on the same path.
     """
     cache = common.load_cache(path, IMPACT_CACHE_VERSION)
     if not cache or not cache.get("prs"):
-        raise SystemExit(
-            f"error: no usable impact cache at {path} (missing, corrupt, or "
-            f"not schema version {IMPACT_CACHE_VERSION}) — run "
-            f"render-impact.py first")
-    if not cache.get("insiders"):
-        raise SystemExit(
-            f"error: impact cache {path} carries no insider set — refetch it "
-            f"with render-impact.py; guessing would count our own orgs' "
-            f"repos as external")
-    return (list(cache["prs"].values()), frozenset(cache["insiders"]),
-            cache.get("fetched_at"))
+        return None
+    insiders = (frozenset(cache["insiders"]) if cache.get("insiders")
+                else common.insider_set(user, []))
+    return (list(cache["prs"].values()), insiders,
+            cache.get("prs_fetched_at") or cache.get("fetched_at"))
+
+
+def update_pr_cache(path, insiders, prs_by_id):
+    """Merge the freshly fetched PR half into the shared cache.
+
+    ONLY the keys this script owns are written; `issues`, `totals` and above
+    all `ourloc` — the git-blame result render-impact.py spends hours on — are
+    carried through untouched by common.merge_cache, which does the whole
+    read-modify-write under the cache lock.
+
+    `fetched_at` is one of the keys left alone: it is render-impact.py's stamp
+    for the sections THIS script does not refresh, and moving it hourly would
+    make a stale `ourloc` look fresh. The PR half gets its own stamp.
+    """
+    return common.merge_cache(path, IMPACT_CACHE_VERSION, {
+        "prs_fetched_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"),
+        "insiders": sorted(insiders),
+        "prs": prs_by_id,
+    })
 
 
 def cache_is_stale(fetched_at, now=None):
     """True when the cache is old enough that the card should say so.
 
-    render-impact refreshes twice daily, so anything past a day means its
-    timer has missed at least one run.
+    Reached only on the degraded path, where the card is drawn from the last
+    cached fetch. The PR data refreshes hourly now, so a cache past a day
+    means roughly a day of consecutive failed runs — a real outage rather than
+    the single blip a stamp would only add noise to.
     """
     if not fetched_at:
         return False
@@ -350,7 +434,7 @@ def cache_is_stale(fetched_at, now=None):
 
 
 def build_card(C, prs, insiders, knobs):
-    """Score the cached PRs and render the card.
+    """Score the PRs and render the card.
 
     Returns (svg, notes) — `notes` is what the card deliberately does not say,
     carried out to the run's stdout instead.
@@ -364,24 +448,55 @@ def build_card(C, prs, insiders, knobs):
     return render_responsiveness(C, scored), notes
 
 
+def load_inputs(args, token):
+    """Fetch the PRs (updating the shared cache) or, on failure, recover them
+    from that cache. Returns (prs, insiders, stale), where `stale` is the
+    cached fetch time when rendering from cache and None after a live fetch.
+    """
+    cache = common.load_cache(args.cache_file, IMPACT_CACHE_VERSION)
+    try:
+        insiders, prs, prs_by_id = fetch_prs(token, args.user,
+                                             cache.get("prs") or None)
+    except Exception:
+        # Durability layer: a failed fetch (after gql's retries) renders from
+        # the cache and exits 0 — but only with a usable cache. Without one,
+        # exiting non-zero with the fetch's own error is still correct. The
+        # cache is never written on this path: what it holds is the only data
+        # there is.
+        cached = read_impact_cache(args.cache_file, args.user)
+        if cached is None:
+            raise
+        prs, insiders, stale = cached
+    else:
+        update_pr_cache(args.cache_file, insiders, prs_by_id)
+        stale = None
+    return prs, insiders, stale
+
+
 def main():
-    args = parse_args()
+    args, token = parse_args()
 
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    prs, insiders, fetched_at = read_impact_cache(args.cache_file)
+    prs, insiders, stale = load_inputs(args, token)
     svg, notes = build_card(C, prs, insiders, metric_knobs())
-    if cache_is_stale(fetched_at):
-        # Same rule as the other renderers: the stamp is a CAVEAT, shown only
-        # when the data is old enough to mislead. render-impact refreshes this
-        # cache twice a day, so a fresh render carries no stamp at all.
-        svg = stamp_cache_notice(C, svg, fetched_at)
+    if stale and cache_is_stale(stale):
+        # The stamp is a CAVEAT, not a label: it appears only when the data is
+        # old enough to mislead. A successful hourly fetch carries no stamp at
+        # all, and neither does one blip recovered from a cache written an
+        # hour ago.
+        svg = stamp_cache_notice(C, svg, stale)
     (out / "responsiveness.svg").write_text(svg)
 
-    print(f"wrote {out}/responsiveness.svg "
-          f"(showing {notes['shown']} of {notes['ranked']} ranked)")
+    if stale:
+        print(f"fetch failed; rendered {out}/responsiveness.svg from cache "
+              f"(fetched_at={stale}, showing {notes['shown']} of "
+              f"{notes['ranked']} ranked)")
+    else:
+        print(f"wrote {out}/responsiveness.svg "
+              f"(showing {notes['shown']} of {notes['ranked']} ranked)")
     # What the card does not say, said here instead: an operator checking a
     # thin-looking board needs to know whether repos fell below the floor or
     # simply had no cached merge time.
@@ -395,10 +510,12 @@ def main():
 
 
 if __name__ == "__main__":
-    # No HTTPError branch, unlike the other two renderers: this one never
-    # touches the network. SystemExit (a bad cache) passes straight through.
     try:
         main()
+    except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code}: {e.read().decode(errors='replace')}",
+              file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
