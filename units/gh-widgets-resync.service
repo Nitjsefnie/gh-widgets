@@ -46,3 +46,10 @@ TimeoutStartSec=10800
 Nice=15
 StandardOutput=journal
 StandardError=journal
+
+# See gh-widgets.service for what these add and how to read them. They matter
+# more here than anywhere: a resync re-clones and re-blames EVERY external repo
+# rather than only the ones whose HEAD moved, so this is the unit whose disk
+# and network cost is worth watching over time.
+IOAccounting=yes
+IPAccounting=yes

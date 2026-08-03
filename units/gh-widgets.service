@@ -48,3 +48,20 @@ TimeoutStartSec=5400
 Nice=12
 StandardOutput=journal
 StandardError=journal
+
+# Accounting — these add `IO:` and `IP:` lines to `systemctl status`, next to
+# the `CPU:` and `Mem peak:` lines systemd already shows (CPU and memory
+# accounting are on by default on this box, I/O and IP are not).
+#
+# Both are worth having here: the blame pass full-clones every external repo
+# whose HEAD moved, so this unit is unusually heavy on both disk and network
+# for something that renders four SVGs.
+#
+# Caveats, so the numbers are not over-read:
+#   IOAccounting counts actual block-device I/O via the cgroup io controller,
+#   so reads served from page cache do not appear — the read figure understates
+#   bytes touched, while the write figure is real.
+#   IPAccounting counts AF_INET/AF_INET6 socket traffic via eBPF; it does not
+#   see traffic of processes that leave the cgroup.
+IOAccounting=yes
+IPAccounting=yes
