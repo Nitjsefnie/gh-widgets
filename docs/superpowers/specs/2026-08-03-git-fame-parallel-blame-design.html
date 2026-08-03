@@ -588,8 +588,39 @@
       </div>
     </section>
 
+    <section id="s8">
+      <div class="sec-head"><span class="num">08</span><h2>Amendment — guard at run time, not just install time</h2></div>
+      <p class="sec-intro">Added 2026-08-03, after Task 1. Adopted from a sibling repo that hit both failure modes after patching a dependency the same way.</p>
+      <p class="body"><code>Consultest-CZ/kvalita</code> patched a broken dependency in <code>2bca15f</code>, then needed
+        <strong>two follow-up commits</strong> — <code>e29fc78</code> and <code>f30eed6</code> — for problems the original
+        fix did not anticipate. Both are worth checking against this design.</p>
+      <div class="compare">
+        <div class="col bad">
+          <div class="col-head">Their trap 1 — version collision</div>
+          <div class="col-body"><ul>
+            <li>The patched wheel reported the <em>same version</em> as stock, so a routine <code>pip -U</code> silently swapped the patch back out and revived the bug with no signal.</li>
+            <li><strong>Not applicable here, verified:</strong> git-fame derives its version from tags via <code>setuptools_scm</code>, so the fork build reports <code>3.1.4.dev1+g&lt;sha&gt;</code> against stock <code>3.1.2</code>/<code>3.1.3</code>.</li>
+            <li>No wheel-retagging step is added — that would be cargo-culting a fix for a problem this project does not have.</li>
+          </ul></div>
+        </div>
+        <div class="col good">
+          <div class="col-head">Their trap 2 — silent success</div>
+          <div class="col-body"><ul>
+            <li>Their guard logged nothing when healthy, so a good boot was indistinguishable from the guard never running.</li>
+            <li><strong>Applicable, and the original design missed it:</strong> <code>install.sh</code> checks at install time, but <code>render-impact.service</code> runs unattended on a timer long afterwards.</li>
+            <li>Hence <code>check_git_fame()</code>, printing the installed version on <em>every render</em>. The absence of its line is the alarm — which only works because success is noisy.</li>
+          </ul></div>
+        </div>
+      </div>
+      <p class="body">Deliberately <strong>not</strong> changed: <code>blame_repo</code> still does not pass <code>-j</code>.
+        The patched build parallelises by default, so leaving the flag off means a stock install degrades to
+        <em>slow</em> rather than <em>every repo errors</em> — and an erroring repo caches an
+        <code>{"error", head}</code> entry that <code>update_loc</code> then skips until HEAD moves, silently
+        dropping the repo from the table.</p>
+    </section>
+
     <div class="footer">
-      <p>Design spec · 2026-08-03 · gh-widgets → git-fame · measurements taken on vmi3458323 (12 cores)</p>
+      <p>Design spec · 2026-08-03 · gh-widgets → git-fame · measurements taken on vmi3458323 (12 cores) · amended 2026-08-03 (§08)</p>
     </div>
   </main>
 
@@ -603,6 +634,7 @@
       <li><a href="#s5">Verification</a></li>
       <li><a href="#s6">Risks</a></li>
       <li><a href="#s7">Out of scope</a></li>
+      <li><a href="#s8">Amendment — run-time guard</a></li>
     </ol>
     <button id="copySpec">copy spec as prompt</button>
     <button id="copyVerify">copy verification steps</button>

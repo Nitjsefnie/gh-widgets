@@ -57,8 +57,33 @@ Extrapolating the measured ~70 loc/file across 56 cached repos (5.95 M lines) pu
 | `tests/test_gitfame.py` | Add `['-j', '4']` to `test_options`; add a determinism test asserting `-j1` output == `-j4` output. |
 | `git-fame_completion.bash` | Add `-j` / `--jobs` to the completion word list. |
 | `gitfame/git-fame.1` | Regenerate from the docstring via the Makefile target. |
-| `/root/gh-widgets/test_impact.py` (new) | Regression test: assert installed git-fame accepts `-j` and that `-j4` output == `-j1` output. No timing assertion. |
-| `/root/gh-widgets/CLAUDE.md`, `install.sh` | Record the fork pin, why it exists, and how to re-pin once the upstream PR merges. |
+| `/root/gh-widgets/test_impact.py` (new) | Regression test: assert installed git-fame accepts `-j` and that `-j4` output == `-j1` output. No timing assertion. Plus a test that the runtime check is *noisy on success*. |
+| `/root/gh-widgets/render-impact.py` | `check_git_fame()`, called from `main()` after `parse_args()`: prints the installed git-fame version on every render, warns loudly on stock, never fatal. |
+| `/root/gh-widgets/CLAUDE.md`, `install.sh` | Record the fork pin, the version marker that distinguishes it, why it exists, and how to re-pin once the upstream PR merges. |
+
+### Amendment (2026-08-03) — guard at run time, not just install time
+
+Adopted from `Consultest-CZ/kvalita`, which hit both failure modes after
+patching a dependency the same way (`2bca15f` → `e29fc78` → `f30eed6`):
+
+1. **A patched build that reports stock's version gets silently reverted** by a
+   routine `pip -U`. *Not applicable here, verified*: git-fame derives its
+   version from tags via `setuptools_scm`, so the fork build reports
+   `3.1.4.dev1+g<sha>` against stock `3.1.2`/`3.1.3`. No wheel retagging step —
+   adding one would be cargo-culting a fix for a problem this project does not
+   have.
+2. **A guard that is silent on success is indistinguishable from a guard that
+   never ran.** *Applicable, and the original design missed it*: `install.sh`
+   checks at install time, but `render-impact.service` runs unattended on a
+   timer long afterwards. Hence `check_git_fame()`, which logs the version on
+   every render. The absence of its line is the alarm — which only works
+   because success is noisy.
+
+Deliberately **not** changed: `blame_repo` still does not pass `-j`. The patched
+build parallelises by default, so leaving the flag off means a stock install
+degrades to "slow" rather than "every repo errors" — and an erroring repo caches
+an `{"error", head}` entry that `update_loc` then skips until HEAD moves,
+silently dropping the repo from the table.
 
 ## Concurrency semantics
 
@@ -79,6 +104,7 @@ Memory forces the bounded window rather than a plain `executor.map`: `--line-por
 - [ ] **Upstream suite green.** `pytest` in the fork passes, including `-W=error` and `--cov-fail-under=85`.
 - [ ] **Speedup reproduced.** `-j8` beats `-j1` by ≥3× on the 477-file repo; recorded, not asserted.
 - [ ] **Regression test fails on stock.** New gh-widgets test passes on the pinned fork, fails on git-fame 3.1.2 from PyPI.
+- [ ] **Runtime guard is self-proving.** A real `render-impact.py` run prints a `git-fame: <version> with --jobs` line; a run against stock prints the warning instead. Neither case is silent.
 - [ ] **End-to-end unchanged.** `render-impact.py` against a copied cache reproduces current `ourloc` counts for repos whose HEAD has not moved.
 - [ ] **Deployed copies match.** `diff /usr/local/bin/render-impact.py /root/gh-widgets/render-impact.py` empty after `install.sh`.
 

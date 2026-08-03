@@ -253,14 +253,17 @@
           <dt>Modify</dt><dd>/root/gh-widgets/install.sh, CLAUDE.md</dd>
         </dl>
         <div class="iface"><b>Consumes:</b> the installed <code>git fame</code> supporting <code>-j</code>. The test pins the <b>capability</b>, never the timing — a slow run is not a wrong run, and timing assertions are flaky on a shared box.</div>
+        <div class="iface" style="border-left-color:var(--clay)"><b>Amended 2026-08-03 (Steps 5–6 added, old 5–9 renumbered to 7–11).</b> From <code>Consultest-CZ/kvalita</code> <code>2bca15f</code>→<code>e29fc78</code>→<code>f30eed6</code>: an install-time-only guard and a silent-on-success guard each needed their own follow-up commit there. <code>install.sh</code> fires at install time, but <code>render-impact.service</code> runs unattended on a timer long after — so the guard must also run <em>per render</em> and be <em>noisy on success</em>. The version-collision half of that pattern is NOT copied: <code>setuptools_scm</code> already reports <code>3.1.4.dev1+g&lt;sha&gt;</code> vs stock <code>3.1.2</code>.</div>
         <ol class="steps">
           <li><div class="st-title">Install the patched build</div><div class="st-note">pip install from the fork at a fixed SHA.</div></li>
           <li><div class="st-title">Write the failing test</div><div class="st-note">Stdlib <code>unittest</code>, matching <code>test_common.py</code>. Builds a 12-file throwaway repo in <code>setUpClass</code>.</div></li>
           <li><div class="st-title">Prove the test fails on stock git-fame</div><div class="expect">FAIL on test_jobs_option_supported — this IS the regression test</div></li>
           <li><div class="st-title">Reinstall the pinned build and confirm it passes</div><div class="expect">PASS</div></li>
+          <li><div class="st-title">Add the self-proving runtime check to render-impact.py</div><div class="st-note"><code>check_git_fame()</code> called from <code>main()</code> after <code>parse_args()</code>. Prints the version on success, warns on stock, never fatal. Do NOT pass <code>-j</code> at the call site — that would turn a stock install from "slow" into "every repo errors".</div></li>
+          <li><div class="st-title">Cover the runtime check in test_impact.py</div><div class="st-note">Assert success is <em>not silent</em> — a silent success cannot be told apart from the check never running.</div></li>
           <li><div class="st-title">Add a capability warning to install.sh</div><div class="st-note">Warn, do not fail: a missing <code>--jobs</code> is degraded, not broken.</div></li>
           <li><div class="st-title">Verify install.sh still runs clean</div><div class="expect">IDENTICAL after install</div></li>
-          <li><div class="st-title">Record the pin in CLAUDE.md</div><div class="st-note">Including how to re-pin to PyPI once the upstream PR merges.</div></li>
+          <li><div class="st-title">Record the pin in CLAUDE.md</div><div class="st-note">Including the version marker that distinguishes the builds, the three guards, and how to re-pin to PyPI once the upstream PR merges.</div></li>
           <li><div class="st-title">Run the full gh-widgets suite</div><div class="expect">PASS</div></li>
           <li><div class="st-title">Commit and push</div></li>
         </ol>

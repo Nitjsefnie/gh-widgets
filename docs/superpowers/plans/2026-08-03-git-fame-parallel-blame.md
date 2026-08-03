@@ -358,12 +358,29 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `/root/gh-widgets/test_impact.py`
+- Modify: `/root/gh-widgets/render-impact.py`
 - Modify: `/root/gh-widgets/install.sh`
 - Modify: `/root/gh-widgets/CLAUDE.md`
 
 **Interfaces:**
 - Consumes: the installed `git fame` binary supporting `-j`.
 - Produces: nothing consumed by later tasks.
+
+**Why this task has a runtime check and not just an install-time one** — copied
+from a sibling repo that learned it the hard way (`Consultest-CZ/kvalita`
+`2bca15f` → `e29fc78` → `f30eed6`). That repo patched a dependency, then needed
+two follow-up commits: one because the patched wheel reported the *same version*
+as stock so a routine `pip -U` silently reverted it, and one because the guard
+**logged nothing on success**, making a healthy boot indistinguishable from the
+guard never having run.
+
+- The version half is already free here: git-fame uses `setuptools_scm`, so the
+  fork build reports `3.1.4.dev1+g<sha>` against stock's `3.1.2`/`3.1.3`. Drift
+  is visible in `pip freeze` by construction — do NOT add a wheel-retagging step.
+- The self-proving half is NOT free, and `install.sh` alone does not provide it:
+  `render-impact.service` runs unattended on a timer, long after any install.
+  The check must run **per render** and must be **noisy on success**, so that the
+  absence of its line in the journal is itself the alarm.
 
 - [ ] **Step 1: Install the patched build**
 
@@ -474,7 +491,74 @@ cd /root/gh-widgets && python3 -m unittest test_impact -v
 ```
 Expected: PASS
 
-- [ ] **Step 5: Add a capability warning to install.sh**
+- [ ] **Step 5: Add the self-proving runtime check to render-impact.py**
+
+Add this function to `/root/gh-widgets/render-impact.py`, next to the other module-level helpers, and call it as the first statement inside `main()` **after** `parse_args()` (so `--help` still exits without paying for it — `install.sh` uses `--help` to verify the renderer starts):
+
+```python
+def check_git_fame():
+    """Verify the installed git-fame is the patched build, and SAY SO.
+
+    This renderer runs unattended on a timer, so a check that is silent on
+    success is indistinguishable from a check that never ran — the absence of
+    the line has to be the alarm, which only works when success is noisy.
+    Stock git-fame is degraded (serial blame, several times slower), not
+    wrong, so this warns and continues rather than aborting.
+    """
+    try:
+        r = subprocess.run(["git", "fame", "--help"], capture_output=True,
+                           text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"git-fame: CHECK FAILED ({e}) — blame pass may not work", flush=True)
+        return False
+    if "--jobs" not in r.stdout:
+        print("git-fame: WARNING — no --jobs, so this is STOCK git-fame: the "
+              "blame pass is serial and several times slower. See CLAUDE.md "
+              "for the pin.", flush=True)
+        return False
+    v = subprocess.run(["git", "fame", "--version"], capture_output=True,
+                       text=True, timeout=60, check=False).stdout.strip()
+    print(f"git-fame: {v} with --jobs (patched build)", flush=True)
+    return True
+```
+
+Do NOT make it fatal and do NOT pass `-j` at the `blame_repo` call site. The patched build parallelises by default, so `blame_repo`'s command stays exactly as it is; passing `-j` explicitly would turn a stock install from "slow" into "every repo errors", which is the cache-poisoning failure this whole guard exists to avoid.
+
+- [ ] **Step 6: Cover the runtime check in test_impact.py**
+
+Append to `/root/gh-widgets/test_impact.py`. Load the renderer the way `test_common.py` loads its module — `render-impact.py` is not an importable name:
+
+```python
+class TestGitFameRuntimeCheck(unittest.TestCase):
+    """The runtime check must be self-proving: loud on success, not silent."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        import io
+        from contextlib import redirect_stdout
+        spec = importlib.util.spec_from_file_location(
+            "render_impact", Path(__file__).with_name("render-impact.py"))
+        if spec is None or spec.loader is None:
+            raise unittest.SkipTest("cannot load render-impact.py")
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+        cls.io, cls.redirect = io, redirect_stdout
+
+    def test_check_is_noisy_on_success(self):
+        """Success must print — a silent success cannot be distinguished from
+        the check never having run, which is the whole point of it."""
+        buf = self.io.StringIO()
+        with self.redirect(buf):
+            ok = self.mod.check_git_fame()
+        out = buf.getvalue()
+        self.assertTrue(ok, f"check reported stock git-fame: {out!r}")
+        self.assertIn("git-fame:", out)
+        self.assertIn("--jobs", out)
+        self.assertTrue(out.strip(), "check was silent on success")
+```
+
+- [ ] **Step 7: Add a capability warning to install.sh**
 
 In `/root/gh-widgets/install.sh`, after the existing `verified: all renderers start...` echo, append:
 
@@ -492,7 +576,7 @@ else
 fi
 ```
 
-- [ ] **Step 6: Verify install.sh still runs clean**
+- [ ] **Step 8: Verify install.sh still runs clean**
 
 ```bash
 sh -n /root/gh-widgets/install.sh && /root/gh-widgets/install.sh /tmp/ghw-install-check
@@ -500,7 +584,7 @@ diff /tmp/ghw-install-check/render-impact.py /root/gh-widgets/render-impact.py &
 ```
 Expected: no syntax error, install succeeds, `IDENTICAL`.
 
-- [ ] **Step 7: Record the pin in CLAUDE.md**
+- [ ] **Step 9: Record the pin in CLAUDE.md**
 
 In `/root/gh-widgets/CLAUDE.md`, directly after the paragraph about `GH_EXTRA_EMAILS`, add:
 
@@ -515,21 +599,34 @@ In `/root/gh-widgets/CLAUDE.md`, directly after the paragraph about `GH_EXTRA_EM
 > pip install --force-reinstall "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@<sha>"
 > ```
 >
-> `test_impact.py` fails if the installed build lacks `--jobs`, and
-> `install.sh` warns. Once the upstream PR merges, re-pin to the PyPI release
-> that contains it and delete this note.
+> **How you can tell which build is installed.** git-fame derives its version
+> from git tags via `setuptools_scm`, so the fork build reports
+> `3.1.4.dev1+g<sha>` while PyPI stock reports `3.1.2`/`3.1.3` — a silent
+> revert is visible in `pip freeze` by construction, with no wheel retagging
+> needed.
+>
+> **Three guards, at three different times.** `test_impact.py` fails if the
+> installed build lacks `--jobs` (test time); `install.sh` warns (install
+> time); and `render-impact.py`'s `check_git_fame()` prints the installed
+> version on **every render** (run time). That last one logs on success on
+> purpose — this renderer runs unattended on a timer, so a guard that is
+> silent when healthy cannot be told apart from a guard that never ran. If
+> `git-fame:` is missing from a run's journal output, treat that as the alarm.
+>
+> Once the upstream PR merges, re-pin to the PyPI release that contains it and
+> delete this note.
 ```
 
-- [ ] **Step 8: Run the full gh-widgets suite**
+- [ ] **Step 10: Run the full gh-widgets suite**
 
 Run: `cd /root/gh-widgets && python3 -m unittest discover -v`
 Expected: PASS, including the new `test_impact` cases.
 
-- [ ] **Step 9: Commit and push**
+- [ ] **Step 11: Commit and push**
 
 ```bash
 cd /root/gh-widgets
-git add test_impact.py install.sh CLAUDE.md
+git add test_impact.py render-impact.py install.sh CLAUDE.md
 git commit -m "pin git-fame to the parallel-blame fork, guard it with a test
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
@@ -588,6 +685,14 @@ Add the issue and PR URLs to the `CLAUDE.md` note from Task 4 Step 7 so the pin 
 ---
 
 ## Self-Review
+
+**Amendment (2026-08-03, after Task 1):** Task 4 gained Steps 5 and 6 — a
+`check_git_fame()` runtime guard in `render-impact.py` and a test that it is
+noisy on success — and Steps 5–9 renumbered to 7–11. Adopted from
+`Consultest-CZ/kvalita` (`2bca15f` → `e29fc78` → `f30eed6`), where an
+install-time-only guard and a silent-on-success guard each needed their own
+follow-up commit. The version-collision half of that pattern is *not* copied:
+git-fame's `setuptools_scm` version already distinguishes the fork build.
 
 **Spec coverage:** every row of the spec's change inventory maps to a task — `_gitfame.py` docstring/`_get_auth_stats`/`run` → Task 2; `tests/test_gitfame.py` → Task 2; `git-fame_completion.bash` + `git-fame.1` → Task 3; `test_impact.py` + `CLAUDE.md`/`install.sh` → Task 4; issue + PR → Task 5. The spec's `imap_bounded` requirement (bounded window) is Task 1. All six spec verification items appear as steps: byte-identical (T2 S10), suite green (T2 S9), speedup recorded (T2 S11), fails-on-stock (T4 S3), deployed copies match (T4 S6). The "end-to-end unchanged" verification is covered by T4 S8 plus the byte-identical check; a full `render-impact.py` run is not scripted here because it mutates the production cache — run it manually against a copied `CACHE_FILE` if desired.
 
