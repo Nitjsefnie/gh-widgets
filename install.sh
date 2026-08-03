@@ -72,3 +72,17 @@ for dst in render-gh-widgets.py render-impact.py render-responsiveness.py; do
     fi
 done
 echo "verified: all renderers start and agree on COMMON_VERSION"
+
+# render-impact.py's blame pass needs the parallel-blame git-fame build; stock
+# git-fame blames one file per subprocess serially and turns a 90s run into
+# minutes. Degraded, not broken — so warn rather than fail.
+if command -v git-fame >/dev/null 2>&1; then
+    # git-fame, NOT `git fame`: `git <cmd> --help` is rewritten by git into
+    # `man git-<cmd>`, which reports no manual entry and hides the option.
+    if ! git-fame --help 2>/dev/null | grep -q -- '--jobs'; then
+        echo "install.sh: WARNING - installed git-fame has no --jobs; render-impact" >&2
+        echo "                     will be several times slower. See CLAUDE.md for the pin." >&2
+    fi
+else
+    echo "install.sh: WARNING - git-fame is not installed; render-impact cannot blame" >&2
+fi
