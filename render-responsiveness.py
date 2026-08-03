@@ -332,7 +332,7 @@ def render_rows(C, y, scored):
     parts = [
         f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
         f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">merged</text>'
-        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">mean merge</text>'
+        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">avg merge</text>'
         f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">responsiveness</text>']
     y += 17
     if not scored:
