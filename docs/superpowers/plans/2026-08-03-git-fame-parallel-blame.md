@@ -387,10 +387,10 @@ guard never having run.
 ```bash
 cd /root/git-fame && git rev-parse HEAD
 pip install --force-reinstall "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$(git rev-parse HEAD)"
-git fame --version
-git fame --help | grep -c -- '--jobs'
+git-fame --version
+git-fame --help | grep -c -- '--jobs'
 ```
-Expected: the help grep returns `1`.
+Expected: the help grep returns `1`. Use `git-fame`, not `git fame`: git rewrites `git <cmd> --help` into `man git-<cmd>`, so the `git fame` form reports "No manual entry for git-fame" and greps as 0 even when the patched build is installed.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -425,6 +425,10 @@ def git(*args, cwd):
 
 
 def fame(cwd, *extra):
+    # Deliberately the `git fame` form here, not `git-fame`: this is the exact
+    # invocation render-impact.py's blame_repo uses, so the parity test must
+    # exercise that path. Only `--help` is special-cased by git's dispatcher,
+    # which is why the capability probe below uses the hyphenated binary.
     out = subprocess.run(["git", "fame", "-s", "-e", "-w", "--format", "json", *extra],
                          cwd=str(cwd), capture_output=True, text=True, check=True)
     return out.stdout
@@ -456,7 +460,10 @@ class TestGitFameParallel(unittest.TestCase):
         Fails on stock git-fame from PyPI, which is the point: without the
         patch the blame pass is serial and render-impact runs take minutes.
         """
-        help_text = subprocess.run(["git", "fame", "--help"],
+        # `git-fame`, NOT `git fame` — git rewrites `git <cmd> --help` into
+        # `man git-<cmd>`, which reports no manual entry and would make this
+        # assertion fail against a correctly patched build.
+        help_text = subprocess.run(["git-fame", "--help"],
                                    capture_output=True, text=True, check=True).stdout
         self.assertIn("--jobs", help_text,
                       "installed git-fame lacks --jobs; expected the pinned "
@@ -505,8 +512,12 @@ def check_git_fame():
     Stock git-fame is degraded (serial blame, several times slower), not
     wrong, so this warns and continues rather than aborting.
     """
+    # NOTE: `git-fame`, not `git fame`. Git's dispatcher rewrites
+    # `git <cmd> --help` into `man git-<cmd>`, so `git fame --help` prints
+    # "No manual entry for git-fame" and greps as if --jobs were absent —
+    # even when the patched build IS installed. Invoke the binary directly.
     try:
-        r = subprocess.run(["git", "fame", "--help"], capture_output=True,
+        r = subprocess.run(["git-fame", "--help"], capture_output=True,
                            text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"git-fame: CHECK FAILED ({e}) — blame pass may not work", flush=True)
@@ -516,7 +527,7 @@ def check_git_fame():
               "blame pass is serial and several times slower. See CLAUDE.md "
               "for the pin.", flush=True)
         return False
-    v = subprocess.run(["git", "fame", "--version"], capture_output=True,
+    v = subprocess.run(["git-fame", "--version"], capture_output=True,
                        text=True, timeout=60, check=False).stdout.strip()
     print(f"git-fame: {v} with --jobs (patched build)", flush=True)
     return True
@@ -567,7 +578,9 @@ In `/root/gh-widgets/install.sh`, after the existing `verified: all renderers st
 # git-fame blames one file per subprocess serially and turns a 90s run into
 # minutes. Degraded, not broken — so warn rather than fail.
 if command -v git-fame >/dev/null 2>&1; then
-    if ! git fame --help 2>/dev/null | grep -q -- '--jobs'; then
+    # git-fame, NOT `git fame`: `git <cmd> --help` is rewritten by git into
+    # `man git-<cmd>`, which reports no manual entry and hides the option.
+    if ! git-fame --help 2>/dev/null | grep -q -- '--jobs'; then
         echo "install.sh: WARNING - installed git-fame has no --jobs; render-impact" >&2
         echo "                     will be several times slower. See CLAUDE.md for the pin." >&2
     fi
