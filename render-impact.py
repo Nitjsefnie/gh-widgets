@@ -97,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 1
+REQUIRED_COMMON = 2
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1

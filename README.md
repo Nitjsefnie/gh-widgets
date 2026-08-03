@@ -1,6 +1,6 @@
 # gh-widgets
 
-Self-hosted alternative to `github-readme-stats` and friends. Renders five
+Self-hosted alternative to `github-readme-stats` and friends. Renders six
 static SVGs about your GitHub profile on a cron — no JavaScript, no third-party
 service, no flakiness.
 
@@ -9,6 +9,7 @@ service, no flakiness.
 <img src="https://nitjsefni.eu/widgets/languages.svg" width="720" alt="languages" /><br/>
 <img src="https://nitjsefni.eu/widgets/external.svg" width="720" alt="external" /><br/>
 <img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="impact" /><br/>
+<img src="https://nitjsefni.eu/widgets/responsiveness.svg" width="720" alt="responsiveness" /><br/>
 
 ## Why
 
@@ -56,10 +57,11 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-Both renderers share `ghwidgets_common.py` and assert its `COMMON_VERSION` on
-startup, so the three files have to travel together. `install.sh` stages them
-into the destination and moves them into place, then starts both entry points
-to prove the install is coherent. A hand-rolled `cp` of one file leaves a
+All three renderers share `ghwidgets_common.py` and assert its
+`COMMON_VERSION` on startup, so the four files have to travel together.
+`install.sh` stages them into the destination and moves them into place, then
+starts every entry point to prove the install is coherent. A hand-rolled `cp`
+of one file leaves a
 renderer that refuses to run — deliberately, since the alternative is rendering
 wrong numbers from a stale module.
 
@@ -99,6 +101,20 @@ defaults are the validated values; override only if you know why.
 An unparseable value aborts the run rather than silently reverting to the
 default — a mis-typed knob that quietly renders wrong numbers is worse than a
 failed run.
+
+## Tuning the responsiveness score (`render-responsiveness.py`)
+
+The board ranks repos by `n**gamma * 1/(1 + t/half_life)`, where `n` is your
+merged PRs in the repo and `t` is the **median** hours from PR creation to
+merge.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RESP_GAMMA` | `0.5` | How much raw PR volume counts against turnaround. |
+| `RESP_HALF_LIFE_H` | `24.0` | Turnaround at which the speed factor is 0.5 (0.25 at three times it). |
+| `RESP_MIN_PRS` | `3` | Merged PRs a repo needs before it is ranked at all. |
+
+Same contract as the impact knobs: an unparseable value aborts the run.
 
 ## Usage (manual run)
 
@@ -145,6 +161,7 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 <img src="https://your-domain/widgets/languages.svg" width="720" alt="Top languages" />
 <img src="https://your-domain/widgets/external.svg"  width="720" alt="External contributions" />
 <img src="https://your-domain/widgets/impact.svg"    width="720" alt="External impact" />
+<img src="https://your-domain/widgets/responsiveness.svg" width="720" alt="External responsiveness" />
 ```
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
@@ -187,6 +204,34 @@ SVG could verify them.
 It pages through your whole PR *and* issue history (100 per request), so a run
 costs a few extra API calls. A non-issue on an hourly timer; worth knowing if
 you run it every minute.
+
+## The `responsiveness` widget
+
+`responsiveness.svg` answers the other half of the external question: not just
+how much lands in other people's repos, but **how long it takes to land**. One
+row per repo, ranked by volume × speed — `n` merged PRs with diminishing
+returns, damped by the **median** hours from PR creation to merge.
+
+Median, not mean, on purpose. Measured over 332 external merged PRs: mean
+24.3 h, median 3.2 h, σ 4.9 days, worst 77 days. 83% merge inside a day, so a
+mean ranks a repo by its single worst outlier — one PR parked over a holiday —
+rather than by what a contributor should actually expect.
+
+A repo needs `RESP_MIN_PRS` merged PRs (default 3) to be ranked: a median over
+one or two samples is not an estimate of anything. The excluded tail is
+**stated on the card** — repo count and PR count — rather than quietly dropped,
+along with the number of rows the top-N cut hides.
+
+It makes no API calls of its own. It reads `render-impact.py`'s cache, which
+already carries every authored PR with its `createdAt`/`mergedAt`, so run it
+after `render-impact.py`. A missing or stale-schema cache is a hard error, not
+a blank card: the previously rendered SVG keeps serving.
+
+Upgrading from a cache written before those timestamps existed: merged PRs are
+frozen in that cache, so their timestamps only arrive on a
+`render-impact.py --resync` (the weekly timer does one). Until then the card
+counts what it can and says how many PRs it had to leave out — run the resync
+once after installing if you don't want to wait.
 
 ## Caveats
 

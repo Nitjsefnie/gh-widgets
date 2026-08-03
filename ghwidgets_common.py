@@ -39,7 +39,7 @@ from pathlib import Path
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 1
+COMMON_VERSION = 2
 
 
 def check_version(required):
@@ -260,6 +260,12 @@ def is_external(node, insiders):
 
 # ------------------------------------------------------- PR / issue fetching
 
+# The three timestamps are for render-responsiveness.py, which measures how
+# long an external PR sits before it merges. They ride along on a query that
+# was already being made (free), instead of a second crawl over the same
+# history. All three are immutable once a PR is merged, so caching them
+# alongside `merged` is safe; closedAt is selected because a node cached while
+# the PR was still open, and later inferred merged, has no mergedAt.
 PR_QUERY = """
 query($login: String!, $cursor: String) {
   user(login: $login) {
@@ -270,6 +276,9 @@ query($login: String!, $cursor: String) {
       nodes {
         id
         merged
+        createdAt
+        mergedAt
+        closedAt
         repository { nameWithOwner isPrivate owner { login } }
       }
     }

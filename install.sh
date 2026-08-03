@@ -1,10 +1,10 @@
 #!/bin/sh
 # gh-widgets — install the renderers and their shared module.
 #
-# The two renderers share ghwidgets_common.py and assert its COMMON_VERSION at
-# startup, so they must be deployed together. Copying one without the other
+# The three renderers share ghwidgets_common.py and assert its COMMON_VERSION
+# at startup, so they must be deployed together. Copying one without the other
 # leaves a working-looking install that refuses to run (by design). This script
-# stages all three into the target directory and moves them into place, so a
+# stages all four into the target directory and moves them into place, so a
 # partial copy is not something you can do by accident.
 #
 #   ./install.sh                    # -> /usr/local/bin
@@ -22,6 +22,7 @@ SRC="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 set -- \
     "render.py:render-gh-widgets.py" \
     "render-impact.py:render-impact.py" \
+    "render-responsiveness.py:render-responsiveness.py" \
     "ghwidgets_common.py:ghwidgets_common.py"
 
 # Verify every source exists BEFORE touching the destination, so a missing
@@ -61,13 +62,13 @@ done
 
 staged=""
 
-# Prove the install is coherent rather than assuming it: both entry points
-# load the shared module and check its version on startup, so --help exercises
-# exactly the failure this script exists to prevent.
-for dst in render-gh-widgets.py render-impact.py; do
+# Prove the install is coherent rather than assuming it: every entry point
+# loads the shared module and checks its version on startup, so --help
+# exercises exactly the failure this script exists to prevent.
+for dst in render-gh-widgets.py render-impact.py render-responsiveness.py; do
     if ! "$DEST/$dst" --help >/dev/null 2>&1; then
         echo "install.sh: $DEST/$dst failed to start after install" >&2
         exit 1
     fi
 done
-echo "verified: both renderers start and agree on COMMON_VERSION"
+echo "verified: all renderers start and agree on COMMON_VERSION"

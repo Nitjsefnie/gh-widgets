@@ -200,11 +200,12 @@ class EnvKnobs(unittest.TestCase):
 
 
 class VersionContract(unittest.TestCase):
-    def test_both_scripts_pin_the_current_version(self):
+    def test_every_script_pins_the_current_version(self):
         # A partial copy to /usr/local/bin must fail loudly, which only works
         # if the scripts' REQUIRED_COMMON tracks COMMON_VERSION.
         here = Path(__file__).parent
-        for name in ("render.py", "render-impact.py"):
+        for name in ("render.py", "render-impact.py",
+                     "render-responsiveness.py"):
             src = (here / name).read_text()
             self.assertIn(f"REQUIRED_COMMON = {common.COMMON_VERSION}", src,
                           f"{name} does not pin COMMON_VERSION")
