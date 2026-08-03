@@ -1,0 +1,76 @@
+# INVERTED FAILURE SEMANTICS — READ THIS BEFORE CHANGING ANYTHING
+#
+# This repo pins git-fame to a patched fork (Nitjsefnie-OSC/git-fame) because
+# stock git-fame lacks a --jobs option. This workflow is a scheduled expiry
+# check. Its FAILURE IS THE NOTIFICATION: GitHub emails the repo owner when a
+# scheduled run fails.
+#
+#   PASS = the newest git-fame on PyPI still lacks --jobs, so the fork pin is
+#          still justified. Nothing to do.
+#   FAIL = PyPI has caught up. The pin is now obsolete: re-pin to the PyPI
+#          release, delete the pin note in CLAUDE.md, and delete this workflow.
+#
+# A red build here is GOOD NEWS. Do NOT "fix" the red build by making the job
+# pass — a failure is the whole point of the notification.
+
+name: pin-still-needed
+
+on:
+  schedule:
+    # Weekly, deliberately off the hour and away from midnight UTC to avoid
+    # GitHub's peak-schedule delays.
+    - cron: '37 9 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: pin-still-needed-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          # There is no requirements.txt here (runtime is pure stdlib), so
+          # the cache must be keyed off the dev pins explicitly or
+          # setup-python fails the job looking for one.
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install newest git-fame from PyPI
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade git-fame
+
+      - name: Check whether git-fame still lacks --jobs
+        run: |
+          # IMPORTANT: probe the hyphenated binary `git-fame --help`, not
+          # `git fame --help`. Git rewrites `git <cmd> --help` into
+          # `man git-<cmd>`, which prints "No manual entry for git-fame" and
+          # reports no --jobs even when the option exists.
+          version=$(pip show git-fame | sed -n 's/^Version: //p')
+          echo "Checked git-fame version: $version"
+
+          if git-fame --help 2>&1 | grep -q -- '--jobs'; then
+            echo "git-fame $version now supports --jobs. The fork pin is obsolete."
+            echo "Follow-up actions:"
+            echo "  1. Re-pin to the PyPI release of git-fame."
+            echo "  2. Delete the pin note in CLAUDE.md."
+            echo "  3. Delete this workflow file."
+            echo "::error::git-fame $version now supports --jobs; the fork pin is obsolete."
+            exit 1
+          else
+            echo "git-fame $version still lacks --jobs; the fork pin is still needed."
+            echo "::notice::git-fame $version still lacks --jobs; the fork pin is still needed."
+            exit 0
+          fi
+
+# Caveat: GitHub disables scheduled workflows after 60 days of repository
+# inactivity. If this repo goes quiet, this check silently stops running and
+# the notification it exists to send would never arrive. Any commit to the repo
+# resets that 60-day clock.
