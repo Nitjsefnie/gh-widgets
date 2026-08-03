@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Implementation plan — git-fame parallel blame</title>
+  <style>
+    :root {
+      --ivory:    #1B1A17;
+      --slate:    #F5F3EC;
+      --clay:     #D97757;
+      --oat:      #3A352B;
+      --olive:    #8FA56E;
+      --rust:     #E08B7F;
+      --gray-150: #2E2C27;
+      --gray-300: #3A3833;
+      --gray-500: #8F8D82;
+      --gray-700: #CFCCC2;
+      --white:    #252420;
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: var(--sans); background: var(--ivory); color: var(--gray-700);
+      line-height: 1.55; padding: 56px 32px 120px; -webkit-font-smoothing: antialiased;
+    }
+    .page { margin: 0 auto; max-width: 1240px; display: grid; grid-template-columns: minmax(0,1fr) 250px; gap: 48px; }
+    @media (max-width: 1060px) { .page { grid-template-columns: 1fr; } aside { position: static; order: 2; } }
+
+    header.page-head { margin-bottom: 44px; max-width: 840px; }
+    .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px; }
+    h1 { font-family: var(--serif); font-weight: 500; font-size: 38px; line-height: 1.15; color: var(--slate); margin-bottom: 18px; letter-spacing: -.01em; }
+    .prompt-box { background: var(--gray-150); border: 1.5px solid var(--gray-300); border-radius: 12px; padding: 16px 20px; font-size: 14.5px; }
+    .prompt-box .label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-500); display: block; margin-bottom: 6px; }
+    .prompt-box + .prompt-box { margin-top: 12px; }
+
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 52px; }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell { background: var(--white); border: 1.5px solid var(--gray-300); border-radius: 12px; padding: 18px 20px; }
+    .summary .k { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-500); margin-bottom: 6px; }
+    .summary .v { font-size: 17px; color: var(--slate); font-weight: 600; }
+    .summary .v.accent { color: var(--clay); }
+
+    section { margin-bottom: 56px; scroll-margin-top: 24px; }
+    .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+    .sec-head .num { font-family: var(--mono); font-size: 12px; background: var(--oat); color: var(--slate); padding: 3px 9px; border-radius: 8px; }
+    .sec-head h2 { font-family: var(--serif); font-weight: 500; font-size: 26px; color: var(--slate); letter-spacing: -.01em; }
+    .sec-intro { font-size: 14.5px; color: var(--gray-500); max-width: 740px; margin-bottom: 22px; }
+    p.body { font-size: 14.5px; max-width: 780px; margin-bottom: 12px; }
+    code { font-family: var(--mono); font-size: .88em; background: var(--gray-150); border: 1px solid var(--gray-300); border-radius: 5px; padding: 1px 5px; color: #C9B98A; }
+    pre { background: #121110; border: 1px solid var(--gray-300); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 12px 0; }
+    pre code { background: none; border: none; padding: 0; font-size: 12.5px; line-height: 1.6; color: var(--gray-700); }
+
+    ul.constraints { list-style: none; max-width: 800px; }
+    ul.constraints li { position: relative; padding: 7px 0 7px 26px; border-bottom: 1px solid var(--gray-300); font-size: 14px; }
+    ul.constraints li:before { content: '\25B8'; position: absolute; left: 6px; color: var(--clay); }
+
+    .task { background: var(--white); border: 1.5px solid var(--gray-300); border-radius: 14px; padding: 0; margin-bottom: 18px; overflow: hidden; }
+    .task > summary { list-style: none; cursor: pointer; padding: 18px 22px; display: flex; align-items: baseline; gap: 14px; }
+    .task > summary::-webkit-details-marker { display: none; }
+    .task > summary:hover { background: var(--gray-150); }
+    .task .tnum { font-family: var(--mono); font-size: 11px; color: var(--clay); border: 1px solid var(--gray-300); border-radius: 5px; padding: 2px 7px; flex: none; }
+    .task .ttitle { font-size: 16px; font-weight: 600; color: var(--slate); flex: 1; }
+    .task .tmeta { font-family: var(--mono); font-size: 11px; color: var(--gray-500); }
+    .task .tbody { padding: 0 22px 20px; border-top: 1px solid var(--gray-300); }
+    .files { display: grid; grid-template-columns: 90px 1fr; gap: 4px 16px; font-size: 13px; margin: 16px 0; }
+    .files dt { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray-500); padding-top: 3px; }
+    .files dd { color: var(--gray-700); font-family: var(--mono); font-size: 12px; }
+    .iface { background: var(--gray-150); border-left: 3px solid var(--olive); border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 13.5px; margin: 14px 0; }
+    .iface b { color: var(--slate); }
+
+    .steps { list-style: none; counter-reset: st; margin-top: 12px; }
+    .steps > li { counter-increment: st; position: relative; padding: 10px 0 10px 34px; border-top: 1px dashed var(--gray-300); }
+    .steps > li:before {
+      content: counter(st); position: absolute; left: 0; top: 12px;
+      font-family: var(--mono); font-size: 10px; color: var(--gray-500);
+      border: 1.5px solid var(--gray-300); border-radius: 5px; width: 22px; text-align: center;
+    }
+    .steps > li.done:before { content: '\2713'; color: var(--olive); border-color: var(--olive); }
+    .steps .st-title { font-size: 14px; font-weight: 600; color: var(--slate); cursor: pointer; }
+    .steps .st-note { font-size: 13.5px; color: var(--gray-700); margin-top: 4px; }
+    .steps .expect { font-size: 12.5px; color: var(--olive); font-family: var(--mono); margin-top: 6px; }
+
+    .risks { border: 1.5px solid var(--gray-300); border-radius: 12px; overflow: hidden; background: var(--white); }
+    .risks .row { display: grid; grid-template-columns: 1.6fr 90px 1.6fr; }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: 1.5px solid var(--gray-300); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: 1.5px solid var(--gray-300); }
+    @media (max-width: 780px) { .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); } }
+    .risks .head { background: var(--gray-150); font-weight: 600; color: var(--slate); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .sev { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 600; }
+    .sev.med { background: var(--oat); color: var(--slate); }
+    .sev.low { background: #2D3A24; color: #B6CC96; }
+
+    aside { position: sticky; top: 32px; align-self: start; border: 1.5px solid var(--gray-300); border-radius: 12px; background: var(--white); padding: 18px; }
+    aside .label { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px; }
+    aside ol { list-style: none; counter-reset: toc; font-size: 12.5px; line-height: 1.5; }
+    aside ol li { counter-increment: toc; margin-bottom: 9px; }
+    aside ol li a { text-decoration: none; color: var(--gray-700); display: block; }
+    aside ol li a:hover { color: var(--slate); }
+    aside ol li a::before { content: counter(toc, decimal-leading-zero) "."; font-family: var(--mono); font-size: 10px; color: var(--gray-500); margin-right: 6px; }
+    aside button { appearance: none; width: 100%; border: 1.5px solid var(--gray-300); background: var(--gray-150); color: var(--gray-700); border-radius: 6px; font-family: var(--mono); font-size: 11px; padding: 8px; cursor: pointer; margin-top: 8px; }
+    aside button:hover { background: var(--oat); color: var(--slate); }
+    #progress { font-family: var(--mono); font-size: 11px; color: var(--gray-500); margin-top: 12px; text-align: center; }
+
+    .footer { color: var(--gray-500); font-size: 13px; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--gray-300); }
+  </style>
+</head>
+<body>
+<div class="page">
+<main>
+
+  <header class="page-head">
+    <div class="eyebrow">Implementation plan · gh-widgets → git-fame</div>
+    <h1>Parallel <code style="font-size:.62em">git blame</code> for git-fame</h1>
+    <div class="prompt-box">
+      <span class="label">Goal</span>
+      Give git-fame a <code>-j/--jobs</code> option that runs its per-file <code>git blame</code>
+      subprocesses concurrently, land it upstream, and consume it from a pinned fork build so
+      <code>render-impact.py</code>'s blame pass stops spending ~41&nbsp;% of its wall time on
+      process spawn.
+    </div>
+    <div class="prompt-box">
+      <span class="label">Architecture</span>
+      A generator helper (<code>imap_bounded</code>) wraps <code>ThreadPoolExecutor</code> with a
+      bounded window of outstanding futures and yields results <strong>in input order</strong>.
+      <code>_get_auth_stats</code> uses it to fetch blame output concurrently while parsing and
+      aggregation stay serial in the calling thread — so <code>stats_append</code> needs no lock
+      and output is byte-identical to the serial path. <code>run()</code> resolves
+      <code>jobs=0</code> to an auto value and divides the budget across concurrent gitdirs.
+    </div>
+  </header>
+
+  <div class="summary">
+    <div class="cell"><div class="k">Tasks</div><div class="v accent">5</div></div>
+    <div class="cell"><div class="k">Repos touched</div><div class="v">2</div></div>
+    <div class="cell"><div class="k">Upstream artefacts</div><div class="v">1 issue + 1 PR</div></div>
+    <div class="cell"><div class="k">Core invariant</div><div class="v">byte-identical</div></div>
+  </div>
+
+  <section id="c">
+    <div class="sec-head"><span class="num">00</span><h2>Global constraints</h2></div>
+    <p class="sec-intro">Every task's requirements implicitly include this list. Values copied verbatim from the spec.</p>
+    <ul class="constraints">
+      <li>Upstream git-fame supports <strong>Python &ge; 3.8</strong> (<code>pyproject.toml: requires-python</code>). No 3.9+ syntax.</li>
+      <li>Upstream pytest runs with <code>-W=error</code> — any warning fails the suite.</li>
+      <li>Upstream pytest runs with <code>--cov-fail-under=85</code>.</li>
+      <li>Upstream line length is <strong>120</strong> (flake8, yapf, isort).</li>
+      <li><code>argopt</code> builds the parser from <code>_gitfame.py</code>'s module <code>__doc__</code>. The docstring <strong>is</strong> the CLI definition.</li>
+      <li>Option help lines need <strong>two spaces</strong> between option and description, and <code>[default: 0:int]</code> for an int-cast default.</li>
+      <li><strong>gh-widgets is stdlib-only</strong> (CONTRIBUTING.md). Test runner is stdlib <code>unittest</code>, not pytest.</li>
+      <li>Every commit carries <code>Co-Authored-By: Claude Opus 5 (1M context)</code>.</li>
+      <li>Output must remain <strong>byte-identical</strong> between <code>-j1</code> and <code>-jN</code>.</li>
+    </ul>
+  </section>
+
+  <section id="t">
+    <div class="sec-head"><span class="num">01</span><h2>Tasks</h2></div>
+    <p class="sec-intro">Each ends with an independently testable deliverable. Click a task to expand; click a step to tick it off.</p>
+
+    <details class="task" open>
+      <summary><span class="tnum">T1</span><span class="ttitle">Bounded ordered concurrent map</span><span class="tmeta">_utils.py</span></summary>
+      <div class="tbody">
+        <dl class="files">
+          <dt>Create</dt><dd>fork Nitjsefnie-OSC/git-fame, branch parallel-blame</dd>
+          <dt>Modify</dt><dd>gitfame/_utils.py</dd>
+          <dt>Test</dt><dd>tests/test_utils.py</dd>
+        </dl>
+        <div class="iface"><b>Produces:</b> <code>imap_bounded(func, items, jobs)</code> — generator yielding <code>func(item)</code> in input order, at most <code>jobs</code> concurrent calls and <code>2 × jobs</code> results held. <code>jobs &lt; 2</code> runs serially with no executor created.</div>
+        <ol class="steps">
+          <li><div class="st-title">Fork and clone</div><div class="st-note"><code>gh repo fork casperdcl/git-fame --org Nitjsefnie-OSC</code>, branch from <code>upstream/main</code>, <code>pip install -e '.[dev]'</code>.</div></li>
+          <li><div class="st-title">Write the failing test</div><div class="st-note">Order preserved over 20 items at <code>jobs=4</code>; observed peak concurrency <code>&gt; 1</code> and <code>&le; 4</code>; serial fallback and empty input.</div></li>
+          <li><div class="st-title">Run test to verify it fails</div><div class="expect">FAIL: cannot import name 'imap_bounded'</div></li>
+          <li><div class="st-title">Write minimal implementation</div><div class="st-note">Deque of futures primed with <code>islice(it, 2*jobs)</code>; pop-left, submit one, yield.</div></li>
+          <li><div class="st-title">Run test to verify it passes</div><div class="expect">PASS</div></li>
+          <li><div class="st-title">Commit</div></li>
+        </ol>
+        <pre><code>def imap_bounded(func, items, jobs):
+    if jobs &lt; 2:
+        for i in items:
+            yield func(i)
+        return
+
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+    from itertools import islice
+
+    it = iter(items)
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        pending = deque(pool.submit(func, i) for i in islice(it, 2 * jobs))
+        while pending:
+            res = pending.popleft().result()
+            for i in islice(it, 1):
+                pending.append(pool.submit(func, i))
+            yield res</code></pre>
+      </div>
+    </details>
+
+    <details class="task">
+      <summary><span class="tnum">T2</span><span class="ttitle">Wire --jobs through the CLI and blame loop</span><span class="tmeta">_gitfame.py</span></summary>
+      <div class="tbody">
+        <dl class="files">
+          <dt>Modify</dt><dd>gitfame/_gitfame.py (docstring; _get_auth_stats; run)</dd>
+          <dt>Test</dt><dd>tests/test_gitfame.py</dd>
+        </dl>
+        <div class="iface"><b>Consumes:</b> <code>imap_bounded</code> from T1. <b>Produces:</b> <code>_get_auth_stats(..., jobs=1)</code> — new trailing keyword, default <code>1</code> so direct callers keep serial behaviour. CLI attribute <code>args.jobs</code> (int, default <code>0</code> = auto).</div>
+        <ol class="steps">
+          <li><div class="st-title">Write the failing determinism test</div><div class="st-note"><code>-j1</code> and <code>-j4</code> JSON output compared for equality via <code>capsys</code>; add <code>['-j','1']</code> and <code>['-j','4']</code> to <code>test_options</code>.</div></li>
+          <li><div class="st-title">Run test to verify it fails</div><div class="expect">FAIL: unrecognized arguments: -j 1</div></li>
+          <li><div class="st-title">Declare the option in the module docstring</div><div class="st-note">Insert after <code>-s, --silent-progress</code>. Two spaces before the description.</div></li>
+          <li><div class="st-title">Import the helper</div><div class="st-note">Add <code>imap_bounded</code> to the <code>._utils</code> import, alphabetical order preserved.</div></li>
+          <li><div class="st-title">Add the jobs parameter to _get_auth_stats</div><div class="st-note">Signature ends <code>until=None, jobs=1</code>.</div></li>
+          <li><div class="st-title">Replace the serial blame loop</div><div class="st-note"><code>blame_file</code> returns <code>(fname, output_or_exception)</code> so failures stay ordered and are reported by the caller.</div></li>
+          <li><div class="st-title">Resolve and divide the job budget in run()</div><div class="st-note"><code>jobs = args.jobs or min(32, (os.cpu_count() or 1) + 4)</code>; divide by <code>len(gitdirs)</code> when &gt; 1.</div></li>
+          <li><div class="st-title">Run the new tests</div><div class="expect">PASS</div></li>
+          <li><div class="st-title">Run the whole suite as CI does</div><div class="expect">PASS, coverage &ge; 85%, no warnings</div></li>
+          <li><div class="st-title">Verify byte-identical output on real repositories</div><div class="expect">IDENTICAL for every repo</div></li>
+          <li><div class="st-title">Record the speedup</div><div class="st-note">Real numbers for the PR body. Not asserted in a test — timing assertions are flaky.</div></li>
+          <li><div class="st-title">Lint</div><div class="expect">flake8 + isort clean</div></li>
+          <li><div class="st-title">Commit</div></li>
+        </ol>
+        <pre><code>  -j, --jobs=&lt;n&gt;  Number of concurrent `git blame` processes per repository
+                  [default: 0:int]. 0: automatic (based on CPU count);
+                  1: serial (the pre-3.2 behaviour).</code></pre>
+      </div>
+    </details>
+
+    <details class="task">
+      <summary><span class="tnum">T3</span><span class="ttitle">Shell completion and man page</span><span class="tmeta">docs</span></summary>
+      <div class="tbody">
+        <dl class="files">
+          <dt>Modify</dt><dd>git-fame_completion.bash, gitfame/git-fame.1</dd>
+        </dl>
+        <ol class="steps">
+          <li><div class="st-title">Read the completion script</div></li>
+          <li><div class="st-title">Add --jobs and -j to the completion word lists</div></li>
+          <li><div class="st-title">Verify it still sources cleanly</div><div class="expect">bash -n → OK</div></li>
+          <li><div class="st-title">Regenerate the man page</div><div class="st-note">If <code>pandoc</code> is unavailable, skip and say so explicitly in the PR body rather than committing a hand-edited man page.</div></li>
+          <li><div class="st-title">Confirm the option is documented</div><div class="expect">git fame --help shows -j, --jobs=&lt;n&gt;</div></li>
+          <li><div class="st-title">Commit</div></li>
+        </ol>
+      </div>
+    </details>
+
+    <details class="task">
+      <summary><span class="tnum">T4</span><span class="ttitle">Pin the build and guard it from gh-widgets</span><span class="tmeta">gh-widgets</span></summary>
+      <div class="tbody">
+        <dl class="files">
+          <dt>Create</dt><dd>/root/gh-widgets/test_impact.py</dd>
+          <dt>Modify</dt><dd>/root/gh-widgets/install.sh, CLAUDE.md</dd>
+        </dl>
+        <div class="iface"><b>Consumes:</b> the installed <code>git fame</code> supporting <code>-j</code>. The test pins the <b>capability</b>, never the timing — a slow run is not a wrong run, and timing assertions are flaky on a shared box.</div>
+        <ol class="steps">
+          <li><div class="st-title">Install the patched build</div><div class="st-note">pip install from the fork at a fixed SHA.</div></li>
+          <li><div class="st-title">Write the failing test</div><div class="st-note">Stdlib <code>unittest</code>, matching <code>test_common.py</code>. Builds a 12-file throwaway repo in <code>setUpClass</code>.</div></li>
+          <li><div class="st-title">Prove the test fails on stock git-fame</div><div class="expect">FAIL on test_jobs_option_supported — this IS the regression test</div></li>
+          <li><div class="st-title">Reinstall the pinned build and confirm it passes</div><div class="expect">PASS</div></li>
+          <li><div class="st-title">Add a capability warning to install.sh</div><div class="st-note">Warn, do not fail: a missing <code>--jobs</code> is degraded, not broken.</div></li>
+          <li><div class="st-title">Verify install.sh still runs clean</div><div class="expect">IDENTICAL after install</div></li>
+          <li><div class="st-title">Record the pin in CLAUDE.md</div><div class="st-note">Including how to re-pin to PyPI once the upstream PR merges.</div></li>
+          <li><div class="st-title">Run the full gh-widgets suite</div><div class="expect">PASS</div></li>
+          <li><div class="st-title">Commit and push</div></li>
+        </ol>
+      </div>
+    </details>
+
+    <details class="task">
+      <summary><span class="tnum">T5</span><span class="ttitle">Upstream the patch</span><span class="tmeta">1 issue + 1 PR</span></summary>
+      <div class="tbody">
+        <div class="iface"><b>Consumes:</b> the <code>parallel-blame</code> branch and the measurements from T2 step 11. <code>casperdcl/git-fame</code> has no CONTRIBUTING.md and no issue templates (verified), so the <code>contribution-contracts</code> skill's contracts apply.</div>
+        <ol class="steps">
+          <li><div class="st-title">Load the contribution contracts</div><div class="st-note">Read both in full <em>before</em> writing either body. Never freehand a PR or issue.</div></li>
+          <li><div class="st-title">Re-check for duplicates immediately before filing</div><div class="st-note">None existed at plan time: 13 open issues, none performance-related; no PR has ever proposed this.</div></li>
+          <li><div class="st-title">File the issue</div><div class="st-note">Observed behaviour only. Do not propose the fix in the issue body — the PR does that.</div></li>
+          <li><div class="st-title">Push the branch to the fork</div></li>
+          <li><div class="st-title">Open the pull request</div><div class="st-note">Lead with the invariant: byte-identical output, proven by the determinism test and the real-repo check.</div></li>
+          <li><div class="st-title">Record the URLs in CLAUDE.md</div></li>
+        </ol>
+      </div>
+    </details>
+  </section>
+
+  <section id="r">
+    <div class="sec-head"><span class="num">02</span><h2>Risks</h2></div>
+    <div class="risks">
+      <div class="row"><div class="cell head">Risk</div><div class="cell head">Sev</div><div class="cell head">Mitigation</div></div>
+      <div class="row">
+        <div class="cell">Memory blow-up on very large repos if the outstanding-future window is unbounded.</div>
+        <div class="cell"><span class="sev med">MED</span></div>
+        <div class="cell">The bounded window is a hard requirement of T1, not an optimisation. <code>--line-porcelain</code> emits ~250–400 B per source line.</div>
+      </div>
+      <div class="row">
+        <div class="cell">Upstream rejects default-on parallelism as a behaviour change.</div>
+        <div class="cell"><span class="sev low">LOW</span></div>
+        <div class="cell">Byte-identical output plus the existing <code>thread_map</code> precedent is the argument. If rejected, flip the default to <code>-j1</code> and pass <code>-j</code> from <code>render-impact.py</code>.</div>
+      </div>
+      <div class="row">
+        <div class="cell">Oversubscription if the caller also parallelises its repo loop.</div>
+        <div class="cell"><span class="sev low">LOW</span></div>
+        <div class="cell">Caller-side repo parallelism is explicitly out of scope in the spec, for exactly this reason.</div>
+      </div>
+      <div class="row">
+        <div class="cell">Fork pin drifts from upstream releases.</div>
+        <div class="cell"><span class="sev low">LOW</span></div>
+        <div class="cell">Pin recorded in CLAUDE.md with a re-pin instruction; return to PyPI once the PR merges.</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    <p>Implementation plan · 2026-08-03 · derived from
+      <a href="https://docs.nitjsefni.eu/d/gh-widgets/2026-08-03-git-fame-parallel-blame-design" style="color:var(--clay)">the design spec</a>
+      · markdown twin: <code>docs/superpowers/plans/2026-08-03-git-fame-parallel-blame.md</code></p>
+  </div>
+</main>
+
+<aside>
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#c">Global constraints</a></li>
+    <li><a href="#t">Tasks</a></li>
+    <li><a href="#r">Risks</a></li>
+  </ol>
+  <button id="expandAll">expand all tasks</button>
+  <button id="copyPlan">copy plan as prompt</button>
+  <div id="progress">0 / 0 steps ticked</div>
+</aside>
+</div>
+
+<script>
+var steps = Array.prototype.slice.call(document.querySelectorAll('.steps > li'));
+function refresh() {
+  var done = steps.filter(function (s) { return s.classList.contains('done'); }).length;
+  document.getElementById('progress').textContent = done + ' / ' + steps.length + ' steps ticked';
+}
+steps.forEach(function (s) {
+  s.querySelector('.st-title').onclick = function () { s.classList.toggle('done'); refresh(); };
+});
+refresh();
+document.getElementById('expandAll').onclick = function () {
+  var tasks = document.querySelectorAll('details.task');
+  var anyClosed = Array.prototype.slice.call(tasks).some(function (t) { return !t.open; });
+  tasks.forEach(function (t) { t.open = anyClosed; });
+  this.textContent = anyClosed ? 'collapse all tasks' : 'expand all tasks';
+};
+document.getElementById('copyPlan').onclick = function () {
+  var t = 'Implementation plan: ' + document.querySelector('h1').textContent.trim() + '\n\n';
+  document.querySelectorAll('details.task').forEach(function (d) {
+    t += d.querySelector('.tnum').textContent + ' ' + d.querySelector('.ttitle').textContent + '\n';
+    d.querySelectorAll('.steps > li .st-title').forEach(function (s, i) {
+      t += '  ' + (i + 1) + '. ' + s.textContent.trim() + '\n';
+    });
+    t += '\n';
+  });
+  navigator.clipboard.writeText(t);
+  this.textContent = 'copied ✓';
+  var self = this; setTimeout(function () { self.textContent = 'copy plan as prompt'; }, 1400);
+};
+</script>
+</body>
+</html>
