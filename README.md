@@ -105,8 +105,9 @@ failed run.
 ## Tuning the responsiveness score (`render-responsiveness.py`)
 
 The board ranks repos by `n**gamma * 1/(1 + t/half_life)`, where `n` is your
-merged PRs in the repo and `t` is the **median** hours from PR creation to
-merge.
+merged PRs in the repo and `t` is the **trimmed-mean** hours from PR creation
+to merge (mean of the p10..p90 range, inclusive; plain mean for fewer than 4
+PRs).
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -210,14 +211,17 @@ you run it every minute.
 `responsiveness.svg` answers the other half of the external question: not just
 how much lands in other people's repos, but **how long it takes to land**. One
 row per repo, ranked by volume × speed — `n` merged PRs with diminishing
-returns, damped by the **median** hours from PR creation to merge.
+returns, damped by the **trimmed-mean** hours from PR creation to merge.
 
-Median, not mean, on purpose. Measured over 332 external merged PRs: mean
-24.3 h, median 3.2 h, σ 4.9 days, worst 77 days. 83% merge inside a day, so a
-mean ranks a repo by its single worst outlier — one PR parked over a holiday —
-rather than by what a contributor should actually expect.
+Trimmed mean, not plain mean, on purpose. Measured over 332 external merged PRs:
+mean 24.3 h, p50 3.2 h, σ 4.9 days, worst 77 days. 83% merge inside a day,
+so a plain mean ranks a repo by its single worst outlier — one PR parked over a
+holiday — rather than by what a contributor should actually expect. The p10..p90
+trim keeps the body of typical PRs while dropping the holiday-weekend tail.
+Repos with fewer than 4 merged PRs fall back to the plain mean so the trim
+cannot collapse to a single value or an empty set.
 
-A repo needs `RESP_MIN_PRS` merged PRs (default 3) to be ranked: a median over
+A repo needs `RESP_MIN_PRS` merged PRs (default 3) to be ranked: a summary over
 one or two samples is not an estimate of anything. The excluded tail is
 **stated on the card** — repo count and PR count — rather than quietly dropped,
 along with the number of rows the top-N cut hides.

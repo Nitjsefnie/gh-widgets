@@ -6,7 +6,7 @@ Writes ONE SVG to OUT_DIR:
   responsiveness.svg   one ranked table of the external repos where we do
                        high-volume work AND get fast turnaround: per repo,
                        n = merged PRs authored by the account and t = the
-                       MEDIAN hours from PR creation to merge. Score:
+                       TRIMMED-MEAN hours from PR creation to merge. Score:
                        n**gamma * 1/(1 + t/half_life) with gamma 0.5 and
                        half_life 24 h — i.e. volume with diminishing
                        returns, damped by how long a typical PR sits.
@@ -72,7 +72,6 @@ Deps: Python stdlib only. Requires Python 3.9+.
 import argparse
 import importlib.util
 import os
-import statistics
 import sys
 import urllib.error
 from collections import namedtuple
@@ -206,6 +205,43 @@ def turnaround_by_repo(prs, insiders):
     return by_repo, skipped
 
 
+def _percentile(sorted_values, q):
+    """Linear-interpolation percentile on a sorted sequence.
+
+    q is in [0, 1].  Equivalent to numpy.percentile(..., method="linear"):
+    index = (n - 1) * q, then interpolate between the neighbouring elements.
+    """
+    n = len(sorted_values)
+    if n == 0:
+        raise ValueError("percentile of empty sequence")
+    if n == 1:
+        return sorted_values[0]
+    idx = (n - 1) * q
+    low = int(idx)
+    high = low + 1
+    if high >= n:
+        return sorted_values[-1]
+    weight = idx - low
+    return sorted_values[low] * (1.0 - weight) + sorted_values[high] * weight
+
+
+def trimmed_mean(values):
+    """Arithmetic mean of values inside the p10..p90 range (inclusive).
+
+    Falls back to the plain arithmetic mean of all values when the list has
+    fewer than 4 values or when the trim would select an empty set.
+    """
+    if len(values) < 4:
+        return sum(values) / len(values)
+    sorted_values = sorted(values)
+    p10 = _percentile(sorted_values, 0.1)
+    p90 = _percentile(sorted_values, 0.9)
+    included = [v for v in sorted_values if p10 <= v <= p90]
+    if not included:
+        return sum(values) / len(values)
+    return sum(included) / len(included)
+
+
 def volume(n, knobs):
     """Merged-PR count with diminishing returns, mirroring the live-code
     table's gamma in render-impact.py: the 30th PR in a repo says less about
@@ -221,15 +257,15 @@ def speed(hours, knobs):
 
 
 def responsiveness_rows(by_repo, knobs):
-    """Rank repos by volume(n) * speed(median turnaround).
+    """Rank repos by volume(n) * speed(trimmed-mean turnaround).
 
-    The turnaround is a MEDIAN, deliberately. Measured over the 332 external
-    merged PRs on 2026-08-03: mean 24.3 h, median 3.2 h, sigma 4.9 days, max
-    77 days — 83% merge inside a day. A mean therefore ranks a repo by its
-    single worst outlier (one PR parked over a holiday) rather than by what
-    a contributor should expect, which is the whole question this card asks.
+    The turnaround is a TRIMMED MEAN over the p10..p90 range, deliberately.
+    It keeps the bulk of PRs that define the typical experience while
+    discarding the worst holiday-weekend outliers that dominate a plain mean.
+    For very small samples (fewer than 4 PRs) it falls back to the plain mean
+    so the trim never collapses to a single value or an empty set.
 
-    Repos below the floor are not ranked at all: a median over one or two
+    Repos below the floor are not ranked at all: a summary over one or two
     samples is not an estimate of anything. Returns (rows, excluded_repos,
     excluded_prs) so the card can disclose the tail instead of hiding it.
     """
@@ -239,7 +275,7 @@ def responsiveness_rows(by_repo, knobs):
             excluded_repos += 1
             excluded_prs += len(hours)
             continue
-        t = statistics.median(hours)
+        t = trimmed_mean(hours)
         rows.append(Row(volume(len(hours), knobs) * speed(t, knobs),
                         len(hours), t, repo))
     # Ties: more merged PRs first, then repo name, so the order is total and
@@ -275,7 +311,7 @@ def fmt_duration(hours):
 
 CARD_W = 520
 COL_N = 300        # merged PRs, right-anchored
-COL_TIME = 390     # median turnaround, right-anchored
+COL_TIME = 390     # mean turnaround, right-anchored
 COL_SCORE = 500    # responsiveness score, right-anchored
 BAR_X = 20
 BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score
@@ -296,7 +332,7 @@ def render_rows(C, y, scored):
     parts = [
         f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
         f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">merged</text>'
-        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">median merge</text>'
+        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">mean merge</text>'
         f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">responsiveness</text>']
     y += 17
     if not scored:

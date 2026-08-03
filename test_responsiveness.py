@@ -111,28 +111,62 @@ class Floor(unittest.TestCase):
         self.assertEqual([r.repo for r in rows], ["real/work"])
 
 
-class MedianNotMean(unittest.TestCase):
-    """Turnaround is a MEDIAN. A mean ranks a repo by its worst outlier."""
+class TrimmedMean(unittest.TestCase):
+    """Turnaround is a p10..p90 trimmed mean; outliers are excluded."""
 
-    FIXTURE = {"a/typical-fast": [0.5, 0.5, 0.5, 0.5, 200.0],  # median 0.5, mean 40.4
-               "b/steady": [4.0, 4.0, 4.0, 4.0, 4.0]}          # median 4.0, mean 4.0
+    FIXTURE = {"a/typical-fast": [0.5, 0.5, 0.5, 0.5, 200.0],  # trim -> 0.5
+               "b/steady": [4.0, 4.0, 4.0, 4.0, 4.0]}          # trim -> 4.0
 
     def rows(self):
         return resp.responsiveness_rows(self.FIXTURE, resp.metric_knobs())[0]
 
     def test_one_stalled_pr_does_not_sink_an_otherwise_fast_repo(self):
-        # Same n for both, so only the turnaround decides. Under a MEAN,
+        # Same n for both, so only the turnaround decides. Under a PLAIN MEAN,
         # a/typical-fast (40.4 h) would rank below b/steady (4.0 h).
         self.assertEqual([r.repo for r in self.rows()],
                          ["a/typical-fast", "b/steady"])
 
-    def test_reported_turnaround_is_the_median_of_the_repo(self):
+    def test_reported_turnaround_is_the_trimmed_mean_of_the_repo(self):
         self.assertAlmostEqual(self.rows()[0].hours, 0.5)
 
-    def test_even_sample_medians_average_the_two_middle_values(self):
+    def test_even_sample_uses_trimmed_mean(self):
+        # [1, 2, 4, 100]: p10 = 1.3, p90 = 71.2, included = [2, 4], mean = 3.0.
         rows = resp.responsiveness_rows({"a/x": [1.0, 2.0, 4.0, 100.0]},
                                         resp.metric_knobs())[0]
         self.assertAlmostEqual(rows[0].hours, 3.0)
+
+    def test_large_outlier_is_excluded_from_trimmed_mean(self):
+        # Hand-derived on [1..9, 100, 200], n=11:
+        # p10 index = 1.0 -> exactly 2; p90 index = 9.0 -> exactly 100.
+        # included = [2..9, 100]; sum = 144, mean = 16.0.
+        # (median would be 6.0; the 200 outlier is excluded.)
+        fixture = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 100.0, 200.0]
+        rows = resp.responsiveness_rows({"a/x": fixture},
+                                        resp.metric_knobs())[0]
+        self.assertAlmostEqual(rows[0].hours, 16.0)
+
+    def test_n1_uses_plain_mean_fallback(self):
+        self.assertAlmostEqual(resp.trimmed_mean([5.0]), 5.0)
+
+    def test_n2_uses_plain_mean_fallback(self):
+        # n < 4, so the trim is never applied.
+        self.assertAlmostEqual(resp.trimmed_mean([1.0, 3.0]), 2.0)
+
+    def test_n3_uses_plain_mean_fallback(self):
+        # n < 4, so the trim is never applied even though it would select [2].
+        self.assertAlmostEqual(resp.trimmed_mean([1.0, 2.0, 100.0]),
+                               103.0 / 3.0)
+
+    def test_trim_boundary_is_inclusive(self):
+        # Hand-derived on [0, 10, ..., 100], n=11:
+        # p10 index = 1.0 -> exactly 10; p90 index = 9.0 -> exactly 90.
+        # Boundary values 10 and 90 must be counted.
+        # included = [10..90]; mean = 450/9 = 50.0.
+        fixture = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0,
+                   60.0, 70.0, 80.0, 90.0, 100.0]
+        rows = resp.responsiveness_rows({"a/x": fixture},
+                                        resp.metric_knobs())[0]
+        self.assertAlmostEqual(rows[0].hours, 50.0)
 
 
 class Scoring(unittest.TestCase):
@@ -252,9 +286,9 @@ class RenderCard(unittest.TestCase):
         self.assertIn("external responsiveness", svg)
         self.assertIn("a/x", svg)
         self.assertIn(">3</text>", svg)        # n
-        self.assertIn("1.0 h", svg)            # median of a/x
+        self.assertIn("1.0 h", svg)            # mean of a/x (n=3 fallback)
         self.assertIn("10.00", svg)            # leader, rescaled
-        self.assertIn("2.0 d", svg)            # median of b/y
+        self.assertIn("2.0 d", svg)            # mean of b/y
 
     def test_the_card_carries_no_bookkeeping_footer(self):
         """The card is a leaderboard, not a report.
