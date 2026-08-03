@@ -6,9 +6,9 @@
 ## Context
 
 `render-impact.py` hardcodes the facts that define *whose* impact it measures:
-a literal `INSIDERS` set of five org names and a literal `OUR_EMAIL`, matched
+a literal `INSIDERS` set of org names and a literal `OUR_EMAIL`, matched
 by substring (`"nitjsefnie" in em`). `render.py` derives the same insider
-concept from the API instead. The two scripts also carry ~200 lines of
+concept from the API instead. The two scripts also carry a large block of
 byte-identical duplicated code.
 
 This spec replaces the constants with fetched identity, moves the metric knobs
@@ -35,13 +35,13 @@ is the same failure in a different location, not a fix.
 
 | Fact | Value | How verified |
 |---|---|---|
-| `user.databaseId` for `Nitjsefnie` | `75166987` | GraphQL query, 2026-07-24 |
-| Constructed noreply address | `75166987+Nitjsefnie@users.noreply.github.com` | Matches the address recorded in `/root/CLAUDE.md` |
-| Fetched org list | `BrainByteQuiz, Consultest-CZ, West-Scripts, Nitjsefnie-Games, Nitjsefnie-OSC` | GraphQL; **identical** to the current `INSIDERS` literal |
+| `user.databaseId` for `Nitjsefnie` | present | GraphQL query against the live account |
+| Constructed noreply address | `{databaseId}+{login}@users.noreply.github.com` | Matches the address recorded in `/root/CLAUDE.md` |
+| Fetched org list | matches the current `INSIDERS` literal | GraphQL against the live account |
 | `user.email` availability | **Not fetchable** | Production token lacks `read:user`; requesting the field fails the entire query with `INSUFFICIENT_SCOPES` |
 
 The third row is the important one: the fetched set reproduces the hardcoded
-set exactly, so this refactor changes no rendered number today.
+set, so this refactor changes no rendered number today.
 
 The fourth row constrains the design — `email` must not appear in the query.
 
@@ -123,7 +123,7 @@ would break; import-by-path does not care about the script's own filename.
 - `python3 -m unittest discover -v` passes.
 - `render.py` still imports nothing outside the stdlib.
 - A dry run of both scripts against the live token produces the same
-  `impact.svg` tables as the 15:39 run, since the fetched insider set equals
+  `impact.svg` tables as before the change, since the fetched insider set equals
   the old literal.
 - Deliberately corrupt `COMMON_VERSION` in one file and confirm both scripts
   refuse to start.

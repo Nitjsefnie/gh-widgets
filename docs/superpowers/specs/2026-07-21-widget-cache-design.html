@@ -371,9 +371,9 @@
         <code>render.py</code> is stateless: every hourly run refetches a full year of
         contribution calendar, every authored PR, and every authored issue. GitHub now
         rejects the calendar query with <code>RESOURCE_LIMITS_EXCEEDED</code> on most
-        runs — 5 of 6 runs failed on 2026-07-21 — so the profile widgets survive on
-        intermittent luck. This spec replaces the stateless fetch with an incremental
-        cache, keyed on <em>real</em> immutability rather than age alone.
+        runs, so the profile widgets survive on intermittent luck. This spec replaces the
+        stateless fetch with an incremental cache, keyed on <em>real</em> immutability
+        rather than age alone.
       </div>
     </header>
 
@@ -405,7 +405,7 @@
         cache instead of exiting non-zero — the widgets stop breaking immediately,
         whatever GitHub's limiter does. <strong>Reduction</strong>: the calendar is fetched
         as a trailing 7-day window merged onto cached history, and PRs are split so that
-        the 192 <code>MERGED</code> ones are never refetched.</div>
+        the <code>MERGED</code> ones are never refetched.</div>
       <div class="d-body">The cutoff is <em>state</em>, not age, everywhere except the
         calendar. <code>CLOSED</code> is explicitly not treated as settled: a closed PR can
         be reopened and later merged, and the GraphQL schema's
@@ -417,12 +417,11 @@
     <section id="s1">
       <div class="sec-head"><span class="num">01</span><h2>Background — the observed failure</h2></div>
       <p class="sec-intro">Evidence from the box, not inference.</p>
-      <p class="body"><code>journalctl -u render-gh-widgets.service</code> for 2026-07-21
-        shows the hourly timer failing on five of six runs, each identically:</p>
-      <pre>RESOURCE_LIMITS_EXCEEDED  path: user.contributionsCollection.contributionCalendar.weeks
-07:06 FAIL   08:06 FAIL   09:06 FAIL   10:08 FAIL   11:08 <strong>ok</strong>   12:10 FAIL</pre>
-      <p class="body">The single 11:08 success is the only reason a current SVG exists on
-        disk. Commit <code>5d66691</code> already split the calendar into its own request
+      <p class="body"><code>journalctl -u render-gh-widgets.service</code> shows the hourly timer
+        failing repeatedly, each identically with
+        <code>RESOURCE_LIMITS_EXCEEDED</code> on the calendar path:</p>
+      <pre>RESOURCE_LIMITS_EXCEEDED  path: user.contributionsCollection.contributionCalendar.weeks</pre>
+      <p class="body">Commit <code>5d66691</code> already split the calendar into its own request
         and added transient-error retries; the retries are now exhausting. <strong>Splitting
         the query further is not a fix — the calendar-only query alone exceeds the node
         limit.</strong> The failing path is the calendar, not the PR or issue queries.</p>
@@ -485,9 +484,8 @@
           <div class="file">render.py — cold-start backfill <em>(amended 2026-07-21)</em></div>
           <div class="what"><span class="lead">Backfill the year in monthly windows.</span>
             A cold cache has no history to merge, so the run must fetch a full year —
-            which is precisely the query that fails on ~5 of 6 runs, and every
-            <code>--resync</code> re-enters that state. Bootstrapping by luck is not
-            acceptable. On a cold cache, issue 12 sequential
+            which is precisely the query that exceeds the node limit. Bootstrapping by luck
+            is not acceptable. On a cold cache, issue sequential
             <code>contributionsCollection(from:, to:)</code> monthly windows and merge
             them into the day map; each sits far below the node limit. The 7-day warm
             path is unchanged. <strong>The original spec omitted the bootstrap path
@@ -496,11 +494,10 @@
         <div class="change">
           <div class="file">render.py — <code>fetch_pull_requests()</code></div>
           <div class="what"><span class="lead">Split by state.</span>
-            Query <code>states:[OPEN, CLOSED]</code> live each run (a server-side filter,
-            ~40 external items) and union with the cached <code>MERGED</code> set. A PR
-            transitioning into <code>MERGED</code> is picked up because it appears in the
-            live half until the run that first sees it merged, at which point it moves to
-            the cached half.</div>
+            Query <code>states:[OPEN, CLOSED]</code> live each run and union with the cached
+            <code>MERGED</code> set. A PR transitioning into <code>MERGED</code> is picked up
+            because it appears in the live half until the run that first sees it merged, at
+            which point it moves to the cached half.</div>
         </div>
         <div class="change">
           <div class="file">render.py — <code>--resync</code> flag</div>
@@ -532,21 +529,20 @@
       <div class="sec-head"><span class="num">04</span><h2>What is cacheable, and why</h2></div>
       <p class="sec-intro">Counts are live figures for this profile, external contributions only, taken with the widget's own token.</p>
       <table class="tbl">
-        <thead><tr><th>Data</th><th>Count</th><th>Cacheable</th><th>Why</th></tr></thead>
+        <thead><tr><th>Data</th><th>Cacheable</th><th>Why</th></tr></thead>
         <tbody>
-          <tr><td class="slate">Calendar days older than 7d</td><td>~358</td><td>Yes — permanently</td><td>A past day's contribution count cannot change.</td></tr>
-          <tr><td class="slate">Calendar days within 7d</td><td>7</td><td>No</td><td>Today's count still moves; the window is cheap.</td></tr>
-          <tr><td class="slate">PRs — <code>MERGED</code></td><td>192</td><td>Yes, with weekly resync</td><td>Merge is believed one-way; the resync removes the need to be sure.</td></tr>
-          <tr><td class="slate">PRs — <code>CLOSED</code></td><td>21</td><td>No</td><td>Reopenable, and a reopened PR can still merge.</td></tr>
-          <tr><td class="slate">PRs — <code>OPEN</code></td><td>19</td><td>No</td><td>The mutable set by definition.</td></tr>
-          <tr><td class="slate">Issues — all states</td><td>66</td><td>No</td><td><code>REOPENED</code> exists; <code>accepted</code> is defined as CLOSED+COMPLETED, so it can flip back. One page, not worth the risk.</td></tr>
+          <tr><td class="slate">Calendar days older than 7d</td><td>Yes — permanently</td><td>A past day's contribution count cannot change.</td></tr>
+          <tr><td class="slate">Calendar days within 7d</td><td>No</td><td>Today's count still moves; the window is cheap.</td></tr>
+          <tr><td class="slate">PRs — <code>MERGED</code></td><td>Yes, with weekly resync</td><td>Merge is believed one-way; the resync removes the need to be sure.</td></tr>
+          <tr><td class="slate">PRs — <code>CLOSED</code></td><td>No</td><td>Reopenable, and a reopened PR can still merge.</td></tr>
+          <tr><td class="slate">PRs — <code>OPEN</code></td><td>No</td><td>The mutable set by definition.</td></tr>
+          <tr><td class="slate">Issues — all states</td><td>No</td><td><code>REOPENED</code> exists; <code>accepted</code> is defined as CLOSED+COMPLETED, so it can flip back. One page, not worth the risk.</td></tr>
         </tbody>
       </table>
       <p class="body" style="margin-top:18px">Net effect per hourly run: a full year of
-        calendar plus every PR and issue becomes <strong>7 days of calendar, ~1 page of
-        PRs, 1 page of issues</strong>. The external total must remain
-        <strong>232 opened / 192 merged</strong> — the figures the live SVG carried before
-        this change.</p>
+        calendar plus every PR and issue becomes <strong>7 days of calendar, one page of
+        PRs, one page of issues</strong>. The external opened and merged totals must remain
+        unchanged from the figures the live SVG carried before this change.</p>
     </section>
 
     <section id="s5">
@@ -554,7 +550,7 @@
       <p class="sec-intro">Concrete and runnable. The parity check is the one that matters: the numbers must not move.</p>
       <div class="checklist">
         <div class="check"><div class="box"></div><div class="ck-text"><strong>Unit suite passes.</strong> <code>cd /root/gh-widgets &amp;&amp; python3 -m unittest discover</code> — stdlib only, no network.</div></div>
-        <div class="check"><div class="box"></div><div class="ck-text"><strong>Cold-cache parity.</strong> Render to a scratch <code>OUT_DIR</code> with no cache file; external widget shows 232 opened / 192 merged, matching the pre-change SVG.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Cold-cache parity.</strong> Render to a scratch <code>OUT_DIR</code> with no cache file; external widget opened / merged counts match the pre-change SVG.</div></div>
         <div class="check"><div class="box"></div><div class="ck-text"><strong>Warm-cache parity.</strong> Render again against the populated cache; byte-identical SVGs to the cold run, apart from the timestamp.</div></div>
         <div class="check"><div class="box"></div><div class="ck-text"><strong>Failure fallback.</strong> Point <code>GH_TOKEN_FILE</code> at an invalid token; the run exits 0, renders from cache, and the card shows the cache age.</div></div>
         <div class="check"><div class="box"></div><div class="ck-text"><strong>Query size.</strong> The calendar request covers 7 days, confirmed by logging the <code>from</code>/<code>to</code> arguments — the run must not reproduce <code>RESOURCE_LIMITS_EXCEEDED</code>.</div></div>
@@ -606,7 +602,7 @@
         <div class="defer">
           <div class="dt">Caching issue outcomes</div>
           <div class="dd">Ruled out on evidence, not effort: <code>REOPENED</code> in the
-            schema means no issue outcome is safe to freeze, and 66 items is already a
+            schema means no issue outcome is safe to freeze, and the issue set is already a
             single page. Revisit only if issue volume grows enough to matter.</div>
         </div>
         <div class="defer">

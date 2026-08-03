@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give git-fame a `-j/--jobs` option that runs its per-file `git blame` subprocesses concurrently, land it upstream, and consume it from a pinned fork build so `render-impact.py`'s blame pass stops spending ~41 % of its wall time on process spawn.
+**Goal:** Give git-fame a `-j/--jobs` option that runs its per-file `git blame` subprocesses concurrently, land it upstream, and consume it from a pinned fork build so `render-impact.py`'s blame pass is no longer bottlenecked by serial per-file blame subprocesses.
 
 **Architecture:** A generator helper (`imap_bounded`) wraps `ThreadPoolExecutor` with a bounded window of outstanding futures and yields results **in input order**. `_get_auth_stats` uses it to fetch blame output concurrently while keeping all parsing and aggregation serial in the calling thread — so `stats_append` needs no lock and output is byte-identical to the serial path. `run()` resolves `jobs=0` to an auto value and divides the budget when several gitdirs are processed concurrently.
 
@@ -94,8 +94,8 @@ def imap_bounded(func, items, jobs):
 
     Only `2 * jobs` results are held at once, so memory stays bounded
     regardless of how many items there are (`git blame --line-porcelain`
-    output is ~300 bytes per source line, so an unbounded map would buffer
-    gigabytes on a large repository).
+    output is large compared to the source file, so an unbounded map would
+    buffer gigabytes on a large repository).
     """
     if jobs < 2:
         for i in items:
@@ -284,21 +284,12 @@ done
 ```
 Expected: `IDENTICAL` for every repo.
 
-- [ ] **Step 11: Record the speedup**
-
-```bash
-cd /root/git-fame
-time git fame -s -e -w --format json -j1 >/dev/null
-time git fame -s -e -w --format json -j8 >/dev/null
-```
-Expected: `-j8` at least 3x faster. Record the real numbers for the PR body — do not assert them in a test.
-
-- [ ] **Step 12: Lint**
+- [ ] **Step 11: Lint**
 
 Run: `flake8 gitfame tests && isort --check gitfame tests`
 Expected: clean
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add gitfame/_gitfame.py tests/test_gitfame.py
@@ -403,9 +394,9 @@ Create `/root/gh-widgets/test_impact.py`. Stdlib only, `unittest`, matching `tes
     python3 -m unittest discover -v
 
 render-impact.py shells out to `git fame` for its blame pass. Stock git-fame
-blames one file per subprocess, serially: measured on a 477-file repository,
-480 processes and 41% of wall time in process spawn alone. We run a patched
-build (Nitjsefnie-OSC/git-fame) that adds `--jobs`.
+blames one file per subprocess serially, so the blame pass is dominated by
+fork/exec overhead. We run a patched build (Nitjsefnie-OSC/git-fame) that adds
+`--jobs`.
 
 These tests pin the CAPABILITY, not the timing — a timing assertion would be
 flaky on a shared box, and a slow run is not a wrong run. The invariant that
@@ -458,7 +449,7 @@ class TestGitFameParallel(unittest.TestCase):
         """The pinned build must accept --jobs.
 
         Fails on stock git-fame from PyPI, which is the point: without the
-        patch the blame pass is serial and render-impact runs take minutes.
+        patch the blame pass is serial.
         """
         # `git-fame`, NOT `git fame` — git rewrites `git <cmd> --help` into
         # `man git-<cmd>`, which reports no manual entry and would make this
@@ -509,8 +500,8 @@ def check_git_fame():
     This renderer runs unattended on a timer, so a check that is silent on
     success is indistinguishable from a check that never ran — the absence of
     the line has to be the alarm, which only works when success is noisy.
-    Stock git-fame is degraded (serial blame, several times slower), not
-    wrong, so this warns and continues rather than aborting.
+    Stock git-fame is degraded (serial blame), not wrong, so this warns and
+    continues rather than aborting.
     """
     # NOTE: `git-fame`, not `git fame`. Git's dispatcher rewrites
     # `git <cmd> --help` into `man git-<cmd>`, so `git fame --help` prints
@@ -524,8 +515,7 @@ def check_git_fame():
         return False
     if "--jobs" not in r.stdout:
         print("git-fame: WARNING — no --jobs, so this is STOCK git-fame: the "
-              "blame pass is serial and several times slower. See CLAUDE.md "
-              "for the pin.", flush=True)
+              "blame pass is serial. See CLAUDE.md for the pin.", flush=True)
         return False
     v = subprocess.run(["git-fame", "--version"], capture_output=True,
                        text=True, timeout=60, check=False).stdout.strip()
@@ -575,14 +565,14 @@ In `/root/gh-widgets/install.sh`, after the existing `verified: all renderers st
 
 ```sh
 # render-impact.py's blame pass needs the parallel-blame git-fame build; stock
-# git-fame blames one file per subprocess serially and turns a 90s run into
-# minutes. Degraded, not broken — so warn rather than fail.
+# git-fame blames one file per subprocess serially. Degraded, not broken — so
+# warn rather than fail.
 if command -v git-fame >/dev/null 2>&1; then
     # git-fame, NOT `git fame`: `git <cmd> --help` is rewritten by git into
     # `man git-<cmd>`, which reports no manual entry and hides the option.
     if ! git-fame --help 2>/dev/null | grep -q -- '--jobs'; then
         echo "install.sh: WARNING - installed git-fame has no --jobs; render-impact" >&2
-        echo "                     will be several times slower. See CLAUDE.md for the pin." >&2
+        echo "                     blame pass is serial. See CLAUDE.md for the pin." >&2
     fi
 else
     echo "install.sh: WARNING - git-fame is not installed; render-impact cannot blame" >&2
@@ -604,8 +594,7 @@ In `/root/gh-widgets/CLAUDE.md`, directly after the paragraph about `GH_EXTRA_EM
 ```markdown
 > **git-fame is pinned to a fork, not PyPI.** `render-impact.py`'s blame pass
 > runs `git fame` per repo; stock git-fame spawns one serial `git blame`
-> subprocess per file (N+3 processes per repo) and spends ~41% of its wall
-> time on process spawn alone. We install
+> subprocess per file. We install
 > `Nitjsefnie-OSC/git-fame` (branch `parallel-blame`), which adds `--jobs`:
 >
 > ```
@@ -667,11 +656,13 @@ Invoke the `contribution-contracts` skill and read both contracts in full **befo
 gh issue list --repo casperdcl/git-fame --state all --search "jobs OR parallel OR concurrent" --limit 20
 gh pr list --repo casperdcl/git-fame --state all --limit 20
 ```
-Expected: still no prior art (none existed at plan time — 13 open issues, none performance-related).
+Expected: still no prior art.
 
 - [ ] **Step 3: File the issue**
 
-Observed behaviour only, per the issue-filing contract: git-fame runs one `git blame` subprocess per file serially; on a 477-file repo that is 480 processes and 2.75 s of 6.7 s wall in process spawn; a 0-byte file still costs 5.44 ms against a 4.10 ms bare `git rev-parse`. Do not propose the fix in the issue body — the PR does that.
+Observed behaviour only, per the issue-filing contract: git-fame runs one `git blame`
+subprocess per file serially, and the fixed per-call cost of fork/exec/repo-open dominates
+runtime even for tiny files. Do not propose the fix in the issue body — the PR does that.
 
 ```bash
 gh issue create --repo casperdcl/git-fame --title "..." --body "..."
@@ -685,7 +676,10 @@ cd /root/git-fame && git push -u origin parallel-blame
 
 - [ ] **Step 5: Open the pull request**
 
-Body follows `pr-report-contract.md` exactly, links the issue from Step 3, and states the measured before/after from Task 2 Step 11 with the commands that produced them. Lead with the invariant: output is byte-identical between `-j1` and `-jN`, proven by `test_jobs_determinism` and by the real-repo check in Task 2 Step 10.
+Body follows `pr-report-contract.md` exactly, links the issue from Step 3, and states the
+performance improvement in plain terms. Lead with the invariant: output is byte-identical
+between `-j1` and `-jN`, proven by `test_jobs_determinism` and by the real-repo check in
+Task 2 Step 10.
 
 ```bash
 gh pr create --repo casperdcl/git-fame --head Nitjsefnie-OSC:parallel-blame --title "..." --body "..."

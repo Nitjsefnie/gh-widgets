@@ -8,13 +8,8 @@
 
 `render.py` is stateless: every hourly run refetches a full year of contribution
 calendar, every authored PR, and every authored issue. GitHub now rejects the
-calendar query with `RESOURCE_LIMITS_EXCEEDED` on most runs — 5 of 6 failed on
-2026-07-21 — so the widgets survive on intermittent luck.
-
-```
-RESOURCE_LIMITS_EXCEEDED  path: user.contributionsCollection.contributionCalendar.weeks
-07:06 FAIL  08:06 FAIL  09:06 FAIL  10:08 FAIL  11:08 ok  12:10 FAIL
-```
+calendar query with `RESOURCE_LIMITS_EXCEEDED` on most runs, so the widgets
+survive on intermittent luck.
 
 Commit `5d66691` already split the calendar into its own request and added
 transient retries; the retries are exhausting. The calendar-only query alone now
@@ -28,7 +23,7 @@ immutable; refetch everything mutable every run. Two layers:
 1. **Durability** — a failed fetch renders from cache and exits 0, instead of
    exiting non-zero and leaving the widgets to rot.
 2. **Reduction** — the calendar is fetched as a trailing 7-day window merged onto
-   cached history; PRs are split so the 192 `MERGED` ones are never refetched.
+   cached history; PRs are split so `MERGED` ones are never refetched.
 
 The cutoff is **state, not age**, everywhere except the calendar.
 
@@ -42,17 +37,17 @@ The cutoff is **state, not age**, everywhere except the calendar.
 
 ## Cacheability (external contributions, widget's own token)
 
-| Data | Count | Cacheable | Why |
-|---|---|---|---|
-| Calendar days > 7d old | ~358 | Yes, permanently | A past day's count cannot change |
-| Calendar days ≤ 7d | 7 | No | Still moving; window is cheap |
-| PRs `MERGED` | 192 | Yes, with weekly resync | Merge believed one-way; resync removes the need to be sure |
-| PRs `CLOSED` | 21 | No | Reopenable, and can still merge afterwards |
-| PRs `OPEN` | 19 | No | Mutable by definition |
-| Issues, all states | 66 | No | `REOPENED` exists; `accepted` = CLOSED+COMPLETED can flip back |
+| Data | Cacheable | Why |
+|---|---|---|
+| Calendar days > 7d old | Yes, permanently | A past day's count cannot change |
+| Calendar days ≤ 7d | No | Still moving; window is cheap |
+| PRs `MERGED` | Yes, with weekly resync | Merge believed one-way; resync removes the need to be sure |
+| PRs `CLOSED` | No | Reopenable, and can still merge afterwards |
+| PRs `OPEN` | No | Mutable by definition |
+| Issues, all states | No | `REOPENED` exists; `accepted` = CLOSED+COMPLETED can flip back |
 
-Parity target: external **232 opened / 192 merged** — the live SVG's values
-before this change.
+Parity target: external opened and merged counts must match the live SVG's
+values before this change.
 
 ## Changes
 
@@ -67,17 +62,17 @@ before this change.
    for the trailing 7 days, merged onto cached days keyed by date.
 
 3b. **`render.py` — cold-start backfill (amendment, 2026-07-21).** A cold cache
-   has no history to merge, so the run must fetch a full year — which is exactly
-   the query that fails on ~5 of 6 runs. Bootstrapping by luck is not acceptable,
+   has no history to merge, so the run must fetch a full year — which is the
+   query that exceeds the node limit. Bootstrapping by luck is not acceptable,
    and every `--resync` re-enters the cold state. **On a cold cache, fetch the
-   year in sequential `contributionsCollection(from:, to:)` windows** (monthly,
-   12 requests) rather than one full-year request, and merge them into the day
-   map. Each window is far below the node limit, making bootstrap deterministic.
-   The 7-day warm path is unchanged. Surfaced by the implementer during the first
-   dispatch; the original spec omitted the bootstrap path entirely.
+   year in sequential `contributionsCollection(from:, to:)` monthly windows**
+   rather than one full-year request, and merge them into the day map. Each
+   window is far below the node limit, making bootstrap deterministic. The 7-day
+   warm path is unchanged. Surfaced by the implementer during the first dispatch;
+   the original spec omitted the bootstrap path entirely.
 4. **`render.py` — `fetch_pull_requests()`.** Query `states:[OPEN, CLOSED]` live
-   (~40 external items) and union with the cached `MERGED` set. A PR entering
-   `MERGED` appears in the live half until first seen merged, then moves to cache.
+   each run and union with the cached `MERGED` set. A PR entering `MERGED`
+   appears in the live half until first seen merged, then moves to cache.
 5. **`render.py` — `--resync` flag.** Discards cache, full refetch. Wired weekly
    so no correctness claim rests permanently on `MERGED` being one-way.
 6. **`test_render.py`.** Cached-day merge equals full fetch; fetch failure renders
@@ -89,7 +84,7 @@ before this change.
 ## Verification
 
 - [ ] `cd /root/gh-widgets && python3 -m unittest discover`
-- [ ] Cold-cache render to scratch `OUT_DIR` → 232 opened / 192 merged
+- [ ] Cold-cache render to scratch `OUT_DIR` → opened / merged counts match the pre-change SVG
 - [ ] Warm-cache render → SVGs byte-identical to cold run apart from timestamp
 - [ ] Invalid token → exits 0, renders from cache, card shows cache age
 - [ ] Calendar request covers 7 days; no `RESOURCE_LIMITS_EXCEEDED`
@@ -112,6 +107,6 @@ before this change.
 ## Out of scope
 
 - **Caching issue outcomes** — `REOPENED` makes no issue outcome safe to freeze,
-  and 66 items is one page.
+  and the issue set is one page.
 - **Caching repo/star/language data** — `repositories(isFork: false)` is not the
   failing path and is small.

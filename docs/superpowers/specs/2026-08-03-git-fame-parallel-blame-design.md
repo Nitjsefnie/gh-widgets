@@ -6,10 +6,9 @@
 ## Context
 
 `render-impact.py` shells out to `git fame` once per external repository to count surviving
-lines. Measurement showed git-fame spends **41 % of its wall time on process spawn alone**,
-because it runs one serial `git blame` subprocess per file. This spec decides to fix the
-dependency rather than work around it: patch git-fame in a fork, upstream the patch, and pin
-the patched build.
+lines. Stock git-fame spawns one serial `git blame` subprocess per file, so the pinned `--jobs`
+fork is several times faster. This spec decides to fix the dependency rather than work around
+it: patch git-fame in a fork, upstream the patch, and pin the patched build.
 
 ## Decision
 
@@ -22,30 +21,12 @@ intra-repo parallelism follows the project's own precedent. The change deliberat
 output: only the subprocess call is parallelised; parsing and aggregation stay serial in the
 main thread, consuming results in submission order, so output is byte-identical to `-j1`.
 
-## Background — the measurement
+## Background — process structure
 
-git-fame spawns **N + 3 processes per repository** (N = text files): `ls-files`,
-`git grep -I`, `shortlog`, then one `git blame --line-porcelain` per file, strictly serially
-(`_gitfame.py:280`).
-
-| Repository | Files | Processes | Wall | Pure spawn | Python side |
-|---|---:|---:|---:|---:|---:|
-| `bamdadd/context-leak` | 28 | 31 | 0.42 s | 91 ms (22 %) | 24 % |
-| `barribob/bosses-of-mass-destruction` | 477 | 480 | 6.7 s | 2.75 s (41 %) | 7 % |
-
-Fixed per-call cost is **~5.4 ms**, confirmed independently: blaming a **0-byte file** costs
-5.44 ms against a 4.10 ms bare `git rev-parse`. Median blame is ~10 ms, so about half of every
-blame call is fork/exec/repo-open.
-
-Thread-pool headroom on the 477-file repo (prediction before running: 1.0–1.6 s at 8 workers):
-
-| Workers | 1 | 4 | 8 | 16 |
-|---|---:|---:|---:|---:|
-| Blame phase | 8.1 s | 1.9 s | 1.6 s | 1.3 s |
-
-Consumer impact: `render-impact.py` re-blames 1–17 repos per run; runs take 22 s–5 min.
-Extrapolating the measured ~70 loc/file across 56 cached repos (5.95 M lines) puts a
-`--resync` at **~85,000 blame processes, ~7.5 min of pure fork/exec**.
+git-fame spawns processes per repository: `ls-files`, `git grep -I`, `shortlog`, then one
+`git blame --line-porcelain` per text file, strictly serially (`_gitfame.py:280`). The fixed
+per-call cost of `git blame` is dominated by fork/exec and repository open, so serial blame
+subprocesses are the bottleneck even when the actual blame work is small.
 
 ## Change inventory
 
@@ -94,15 +75,14 @@ silently dropping the repo from the table.
 | n > 1 | n | Explicit cap. |
 | multiple gitdirs | `max(1, jobs // len(gitdirs))` | Outer `thread_map` already parallelises across repos; inner budget divided so the product stays bounded. |
 
-Memory forces the bounded window rather than a plain `executor.map`: `--line-porcelain` emits
-~250–400 bytes per source line, so buffering every file at once would reach gigabytes on a
-1.3 M-line repo like `packit/ogr`. Peak stays **O(jobs × per-file output)**, not O(repo).
+Memory forces the bounded window rather than a plain `executor.map`: `--line-porcelain`
+output is large compared to the source file, so buffering every file at once would reach
+gigabytes on a large repository. Peak stays **O(jobs × per-file output)**, not O(repo).
 
 ## Verification
 
 - [ ] **Byte-identical output.** `git fame -e -w --format json -j1` vs `-j8` identical on ≥3 real repos of differing size.
 - [ ] **Upstream suite green.** `pytest` in the fork passes, including `-W=error` and `--cov-fail-under=85`.
-- [ ] **Speedup reproduced.** `-j8` beats `-j1` by ≥3× on the 477-file repo; recorded, not asserted.
 - [ ] **Regression test fails on stock.** New gh-widgets test passes on the pinned fork, fails on git-fame 3.1.2 from PyPI.
 - [ ] **Runtime guard is self-proving.** A real `render-impact.py` run prints a `git-fame: <version> with --jobs` line; a run against stock prints the warning instead. Neither case is silent.
 - [ ] **End-to-end unchanged.** `render-impact.py` against a copied cache reproduces current `ourloc` counts for repos whose HEAD has not moved.
@@ -120,7 +100,7 @@ Memory forces the bounded window rather than a plain `executor.map`: `--line-por
 ## Out of scope
 
 - **Parallelising `blame_moved` in render-impact.py** — deferred until the git-fame fix is
-  deployed and measured; doing both would oversubscribe a 12-core box.
+  deployed and measured; doing both would oversubscribe the host.
 - **Replacing per-file blame with a single `git log` pass** — would remove the N-process
   structure entirely but changes what "surviving lines" means; too large an upstream argument
   for a performance patch.

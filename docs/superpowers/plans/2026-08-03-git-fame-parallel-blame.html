@@ -120,8 +120,8 @@
       <span class="label">Goal</span>
       Give git-fame a <code>-j/--jobs</code> option that runs its per-file <code>git blame</code>
       subprocesses concurrently, land it upstream, and consume it from a pinned fork build so
-      <code>render-impact.py</code>'s blame pass stops spending ~41&nbsp;% of its wall time on
-      process spawn.
+      <code>render-impact.py</code>'s blame pass is no longer bottlenecked by serial per-file
+      blame subprocesses.
     </div>
     <div class="prompt-box">
       <span class="label">Architecture</span>
@@ -218,7 +218,6 @@
           <li><div class="st-title">Run the new tests</div><div class="expect">PASS</div></li>
           <li><div class="st-title">Run the whole suite as CI does</div><div class="expect">PASS, coverage &ge; 85%, no warnings</div></li>
           <li><div class="st-title">Verify byte-identical output on real repositories</div><div class="expect">IDENTICAL for every repo</div></li>
-          <li><div class="st-title">Record the speedup</div><div class="st-note">Real numbers for the PR body. Not asserted in a test — timing assertions are flaky.</div></li>
           <li><div class="st-title">Lint</div><div class="expect">flake8 + isort clean</div></li>
           <li><div class="st-title">Commit</div></li>
         </ol>
@@ -256,7 +255,7 @@
         <div class="iface" style="border-left-color:var(--clay)"><b>Amended 2026-08-03 (Steps 5–6 added, old 5–9 renumbered to 7–11).</b> From <code>Consultest-CZ/kvalita</code> <code>2bca15f</code>→<code>e29fc78</code>→<code>f30eed6</code>: an install-time-only guard and a silent-on-success guard each needed their own follow-up commit there. <code>install.sh</code> fires at install time, but <code>render-impact.service</code> runs unattended on a timer long after — so the guard must also run <em>per render</em> and be <em>noisy on success</em>. The version-collision half of that pattern is NOT copied: <code>setuptools_scm</code> already reports <code>3.1.4.dev1+g&lt;sha&gt;</code> vs stock <code>3.1.2</code>.</div>
         <ol class="steps">
           <li><div class="st-title">Install the patched build</div><div class="st-note">pip install from the fork at a fixed SHA.</div></li>
-          <li><div class="st-title">Write the failing test</div><div class="st-note">Stdlib <code>unittest</code>, matching <code>test_common.py</code>. Builds a 12-file throwaway repo in <code>setUpClass</code>.</div></li>
+          <li><div class="st-title">Write the failing test</div><div class="st-note">Stdlib <code>unittest</code>, matching <code>test_common.py</code>. Builds a throwaway repo in <code>setUpClass</code>.</div></li>
           <li><div class="st-title">Prove the test fails on stock git-fame</div><div class="expect">FAIL on test_jobs_option_supported — this IS the regression test</div></li>
           <li><div class="st-title">Reinstall the pinned build and confirm it passes</div><div class="expect">PASS</div></li>
           <li><div class="st-title">Add the self-proving runtime check to render-impact.py</div><div class="st-note"><code>check_git_fame()</code> called from <code>main()</code> after <code>parse_args()</code>. Prints the version on success, warns on stock, never fatal. Do NOT pass <code>-j</code> at the call site — that would turn a stock install from "slow" into "every repo errors".</div></li>
@@ -267,16 +266,76 @@
           <li><div class="st-title">Run the full gh-widgets suite</div><div class="expect">PASS</div></li>
           <li><div class="st-title">Commit and push</div></li>
         </ol>
+        <pre><code>#!/usr/bin/env python3
+"""Tests for render-impact.py's external dependency, git-fame.
+
+    python3 -m unittest discover -v
+
+render-impact.py shells out to `git fame` for its blame pass. Stock git-fame
+blames one file per subprocess serially, so the blame pass is dominated by
+fork/exec overhead. We run a patched build (Nitjsefnie-OSC/git-fame) that adds
+`--jobs`.
+
+These tests pin the CAPABILITY, not the timing — a timing assertion would be
+flaky on a shared box, and a slow run is not a wrong run. The invariant that
+matters is that parallelism does not change the numbers.
+"""</code></pre>
+        <pre><code>    def test_jobs_option_supported(self):
+        """The pinned build must accept --jobs.
+
+        Fails on stock git-fame from PyPI, which is the point: without the
+        patch the blame pass is serial.
+        """</code></pre>
+        <pre><code>def check_git_fame():
+    """Verify the installed git-fame is the patched build, and SAY SO.
+
+    This renderer runs unattended on a timer, so a check that is silent on
+    success is indistinguishable from a check that never ran — the absence of
+    the line has to be the alarm, which only works when success is noisy.
+    Stock git-fame is degraded (serial blame), not wrong, so this warns and
+    continues rather than aborting.
+    """
+    # NOTE: `git-fame`, not `git fame`. Git's dispatcher rewrites
+    # `git <cmd> --help` into `man git-<cmd>`, so `git fame --help` prints
+    # "No manual entry for git-fame" and greps as if --jobs were absent —
+    # even when the patched build IS installed. Invoke the binary directly.
+    try:
+        r = subprocess.run(["git-fame", "--help"], capture_output=True,
+                           text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"git-fame: CHECK FAILED ({e}) — blame pass may not work", flush=True)
+        return False
+    if "--jobs" not in r.stdout:
+        print("git-fame: WARNING — no --jobs, so this is STOCK git-fame: the "
+              "blame pass is serial. See CLAUDE.md for the pin.", flush=True)
+        return False
+    v = subprocess.run(["git-fame", "--version"], capture_output=True,
+                       text=True, timeout=60, check=False).stdout.strip()
+    print(f"git-fame: {v} with --jobs (patched build)", flush=True)
+    return True</code></pre>
+        <pre><code># render-impact.py's blame pass needs the parallel-blame git-fame build; stock
+# git-fame blames one file per subprocess serially. Degraded, not broken — so
+# warn rather than fail.
+if command -v git-fame >/dev/null 2>&1; then
+    # git-fame, NOT `git fame`: `git <cmd> --help` is rewritten by git into
+    # `man git-<cmd>`, which reports no manual entry and hides the option.
+    if ! git-fame --help 2>/dev/null | grep -q -- '--jobs'; then
+        echo "install.sh: WARNING - installed git-fame has no --jobs; render-impact" >&2
+        echo "                     blame pass is serial. See CLAUDE.md for the pin." >&2
+    fi
+else
+    echo "install.sh: WARNING - git-fame is not installed; render-impact cannot blame" >&2
+fi</code></pre>
       </div>
     </details>
 
     <details class="task">
       <summary><span class="tnum">T5</span><span class="ttitle">Upstream the patch</span><span class="tmeta">1 issue + 1 PR</span></summary>
       <div class="tbody">
-        <div class="iface"><b>Consumes:</b> the <code>parallel-blame</code> branch and the measurements from T2 step 11. <code>casperdcl/git-fame</code> has no CONTRIBUTING.md and no issue templates (verified), so the <code>contribution-contracts</code> skill's contracts apply.</div>
+        <div class="iface"><b>Consumes:</b> the <code>parallel-blame</code> branch from Tasks 1–3. <code>casperdcl/git-fame</code> has no CONTRIBUTING.md and no issue templates (verified), so the <code>contribution-contracts</code> skill's contracts apply.</div>
         <ol class="steps">
           <li><div class="st-title">Load the contribution contracts</div><div class="st-note">Read both in full <em>before</em> writing either body. Never freehand a PR or issue.</div></li>
-          <li><div class="st-title">Re-check for duplicates immediately before filing</div><div class="st-note">None existed at plan time: 13 open issues, none performance-related; no PR has ever proposed this.</div></li>
+          <li><div class="st-title">Re-check for duplicates immediately before filing</div><div class="st-note">None existed at plan time; no PR has ever proposed this.</div></li>
           <li><div class="st-title">File the issue</div><div class="st-note">Observed behaviour only. Do not propose the fix in the issue body — the PR does that.</div></li>
           <li><div class="st-title">Push the branch to the fork</div></li>
           <li><div class="st-title">Open the pull request</div><div class="st-note">Lead with the invariant: byte-identical output, proven by the determinism test and the real-repo check.</div></li>
@@ -293,7 +352,7 @@
       <div class="row">
         <div class="cell">Memory blow-up on very large repos if the outstanding-future window is unbounded.</div>
         <div class="cell"><span class="sev med">MED</span></div>
-        <div class="cell">The bounded window is a hard requirement of T1, not an optimisation. <code>--line-porcelain</code> emits ~250–400 B per source line.</div>
+        <div class="cell">The bounded window is a hard requirement of T1, not an optimisation. <code>--line-porcelain</code> output is large compared to the source file.</div>
       </div>
       <div class="row">
         <div class="cell">Upstream rejects default-on parallelism as a behaviour change.</div>

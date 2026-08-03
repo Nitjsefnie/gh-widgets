@@ -365,9 +365,9 @@
       <div class="context-box">
         <span class="label">Context</span>
         <code>render-impact.py</code> hardcodes the facts that decide <em>whose</em>
-        impact it measures — a literal set of five org names and a literal email
+        impact it measures — a literal set of org names and a literal email
         matched by substring — while <code>render.py</code> derives the same
-        concept from the API. The two scripts also carry roughly 200 lines of
+        concept from the API. The two scripts also carry a large block of
         byte-identical duplicated code. This spec replaces the constants with
         fetched identity, moves the metric knobs to the environment, and extracts
         the duplication into one shared module.
@@ -439,10 +439,10 @@
         <div class="col bad">
           <div class="col-head">Before</div>
           <div class="col-body"><ul>
-            <li>Five org names hardcoded in <code>INSIDERS</code>; joining a sixth org silently counts it as external.</li>
+            <li>Org names hardcoded in <code>INSIDERS</code>; joining another org silently counts it as external.</li>
             <li>Ownership decided by <code>"nitjsefnie" in email</code> — a substring test on untrusted input.</li>
             <li><code>Z</code> and three gammas fixed in source, citing a validation script that is not in the repo.</li>
-            <li>~200 lines duplicated across two scripts, drifting independently.</li>
+            <li>A large block of code duplicated across two scripts, drifting independently.</li>
           </ul></div>
         </div>
         <div class="col good">
@@ -459,25 +459,25 @@
 
     <section id="s3">
       <div class="sec-head"><span class="num">03</span><h2>Verified facts</h2></div>
-      <p class="sec-intro">Everything below was confirmed by query on 2026-07-24, not assumed.</p>
+      <p class="sec-intro">Everything below was confirmed by query against the live account, not assumed.</p>
       <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr><th>Fact</th><th>Value</th><th>How verified</th></tr></thead>
         <tbody>
           <tr>
             <td class="slate">databaseId</td>
-            <td class="mono">75166987</td>
+            <td class="mono">present</td>
             <td>GraphQL query against the live account</td>
           </tr>
           <tr>
             <td class="slate">Constructed noreply</td>
-            <td class="mono">75166987+Nitjsefnie@users.noreply.github.com</td>
+            <td class="mono">{databaseId}+{login}@users.noreply.github.com</td>
             <td>Matches the address recorded in <code>/root/CLAUDE.md</code></td>
           </tr>
           <tr>
             <td class="slate">Fetched org list</td>
-            <td class="mono">BrainByteQuiz, Consultest-CZ, West-Scripts, Nitjsefnie-Games, Nitjsefnie-OSC</td>
-            <td><strong>Identical</strong> to the current <code>INSIDERS</code> literal</td>
+            <td class="mono">matches the current <code>INSIDERS</code> literal</td>
+            <td>GraphQL against the live account</td>
           </tr>
           <tr>
             <td class="slate">user.email</td>
@@ -488,7 +488,7 @@
       </table>
       </div>
       <p class="body" style="margin-top:16px">Row three is the load-bearing one:
-        the fetched set reproduces the hardcoded set exactly, so this refactor
+        the fetched set reproduces the hardcoded set, so this refactor
         <strong>changes no rendered number today</strong>. Row four constrains the
         design — <code>email</code> must not appear in the query at all.</p>
     </section>
@@ -595,7 +595,7 @@ our_emails = lower(
       <div class="checklist">
         <div class="check"><div class="box"></div><div class="ck-text"><strong>python3 -m unittest discover -v</strong> passes.</div></div>
         <div class="check"><div class="box"></div><div class="ck-text"><strong>render.py imports nothing outside the stdlib.</strong> Grep its imports.</div></div>
-        <div class="check"><div class="box"></div><div class="ck-text"><strong>Live run reproduces the 15:39 tables.</strong> The fetched insider set equals the old literal, so the SVG must not change.</div></div>
+        <div class="check"><div class="box"></div><div class="ck-text"><strong>Live run reproduces the previous tables.</strong> The fetched insider set equals the old literal, so the SVG must not change.</div></div>
         <div class="check"><div class="box"></div><div class="ck-text"><strong>Corrupt COMMON_VERSION deliberately.</strong> Both scripts must refuse to start.</div></div>
       </div>
     </section>
