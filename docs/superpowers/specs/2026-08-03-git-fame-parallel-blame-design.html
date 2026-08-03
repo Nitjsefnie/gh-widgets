@@ -366,9 +366,9 @@
         <span class="label">Context</span>
         <code>render-impact.py</code> shells out to <code>git fame</code> once per external
         repository to count surviving lines. Stock git-fame spawns one serial
-        <code>git blame</code> subprocess per file, so the pinned <code>--jobs</code> fork is
-        several times faster. This spec decides to fix the dependency rather than work around
-        it: patch git-fame in a fork, upstream the patch, and pin the patched build.
+        <code>git blame</code> subprocess per file, so this spec decides to fix the dependency
+        rather than work around it: patch git-fame in a fork, upstream the patch, and pin the
+        patched build.
       </div>
     </header>
 
@@ -554,7 +554,7 @@
       <div class="deferred">
         <div class="defer">
           <div class="dt">Parallelising <code>blame_moved</code> in render-impact.py</div>
-          <div class="dd">Deferred until the git-fame fix is deployed and measured. Doing both would
+          <div class="dd">Deferred until the git-fame fix is deployed and evaluated. Doing both would
             oversubscribe the host. Revisit only if runs with many moved repos are still slow
             afterwards.</div>
         </div>

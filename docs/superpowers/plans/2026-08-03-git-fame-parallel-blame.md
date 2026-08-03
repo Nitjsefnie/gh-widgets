@@ -643,7 +643,7 @@ git push
 - No source changes. Produces one GitHub issue and one pull request on `casperdcl/git-fame`.
 
 **Interfaces:**
-- Consumes: the `parallel-blame` branch from Tasks 1–3 and the measurements from Task 2 Step 11.
+- Consumes: the `parallel-blame` branch from Tasks 1–3.
 - Produces: nothing consumed by later tasks.
 
 - [ ] **Step 1: Load the contribution contracts**
@@ -701,7 +701,7 @@ install-time-only guard and a silent-on-success guard each needed their own
 follow-up commit. The version-collision half of that pattern is *not* copied:
 git-fame's `setuptools_scm` version already distinguishes the fork build.
 
-**Spec coverage:** every row of the spec's change inventory maps to a task — `_gitfame.py` docstring/`_get_auth_stats`/`run` → Task 2; `tests/test_gitfame.py` → Task 2; `git-fame_completion.bash` + `git-fame.1` → Task 3; `test_impact.py` + `CLAUDE.md`/`install.sh` → Task 4; issue + PR → Task 5. The spec's `imap_bounded` requirement (bounded window) is Task 1. All six spec verification items appear as steps: byte-identical (T2 S10), suite green (T2 S9), speedup recorded (T2 S11), fails-on-stock (T4 S3), deployed copies match (T4 S6). The "end-to-end unchanged" verification is covered by T4 S8 plus the byte-identical check; a full `render-impact.py` run is not scripted here because it mutates the production cache — run it manually against a copied `CACHE_FILE` if desired.
+**Spec coverage:** every row of the spec's change inventory maps to a task — `_gitfame.py` docstring/`_get_auth_stats`/`run` → Task 2; `tests/test_gitfame.py` → Task 2; `git-fame_completion.bash` + `git-fame.1` → Task 3; `test_impact.py` + `CLAUDE.md`/`install.sh` → Task 4; issue + PR → Task 5. The spec's `imap_bounded` requirement (bounded window) is Task 1. The spec verification items appear as steps: byte-identical output (T2 S10), upstream suite green (T2 S9), fails-on-stock (T4 S3), deployed copies match (T4 S8). The "end-to-end unchanged" verification is covered by T4 S8 plus the byte-identical check; a full `render-impact.py` run is not scripted here because it mutates the production cache — run it manually against a copied `CACHE_FILE` if desired.
 
 **Placeholder scan:** the only deliberately unwritten content is the issue and PR **body text** in Task 5, which cannot be pre-written — the contracts that govern their structure are loaded in Task 5 Step 1, and the required content is enumerated in Steps 3 and 5.
 

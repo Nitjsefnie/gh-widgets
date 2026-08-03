@@ -6,9 +6,9 @@
 ## Context
 
 `render-impact.py` shells out to `git fame` once per external repository to count surviving
-lines. Stock git-fame spawns one serial `git blame` subprocess per file, so the pinned `--jobs`
-fork is several times faster. This spec decides to fix the dependency rather than work around
-it: patch git-fame in a fork, upstream the patch, and pin the patched build.
+lines. Stock git-fame spawns one serial `git blame` subprocess per file, so this spec decides to
+fix the dependency rather than work around it: patch git-fame in a fork, upstream the patch,
+and pin the patched build.
 
 ## Decision
 
@@ -100,7 +100,7 @@ gigabytes on a large repository. Peak stays **O(jobs × per-file output)**, not 
 ## Out of scope
 
 - **Parallelising `blame_moved` in render-impact.py** — deferred until the git-fame fix is
-  deployed and measured; doing both would oversubscribe the host.
+  deployed and evaluated; doing both would oversubscribe the host.
 - **Replacing per-file blame with a single `git log` pass** — would remove the N-process
   structure entirely but changes what "surviving lines" means; too large an upstream argument
   for a performance patch.
