@@ -45,7 +45,8 @@ Same env as the main pair except `CACHE_FILE=/var/lib/gh-widgets/impact-cache.js
 > runs `git fame` per repo; stock git-fame spawns one serial `git blame`
 > subprocess per file (N+3 processes per repo) and spends ~41% of its wall
 > time on process spawn alone. We install
-> `Nitjsefnie-OSC/git-fame` (branch `parallel-blame`), which adds `--jobs`:
+> `Nitjsefnie-OSC/git-fame`, pinned by SHA (not the moving branch), which adds
+> `--jobs`:
 >
 > ```
 > pip install --force-reinstall "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
@@ -53,7 +54,7 @@ Same env as the main pair except `CACHE_FILE=/var/lib/gh-widgets/impact-cache.js
 >
 > **How you can tell which build is installed.** git-fame derives its version
 > from git tags via `setuptools_scm`, so the fork build reports
-> `3.1.4.dev1+g<sha>` while PyPI stock reports `3.1.2`/`3.1.3` — a silent
+> `3.1.4.devN+g<sha>` while PyPI stock reports `3.1.2`/`3.1.3` — a silent
 > revert is visible in `pip freeze` by construction, with no wheel retagging
 > needed.
 >

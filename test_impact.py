@@ -12,12 +12,25 @@ These tests pin the CAPABILITY, not the timing — a timing assertion would be
 flaky on a shared box, and a slow run is not a wrong run. The invariant that
 matters is that parallelism does not change the numbers.
 """
+import importlib.util
+import io
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
+
+
+spec = importlib.util.spec_from_file_location(
+    "render_impact", Path(__file__).with_name("render-impact.py"))
+if spec is None or spec.loader is None:
+    raise SystemExit("error: cannot load render-impact.py")
+render_impact = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(render_impact)
 
 
 def git(*args, cwd):
@@ -26,10 +39,11 @@ def git(*args, cwd):
 
 
 def fame(cwd, *extra):
-    # Deliberately the `git fame` form here, not `git-fame`: this is the exact
-    # invocation render-impact.py's blame_repo uses, so the parity test must
-    # exercise that path. Only `--help` is special-cased by git's dispatcher,
-    # which is why the capability probe below uses the hyphenated binary.
+    # Deliberately the `git fame` form here, not `git-fame`: this is the same
+    # `git fame` dispatch path render-impact.py's blame_repo uses, plus `-s`
+    # (--silent-progress) so the test run stays quiet. Only `--help` is
+    # special-cased by git's dispatcher, which is why the capability probe
+    # below uses the hyphenated binary.
     out = subprocess.run(["git", "fame", "-s", "-e", "-w", "--format", "json", *extra],
                          cwd=str(cwd), capture_output=True, text=True, check=True)
     return out.stdout
@@ -83,28 +97,56 @@ class TestGitFameRuntimeCheck(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import importlib.util
-        import io
-        from contextlib import redirect_stdout
-        spec = importlib.util.spec_from_file_location(
-            "render_impact", Path(__file__).with_name("render-impact.py"))
-        if spec is None or spec.loader is None:
-            raise unittest.SkipTest("cannot load render-impact.py")
-        cls.mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mod)
-        cls.io, cls.redirect = io, redirect_stdout
+        if shutil.which("git-fame") is None:
+            raise unittest.SkipTest("git-fame is not installed")
 
     def test_check_is_noisy_on_success(self):
         """Success must print — a silent success cannot be distinguished from
         the check never having run, which is the whole point of it."""
-        buf = self.io.StringIO()
-        with self.redirect(buf):
-            ok = self.mod.check_git_fame()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ok = render_impact.check_git_fame()
         out = buf.getvalue()
         self.assertTrue(ok, f"check reported stock git-fame: {out!r}")
         self.assertIn("git-fame:", out)
         self.assertIn("--jobs", out)
         self.assertTrue(out.strip(), "check was silent on success")
+
+
+class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
+    """The alarm branches must also be self-proving; a silent regression is
+    the worst kind. These tests deliberately manipulate PATH so they run even
+    on boxes where the real git-fame is absent or already patched."""
+
+    def _check_with_path(self, path):
+        """Run check_git_fame() with PATH replaced by *path*, capturing stdout."""
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            with redirect_stdout(buf):
+                ok = render_impact.check_git_fame()
+        return ok, buf.getvalue()
+
+    def test_stock_git_fame_warns_instead_of_lieing(self):
+        """A git-fame without --jobs is detected and warned about."""
+        with tempfile.TemporaryDirectory() as td:
+            fake_bin = Path(td)
+            script = fake_bin / "git-fame"
+            script.write_text(
+                "#!/bin/sh\n"
+                "echo 'usage: git-fame [--format FORMAT] [--help]'\n",
+                encoding="utf-8")
+            script.chmod(0o755)
+            path = f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+            ok, out = self._check_with_path(path)
+        self.assertFalse(ok, "stock git-fame must be rejected")
+        self.assertIn("WARNING", out)
+
+    def test_missing_git_fame_fails_loudly(self):
+        """git-fame missing from PATH must not be treated as success."""
+        with tempfile.TemporaryDirectory() as td:
+            ok, out = self._check_with_path(td)
+        self.assertFalse(ok, "missing git-fame must be rejected")
+        self.assertIn("CHECK FAILED", out)
 
 
 if __name__ == "__main__":
