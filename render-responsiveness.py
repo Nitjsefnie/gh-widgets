@@ -275,41 +275,24 @@ def render_rows(C, y, scored):
     return parts, y
 
 
-def footer_lines(ranked, shown, excluded_repos, excluded_prs, skipped, min_prs):
-    """What the board does NOT show, stated on the board.
+def render_responsiveness(C, scored):
+    """The card is a leaderboard, so it shows the leaders and nothing else.
 
-    A leaderboard that silently drops its tail is how a floor turns into a
-    lie: the excluded repos are real contributions, they are just too few to
-    take a median over.
+    The floor and the top-N cut are deliberately NOT disclosed here: this is a
+    personal stat card, "top N" is self-evident, and the counts belong in the
+    run's output where an operator looks, not on the graphic. They are printed
+    by main().
     """
-    lines = []
-    if ranked > shown:
-        lines.append(f"showing {shown} of {ranked} ranked repos")
-    lines.append(f"excluded: {plural(excluded_repos, 'repo')} "
-                 f"({plural(excluded_prs, 'merged PR')}) "
-                 f"below the n ≥ {min_prs} floor")
-    if skipped:
-        lines.append(f"{plural(skipped, 'merged PR')} with no cached merge "
-                     f"time not counted")
-    return lines
-
-
-def render_responsiveness(C, scored, footers):
     y = 88
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external responsiveness</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">how much I ship into repos outside my account — and how fast it lands</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">how fast my work lands outside my own account</text>
   <line x1="20" y1="64" x2="{CARD_W - 20}" y2="64" stroke="{C['border']}"/>"""
     parts, y = render_rows(C, y, scored)
     body += "\n  " + "\n  ".join(parts)
     y += 6
     body += (f'\n  <line x1="20" y1="{y}" x2="{CARD_W - 20}" y2="{y}" '
              f'stroke="{C["border"]}"/>')
-    y += 18
-    for line in footers:
-        body += (f'\n  <text x="20" y="{y}" fill="{C["dim"]}" font-size="10">'
-                 f'{xml_escape(line)}</text>')
-        y += 14
     return base_card(C, CARD_W, y + 14, body)
 
 
@@ -351,13 +334,18 @@ def read_impact_cache(path):
 
 
 def build_card(C, prs, insiders, knobs):
-    """Score the cached PRs and render the card. Returns (svg, ranked_rows)."""
+    """Score the cached PRs and render the card.
+
+    Returns (svg, notes) — `notes` is what the card deliberately does not say,
+    carried out to the run's stdout instead.
+    """
     by_repo, skipped = turnaround_by_repo(prs, insiders)
     rows, excluded_repos, excluded_prs = responsiveness_rows(by_repo, knobs)
     scored = rescale(rows)[:TOP_N]
-    footers = footer_lines(len(rows), len(scored), excluded_repos,
-                           excluded_prs, skipped, knobs["min_prs"])
-    return render_responsiveness(C, scored, footers), rows
+    notes = {"shown": len(scored), "ranked": len(rows),
+             "excluded_repos": excluded_repos, "excluded_prs": excluded_prs,
+             "skipped": skipped, "min_prs": knobs["min_prs"]}
+    return render_responsiveness(C, scored), notes
 
 
 def main():
@@ -368,14 +356,25 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     prs, insiders, fetched_at = read_impact_cache(args.cache_file)
-    svg, rows = build_card(C, prs, insiders, metric_knobs())
+    svg, notes = build_card(C, prs, insiders, metric_knobs())
     if fetched_at:
         # Every render of this card comes from the cache, so its age is
         # always worth showing, not just on a failure path.
         svg = stamp_cache_notice(C, svg, fetched_at)
     (out / "responsiveness.svg").write_text(svg)
 
-    print(f"wrote {out}/responsiveness.svg (ranked repos={len(rows)})")
+    print(f"wrote {out}/responsiveness.svg "
+          f"(showing {notes['shown']} of {notes['ranked']} ranked)")
+    # What the card does not say, said here instead: an operator checking a
+    # thin-looking board needs to know whether repos fell below the floor or
+    # simply had no cached merge time.
+    if notes["excluded_repos"]:
+        print(f"  {plural(notes['excluded_repos'], 'repo')} "
+              f"({plural(notes['excluded_prs'], 'merged PR')}) below the "
+              f"n >= {notes['min_prs']} floor")
+    if notes["skipped"]:
+        print(f"  {plural(notes['skipped'], 'merged PR')} skipped: no cached "
+              f"merge time (run render-impact.py --resync)")
 
 
 if __name__ == "__main__":

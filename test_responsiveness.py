@@ -232,18 +232,18 @@ class RenderCard(unittest.TestCase):
         self.assertIn("10.00", svg)            # leader, rescaled
         self.assertIn("2.0 d", svg)            # median of b/y
 
-    def test_floor_exclusions_are_disclosed_on_the_card(self):
+    def test_the_card_carries_no_bookkeeping_footer(self):
+        """The card is a leaderboard, not a report.
+
+        The floor, the top-N cut and the skipped-PR count are real and are
+        printed by main(); they are deliberately absent from the graphic. If
+        a future change starts writing them onto the card again, this fails.
+        """
         svg = self.render(prs("a/x", [1.0] * 3) + prs("b/y", [1.0] * 2)
-                          + prs("c/z", [1.0]))
-        self.assertIn("2 repos (3 merged PRs) below the n ≥ 3 floor", svg)
-
-    def test_skipped_prs_are_disclosed_on_the_card(self):
-        svg = self.render(prs("a/x", [1.0] * 3) + prs("a/x", [None]))
-        self.assertIn("1 merged PR with no cached merge time", svg)
-
-    def test_no_skip_line_when_every_pr_has_timestamps(self):
-        svg = self.render(prs("a/x", [1.0] * 3))
-        self.assertNotIn("no cached merge time", svg)
+                          + prs("c/z", [1.0]) + prs("a/x", [None]))
+        for leaked in ("floor", "below n", "excluded", "showing",
+                       "no cached merge time", "untimed"):
+            self.assertNotIn(leaked, svg)
 
     def test_cache_fetch_time_is_stamped(self):
         svg = self.render(prs("a/x", [1.0] * 3))
@@ -253,14 +253,13 @@ class RenderCard(unittest.TestCase):
         svg = self.render(prs("me/mine", [1.0] * 3))
         self.assertIn("no external merged PRs yet", svg)
 
-    def test_only_the_top_rows_are_drawn_and_the_rest_disclosed(self):
+    def test_only_the_top_rows_are_drawn(self):
         nodes = []
         for i in range(resp.TOP_N + 3):
             nodes += prs(f"o{i}/r", [float(i + 1)] * 3)
         svg = self.render(nodes)
         drawn = re.findall(r'>(o\d+/r)</text>', svg)
         self.assertEqual(len(drawn), resp.TOP_N)
-        self.assertIn(f"showing {resp.TOP_N} of {resp.TOP_N + 3} ranked repos", svg)
 
 
 class CacheContract(unittest.TestCase):
