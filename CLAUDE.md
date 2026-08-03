@@ -66,6 +66,14 @@ Same env as the main pair except `CACHE_FILE=/var/lib/gh-widgets/impact-cache.js
 > silent when healthy cannot be told apart from a guard that never ran. If
 > `git-fame:` is missing from a run's journal output, treat that as the alarm.
 >
+> **Upstream status.** The patch is
+> [casperdcl/git-fame#132](https://github.com/casperdcl/git-fame/pull/132),
+> which fixes
+> [#131](https://github.com/casperdcl/git-fame/issues/131) (the serial
+> one-blame-process-per-file measurement above). A pre-existing, unrelated bug
+> found during the work is
+> [#130](https://github.com/casperdcl/git-fame/issues/130).
+>
 > Once the upstream PR merges, re-pin to the PyPI release that contains it and
 > delete this note.
 
