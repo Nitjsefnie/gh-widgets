@@ -1,0 +1,162 @@
+name: gitfame-pool-probe
+
+# Does git-fame's blame pool actually keep the CPUs busy on the ONE repository
+# that dominates a --resync?
+#
+# Attribution of a full resync put 60% of the whole blame phase in a single
+# repo (Nitjsefnie-OSC/codex, 1.65M loc, 258s of 428s, against 33s for the
+# next-slowest repo). Both builds'
+# `imap_bounded` yields results in INPUT order with at most min(2*jobs,
+# jobs+4) calls outstanding, and a completed-but-unyielded result still
+# occupies the window -- so a single slow file can stop submission entirely
+# while the pool drains. Whether that costs anything depends on the file size
+# distribution of the real repo, which is a fact about the repo, not something
+# to reason about from the code.
+#
+# CPU-seconds divided by wall-seconds is the answer, and it needs no new
+# instrumentation: at ~nproc the pool is saturated and scheduling has no
+# headroom to win; well below it, the pool is starving and the ordering/
+# windowing is worth fixing.
+#
+# Measurement-only: clones one public repo, writes nothing anywhere.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repository to profile"
+        required: false
+        default: "Nitjsefnie-OSC/codex"
+      arms:
+        description: >-
+          Space-separated arms as build[:jobs] -- e.g. "fork new new:16".
+          Omitting :jobs uses git-fame's automatic min(32, cpu+4).
+        required: false
+        default: "fork new new:16"
+      new_ref:
+        description: "Fork ref installed as the `new` arm"
+        required: false
+        default: "perf-blame"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Environment facts
+        run: |
+          set -euo pipefail
+          echo "nproc=$(nproc)"
+          free -m
+          git --version
+
+      - name: Build a virtualenv per requested arm
+        env:
+          ARMS: ${{ inputs.arms }}
+          NEW_REF: ${{ inputs.new_ref }}
+        run: |
+          set -euo pipefail
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+          for arm in $ARMS; do
+            build="${arm%%:*}"
+            # `[ -d x ] && continue` would be the natural spelling and is a
+            # trap under `set -e`: when the directory is ABSENT the list exits
+            # non-zero and kills the step.
+            if [ -d "/tmp/venv-$build" ]; then continue; fi
+            case "$build" in
+              fork) spec="git-fame @ $FORK_PIN" ;;
+              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$NEW_REF" ;;
+              *)    echo "FATAL: unknown build arm '$build'"; exit 1 ;;
+            esac
+            python3 -m venv "/tmp/venv-$build"
+            "/tmp/venv-$build/bin/pip" install -q --upgrade pip
+            "/tmp/venv-$build/bin/pip" install -q "$spec"
+            echo "--- $build: $("/tmp/venv-$build/bin/git-fame" --version) ---"
+            "/tmp/venv-$build/bin/git-fame" --help | grep -q -- '--jobs'
+          done
+
+      - name: Clone the target once, reuse for every arm
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          # One clone shared by all arms: cloning per arm would put the repo's
+          # own churn between them and make the runs incomparable.
+          git clone -q --single-branch "https://github.com/$REPO.git" /tmp/target
+          echo "files: $(git -C /tmp/target ls-files | wc -l)"
+          echo "--- 10 largest tracked files (bytes) ---"
+          git -C /tmp/target ls-tree -r -l HEAD | sort -k4 -n -r | head -10
+
+      - name: Profile each arm
+        env:
+          ARMS: ${{ inputs.arms }}
+        run: |
+          set -euo pipefail
+          for arm in $ARMS; do
+            build="${arm%%:*}"
+            jobs=""
+            case "$arm" in *:*) jobs="-j ${arm##*:}" ;; esac
+            tag="${arm//:/-}"
+            echo "::group::$arm"
+            # `-w -e --format json` is exactly what render-impact.py runs.
+            # shellcheck disable=SC2086
+            /usr/bin/time -v "/tmp/venv-$build/bin/git-fame" -s -e -w $jobs \
+              --format json /tmp/target > "/tmp/$tag.json" 2> "/tmp/$tag.time" || \
+              { echo "FATAL: $arm failed"; tail -20 "/tmp/$tag.time"; exit 1; }
+            grep -E 'Elapsed \(wall|User time|System time|Maximum resident' "/tmp/$tag.time"
+            echo "::endgroup::"
+          done
+
+          python3 - <<'PYEOF'
+          import os
+          import re
+          rows = []
+          for arm in os.environ["ARMS"].split():
+              build = arm.replace(":", "-")
+              t = open(f"/tmp/{build}.time").read()
+              user = float(re.search(r"User time \(seconds\): ([\d.]+)", t).group(1))
+              sysc = float(re.search(r"System time \(seconds\): ([\d.]+)", t).group(1))
+              wall = re.search(r"wall clock\): ([\d:.]+)", t).group(1)
+              parts = [float(x) for x in wall.split(":")]
+              secs = parts[0] * 60 + parts[1] if len(parts) == 2 else parts[0]
+              rss = int(re.search(r"Maximum resident set size \(kbytes\): (\d+)", t).group(1))
+              rows.append((build, secs, user + sysc, (user + sysc) / secs, rss / 1024))
+          print(f"\n{'arm':6} {'wall_s':>8} {'cpu_s':>8} {'cpu/wall':>9} {'peak_rss_MB':>12}")
+          for r in rows:
+              print(f"{r[0]:6} {r[1]:8.1f} {r[2]:8.1f} {r[3]:9.2f} {r[4]:12.1f}")
+          print(f"\nnproc={os.cpu_count()} -- cpu/wall at ~nproc means the pool is "
+                f"saturated and scheduling cannot win; well below means it starves.")
+          PYEOF
+
+      - name: The arms must agree, or the faster one is just wrong
+        if: always()
+        env:
+          ARMS: ${{ inputs.arms }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          builds = [a.replace(":", "-") for a in os.environ["ARMS"].split()]
+          if len(builds) < 2:
+              print("single arm, nothing to compare")
+              sys.exit(0)
+          ref = json.load(open(f"/tmp/{builds[0]}.json"))
+          for b in builds[1:]:
+              other = json.load(open(f"/tmp/{b}.json"))
+              if ref == other:
+                  print(f"{builds[0]} vs {b}: output identical")
+              else:
+                  print(f"{builds[0]} vs {b}: OUTPUT DIFFERS")
+                  print(f"  total {ref.get('total')} -> {other.get('total')}")
+                  sys.exit("a performance change that alters the numbers is a bug")
+          PYEOF
