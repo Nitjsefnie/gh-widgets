@@ -352,13 +352,23 @@ def targeted_counts(dest, emails):
     path our own history never mentions, so this can under-count. That is why
     it is gated on agreeing with git-fame rather than trusted on its own.
     """
+    # TWO greps, with DIFFERENT patterns, because git-fame uses `.` to decide
+    # which files are text: a file containing only blank lines matches the
+    # empty pattern but not `.`, so git-fame skips it entirely while a naive
+    # count includes its lines. That was 5 lines of 320,722 on one repo and 1
+    # of 1,651,048 on another -- small, and still a disagreement.
+    texts = {f[len("HEAD:"):] if f.startswith("HEAD:") else f
+             for f in git_out(dest, "grep", "-I", "--name-only", ".",
+                              "HEAD").split("\n") if f}
     total = 0
-    texts = set()
     for line in git_out(dest, "grep", "-I", "-c", "", "HEAD").split("\n"):
         if line:
             path, _, count = line.rpartition(":")
-            texts.add(path[len("HEAD:"):] if path.startswith("HEAD:") else path)
-            total += int(count)
+            path = path[len("HEAD:"):] if path.startswith("HEAD:") else path
+            # every line of a text file counts, blank ones included -- the `.`
+            # pattern picks the FILES, not the lines
+            if path in texts:
+                total += int(count)
     ours = 0
     for fname in our_touched_files(dest, emails) & texts:
         out = git_out(dest, "blame", "--incremental", "-w", "HEAD", "--", fname)

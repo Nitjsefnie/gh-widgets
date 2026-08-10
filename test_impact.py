@@ -290,6 +290,22 @@ class TestTargetedCounts(unittest.TestCase):
                        if str(r[0]).strip().lower() in emails)
         self.assertEqual((ours, total), (ref_ours, ref_total))
 
+    def test_blank_line_only_file_is_excluded(self):
+        """git-fame picks text files with `git grep -I .`, so a file of only
+        blank lines is not a text file to it. Counting its lines anyway was a
+        real +5 on one repo and +1 on another."""
+        blank = self.tmp / "blank.txt"
+        blank.write_text("\n\n\n")
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-qm", "blank", cwd=self.tmp)
+        try:
+            _ours, total = render_impact.targeted_counts(self.tmp,
+                                                         {self.email.lower()})
+            self.assertEqual(total, 5, "blank-only file must not add lines")
+        finally:
+            git("rm", "-q", "-f", "blank.txt", cwd=self.tmp)
+            git("commit", "-qm", "drop blank", cwd=self.tmp)
+
     def test_unrelated_address_counts_nothing(self):
         ours, total = render_impact.targeted_counts(self.tmp,
                                                     {"nobody@example.com"})
