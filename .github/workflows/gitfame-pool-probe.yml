@@ -128,7 +128,8 @@ jobs:
               t = open(f"/tmp/{build}.time").read()
               user = float(re.search(r"User time \(seconds\): ([\d.]+)", t).group(1))
               sysc = float(re.search(r"System time \(seconds\): ([\d.]+)", t).group(1))
-              wall = re.search(r"wall clock\): ([\d:.]+)", t).group(1)
+              # the real label is "Elapsed (wall clock) time (h:mm:ss or m:ss):"
+              wall = re.search(r"wall clock\).*?: ([\d:.]+)", t).group(1)
               parts = [float(x) for x in wall.split(":")]
               secs = parts[0] * 60 + parts[1] if len(parts) == 2 else parts[0]
               rss = int(re.search(r"Maximum resident set size \(kbytes\): (\d+)", t).group(1))

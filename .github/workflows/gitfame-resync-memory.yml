@@ -41,6 +41,12 @@ on:
         description: "Fork ref installed as the `new` arm"
         required: false
         default: "parallel-blame"
+      blame_method:
+        description: >-
+          fame (reference), targeted (blame only files our commits touched),
+          or both (run both and report every disagreement).
+        required: false
+        default: "fame"
       clone_lookahead:
         description: >-
           How many repos render-impact.py clones ahead of the blame consuming
@@ -286,9 +292,10 @@ jobs:
           REPEATS: ${{ inputs.repeats }}
           BUILDS: ${{ inputs.builds }}
           CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead }}
+          BLAME_METHOD: ${{ inputs.blame_method }}
         run: |
           set -euo pipefail
-          echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD"
+          echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD BLAME_METHOD=$BLAME_METHOD"
           mkdir -p /tmp/results
           # Interleave the builds (fork, up, fork, up) rather than grouping
           # them, so any drift in the runner or in upstream repo state is
@@ -329,6 +336,7 @@ jobs:
                   "CACHE_FILE=/tmp/cache-$LABEL.json" \
                   "DEBUG_TIMING=1" \
                   "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
+                  "BLAME_METHOD=$BLAME_METHOD" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
               echo "--- which build actually ran ---"
               grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
@@ -424,6 +432,21 @@ jobs:
                     f"hidden {clone-wait:6.1f}s)  fame {fame:7.1f}s  "
                     f"blocking {wait+fame:7.1f}s  wall {wall:7.1f}s  "
                     f"unattributed {wall-wait-fame:6.1f}s")
+
+          # A disagreement between the two counting methods is a correctness
+          # failure, and the fast one under-reports SILENTLY, so surface it
+          # here rather than leaving it in a per-run log nobody opens.
+          print("\n--- targeted-vs-fame agreement ---")
+          for f in sorted(glob.glob("/tmp/results/*.json")):
+              label = json.load(open(f))["label"]
+              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
+              cmps = re.findall(r"^\s+compare (\S+): .*?(ok|MISMATCH)", txt, re.M)
+              if not cmps:
+                  print(f"{label}: no comparison ran (BLAME_METHOD != both)")
+                  continue
+              bad = [r for r, v in cmps if v == "MISMATCH"]
+              print(f"{label}: {len(cmps) - len(bad)}/{len(cmps)} repos agree"
+                    + (f" -- MISMATCH on {bad}" if bad else ""))
 
           # The comparison is only fair if both arms blamed the same repos.
           print("\n--- work-equality check (same repos, same surviving LOC?) ---")

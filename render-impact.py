@@ -309,6 +309,90 @@ def clone_repo(repo, branch, dest):
     return time.monotonic() - t0
 
 
+def git_out(dest, *args):
+    """Run git in `dest` and return stdout, tolerating undecodable bytes."""
+    return subprocess.run(["git", "-C", str(dest), *args], capture_output=True,
+                          text=True, errors="replace", timeout=600,
+                          check=False).stdout
+
+
+def our_touched_files(dest, emails):
+    """Paths touched by any commit WE authored, on the cloned branch.
+
+    A line can only blame to us if we authored the commit that last touched
+    its file, so this is a superset of the files that can carry our lines.
+
+    Two flags that are not optional, both of which fail by returning ZERO --
+    which is indistinguishable from "we never contributed here":
+
+    * --fixed-strings, because `--author` takes a REGEX and a GitHub noreply
+      address like `75166987+user@users.noreply.github.com` contains `+`,
+      which quantifies the preceding character and matches nothing.
+    * --regexp-ignore-case, because the addresses are lower-cased for exact
+      comparison while `--author` matching is case-sensitive.
+    """
+    files = set()
+    for email in emails:
+        out = git_out(dest, "log", "HEAD", "--fixed-strings",
+                      "--regexp-ignore-case", f"--author={email}",
+                      "--name-only", "--pretty=format:", "-M")
+        files.update(f for f in out.split("\n") if f)
+    return files
+
+
+def targeted_counts(dest, emails):
+    """(ours, total) without blaming every file.
+
+    `total` needs no blame at all: it is the line count of exactly the files
+    git-fame would blame, which `git grep -I` already identifies. `ours` needs
+    blame only for the files our own commits touched -- 4 of 349 on the repo
+    this was first measured against.
+
+    A rename performed by SOMEONE ELSE after our commit moves our lines to a
+    path our own history never mentions, so this can under-count. That is why
+    it is gated on agreeing with git-fame rather than trusted on its own.
+    """
+    total = 0
+    texts = set()
+    for line in git_out(dest, "grep", "-I", "-c", "", "HEAD").split("\n"):
+        if line:
+            path, _, count = line.rpartition(":")
+            texts.add(path[len("HEAD:"):] if path.startswith("HEAD:") else path)
+            total += int(count)
+    ours = 0
+    for fname in our_touched_files(dest, emails) & texts:
+        out = git_out(dest, "blame", "--incremental", "-w", "HEAD", "--", fname)
+        ours += blamed_lines_for(out, emails)
+    return ours, total
+
+
+def blamed_lines_for(blame_out, emails):
+    """Lines in `git blame --incremental` output authored by `emails`.
+
+    Only the totals are wanted, so adjacent chunks of one commit need no
+    re-joining: summing is order- and grouping-independent. Commit identity
+    appears only the FIRST time a commit shows up, so it is remembered per
+    sha rather than re-read per chunk.
+    """
+    seen = {}
+    ours = 0
+    sha = None
+    nlines = 0
+    for line in blame_out.split("\n"):
+        head = line.split(" ")
+        if len(head) == 4 and len(head[0]) >= 40 and head[3].isdigit():
+            sha, nlines = head[0], int(head[3])
+        elif sha is None:
+            continue
+        elif line.startswith("author-mail <") and line.endswith(">"):
+            seen[sha] = line[13:-1].strip().lower()
+        elif line.startswith("filename "):
+            if seen.get(sha) in emails:
+                ours += nlines
+            sha = None
+    return ours
+
+
 def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
     """Aggregate surviving LOC per author email with git-fame over the clone
     already at `dest`, and return (ours, total). The clone is deleted by the
@@ -332,6 +416,57 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
             ours += row[1]
     _record_timing(repo, clone_s, fame_s, total, wait_s)
     return ours, total
+
+
+# How the per-repo line counts are produced:
+#   fame     - git-fame over every file (the reference; what has always run)
+#   both     - run BOTH and report disagreement; git-fame's answer is used
+#   targeted - blame only the files our own commits touched
+# The default stays on the reference. `targeted` cannot be trusted from one
+# repo agreeing: its failure mode is a silent ZERO (an unmatched author
+# pattern looks exactly like "we contributed nothing here"), so `both` over
+# the whole fleet is what earns the switch.
+BLAME_METHOD = os.environ.get("BLAME_METHOD", "fame").strip().lower()
+_DISAGREEMENTS = []
+
+
+def counts_for(repo, dest, emails, clone_s=0.0, wait_s=0.0):
+    """Return (ours, total) by the configured method, checking the fast path
+    against the reference when asked to."""
+    if BLAME_METHOD == "targeted":
+        t1 = time.monotonic()
+        ours, total = targeted_counts(dest, emails)
+        _record_timing(repo, clone_s, time.monotonic() - t1, total, wait_s)
+        return ours, total
+
+    ours, total = blame_repo(repo, dest, emails, clone_s=clone_s, wait_s=wait_s)
+    if BLAME_METHOD == "both":
+        t1 = time.monotonic()
+        t_ours, t_total = targeted_counts(dest, emails)
+        secs = time.monotonic() - t1
+        agree = (t_ours, t_total) == (ours, total)
+        if not agree:
+            _DISAGREEMENTS.append((repo, ours, total, t_ours, t_total))
+        print(f"    compare {repo}: fame ({ours:,}, {total:,}) vs targeted "
+              f"({t_ours:,}, {t_total:,}) {'ok' if agree else 'MISMATCH'} "
+              f"in {secs:.1f}s", flush=True)
+    return ours, total
+
+
+def print_method_comparison():
+    """Report the fast path's agreement. Silence would be indistinguishable
+    from the comparison never having run, so this always prints under `both`."""
+    if BLAME_METHOD != "both":
+        return
+    if _DISAGREEMENTS:
+        print(f"\n=== targeted DISAGREES on {len(_DISAGREEMENTS)} repo(s) ===",
+              flush=True)
+        for repo, o, t, to, tt in _DISAGREEMENTS:
+            print(f"  {repo}: ours {o:,} -> {to:,}   total {t:,} -> {tt:,}",
+                  flush=True)
+    else:
+        print("\n=== targeted agreed with git-fame on every repo ===",
+              flush=True)
 
 
 def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
@@ -433,7 +568,8 @@ def blame_moved(moved, ourloc, emails):
         try:
             if err is not None:
                 raise err
-            ours, total = blame_repo(repo, tmp, emails, clone_s=clone_s, wait_s=wait_s)
+            ours, total = counts_for(repo, tmp, emails,
+                                     clone_s=clone_s, wait_s=wait_s)
             ourloc[repo] = {"ours": ours, "total": total,
                             "branch": t["branch"], "head": t["head"]}
             print(f"loc [{i}/{n}] ours {ours:>7,} / {total:>8,} "
@@ -702,6 +838,7 @@ def main():
         print(f"wrote {out}/impact.svg "
               f"(pr repos={len(pr_rows)} issue repos={len(issue_rows)} "
               f"loc repos={len(loc_rows)})")
+    print_method_comparison()
     print_timing_summary()
 
 

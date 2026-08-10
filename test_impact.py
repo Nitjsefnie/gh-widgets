@@ -242,6 +242,61 @@ class TestPrefetchedClones(unittest.TestCase):
         self.assertEqual(leftover, [], f"prefetch leaked {leftover}")
 
 
+class TestTargetedCounts(unittest.TestCase):
+    """The fast path's failure mode is a silent ZERO, so its author matching
+    gets regression tests rather than trust. Both bugs below were real: each
+    made a repo we HAD contributed to report no lines at all."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-targeted-"))
+        # a GitHub noreply address: the `+` is a regex quantifier, and the
+        # capital letters matter once the address is lower-cased for matching
+        cls.email = "75166987+MixedCase@users.noreply.github.com"
+        git("init", "-q", "-b", "main", ".", cwd=cls.tmp)
+        git("config", "user.name", "Other", cwd=cls.tmp)
+        git("config", "user.email", "other@example.com", cwd=cls.tmp)
+        (cls.tmp / "theirs.txt").write_text("a\nb\nc\n")
+        git("add", "-A", cwd=cls.tmp)
+        git("commit", "-qm", "theirs", cwd=cls.tmp)
+        (cls.tmp / "ours.txt").write_text("x\ny\n")
+        git("add", "-A", cwd=cls.tmp)
+        git("-c", "user.name=Us", "-c", f"user.email={cls.email}",
+            "commit", "-qm", "ours", cwd=cls.tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_plus_in_address_is_not_a_regex(self):
+        """`75166987+x@...` as a regex matches nothing -- and looks like zero."""
+        found = render_impact.our_touched_files(self.tmp, {self.email.lower()})
+        self.assertIn("ours.txt", found)
+        self.assertNotIn("theirs.txt", found)
+
+    def test_matching_is_case_insensitive(self):
+        """Addresses are lower-cased for comparison; --author is not."""
+        found = render_impact.our_touched_files(self.tmp, {self.email.lower()})
+        self.assertTrue(found, "lower-cased address matched no commit")
+
+    def test_counts_match_git_fame(self):
+        if shutil.which("git-fame") is None:
+            raise unittest.SkipTest("git-fame is not installed")
+        emails = {self.email.lower()}
+        ours, total = render_impact.targeted_counts(self.tmp, emails)
+        reference = json.loads(fame(self.tmp))
+        ref_total = reference["total"]["loc"]
+        ref_ours = sum(r[1] for r in reference["data"]
+                       if str(r[0]).strip().lower() in emails)
+        self.assertEqual((ours, total), (ref_ours, ref_total))
+
+    def test_unrelated_address_counts_nothing(self):
+        ours, total = render_impact.targeted_counts(self.tmp,
+                                                    {"nobody@example.com"})
+        self.assertEqual(ours, 0)
+        self.assertEqual(total, 5)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -249,8 +304,13 @@ if __name__ == "__main__":
 class TestCloneLookahead(unittest.TestCase):
     """Depth is a tuning knob, so its bounds are part of the contract."""
 
-    def test_depth_reaches_the_configured_lookahead(self):
-        """With depth d, d clones beyond the one being consumed are in flight."""
+    def test_depth_caps_concurrent_clones(self):
+        """At most `depth` clones RUN at once, however many are queued.
+
+        The generator submits indices i..i+depth, but the pool has `depth`
+        workers, so the surplus waits its turn. That cap is the contract worth
+        pinning: it bounds the disk and the concurrent transfers.
+        """
         gate = threading.Event()
         started, lock = [], threading.Lock()
 
@@ -269,16 +329,17 @@ class TestCloneLookahead(unittest.TestCase):
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 with lock:
-                    if len(started) >= 4:
+                    if len(started) >= 3:
                         break
                 time.sleep(0.01)
+            time.sleep(0.3)  # give a 4th a chance to start, if the cap leaks
             with lock:
                 inflight = len(started)
             gate.set()
             shutil.rmtree(fut.result(timeout=10)[2], ignore_errors=True)
             gen.close()
-        self.assertEqual(inflight, 4,
-                         "depth=3 should have item 0 plus 3 ahead in flight")
+        self.assertEqual(inflight, 3,
+                         "depth=3 must run exactly 3 clones concurrently")
 
     def test_lookahead_is_at_least_one(self):
         for raw in ("0", "-5"):
