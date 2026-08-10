@@ -300,7 +300,14 @@ def print_timing_summary():
 def clone_repo(repo, branch, dest):
     """Full-clone the default branch into `dest` (blame needs history, so NOT
     --depth 1). Returns the clone's own duration. Raises on failure."""
-    cmd = ["git", "clone", "--single-branch"]
+    # Peak memory of a --resync is now dominated by concurrent clones, not by
+    # blame, so cap what each clone's `index-pack` allocates. Its thread count
+    # and delta window buy throughput that CLONE_LOOKAHEAD concurrent clones
+    # already provide, while each thread holds its own delta window -- which
+    # is what made lookahead 8 cost 769MB against a 624.6MB budget.
+    cmd = ["git", "-c", f"pack.threads={common.env_float('CLONE_PACK_THREADS', 1):.0f}",
+           "-c", f"pack.windowMemory={int(common.env_float('CLONE_WINDOW_MB', 32))}m",
+           "clone", "--single-branch"]
     if branch:
         cmd += ["--branch", branch]
     cmd += [f"https://github.com/{repo}.git", str(dest)]
