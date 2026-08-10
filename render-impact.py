@@ -28,6 +28,9 @@ Configuration (env vars or CLI flags, in that order of precedence):
 
   GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
   GH_EXTRA_EMAILS    extra commit-author addresses that are ours (comma-sep)
+  BLAME_METHOD       targeted (default) | fame | both   — see CLAUDE.md
+  CLONE_LOOKAHEAD    repos cloned ahead of the blame    (default 3)
+  DEBUG_TIMING       per-phase timing for the whole run (default off)
   IMPACT_Z           Wilson lower-bound z score        (default 2.58)
   IMPACT_PR_GAMMA    volume exponent, PR table         (default 1.0)
   IMPACT_ISSUE_GAMMA volume exponent, issue table      (default 1.75)
@@ -429,14 +432,17 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 
 
 # How the per-repo line counts are produced:
-#   fame     - git-fame over every file (the reference; what has always run)
-#   both     - run BOTH and report disagreement; git-fame's answer is used
-#   targeted - blame only the files our own commits touched
-# The default stays on the reference. `targeted` cannot be trusted from one
-# repo agreeing: its failure mode is a silent ZERO (an unmatched author
-# pattern looks exactly like "we contributed nothing here"), so `both` over
-# the whole fleet is what earns the switch.
-BLAME_METHOD = os.environ.get("BLAME_METHOD", "fame").strip().lower()
+#   targeted - blame only the files our own commits touched (default)
+#   fame     - git-fame over every file (the reference)
+#   both     - run BOTH and fail loudly on any disagreement
+# `targeted` earned the default by agreeing with git-fame on all 59 repos of a
+# full --resync, byte-exact on `ours` and `total`, in 11.4s against 489.9s.
+# It keeps ONE known way to under-count: if somebody else renames a file after
+# our commit, our lines move to a path our own history never mentions. That is
+# why gitfame-resync-memory runs `both` weekly as a drift audit -- the risk is
+# monitored rather than merely accepted, since under-counting is invisible in
+# the output.
+BLAME_METHOD = os.environ.get("BLAME_METHOD", "targeted").strip().lower()
 _DISAGREEMENTS = []
 
 
@@ -797,7 +803,12 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale):
 
 def main():
     args, token = parse_args()
-    check_git_fame()
+    # Say which method ran, every run. The git-fame guard line was the health
+    # check while git-fame did the counting; under `targeted` it never runs,
+    # so its absence has to mean "not used" rather than "guard broken".
+    print(f"blame-method: {BLAME_METHOD}", flush=True)
+    if BLAME_METHOD in ("fame", "both"):
+        check_git_fame()
 
     C = THEMES[args.theme]
     out = Path(args.out_dir)

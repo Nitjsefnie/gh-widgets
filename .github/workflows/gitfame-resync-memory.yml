@@ -20,6 +20,16 @@ name: gitfame-resync-memory
 # publishes an SVG anywhere, and reads only public GitHub data.
 
 on:
+  # Weekly drift audit. render-impact.py counts lines the targeted way, which
+  # has one known blind spot: a rename made by SOMEBODY ELSE after our commit
+  # moves our lines to a path our own history never mentions. Under-counting
+  # is invisible in the rendered card, so the check cannot wait for a human to
+  # think of running it.
+  schedule:
+    # NOTE: a schedule event carries NO inputs, so every `inputs.x` below is
+    # spelled `inputs.x || <default>`. Without that the audit would run with
+    # an empty build list and pass by doing nothing.
+    - cron: "23 5 * * 1"
   workflow_dispatch:
     inputs:
       repeats:
@@ -43,10 +53,10 @@ on:
         default: "parallel-blame"
       blame_method:
         description: >-
-          fame (reference), targeted (blame only files our commits touched),
-          or both (run both and report every disagreement).
+          targeted (default in the renderer), fame (the git-fame reference),
+          or both (run both; ANY disagreement fails the run).
         required: false
-        default: "fame"
+        default: "both"
       clone_lookahead:
         description: >-
           How many repos render-impact.py clones ahead of the blame consuming
@@ -82,7 +92,7 @@ jobs:
       - name: Preflight — can this token read the public identity?
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LOGIN: ${{ inputs.user }}
+          LOGIN: ${{ inputs.user || 'Nitjsefnie' }}
         run: |
           set -euo pipefail
           # Every query in ghwidgets_common.py is `user(login: $login)` over
@@ -107,8 +117,8 @@ jobs:
 
       - name: Build a virtualenv per requested arm
         env:
-          BUILDS: ${{ inputs.builds }}
-          NEW_REF: ${{ inputs.new_ref }}
+          BUILDS: ${{ inputs.builds || 'new' }}
+          NEW_REF: ${{ inputs.new_ref || 'perf-blame' }}
         run: |
           set -euo pipefail
           # One venv per arm, built only for the arms actually requested, so a
@@ -288,11 +298,11 @@ jobs:
       - name: Measure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_USER: ${{ inputs.user }}
-          REPEATS: ${{ inputs.repeats }}
-          BUILDS: ${{ inputs.builds }}
-          CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead }}
-          BLAME_METHOD: ${{ inputs.blame_method }}
+          GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+          REPEATS: ${{ inputs.repeats || '1' }}
+          BUILDS: ${{ inputs.builds || 'new' }}
+          CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead || '3' }}
+          BLAME_METHOD: ${{ inputs.blame_method || 'both' }}
         run: |
           set -euo pipefail
           echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD BLAME_METHOD=$BLAME_METHOD"
@@ -384,7 +394,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
-          import glob, json, re, collections
+          import glob, json, re, sys
           rows, manifests = [], {}
           for f in sorted(glob.glob("/tmp/results/*.json")):
               d = json.load(open(f))
@@ -437,6 +447,7 @@ jobs:
           # failure, and the fast one under-reports SILENTLY, so surface it
           # here rather than leaving it in a per-run log nobody opens.
           print("\n--- targeted-vs-fame agreement ---")
+          disagreed = []
           for f in sorted(glob.glob("/tmp/results/*.json")):
               label = json.load(open(f))["label"]
               txt = open(f"/tmp/results/{label}.out", errors="replace").read()
@@ -447,6 +458,14 @@ jobs:
               bad = [r for r, v in cmps if v == "MISMATCH"]
               print(f"{label}: {len(cmps) - len(bad)}/{len(cmps)} repos agree"
                     + (f" -- MISMATCH on {bad}" if bad else ""))
+              if bad:
+                  disagreed.extend(bad)
+
+          # A disagreement is a correctness failure of the shipped default, so
+          # it fails the run. Reporting it into a log that nobody opens would
+          # make this audit indistinguishable from not running one.
+          if disagreed:
+              sys.exit(f"TARGETED DISAGREES WITH git-fame on {sorted(set(disagreed))}")
 
           # The comparison is only fair if both arms blamed the same repos.
           print("\n--- work-equality check (same repos, same surviving LOC?) ---")

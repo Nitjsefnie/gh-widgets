@@ -139,10 +139,45 @@ everything, so it takes far longer than an incremental run.
 > `gh-widgets-resync.timer` also shows a blank LAST column until its first
 > Sunday fires; blank ≠ broken.
 
-> **Health check in one line:** every render prints
-> `git-fame: <version> with --jobs` before the blame pass. If that line is
-> absent from a run's journal, the guard did not run — which is the alarm, not
-> the silence.
+> **Health check in one line:** every render prints `blame-method: <method>`
+> as its first line. Under `fame` or `both` it then prints
+> `git-fame: <version> with --jobs` before the blame pass, and the absence of
+> THAT line is the alarm. Under `targeted` (the default) git-fame never runs,
+> so its guard line is absent on purpose — which is why the method line exists
+> at all: silence used to be ambiguous between "not used" and "guard broken".
+
+> **`BLAME_METHOD` — how the per-repo line counts are produced.**
+> `targeted` (default) blames only the files our own commits touched and takes
+> `total` from a line count of the files `git grep -I .` calls text; `fame`
+> runs git-fame over every file; `both` runs the two and **fails** on any
+> disagreement. Measured over a full 59-repo `--resync`: 11.4s against 489.9s,
+> byte-exact on `ours` and `total` for every repo.
+>
+> The one known way `targeted` can be wrong: if somebody ELSE renames a file
+> after our commit, our lines live at a path our own history never mentions
+> and go uncounted. It under-counts **silently** — a smaller number, never an
+> error — so `gitfame-resync-memory.yml` runs `both` every Monday 05:23 UTC as
+> a drift audit and fails if any repo disagrees. Do not delete that schedule
+> without replacing the audit.
+>
+> Two more ways to get a silent zero, both now regression-tested, both hit
+> while writing this: a GitHub noreply address like
+> `75166987+user@users.noreply.github.com` is a **regex** to `git log
+> --author`, where `+` quantifies the preceding character and matches nothing;
+> and the addresses are lower-cased for comparison while `--author` matching
+> is case-sensitive. Any change to author matching needs `-F` and `-i` kept.
+
+> **`CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
+> blame consuming them. Clone waits on the network, blame saturates the CPUs,
+> so the overlap is close to free: measured 125.4s of 159.0s clone hidden,
+> against 60s hidden at depth 1. It costs that many extra checkouts on disk
+> and that many concurrent transfers, which is why it is bounded.
+
+> **`DEBUG_TIMING=1`** — per-repo clone/wait/fame seconds plus a phase summary
+> that closes named phases against real elapsed time. The residual is the
+> point: it was a stable ~36s of unattributed run until the fetch phases were
+> wrapped, and is now ~2s. A growing residual means an unmeasured phase, not a
+> fast run.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
 > scopes incl. `repo`), not a narrow PAT. Safe only because the renderer filters
