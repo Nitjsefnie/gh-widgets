@@ -192,7 +192,7 @@ def fetch_repo_totals(token, repos):
 
 
 def check_git_fame():
-    """Verify the installed git-fame is the patched build, and SAY SO.
+    """Verify the installed git-fame supports --jobs, and SAY SO.
 
     This renderer runs unattended on a timer, so a check that is silent on
     success is indistinguishable from a check that never ran — the absence of
@@ -203,7 +203,7 @@ def check_git_fame():
     # NOTE: `git-fame`, not `git fame`. Git's dispatcher rewrites
     # `git <cmd> --help` into `man git-<cmd>`, so `git fame --help` prints
     # "No manual entry for git-fame" and greps as if --jobs were absent —
-    # even when the patched build IS installed. Invoke the binary directly.
+    # even when a --jobs-capable build IS installed. Invoke the binary directly.
     try:
         r = subprocess.run(["git-fame", "--help"], capture_output=True,
                            text=True, timeout=60, check=False)
@@ -211,13 +211,13 @@ def check_git_fame():
         print(f"git-fame: CHECK FAILED ({e}) — blame pass may not work", flush=True)
         return False
     if "--jobs" not in r.stdout:
-        print("git-fame: WARNING — no --jobs, so this is STOCK git-fame: the "
-              "blame pass is serial and several times slower. See CLAUDE.md "
-              "for the pin.", flush=True)
+        print("git-fame: WARNING — no --jobs, so this git-fame predates 4.0.0: "
+              "the blame pass is serial and several times slower. See CLAUDE.md "
+              "for the version floor.", flush=True)
         return False
     v = subprocess.run(["git-fame", "--version"], capture_output=True,
                        text=True, timeout=60, check=False).stdout.strip()
-    print(f"git-fame: {v} with --jobs (patched build)", flush=True)
+    print(f"git-fame: {v} with --jobs", flush=True)
     return True
 
 

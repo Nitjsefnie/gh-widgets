@@ -44,38 +44,48 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > repo at once. Insiders/orgs need no such var: they are fetched from the
 > account.
 
-> **git-fame is pinned to a fork, not PyPI.** `render-impact.py`'s blame pass
-> runs `git fame` per repo; stock git-fame spawns one serial `git blame`
-> subprocess per file, so the pinned `Nitjsefnie-OSC/git-fame` fork that adds
-> `--jobs` is several times faster:
+> **git-fame needs `>= 4.0.0`, from PyPI.** `render-impact.py`'s blame pass
+> runs `git fame` per repo, and before 4.0.0 that spawned one serial
+> `git blame` subprocess per file. 4.0.0 added `--jobs`, which parallelises it:
 >
 > ```
-> pip install --force-reinstall "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+> pip install --upgrade "git-fame>=4"
 > ```
 >
-> **How you can tell which build is installed.** git-fame derives its version
-> from git tags via `setuptools_scm`, so the fork build reports
-> `3.1.4.devN+g<sha>` while PyPI stock reports `3.1.2`/`3.1.3` — a silent
-> revert is visible in `pip freeze` by construction, with no wheel retagging
-> needed.
+> Do not pass `-j` at the `blame_repo` call site. The parallelism is automatic
+> (`min(32, cpu+4)`), and passing the flag explicitly would turn an older
+> install from "slow" into "every repo errors", which poisons the cache.
 >
 > **Three guards, at three different times.** `test_impact.py` fails if the
 > installed build lacks `--jobs` (test time); `install.sh` warns (install
 > time); and `render-impact.py`'s `check_git_fame()` prints the installed
-> version on **every render** (run time). That last one logs on success on
-> purpose — this renderer runs unattended on a timer, so a guard that is
-> silent when healthy cannot be told apart from a guard that never ran. If
-> `git-fame:` is missing from a run's journal output, treat that as the alarm.
+> version on **every render** (run time). All three probe for `--jobs` in
+> `git-fame --help` rather than matching a version string, so they needed no
+> change when the source moved from the fork to PyPI. That last one logs on
+> success on purpose — this renderer runs unattended on a timer, so a guard
+> that is silent when healthy cannot be told apart from a guard that never
+> ran. If `git-fame:` is missing from a run's journal output, treat that as
+> the alarm.
 >
-> **Upstream status.** The patch is
+> **Provenance.** `--jobs` is our patch,
 > [casperdcl/git-fame#132](https://github.com/casperdcl/git-fame/pull/132),
-> which fixes
-> [#131](https://github.com/casperdcl/git-fame/issues/131) (the serial
-> one-blame-process-per-file issue). A pre-existing, unrelated bug found during
-> the work is [#130](https://github.com/casperdcl/git-fame/issues/130).
+> closing [#131](https://github.com/casperdcl/git-fame/issues/131). The
+> maintainer rebased and squashed it rather than merging the branch, so the PR
+> reads CLOSED while the work shipped as `41e9e48` in v4.0.0 — that release IS
+> that commit, and the PyPI wheel matches the git tree. Output is byte-identical
+> to the old fork build.
 >
-> Once the upstream PR merges, re-pin to the PyPI release that contains it and
-> delete this note.
+> One deliberate difference survives in upstream's version: it submits every
+> file to the pool up front (`list(ex.map(...))`) where the fork used a bounded
+> work window, so peak memory is held across all files rather than a window of
+> them. Unmeasured, and it did not affect the decision to move — the blame pass
+> is roughly 10–30% of a render — but it is the thing to look at first if this
+> ever starts using more memory than expected on a large repo.
+>
+> [#130](https://github.com/casperdcl/git-fame/issues/130) is a pre-existing,
+> unrelated bug found during the work. It is NOT caused by the parallelism:
+> the nondeterministic ordering comes from iterating an unsorted `set` outside
+> the blame loop, identically in stock, fork and 4.0.0.
 
 The long timeouts are load-bearing. `--resync` ignores the cache and re-blames
 everything, so it takes far longer than an incremental run.
@@ -88,9 +98,9 @@ everything, so it takes far longer than an incremental run.
 > Sunday fires; blank ≠ broken.
 
 > **Health check in one line:** every render prints
-> `git-fame: 3.1.4.devN+g<sha> with --jobs (patched build)` before the blame
-> pass. If that line is absent from a run's journal, the guard did not run —
-> which is the alarm, not the silence.
+> `git-fame: <version> with --jobs` before the blame pass. If that line is
+> absent from a run's journal, the guard did not run — which is the alarm, not
+> the silence.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
 > scopes incl. `repo`), not a narrow PAT. Safe only because the renderer filters
