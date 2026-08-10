@@ -44,13 +44,21 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > repo at once. Insiders/orgs need no such var: they are fetched from the
 > account.
 
-> **git-fame needs `>= 4.0.0`, from PyPI.** `render-impact.py`'s blame pass
-> runs `git fame` per repo, and before 4.0.0 that spawned one serial
-> `git blame` subprocess per file. 4.0.0 added `--jobs`, which parallelises it:
+> **git-fame is PINNED to our fork build, not to PyPI.** `render-impact.py`'s
+> blame pass runs `git fame` per repo, and stock git-fame before 4.0.0 spawned
+> one serial `git blame` subprocess per file. Both our fork and PyPI 4.0.0 have
+> `--jobs`; we run the fork because upstream's version costs ~2.2× peak memory
+> for no time saving (measured — see below).
 >
 > ```
-> pip install --upgrade "git-fame>=4"
+> pip install --force-reinstall \
+>   "git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
 > ```
+>
+> `git-fame --version` must print **`3.1.4.dev7+ga99855d3a`**. A local checkout
+> is at `/root/git-fame` on branch `parallel-blame`; `pip install .` from there
+> is equivalent. A bare `pip install --upgrade git-fame` **silently undoes this
+> pin** — 4.0.0 is the higher version number and installs cleanly.
 >
 > Do not pass `-j` at the `blame_repo` call site. The parallelism is automatic
 > (`min(32, cpu+4)`), and passing the flag explicitly would turn an older
@@ -60,8 +68,10 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > installed build lacks `--jobs` (test time); `install.sh` warns (install
 > time); and `render-impact.py`'s `check_git_fame()` prints the installed
 > version on **every render** (run time). All three probe for `--jobs` in
-> `git-fame --help` rather than matching a version string, so they needed no
-> change when the source moved from the fork to PyPI. That last one logs on
+> `git-fame --help` rather than matching a version string, so they need no
+> change when the source moves between the fork and PyPI — and, by the same
+> token, **none of them can tell the two apart.** The version in the
+> `git-fame:` journal line is what distinguishes them. That last one logs on
 > success on purpose — this renderer runs unattended on a timer, so a guard
 > that is silent when healthy cannot be told apart from a guard that never
 > ran. If `git-fame:` is missing from a run's journal output, treat that as
@@ -78,9 +88,41 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > One deliberate difference survives in upstream's version: it submits every
 > file to the pool up front (`list(ex.map(...))`) where the fork used a bounded
 > work window, so peak memory is held across all files rather than a window of
-> them. Unmeasured, and it did not affect the decision to move — the blame pass
-> is roughly 10–30% of a render — but it is the thing to look at first if this
-> ever starts using more memory than expected on a large repo.
+> them. **Measured 2026-08-10 — it costs roughly 2.2× peak memory for no time
+> saving.** A full `--resync` over the same 59 repos, two runs per build on a
+> GitHub runner (workflow run `31386157081`, `gitfame-resync-memory` — never on
+> this box):
+>
+> | build | cgroup peak | sampler tree peak | `git fame` proc peak | wall |
+> |---|---|---|---|---|
+> | fork `a99855d3` | 624.6 / 618.4 MB | 894.6 / 782.8 MB | 396.5 / 359.3 MB | 633.3 / 629.5 s |
+> | upstream 4.0.0 | 1351.6 / 1354.1 MB | 2251.9 / 2252.5 MB | 996.7 / 1000.8 MB | 627.3 / 625.0 s |
+>
+> Every run was validated before its numbers were believed: `rc=0`, a written
+> `impact.svg` of an identical 11,333 B, 59 repos actually blamed, and each
+> build confirmed by its own `git-fame:` guard line. The two arms blamed the
+> same repos with the same surviving LOC, so the comparison is like-for-like.
+> The wall-clock difference is under 1% and inside run-to-run noise — the
+> memory is spent to buy nothing.
+>
+> **So the pin went back to the fork on 2026-08-10 (operator instruction),
+> after a brief move to 4.0.0.** Paying 2.2× peak memory to buy nothing is the
+> whole argument; the earlier decision to move had been taken on a *time* cost
+> structure, before anyone had measured memory. The peak scales with the
+> largest single repo blamed (`Nitjsefnie-OSC/codex`, 1.65 M LOC), not with the
+> repo count, so it grows as that repo does.
+>
+> **There is deliberately no pin-expiry check in CI, and none should be
+> added.** `pin-still-needed.yml` was deleted and stays deleted. Its question —
+> has upstream shipped `--jobs` yet — is answered permanently and was never the
+> reason for the pin. The live reason is a memory property that no `--help`
+> probe can see, and it does not decay on a schedule, so a recurring check
+> would only ever produce false "you can unpin now" pressure. If you want to
+> re-test the gap, re-run the measurement workflow, on a runner.
+>
+> Not reported upstream: `casperdcl/git-fame` is blocked by operator
+> instruction (2026-08-07, no expiry, no ask to be raised) — see
+> `/root/oss-contrib/repo-references/casperdcl-git-fame.md`.
 >
 > [#130](https://github.com/casperdcl/git-fame/issues/130) is a pre-existing,
 > unrelated bug found during the work. It is NOT caused by the parallelism:
