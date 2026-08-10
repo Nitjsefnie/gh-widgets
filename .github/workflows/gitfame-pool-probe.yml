@@ -93,7 +93,11 @@ jobs:
           git clone -q --single-branch "https://github.com/$REPO.git" /tmp/target
           echo "files: $(git -C /tmp/target ls-files | wc -l)"
           echo "--- 10 largest tracked files (bytes) ---"
-          git -C /tmp/target ls-tree -r -l HEAD | sort -k4 -n -r | head -10
+          # NOT `... | sort | head`: under `set -o pipefail` head closes the
+          # pipe, sort dies of EPIPE with status 2, and a diagnostic listing
+          # takes the whole step down with it. Materialise, then read.
+          git -C /tmp/target ls-tree -r -l HEAD | sort -k4 -n -r > /tmp/sizes.txt
+          head -10 /tmp/sizes.txt
 
       - name: Profile each arm
         env:
