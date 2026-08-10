@@ -30,6 +30,9 @@ on:
     # spelled `inputs.x || <default>`. Without that the audit would run with
     # an empty build list and pass by doing nothing.
     - cron: "23 5 * * 1"
+    # TEMPORARY, remove after verifying the scheduled path runs: a schedule
+    # event supplies NO inputs, and that path has never actually executed.
+    - cron: "35 18 * * *"
   workflow_dispatch:
     inputs:
       repeats:
