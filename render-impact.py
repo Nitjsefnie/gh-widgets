@@ -350,7 +350,27 @@ def our_touched_files(dest, emails):
     return files
 
 
-def rename_closure(dest, paths):
+def our_first_commit_date(dest, emails):
+    """Author date of our EARLIEST commit, or None if we have none here.
+
+    Renames strictly older than that cannot have hidden our lines: at the time
+    we committed, the file already had whatever name the rename gave it, so
+    our own history records the post-rename path. Bounding the rename scan by
+    it is what keeps the scan from walking the entire history of a repo we
+    joined last month.
+    """
+    oldest = None
+    for email in emails:
+        out = git_out(dest, "log", "HEAD", "--fixed-strings",
+                      "--regexp-ignore-case", f"--author={email}",
+                      "--format=%at", "--reverse")
+        first = out.split("\n", 1)[0].strip()
+        if first.isdigit() and (oldest is None or int(first) < oldest):
+            oldest = int(first)
+    return oldest
+
+
+def rename_closure(dest, paths, since=None):
     """Extend `paths` with everything they were renamed INTO, transitively.
 
     A rename made by somebody else after our commit moves our lines to a path
@@ -368,8 +388,11 @@ def rename_closure(dest, paths):
     # therefore invisible. One real chain needed exactly that hop
     # (.../tags/blocks/... -> .../tags/block/...), and without it 13 lines
     # stayed lost after every other hop resolved.
-    out = git_out(dest, "log", "HEAD", "--diff-filter=R", "--name-status",
-                  "-M", "--diff-merges=first-parent", "--format=")
+    scan = ["log", "HEAD", "--diff-filter=R", "--name-status", "-M",
+            "--diff-merges=first-parent", "--format="]
+    if since:
+        scan.append(f"--since={since}")
+    out = git_out(dest, *scan)
     events = []
     for line in out.split("\n"):
         if line.startswith("R"):
@@ -424,7 +447,8 @@ def targeted_counts(dest, emails):
     # rename can have hidden our lines. Most repos skip this entirely.
     gone = touched - texts
     if gone:
-        touched = rename_closure(dest, touched)
+        touched = rename_closure(dest, touched,
+                                 since=our_first_commit_date(dest, emails))
         # `git log` does not record every link that `git blame` follows: blame
         # re-detects renames during its own walk, and one real case moved
         # resources/.../pickaxe.json to generated/.../pickaxe.json with no R

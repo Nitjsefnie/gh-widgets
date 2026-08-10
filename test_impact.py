@@ -362,6 +362,23 @@ class TestTargetedRenames(unittest.TestCase):
         git("commit", "-qm", "relocate", cwd=self.tmp)
         self.assertEqual(self._ours(), 3, "lines lost through a directory move")
 
+    def test_rename_before_our_commit_does_not_break_a_later_one(self):
+        """The scan is bounded to renames newer than our earliest commit.
+
+        That is sound because a rename older than our commit is already
+        reflected in the path our own history records — but only if a LATER
+        rename is still followed, which is what this pins.
+        """
+        git("mv", "seed.txt", "seed-renamed.txt", cwd=self.tmp)
+        git("commit", "-qm", "rename before we arrive", cwd=self.tmp)
+        (self.tmp / "later.txt").write_text("a\nb\n")
+        git("add", "-A", cwd=self.tmp)
+        git("-c", "user.name=Us", "-c", f"user.email={self.email}",
+            "commit", "-qm", "ours later", cwd=self.tmp)
+        git("mv", "later.txt", "later-moved.txt", cwd=self.tmp)
+        git("commit", "-qm", "rename after us", cwd=self.tmp)
+        self.assertEqual(self._ours(), 5, "post-commit rename was not followed")
+
     def test_untouched_repo_still_counts_nothing(self):
         """The recovery paths must not invent lines for a repo we never touched."""
         ours, _total = render_impact.targeted_counts(self.tmp,
