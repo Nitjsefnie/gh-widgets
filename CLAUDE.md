@@ -172,6 +172,14 @@ everything, so it takes far longer than an incremental run.
 > so the overlap is close to free: measured 125.4s of 159.0s clone hidden,
 > against 60s hidden at depth 1. It costs that many extra checkouts on disk
 > and that many concurrent transfers, which is why it is bounded.
+>
+> **Do not raise it to 8.** Measured, 59 repos, two runs each: depth 8 gets
+> wall 101.6s -> 79.3s, and cgroup peak 554.6MB -> **769.3MB**, which is worse
+> than the 624.6MB git-fame baseline the whole exercise had to beat — eight
+> concurrent clones cost more memory than the entire blame pass ever did. One
+> of the two runs also lost a repo to `clone_failed` under that concurrency
+> (the failure contract kept its old count and its stale oid forces a retry,
+> so no data was lost). 22 seconds is not worth either.
 
 > **`DEBUG_TIMING=1`** — per-repo clone/wait/fame seconds plus a phase summary
 > that closes named phases against real elapsed time. The residual is the
