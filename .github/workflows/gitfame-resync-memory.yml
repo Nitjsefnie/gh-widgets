@@ -29,10 +29,16 @@ on:
     # NOTE: a schedule event carries NO inputs, so every `inputs.x` below is
     # spelled `inputs.x || <default>`. Without that the audit would run with
     # an empty build list and pass by doing nothing.
+    # Verified as a SCHEDULE event, not just via dispatch: run 31424534870
+    # resolved builds->new, blame_method->both and the production
+    # GH_EXTRA_EMAILS purely from the `|| default` fallbacks, and reported
+    # 59/59. A dispatch cannot prove this -- it fills every input with its
+    # declared default and never takes that path.
+    #
+    # GitHub delays scheduled events under load: that run was created 56
+    # minutes after its cron time. Do not read a late start as a fault, and
+    # do not assume this fires at 05:23 sharp.
     - cron: "23 5 * * 1"
-    # TEMPORARY, remove after verifying the scheduled path runs: a schedule
-    # event supplies NO inputs, and that path has never actually executed.
-    - cron: "35 18 * * *"
   workflow_dispatch:
     inputs:
       repeats:
