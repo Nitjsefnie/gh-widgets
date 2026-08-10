@@ -159,18 +159,29 @@ everything, so it takes far longer than an incremental run.
 > at all: silence used to be ambiguous between "not used" and "guard broken".
 
 > **`BLAME_METHOD` — how the per-repo line counts are produced.**
-> `targeted` (default) blames only the files our own commits touched and takes
-> `total` from a line count of the files `git grep -I .` calls text; `fame`
-> runs git-fame over every file; `both` runs the two and **fails** on any
-> disagreement. Measured over a full 59-repo `--resync`: 11.4s against 489.9s,
-> byte-exact on `ours` and `total` for every repo.
+> `fame` (default) runs git-fame over every file; `targeted` blames only the
+> files our own commits touched and takes `total` from a line count of the
+> files `git grep -I .` calls text; `both` runs the two and **fails** on any
+> disagreement. `targeted` is 11.4s against 489.9s over 59 repos — and is NOT
+> safe to enable yet.
 >
-> The one known way `targeted` can be wrong: if somebody ELSE renames a file
-> after our commit, our lines live at a path our own history never mentions
-> and go uncounted. It under-counts **silently** — a smaller number, never an
-> error — so `gitfame-resync-memory.yml` runs `both` every Monday 05:23 UTC as
-> a drift audit and fails if any repo disagrees. Do not delete that schedule
-> without replacing the audit.
+> **Why `targeted` is off.** A rename made by somebody ELSE after our commit
+> moves our lines to a path our own history never mentions, so they go
+> uncounted. Measured over the fleet with production's real address set:
+> 54/59 agree, and the five that do not under-count `ours` by up to 99%
+> (warior456/Sculk-Depths 313 -> 4, tiagolauer/OwlSQL 430 -> 258,
+> AgoraDMV/DeltaTrack 2,852 -> 2,776, LunarVagabond/Pipe-Deck 262 -> 212,
+> Brandcraf06/AdaPaxels 1 -> 0). `total` is exact in every case, so the error
+> is purely in candidate-file selection. Fixing it means resolving our touched
+> paths forward through the rename chain (`git log --diff-filter=R
+> --name-status`), not blaming more files.
+>
+> **The 59/59 result that briefly justified enabling it was measured without
+> `GH_EXTRA_EMAILS`** — the derived noreply addresses alone. Every future
+> measurement of this must carry the production address set, which is why the
+> workflow now passes it; auditing a different identity than the one that
+> renders the card is not an audit. `gitfame-resync-memory.yml` runs `both`
+> every Monday 05:23 UTC and fails on any disagreement.
 >
 > Two more ways to get a silent zero, both now regression-tested, both hit
 > while writing this: a GitHub noreply address like

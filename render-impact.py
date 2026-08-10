@@ -432,17 +432,16 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 
 
 # How the per-repo line counts are produced:
-#   targeted - blame only the files our own commits touched (default)
-#   fame     - git-fame over every file (the reference)
+#   fame     - git-fame over every file (the reference, and the default)
+#   targeted - blame only the files our own commits touched
 #   both     - run BOTH and fail loudly on any disagreement
-# `targeted` earned the default by agreeing with git-fame on all 59 repos of a
-# full --resync, byte-exact on `ours` and `total`, in 11.4s against 489.9s.
-# It keeps ONE known way to under-count: if somebody else renames a file after
-# our commit, our lines move to a path our own history never mentions. That is
-# why gitfame-resync-memory runs `both` weekly as a drift audit -- the risk is
-# monitored rather than merely accepted, since under-counting is invisible in
-# the output.
-BLAME_METHOD = os.environ.get("BLAME_METHOD", "targeted").strip().lower()
+# `targeted` was briefly the default on the strength of 59/59 agreement, and
+# that run was measured with the DERIVED noreply addresses only. Re-run with
+# production's GH_EXTRA_EMAILS it agrees on 54/59, under-counting `ours` by up
+# to 99% on one repo (313 -> 4) while `total` stays exact -- the rename blind
+# spot, which is common rather than theoretical. So the default is back to the
+# reference until candidate files are resolved through later renames.
+BLAME_METHOD = os.environ.get("BLAME_METHOD", "fame").strip().lower()
 _DISAGREEMENTS = []
 
 
