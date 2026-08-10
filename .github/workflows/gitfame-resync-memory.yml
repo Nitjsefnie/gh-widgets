@@ -1,0 +1,398 @@
+name: gitfame-resync-memory
+
+# Measures the PEAK MEMORY of a full `render-impact.py --resync` under two
+# git-fame builds, to size one specific behavioural difference between them.
+#
+# Why this exists. Upstream git-fame 4.0.0 runs the per-file `git blame` calls
+# through `tqdm.contrib.concurrent.thread_map`, which is `list(ex.map(...))`:
+# every file is submitted to the pool up front and every file's blame output is
+# retained until the whole repo is done. The Nitjsefnie-OSC fork used a bounded
+# window (`imap_bounded`, at most min(2*jobs, jobs+4) outstanding) and consumed
+# results as a generator. Both run the same number of blames concurrently, so
+# this is a memory question, not a throughput one.
+#
+# Why --resync is the workload rather than a synthetic git-fame benchmark: it is
+# the real consumer path AND the maximum-blame case (it ignores the cache and
+# re-blames every repo), so it is exactly the condition under which a dropped
+# work window would show.
+#
+# This workflow is measurement-only. It never writes to the repo, never
+# publishes an SVG anywhere, and reads only public GitHub data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Repeats per build (>=2 so an outlier is visible)"
+        required: false
+        default: "2"
+      user:
+        description: "GitHub login whose impact card is rendered"
+        required: false
+        default: "Nitjsefnie"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Environment facts
+        run: |
+          set -euo pipefail
+          echo "nproc=$(nproc)"
+          echo "kernel=$(uname -r)"
+          echo "cgroup version: $(stat -fc %T /sys/fs/cgroup)"
+          free -m
+          df -h / | tail -1
+          git --version
+
+      - name: Preflight — can this token read the public identity?
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOGIN: ${{ inputs.user }}
+        run: |
+          set -euo pipefail
+          # Every query in ghwidgets_common.py is `user(login: $login)` over
+          # PUBLIC fields, so the default runner token should suffice. Fail
+          # here in seconds rather than 20 minutes into a measurement.
+          resp=$(curl -sS -H "Authorization: bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"query(\$l:String!){user(login:\$l){login databaseId organizations(first:5){nodes{login}}}}\",\"variables\":{\"l\":\"$LOGIN\"}}" \
+            https://api.github.com/graphql)
+          echo "$resp"
+          python3 - "$resp" <<'PYEOF'
+          import json, sys
+          d = json.loads(sys.argv[1])
+          if d.get("errors"):
+              sys.exit(f"PREFLIGHT FAILED: GraphQL errors: {d['errors']}")
+          u = (d.get("data") or {}).get("user")
+          if not u or not u.get("databaseId"):
+              sys.exit(f"PREFLIGHT FAILED: no usable user node: {d}")
+          print(f"preflight ok: login={u['login']} databaseId={u['databaseId']} "
+                f"orgs={[o['login'] for o in u['organizations']['nodes']]}")
+          PYEOF
+
+      - name: Build the two virtualenvs
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/venv-fork
+          python3 -m venv /tmp/venv-up
+          /tmp/venv-fork/bin/pip install -q --upgrade pip
+          /tmp/venv-up/bin/pip install -q --upgrade pip
+          /tmp/venv-fork/bin/pip install -q \
+            "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+          /tmp/venv-up/bin/pip install -q "git-fame==4.0.0"
+          echo "--- fork ---"
+          /tmp/venv-fork/bin/git-fame --version
+          /tmp/venv-fork/bin/git-fame --help | grep -c -- '--jobs'
+          echo "--- upstream ---"
+          /tmp/venv-up/bin/git-fame --version
+          /tmp/venv-up/bin/git-fame --help | grep -c -- '--jobs'
+          # Both must genuinely have --jobs, or the comparison is meaningless.
+          /tmp/venv-fork/bin/git-fame --help | grep -q -- '--jobs'
+          /tmp/venv-up/bin/git-fame --help | grep -q -- '--jobs'
+
+      - name: Install the measurement harness
+        run: |
+          set -euo pipefail
+          cat > /tmp/measure.py <<'PYEOF'
+          #!/usr/bin/env python3
+          """Run a command and report the peak memory of the WHOLE process tree.
+
+          Two independent instruments, because neither is sufficient alone and
+          they have opposite biases:
+
+          * cgroup v2 `memory.peak` on a dedicated cgroup. Exact kernel
+            high-water mark for the whole tree (children are auto-inherited),
+            no sampling error. Counts shared pages ONCE, and includes page
+            cache and kernel memory charged to the cgroup -- so it is an
+            over-count relative to "sum of anonymous RSS" and cannot be
+            attributed to an individual process.
+          * a sampler that reads the cgroup's `cgroup.procs` and sums each
+            member's RSS from /proc/<pid>/statm. Attributable per process (so
+            the `git-fame` child can be isolated, which is the whole point),
+            but DOUBLE-COUNTS pages shared between the concurrent `git blame`
+            children, and misses any spike shorter than the sample interval.
+
+          Both are reported. Neither is silently preferred.
+          """
+          import argparse
+          import json
+          import os
+          import subprocess
+          import sys
+          import threading
+          import time
+
+          PAGE = os.sysconf("SC_PAGE_SIZE")
+
+
+          def read_rss_kb(pid):
+              try:
+                  with open(f"/proc/{pid}/statm") as f:
+                      return int(f.read().split()[1]) * PAGE // 1024
+              except (OSError, IndexError, ValueError):
+                  return 0
+
+
+          def read_cmd(pid):
+              try:
+                  with open(f"/proc/{pid}/cmdline", "rb") as f:
+                      return f.read().replace(b"\0", b" ").decode(errors="replace").strip()[:120]
+              except OSError:
+                  return "?"
+
+
+          def main():
+              ap = argparse.ArgumentParser()
+              ap.add_argument("--cgroup", required=True)
+              ap.add_argument("--json", required=True)
+              ap.add_argument("--label", required=True)
+              ap.add_argument("--stdout", required=True)
+              ap.add_argument("--stderr", required=True)
+              ap.add_argument("--interval", type=float, default=0.02)
+              ap.add_argument("cmd", nargs=argparse.REMAINDER)
+              a = ap.parse_args()
+              cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
+              cg = a.cgroup
+              procs = os.path.join(cg, "cgroup.procs")
+
+              tree_peak_kb = [0]
+              per_pid_peak = {}
+              samples = [0]
+              stop = threading.Event()
+
+              def sample():
+                  while not stop.is_set():
+                      try:
+                          with open(procs) as f:
+                              pids = [int(x) for x in f.read().split()]
+                      except OSError:
+                          pids = []
+                      total = 0
+                      for pid in pids:
+                          rss = read_rss_kb(pid)
+                          total += rss
+                          prev = per_pid_peak.get(pid)
+                          if prev is None or rss > prev[0]:
+                              per_pid_peak[pid] = (rss, read_cmd(pid))
+                      if total > tree_peak_kb[0]:
+                          tree_peak_kb[0] = total
+                      samples[0] += 1
+                      time.sleep(a.interval)
+
+              # `sh` puts ITSELF into the cgroup and then execs the target, so
+              # the target and every descendant it spawns are inside from the
+              # first instruction. Writing the pid after Popen would race.
+              shim = 'echo $$ > "$1"/cgroup.procs; shift; exec "$@"'
+              full = ["sh", "-c", shim, "sh", cg] + cmd
+
+              t0 = time.monotonic()
+              with open(a.stdout, "wb") as fo, open(a.stderr, "wb") as fe:
+                  p = subprocess.Popen(full, stdout=fo, stderr=fe)
+                  th = threading.Thread(target=sample, daemon=True)
+                  th.start()
+                  rc = p.wait()
+              stop.set()
+              th.join(timeout=2)
+              wall = time.monotonic() - t0
+
+              cgroup_peak_kb = None
+              try:
+                  with open(os.path.join(cg, "memory.peak")) as f:
+                      cgroup_peak_kb = int(f.read().strip()) // 1024
+              except (OSError, ValueError):
+                  pass
+
+              top = sorted(per_pid_peak.items(), key=lambda kv: -kv[1][0])[:12]
+              out = {
+                  "label": a.label,
+                  "rc": rc,
+                  "wall_s": round(wall, 1),
+                  "cgroup_memory_peak_kb": cgroup_peak_kb,
+                  "sampler_tree_peak_kb": tree_peak_kb[0],
+                  "sampler_samples": samples[0],
+                  "sampler_interval_s": a.interval,
+                  "top_processes_by_peak_rss_kb": [
+                      {"pid": pid, "peak_rss_kb": rss, "cmd": cmd_} for pid, (rss, cmd_) in top
+                  ],
+              }
+              with open(a.json, "w") as f:
+                  json.dump(out, f, indent=2)
+              print(json.dumps(out, indent=2))
+              return 0 if rc == 0 else 1
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PYEOF
+          python3 -c "import ast,sys; ast.parse(open('/tmp/measure.py').read())"
+          echo "measure.py parses"
+
+      - name: Prepare the cgroup
+        run: |
+          set -euo pipefail
+          if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
+            echo "FATAL: not cgroup v2"; exit 1
+          fi
+          echo "root controllers: $(cat /sys/fs/cgroup/cgroup.controllers)"
+          echo "root subtree_control before: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+          if ! grep -qw memory /sys/fs/cgroup/cgroup.subtree_control; then
+            echo '+memory' | sudo tee /sys/fs/cgroup/cgroup.subtree_control || \
+              echo "WARN: could not enable memory controller at root"
+          fi
+          echo "root subtree_control after: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+          sudo mkdir -p /sys/fs/cgroup/gfbench
+          ls /sys/fs/cgroup/gfbench/ | grep -E '^memory\.(peak|current)$' || \
+            { echo "FATAL: memory controller not delegated to the test cgroup"; exit 1; }
+
+      - name: Measure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ inputs.user }}
+          REPEATS: ${{ inputs.repeats }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/results
+          # Interleave the builds (fork, up, fork, up) rather than grouping
+          # them, so any drift in the runner or in upstream repo state is
+          # spread across both arms instead of loading one of them.
+          for rep in $(seq 1 "$REPEATS"); do
+            for build in fork up; do
+              LABEL="$build-$rep"
+              echo "::group::$LABEL"
+              # A fresh cgroup per run: memory.peak is a high-water mark and
+              # would otherwise carry the previous run's maximum forward --
+              # which would inflate every run after the first and manufacture
+              # exactly the difference this workflow is trying to measure.
+              # So this is asserted, not assumed.
+              sudo rmdir /sys/fs/cgroup/gfbench 2>/dev/null || true
+              sudo mkdir -p /sys/fs/cgroup/gfbench
+              echo 0 | sudo tee /sys/fs/cgroup/gfbench/memory.peak >/dev/null 2>&1 || true
+              stale=$(cat /sys/fs/cgroup/gfbench/memory.peak)
+              resident=$(wc -w < /sys/fs/cgroup/gfbench/cgroup.procs)
+              echo "cgroup starts at memory.peak=${stale}B with ${resident} procs"
+              if [ "$stale" -gt 52428800 ] || [ "$resident" -ne 0 ]; then
+                echo "FATAL: cgroup not fresh (peak=${stale}B procs=${resident}) —"
+                echo "       a carried-over high-water mark would corrupt this run"
+                exit 1
+              fi
+              rm -rf "/tmp/out-$LABEL" "/tmp/cache-$LABEL.json"
+              mkdir -p "/tmp/out-$LABEL"
+              sudo -E python3 /tmp/measure.py \
+                --cgroup /sys/fs/cgroup/gfbench \
+                --json "/tmp/results/$LABEL.json" \
+                --label "$LABEL" \
+                --stdout "/tmp/results/$LABEL.out" \
+                --stderr "/tmp/results/$LABEL.err" \
+                -- env \
+                  "PATH=/tmp/venv-$build/bin:$PATH" \
+                  "GH_USER=$GH_USER" \
+                  "GH_TOKEN=$GH_TOKEN" \
+                  "OUT_DIR=/tmp/out-$LABEL" \
+                  "CACHE_FILE=/tmp/cache-$LABEL.json" \
+                  python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
+              echo "--- which build actually ran ---"
+              grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
+                { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
+              echo "--- repos blamed ---"
+              grep -c '^loc \[' "/tmp/results/$LABEL.out" || true
+              echo "::endgroup::"
+            done
+          done
+
+      - name: Validate every run before any number is believed
+        run: |
+          set -euo pipefail
+          # A crashed run allocates little and would otherwise read as the
+          # winner. Nothing here is accepted without rc=0, a written SVG, and
+          # a blame manifest.
+          python3 - <<'PYEOF'
+          import glob, json, os, re, sys
+          bad = []
+          for f in sorted(glob.glob("/tmp/results/*.json")):
+              d = json.load(open(f))
+              label = d["label"]
+              out = f"/tmp/results/{label}.out"
+              txt = open(out, errors="replace").read()
+              svg = f"/tmp/out-{label}/impact.svg"
+              size = os.path.getsize(svg) if os.path.exists(svg) else 0
+              blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+([\d,]+) /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
+              guard = re.search(r"^git-fame: (.+)$", txt, re.M)
+              if d["rc"] != 0:
+                  bad.append(f"{label}: rc={d['rc']}")
+              if size == 0:
+                  bad.append(f"{label}: impact.svg missing or empty")
+              if not blamed:
+                  bad.append(f"{label}: blamed ZERO repos — not a max-blame workload")
+              if not guard:
+                  bad.append(f"{label}: no git-fame identification line")
+              print(f"{label}: rc={d['rc']} svg={size}B repos_blamed={len(blamed)} "
+                    f"guard={guard.group(1) if guard else 'NONE'}")
+          if bad:
+              sys.exit("VALIDATION FAILED:\n  " + "\n  ".join(bad))
+          print("all runs valid")
+          PYEOF
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import glob, json, re, collections
+          rows, manifests = [], {}
+          for f in sorted(glob.glob("/tmp/results/*.json")):
+              d = json.load(open(f))
+              label = d["label"]
+              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
+              blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+[\d,]+ /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
+              manifests[label] = {repo: int(tot.replace(",", "")) for tot, repo in blamed}
+              gf = re.search(r"^git-fame: (.+)$", txt, re.M)
+              gfp = max(((p["peak_rss_kb"], p["cmd"]) for p in d["top_processes_by_peak_rss_kb"]
+                         if "git-fame" in p["cmd"] or "git fame" in p["cmd"]), default=(0, "-"))
+              rows.append((label, d["rc"], d["wall_s"], d["cgroup_memory_peak_kb"],
+                           d["sampler_tree_peak_kb"], gfp[0], len(blamed),
+                           gf.group(1) if gf else "?"))
+          print(f"{'run':10} {'rc':>3} {'wall_s':>8} {'cgroup_peak_MB':>15} "
+                f"{'sampler_tree_MB':>16} {'git-fame_proc_MB':>17} {'repos':>6}  build")
+          for r in rows:
+              cg = f"{r[3]/1024:.1f}" if r[3] is not None else "n/a"
+              print(f"{r[0]:10} {r[1]:>3} {r[2]:>8} {cg:>15} "
+                    f"{r[4]/1024:>16.1f} {r[5]/1024:>17.1f} {r[6]:>6}  {r[7]}")
+
+          # The comparison is only fair if both arms blamed the same repos.
+          print("\n--- work-equality check (same repos, same surviving LOC?) ---")
+          keys = sorted(manifests)
+          base = manifests[keys[0]]
+          for k in keys[1:]:
+              m = manifests[k]
+              only_a = set(base) - set(m)
+              only_b = set(m) - set(base)
+              moved = {r for r in set(base) & set(m) if base[r] != m[r]}
+              print(f"{keys[0]} vs {k}: repos_only_in_first={len(only_a)} "
+                    f"repos_only_in_second={len(only_b)} loc_changed={len(moved)}")
+              for r in sorted(moved)[:10]:
+                  print(f"    {r}: {base[r]} -> {m[r]}")
+
+          print("\n--- largest repos blamed (drives the peak) ---")
+          for repo, loc in sorted(base.items(), key=lambda kv: -kv[1])[:10]:
+              print(f"  {loc:>10,}  {repo}")
+          PYEOF
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitfame-resync-memory
+          path: |
+            /tmp/results/
+          retention-days: 14
