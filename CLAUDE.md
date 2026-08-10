@@ -190,19 +190,34 @@ everything, so it takes far longer than an incremental run.
 > and the addresses are lower-cased for comparison while `--author` matching
 > is case-sensitive. Any change to author matching needs `-F` and `-i` kept.
 
+> **The CI audit blames a SUPERSET of what production does**, so its timings
+> are not production's. The runner token cannot see the account's private org
+> memberships, so `Nitjsefnie-OSC` and `Nitjsefnie-Games` repos come out
+> external there and get blamed; on the box they are derived insiders and are
+> never cloned. Those three repos are 33.2s of the audit's 44.1s blame phase,
+> so production's is nearer 11s. This is deliberate — a superset is a stricter
+> correctness check — but do not read the audit's wall time as the box's.
+
 > **`CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
 > blame consuming them. Clone waits on the network, blame saturates the CPUs,
 > so the overlap is close to free: measured 125.4s of 159.0s clone hidden,
 > against 60s hidden at depth 1. It costs that many extra checkouts on disk
 > and that many concurrent transfers, which is why it is bounded.
 >
-> **Do not raise it to 8.** Measured, 59 repos, two runs each: depth 8 gets
-> wall 101.6s -> 79.3s, and cgroup peak 554.6MB -> **769.3MB**, which is worse
-> than the 624.6MB git-fame baseline the whole exercise had to beat — eight
-> concurrent clones cost more memory than the entire blame pass ever did. One
-> of the two runs also lost a repo to `clone_failed` under that concurrency
-> (the failure contract kept its old count and its stale oid forces a retry,
-> so no data was lost). 22 seconds is not worth either.
+> **Depth 8 is faster and reads as a memory regression, but read the two
+> instruments before believing that.** Depth 8 gets wall 101.6s -> 79.3s with
+> cgroup peak 554.6MB -> 769.3MB, which is worse than the 624.6MB baseline —
+> while the sampler's RSS sum only moves 221MB -> 327MB, far under the 894MB
+> baseline on that same instrument. cgroup `memory.peak` **counts page cache**,
+> and eight concurrent clones write much more file data, so most of that
+> "regression" is reclaimable cache rather than process memory. Capping
+> index-pack (`CLONE_PACK_THREADS`, `CLONE_WINDOW_MB`) confirmed it: 769MB ->
+> 761MB, i.e. allocation was never the driver.
+>
+> The real cost of depth 8 is reliability: one of two runs lost a repo to
+> `clone_failed` under eight concurrent transfers. The failure contract kept
+> its old count and its stale oid forces a retry, so nothing was lost, but
+> that is the thing to weigh — not the cgroup number.
 
 > **`DEBUG_TIMING=1`** — per-repo clone/wait/fame seconds plus a phase summary
 > that closes named phases against real elapsed time. The residual is the
