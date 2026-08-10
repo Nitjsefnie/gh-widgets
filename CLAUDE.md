@@ -154,9 +154,9 @@ everything, so it takes far longer than an incremental run.
 > **Health check in one line:** every render prints `blame-method: <method>`
 > as its first line. Under `fame` or `both` it then prints
 > `git-fame: <version> with --jobs` before the blame pass, and the absence of
-> THAT line is the alarm. Under `targeted` (the default) git-fame never runs,
-> so its guard line is absent on purpose — which is why the method line exists
-> at all: silence used to be ambiguous between "not used" and "guard broken".
+> THAT line is the alarm. Under `targeted` git-fame never runs, so its guard
+> line is absent on purpose — which is why the method line exists at all:
+> silence would otherwise be ambiguous between "not used" and "guard broken".
 
 > **`BLAME_METHOD` — how the per-repo line counts are produced.**
 > `fame` (default) runs git-fame over every file; `targeted` blames only the
