@@ -66,6 +66,7 @@ Deps: Python stdlib + the `git` CLI + git-fame (pip) for the blame pass.
 Requires Python 3.9+.
 """
 import argparse
+import contextlib
 import importlib.util
 import json
 import math
@@ -229,6 +230,24 @@ def check_git_fame():
 # `git fame` is CPU-bound -- which a single wall-clock number cannot separate.
 DEBUG_TIMING = bool(os.environ.get("DEBUG_TIMING"))
 _TIMINGS = []
+_PHASES = {}
+_T0 = time.monotonic()
+
+
+@contextlib.contextmanager
+def timed_phase(name):
+    """Attribute a non-blame phase. Everything outside the blame pass used to
+    land in one unattributed remainder -- a stable ~36s of a ~600s run, which
+    is too big to leave unnamed: an unmeasured phase cannot be optimised and
+    cannot be shown to be irrelevant either."""
+    if not DEBUG_TIMING:
+        yield
+        return
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        _PHASES[name] = _PHASES.get(name, 0.0) + time.monotonic() - t0
 
 
 def _record_timing(repo, clone_s, fame_s, total, wait_s=0.0):
@@ -243,8 +262,8 @@ def _record_timing(repo, clone_s, fame_s, total, wait_s=0.0):
 
 
 def print_timing_summary():
-    """Report where the blame pass actually went. Prints the phase totals AND
-    the measured wall total, so a gap between them is visible rather than
+    """Report where the run actually went. Prints the phase totals AND the
+    measured wall total, so a gap between them is visible rather than
     silently absorbed -- an unaccounted phase is exactly what per-phase timing
     is supposed to expose."""
     if not (DEBUG_TIMING and _TIMINGS):
@@ -264,6 +283,15 @@ def print_timing_summary():
     for repo, c, f, n, w in sorted(_TIMINGS, key=lambda t: -t[2])[:10]:
         print(f"    {f:7.1f}s fame  {c:6.1f}s clone ({w:5.1f}s waited)  "
               f"{n:>10,} loc  {repo}", flush=True)
+    for name, secs in sorted(_PHASES.items(), key=lambda kv: -kv[1]):
+        print(f"  {name:<12}{secs:8.1f}s", flush=True)
+    # The closing line is the point of all of this: named phases against the
+    # real elapsed time. A residual that grows is an instrument with a hole
+    # in it, not a fast run.
+    named = wait + fame + sum(_PHASES.values())
+    elapsed = time.monotonic() - _T0
+    print(f"  ---\n  named       {named:8.1f}s of {elapsed:8.1f}s elapsed "
+          f"({elapsed - named:.1f}s unattributed)", flush=True)
 
 
 def clone_repo(repo, branch, dest):
@@ -335,42 +363,60 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
     return ourloc
 
 
-def prefetched_clones(moved):
+def clone_lookahead():
+    """How many repos to clone ahead of the blame consuming them.
+
+    One-deep hid a measured ~60s of clone per run but still left 115-131s of
+    WAITING, because a clone only overlaps the single blame next to it and
+    the blames are not all long. Going deeper overlaps a clone with several
+    blames. The cost is linear in disk (that many extra checkouts) and in
+    concurrent network transfers, so this is bounded and configurable rather
+    than "as deep as possible".
+    """
+    # env_float, not a bespoke int reader: it already hard-errors on a typo
+    # instead of silently reverting to the default, which is the property
+    # that matters for a tuning knob.
+    return max(1, int(common.env_float("CLONE_LOOKAHEAD", 3)))
+
+
+def prefetched_clones(moved, depth=None):
     """Yield `(repo, t, dest, clone_s, wait_s, error)` per entry of `moved`,
-    with the NEXT repo's clone already running in the background.
+    with the next `depth` repos' clones already running in the background.
 
     Clone and blame contend for nothing -- `git clone` waits on the network,
-    `git fame` saturates the CPUs -- so running one clone ahead hides it
-    behind blame time the loop was previously spending idle. Exactly one runs
-    ahead, which caps the extra disk at a single repository.
+    `git fame` saturates the CPUs -- so running clones ahead hides them behind
+    blame time the loop was otherwise spending idle.
 
     A clone failure is handed to the consumer as `error` rather than raised,
     so the caller's per-repo failure contract still applies and, crucially,
     the prefetch chain keeps running instead of stopping at the first bad
     repo. The consumer owns deleting each `dest` it is given.
     """
-    pool = futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch")
+    depth = clone_lookahead() if depth is None else depth
+    pool = futures.ThreadPoolExecutor(max_workers=depth, thread_name_prefix="prefetch")
     pending = {}
     dirs = {}
 
     def start(idx):
-        if idx < len(moved):
+        if idx < len(moved) and idx not in pending:
             repo, t = moved[idx]
             dirs[idx] = Path(tempfile.mkdtemp(prefix="impact-fame-"))
             pending[idx] = pool.submit(clone_repo, repo, t["branch"], dirs[idx])
 
     try:
-        start(0)
-        for i, (repo, t) in enumerate(moved):
+        for i, entry in enumerate(moved):
+            # top the queue back up BEFORE blocking, so the wait for repo i
+            # is also clone time for i+1..i+depth
+            for ahead in range(i, i + depth + 1):
+                start(ahead)
             t0 = time.monotonic()
             try:
                 clone_s = pending.pop(i).result()
                 err = None
             except Exception as e:  # pylint: disable=broad-except
                 clone_s, err = 0.0, e
-            wait_s = time.monotonic() - t0
-            start(i + 1)
-            yield repo, t, dirs.pop(i), clone_s, wait_s, err
+            yield (entry[0], entry[1], dirs.pop(i), clone_s,
+                   time.monotonic() - t0, err)
     finally:
         for fut in pending.values():
             fut.cancel()
@@ -403,7 +449,6 @@ def blame_moved(moved, ourloc, emails):
                 print(f"loc [{i}/{n}] FAIL {repo}: {str(e)[:60]}", flush=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    print_timing_summary()
 
 
 def wilson(w, n, z):
@@ -567,15 +612,19 @@ def fetch_all(token, user, cache, resync):
     # Identity first: everything downstream depends on knowing who we are
     # and which owners are insiders. Derived from the token's own account,
     # so joining an org needs no code or config change.
-    me = common.fetch_identity(token, user, gql_fn=gql)
+    with timed_phase("identity"):
+        me = common.fetch_identity(token, user, gql_fn=gql)
     insiders = me.insiders
-    prs, prs_by_id = fetch_pull_requests(
-        token, me.login, None if resync else cache.get("prs") or None)
-    issues = fetch_issues(token, me.login)
+    with timed_phase("fetch_prs"):
+        prs, prs_by_id = fetch_pull_requests(
+            token, me.login, None if resync else cache.get("prs") or None)
+    with timed_phase("fetch_issues"):
+        issues = fetch_issues(token, me.login)
     repos = sorted({n["repository"]["nameWithOwner"]
                     for n in prs + issues
                     if common.is_external(n, insiders)})
-    totals = fetch_repo_totals(token, repos)
+    with timed_phase("fetch_totals"):
+        totals = fetch_repo_totals(token, repos)
     merged_repos = {n["repository"]["nameWithOwner"] for n in prs
                     if n["merged"] and common.is_external(n, insiders)}
     ourloc = update_loc(merged_repos, totals,
@@ -592,10 +641,11 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale):
     issue_rows = issue_table(issues, totals, insiders, knobs)
     loc_rows = loc_table(ourloc, knobs)
 
-    svg = render_impact(C, pr_rows, issue_rows, loc_rows)
-    if stale:
-        svg = stamp_cache_notice(C, svg, stale)
-    (out / "impact.svg").write_text(svg)
+    with timed_phase("render_svg"):
+        svg = render_impact(C, pr_rows, issue_rows, loc_rows)
+        if stale:
+            svg = stamp_cache_notice(C, svg, stale)
+        (out / "impact.svg").write_text(svg)
     return pr_rows, issue_rows, loc_rows
 
 
@@ -631,15 +681,16 @@ def main():
         insiders = (frozenset(cache["insiders"]) if cache.get("insiders")
                     else common.insider_set(args.user, []))
     else:
-        save_cache(args.cache_file, {
-            "version": CACHE_VERSION,
-            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "insiders": sorted(insiders),
-            "prs": prs_by_id,
-            "issues": issues,
-            "totals": totals,
-            "ourloc": ourloc,
-        })
+        with timed_phase("save_cache"):
+            save_cache(args.cache_file, {
+                "version": CACHE_VERSION,
+                "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "insiders": sorted(insiders),
+                "prs": prs_by_id,
+                "issues": issues,
+                "totals": totals,
+                "ourloc": ourloc,
+            })
 
     pr_rows, issue_rows, loc_rows = write_card(
         C, out, prs, issues, totals, ourloc, insiders, stale)
@@ -651,6 +702,7 @@ def main():
         print(f"wrote {out}/impact.svg "
               f"(pr repos={len(pr_rows)} issue repos={len(issue_rows)} "
               f"loc repos={len(loc_rows)})")
+    print_timing_summary()
 
 
 if __name__ == "__main__":

@@ -41,6 +41,12 @@ on:
         description: "Fork ref installed as the `new` arm"
         required: false
         default: "parallel-blame"
+      clone_lookahead:
+        description: >-
+          How many repos render-impact.py clones ahead of the blame consuming
+          them. 1 reproduces the original one-deep prefetch.
+        required: false
+        default: "3"
 
 permissions:
   contents: read
@@ -279,8 +285,10 @@ jobs:
           GH_USER: ${{ inputs.user }}
           REPEATS: ${{ inputs.repeats }}
           BUILDS: ${{ inputs.builds }}
+          CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead }}
         run: |
           set -euo pipefail
+          echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD"
           mkdir -p /tmp/results
           # Interleave the builds (fork, up, fork, up) rather than grouping
           # them, so any drift in the runner or in upstream repo state is
@@ -320,6 +328,7 @@ jobs:
                   "OUT_DIR=/tmp/out-$LABEL" \
                   "CACHE_FILE=/tmp/cache-$LABEL.json" \
                   "DEBUG_TIMING=1" \
+                  "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
               echo "--- which build actually ran ---"
               grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
@@ -396,16 +405,25 @@ jobs:
           for f in sorted(glob.glob("/tmp/results/*.json")):
               label = json.load(open(f))["label"]
               txt = open(f"/tmp/results/{label}.out", errors="replace").read()
-              ph = re.findall(r"^\s+timing (\S+): clone\s+([\d.]+)s\s+fame\s+([\d.]+)s", txt, re.M)
+              # Tolerant of new fields: match each `name value` pair rather
+              # than a fixed field ORDER. The first version of this pattern
+              # hardcoded `clone ... fame ...`, so adding a `wait` field
+              # between them silently reported every run as uninstrumented --
+              # the numbers were in the artifact the whole time.
+              ph = [dict(re.findall(r"(\w+)\s+([\d.]+)s", line))
+                    for line in re.findall(r"^\s+timing \S+: .*$", txt, re.M)]
               if not ph:
-                  print(f"{label}: no timing lines (DEBUG_TIMING unset?)")
+                  print(f"{label}: NO TIMING LINES -- attribution is missing, "
+                        f"not zero (is DEBUG_TIMING set?)")
                   continue
-              clone = sum(float(c) for _, c, _ in ph)
-              fame = sum(float(x) for _, _, x in ph)
+              def col(key):
+                  return sum(float(p[key]) for p in ph if key in p)
+              clone, wait, fame = col("clone"), col("wait"), col("fame")
               wall = json.load(open(f))["wall_s"]
-              print(f"{label}: clone {clone:7.1f}s  fame {fame:7.1f}s  "
-                    f"phases {clone+fame:7.1f}s  wall {wall:7.1f}s  "
-                    f"unattributed {wall-clone-fame:6.1f}s")
+              print(f"{label}: clone {clone:7.1f}s (waited {wait:6.1f}s, "
+                    f"hidden {clone-wait:6.1f}s)  fame {fame:7.1f}s  "
+                    f"blocking {wait+fame:7.1f}s  wall {wall:7.1f}s  "
+                    f"unattributed {wall-wait-fame:6.1f}s")
 
           # The comparison is only fair if both arms blamed the same repos.
           print("\n--- work-equality check (same repos, same surviving LOC?) ---")

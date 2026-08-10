@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent import futures
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -150,6 +151,11 @@ class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
         self.assertIn("CHECK FAILED", out)
 
 
+def fake_moved(n):
+    """`moved` entries as update_loc builds them, for tests that never clone."""
+    return [(f"o/r{i}", {"branch": "main", "head": f"h{i}"}) for i in range(n)]
+
+
 class TestPrefetchedClones(unittest.TestCase):
     """The clone prefetch must not change WHAT is blamed, only when it starts.
 
@@ -158,16 +164,12 @@ class TestPrefetchedClones(unittest.TestCase):
     running, or one dead repo silently serialises every repo after it.
     """
 
-    @staticmethod
-    def _moved(n):
-        return [(f"o/r{i}", {"branch": "main", "head": f"h{i}"}) for i in range(n)]
-
     def test_yields_every_repo_in_order(self):
         seen = []
         with mock.patch.object(render_impact, "clone_repo",
                                side_effect=lambda *a: 0.5) as cl:
             for repo, _t, dest, clone_s, _wait, err in \
-                    render_impact.prefetched_clones(self._moved(5)):
+                    render_impact.prefetched_clones(fake_moved(5)):
                 seen.append(repo)
                 self.assertIsNone(err)
                 self.assertEqual(clone_s, 0.5)
@@ -197,7 +199,7 @@ class TestPrefetchedClones(unittest.TestCase):
 
         with mock.patch.object(render_impact, "clone_repo", side_effect=record):
             for i, (_repo, _t, dest, _c, _w, _e) in enumerate(
-                    render_impact.prefetched_clones(self._moved(4))):
+                    render_impact.prefetched_clones(fake_moved(4), depth=1)):
                 want = min(i + 2, 4)
                 deadline = time.monotonic() + 5
                 while count() < want and time.monotonic() < deadline:
@@ -215,7 +217,7 @@ class TestPrefetchedClones(unittest.TestCase):
         errs, seen = {}, []
         with mock.patch.object(render_impact, "clone_repo", side_effect=flaky):
             for repo, _t, dest, _c, _w, err in \
-                    render_impact.prefetched_clones(self._moved(4)):
+                    render_impact.prefetched_clones(fake_moved(4)):
                 seen.append(repo)
                 if err is not None:
                     errs[repo] = str(err)
@@ -232,7 +234,7 @@ class TestPrefetchedClones(unittest.TestCase):
             return 0.0
 
         with mock.patch.object(render_impact, "clone_repo", side_effect=record):
-            gen = render_impact.prefetched_clones(self._moved(6))
+            gen = render_impact.prefetched_clones(fake_moved(6))
             _repo, _t, dest, _c, _w, _e = next(gen)
             shutil.rmtree(dest, ignore_errors=True)
             gen.close()
@@ -242,3 +244,48 @@ class TestPrefetchedClones(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCloneLookahead(unittest.TestCase):
+    """Depth is a tuning knob, so its bounds are part of the contract."""
+
+    def test_depth_reaches_the_configured_lookahead(self):
+        """With depth d, d clones beyond the one being consumed are in flight."""
+        gate = threading.Event()
+        started, lock = [], threading.Lock()
+
+        def blocking(repo, *_a):
+            with lock:
+                started.append(repo)
+            gate.wait(10)
+            return 0.0
+
+        moved = fake_moved(8)
+        with mock.patch.object(render_impact, "clone_repo", side_effect=blocking):
+            gen = render_impact.prefetched_clones(moved, depth=3)
+            # the generator submits before blocking, so the window is filled
+            # even though nothing has completed yet
+            fut = futures.ThreadPoolExecutor(max_workers=1).submit(next, gen)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with lock:
+                    if len(started) >= 4:
+                        break
+                time.sleep(0.01)
+            with lock:
+                inflight = len(started)
+            gate.set()
+            shutil.rmtree(fut.result(timeout=10)[2], ignore_errors=True)
+            gen.close()
+        self.assertEqual(inflight, 4,
+                         "depth=3 should have item 0 plus 3 ahead in flight")
+
+    def test_lookahead_is_at_least_one(self):
+        for raw in ("0", "-5"):
+            with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": raw}):
+                self.assertEqual(render_impact.clone_lookahead(), 1)
+
+    def test_lookahead_rejects_garbage(self):
+        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "lots"}):
+            with self.assertRaises(SystemExit):
+                render_impact.clone_lookahead()
