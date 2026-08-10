@@ -221,6 +221,43 @@ def check_git_fame():
     return True
 
 
+# Per-repo phase timings for the blame pass. Inert unless DEBUG_TIMING is set,
+# and read once at import so the flag cannot change mid-run. This exists
+# because the blame pass is the only slow part of a render and its cost splits
+# across two very different resources -- `git clone` is network-bound and
+# `git fame` is CPU-bound -- which a single wall-clock number cannot separate.
+DEBUG_TIMING = bool(os.environ.get("DEBUG_TIMING"))
+_TIMINGS = []
+
+
+def _record_timing(repo, clone_s, fame_s, total):
+    if DEBUG_TIMING:
+        _TIMINGS.append((repo, clone_s, fame_s, total))
+        print(f"    timing {repo}: clone {clone_s:6.1f}s  fame {fame_s:6.1f}s  "
+              f"({total:,} loc)", flush=True)
+
+
+def print_timing_summary():
+    """Report where the blame pass actually went. Prints the phase totals AND
+    the measured wall total, so a gap between them is visible rather than
+    silently absorbed -- an unaccounted phase is exactly what per-phase timing
+    is supposed to expose."""
+    if not (DEBUG_TIMING and _TIMINGS):
+        return
+    clone = sum(t[1] for t in _TIMINGS)
+    fame = sum(t[2] for t in _TIMINGS)
+    loc = sum(t[3] for t in _TIMINGS)
+    print(f"\n=== blame pass timing ({len(_TIMINGS)} repos, {loc:,} loc) ===",
+          flush=True)
+    print(f"  clone total {clone:8.1f}s", flush=True)
+    print(f"  fame  total {fame:8.1f}s", flush=True)
+    print(f"  phases sum  {clone + fame:8.1f}s", flush=True)
+    print("  slowest repos by fame time:", flush=True)
+    for repo, c, f, n in sorted(_TIMINGS, key=lambda t: -t[2])[:10]:
+        print(f"    {f:7.1f}s fame  {c:6.1f}s clone  {n:>10,} loc  {repo}",
+              flush=True)
+
+
 def blame_repo(repo, branch, dest, emails):
     """Full-clone the default branch into `dest` (blame needs history, so
     NOT --depth 1), aggregate surviving LOC per author email with git-fame,
@@ -236,19 +273,24 @@ def blame_repo(repo, branch, dest, emails):
     if branch:
         cmd += ["--branch", branch]
     cmd += [f"https://github.com/{repo}.git", str(dest)]
+    t0 = time.monotonic()
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        timeout=300, check=False)
+    clone_s = time.monotonic() - t0
     if r.returncode != 0 or not dest.exists():
         raise RuntimeError("clone_failed")
+    t1 = time.monotonic()
     fm = subprocess.run(["git", "fame", "-e", "-w", "--format", "json"],
                         cwd=str(dest), capture_output=True, text=True,
                         timeout=600, check=False)
+    fame_s = time.monotonic() - t1
     data = json.loads(fm.stdout) if fm.stdout.strip() else {}
     total = data.get("total", {}).get("loc", 0)
     ours = 0
     for row in data.get("data", []):
         if str(row[0]).strip().lower() in emails:
             ours += row[1]
+    _record_timing(repo, clone_s, fame_s, total)
     return ours, total
 
 
@@ -304,6 +346,7 @@ def blame_moved(moved, ourloc, emails):
                       flush=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+    print_timing_summary()
 
 
 def wilson(w, n, z):

@@ -30,6 +30,17 @@ on:
         description: "GitHub login whose impact card is rendered"
         required: false
         default: "Nitjsefnie"
+      builds:
+        description: >-
+          Space-separated arms to run: fork (the pinned baseline), up (PyPI
+          4.0.0), new (whatever `new_ref` names). One arm and repeats=1 is an
+          attribution run (~11 min) rather than a comparison.
+        required: false
+        default: "fork up"
+      new_ref:
+        description: "Fork ref installed as the `new` arm"
+        required: false
+        default: "parallel-blame"
 
 permissions:
   contents: read
@@ -82,25 +93,31 @@ jobs:
                 f"orgs={[o['login'] for o in u['organizations']['nodes']]}")
           PYEOF
 
-      - name: Build the two virtualenvs
+      - name: Build a virtualenv per requested arm
+        env:
+          BUILDS: ${{ inputs.builds }}
+          NEW_REF: ${{ inputs.new_ref }}
         run: |
           set -euo pipefail
-          python3 -m venv /tmp/venv-fork
-          python3 -m venv /tmp/venv-up
-          /tmp/venv-fork/bin/pip install -q --upgrade pip
-          /tmp/venv-up/bin/pip install -q --upgrade pip
-          /tmp/venv-fork/bin/pip install -q \
-            "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
-          /tmp/venv-up/bin/pip install -q "git-fame==4.0.0"
-          echo "--- fork ---"
-          /tmp/venv-fork/bin/git-fame --version
-          /tmp/venv-fork/bin/git-fame --help | grep -c -- '--jobs'
-          echo "--- upstream ---"
-          /tmp/venv-up/bin/git-fame --version
-          /tmp/venv-up/bin/git-fame --help | grep -c -- '--jobs'
-          # Both must genuinely have --jobs, or the comparison is meaningless.
-          /tmp/venv-fork/bin/git-fame --help | grep -q -- '--jobs'
-          /tmp/venv-up/bin/git-fame --help | grep -q -- '--jobs'
+          # One venv per arm, built only for the arms actually requested, so a
+          # single-arm attribution run does not pay for the others.
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+          for build in $BUILDS; do
+            case "$build" in
+              fork) spec="git-fame @ $FORK_PIN" ;;
+              up)   spec="git-fame==4.0.0" ;;
+              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$NEW_REF" ;;
+              *)    echo "FATAL: unknown build arm '$build'"; exit 1 ;;
+            esac
+            python3 -m venv "/tmp/venv-$build"
+            "/tmp/venv-$build/bin/pip" install -q --upgrade pip
+            "/tmp/venv-$build/bin/pip" install -q "$spec"
+            echo "--- $build ---"
+            "/tmp/venv-$build/bin/git-fame" --version
+            # Every arm must genuinely have --jobs, or the comparison is
+            # meaningless: a serial-blame build would be a different workload.
+            "/tmp/venv-$build/bin/git-fame" --help | grep -q -- '--jobs'
+          done
 
       - name: Install the measurement harness
         run: |
@@ -261,6 +278,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_USER: ${{ inputs.user }}
           REPEATS: ${{ inputs.repeats }}
+          BUILDS: ${{ inputs.builds }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/results
@@ -268,7 +286,7 @@ jobs:
           # them, so any drift in the runner or in upstream repo state is
           # spread across both arms instead of loading one of them.
           for rep in $(seq 1 "$REPEATS"); do
-            for build in fork up; do
+            for build in $BUILDS; do
               LABEL="$build-$rep"
               echo "::group::$LABEL"
               # A fresh cgroup per run: memory.peak is a high-water mark and
@@ -301,6 +319,7 @@ jobs:
                   "GH_TOKEN=$GH_TOKEN" \
                   "OUT_DIR=/tmp/out-$LABEL" \
                   "CACHE_FILE=/tmp/cache-$LABEL.json" \
+                  "DEBUG_TIMING=1" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
               echo "--- which build actually ran ---"
               grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
@@ -368,6 +387,25 @@ jobs:
               cg = f"{r[3]/1024:.1f}" if r[3] is not None else "n/a"
               print(f"{r[0]:10} {r[1]:>3} {r[2]:>8} {cg:>15} "
                     f"{r[4]/1024:>16.1f} {r[5]/1024:>17.1f} {r[6]:>6}  {r[7]}")
+
+          # Where the wall time actually goes. `git clone` is network-bound and
+          # `git fame` is CPU-bound, so a single wall number cannot say which
+          # arm's change mattered -- and a clone-dominated total would mean the
+          # blame build is not the thing worth optimising at all.
+          print("\n--- phase attribution (DEBUG_TIMING) ---")
+          for f in sorted(glob.glob("/tmp/results/*.json")):
+              label = json.load(open(f))["label"]
+              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
+              ph = re.findall(r"^\s+timing (\S+): clone\s+([\d.]+)s\s+fame\s+([\d.]+)s", txt, re.M)
+              if not ph:
+                  print(f"{label}: no timing lines (DEBUG_TIMING unset?)")
+                  continue
+              clone = sum(float(c) for _, c, _ in ph)
+              fame = sum(float(x) for _, _, x in ph)
+              wall = json.load(open(f))["wall_s"]
+              print(f"{label}: clone {clone:7.1f}s  fame {fame:7.1f}s  "
+                    f"phases {clone+fame:7.1f}s  wall {wall:7.1f}s  "
+                    f"unattributed {wall-clone-fame:6.1f}s")
 
           # The comparison is only fair if both arms blamed the same repos.
           print("\n--- work-equality check (same repos, same surviving LOC?) ---")
