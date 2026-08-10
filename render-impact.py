@@ -497,16 +497,20 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 
 
 # How the per-repo line counts are produced:
-#   fame     - git-fame over every file (the reference, and the default)
-#   targeted - blame only the files our own commits touched
+#   targeted - blame only the files our own commits touched (the default)
+#   fame     - git-fame over every file (the reference)
 #   both     - run BOTH and fail loudly on any disagreement
-# `targeted` was briefly the default on the strength of 59/59 agreement, and
-# that run was measured with the DERIVED noreply addresses only. Re-run with
-# production's GH_EXTRA_EMAILS it agrees on 54/59, under-counting `ours` by up
-# to 99% on one repo (313 -> 4) while `total` stays exact -- the rename blind
-# spot, which is common rather than theoretical. So the default is back to the
-# reference until candidate files are resolved through later renames.
-BLAME_METHOD = os.environ.get("BLAME_METHOD", "fame").strip().lower()
+# `targeted` is the default again, on 59/59 agreement measured WITH
+# production's GH_EXTRA_EMAILS -- the address set that renders the real card.
+# An earlier 59/59 used only the derived noreply addresses and was worthless:
+# re-run with the real set it was 54/59, under-counting by up to 99% on one
+# repo. Every future measurement of this must carry the production addresses.
+#
+# It is a verified superset, not a proof: the ground truth is blame's own
+# rename detection, which is not reconstructible from `git log`. What makes it
+# safe to ship is the weekly `both` audit in gitfame-resync-memory.yml, which
+# re-checks the whole fleet and fails on any disagreement.
+BLAME_METHOD = os.environ.get("BLAME_METHOD", "targeted").strip().lower()
 _DISAGREEMENTS = []
 
 
