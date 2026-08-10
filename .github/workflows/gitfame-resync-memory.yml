@@ -57,6 +57,13 @@ on:
           or both (run both; ANY disagreement fails the run).
         required: false
         default: "both"
+      extra_emails:
+        description: >-
+          GH_EXTRA_EMAILS, mirroring units/gh-widgets.service. Without it the
+          audit certifies a DIFFERENT email set than the one that renders the
+          real card, and line ownership is an exact match against that set.
+        required: false
+        default: "zmatek.peter@gmail.com"
       clone_lookahead:
         description: >-
           How many repos render-impact.py clones ahead of the blame consuming
@@ -303,9 +310,11 @@ jobs:
           BUILDS: ${{ inputs.builds || 'new' }}
           CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead || '3' }}
           BLAME_METHOD: ${{ inputs.blame_method || 'both' }}
+          GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
         run: |
           set -euo pipefail
           echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD BLAME_METHOD=$BLAME_METHOD"
+          echo "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS"
           mkdir -p /tmp/results
           # Interleave the builds (fork, up, fork, up) rather than grouping
           # them, so any drift in the runner or in upstream repo state is
@@ -347,6 +356,7 @@ jobs:
                   "DEBUG_TIMING=1" \
                   "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
                   "BLAME_METHOD=$BLAME_METHOD" \
+                  "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
               echo "--- which method and build actually ran ---"
               # Every run identifies its method; only the methods that USE

@@ -52,13 +52,25 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 >
 > ```
 > pip install --force-reinstall \
->   "git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+>   "git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
 > ```
 >
-> `git-fame --version` must print **`3.1.4.dev7+ga99855d3a`**. A local checkout
-> is at `/root/git-fame` on branch `parallel-blame`; `pip install .` from there
+> `git-fame --version` must print **`3.1.4.dev8+g65925d826`**. A local checkout
+> is at `/root/git-fame` on branch `perf-blame`; `pip install .` from there
 > is equivalent. A bare `pip install --upgrade git-fame` **silently undoes this
 > pin** — 4.0.0 is the higher version number and installs cleanly.
+>
+> `perf-blame` is `parallel-blame` plus `--incremental` blame parsing: the
+> parse only ever consumed chunk headers, while `--line-porcelain` re-emits
+> every commit header per LINE and both porcelain formats emit the file's
+> whole content. 53.8MB of blame output became 5.1MB on a 107k-loc repo, the
+> parse 0.90s -> 0.11s, and the blame phase of a full resync -18.6%. Output is
+> byte-identical, including on a 1.65M-loc repo.
+>
+> Note that under the default `BLAME_METHOD=targeted` **git-fame does not run
+> at all** — this pin only governs `fame` and the weekly `both` audit. Keep it
+> current anyway: the audit is what certifies the fast path, and auditing
+> against a stale reference is worth less.
 >
 > Do not pass `-j` at the `blame_repo` call site. The parallelism is automatic
 > (`min(32, cpu+4)`), and passing the flag explicitly would turn an older
