@@ -313,6 +313,62 @@ class TestTargetedCounts(unittest.TestCase):
         self.assertEqual(total, 5)
 
 
+class TestTargetedRenames(unittest.TestCase):
+    """Our lines survive under paths our own history never mentions.
+
+    This is what took `targeted` back out of production once: a rename made
+    by somebody ELSE after our commit moved the lines, and selecting candidate
+    files by the paths our commits name missed them entirely -- silently, as a
+    smaller number.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-rename-"))
+        self.email = "75166987+MixedCase@users.noreply.github.com"
+        git("init", "-q", "-b", "main", ".", cwd=self.tmp)
+        git("config", "user.name", "Other", cwd=self.tmp)
+        git("config", "user.email", "other@example.com", cwd=self.tmp)
+        (self.tmp / "seed.txt").write_text("seed\n")
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-qm", "seed", cwd=self.tmp)
+        (self.tmp / "ours.txt").write_text("our line 1\nour line 2\nour line 3\n")
+        git("add", "-A", cwd=self.tmp)
+        git("-c", "user.name=Us", "-c", f"user.email={self.email}",
+            "commit", "-qm", "ours", cwd=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _ours(self):
+        return render_impact.targeted_counts(self.tmp, {self.email.lower()})[0]
+
+    def test_rename_by_another_author_is_followed(self):
+        git("mv", "ours.txt", "moved.txt", cwd=self.tmp)
+        git("commit", "-qm", "someone else moves it", cwd=self.tmp)
+        self.assertEqual(self._ours(), 3, "lines lost through a rename")
+
+    def test_rename_chain_is_followed(self):
+        git("mv", "ours.txt", "one.txt", cwd=self.tmp)
+        git("commit", "-qm", "move 1", cwd=self.tmp)
+        git("mv", "one.txt", "two.txt", cwd=self.tmp)
+        git("commit", "-qm", "move 2", cwd=self.tmp)
+        self.assertEqual(self._ours(), 3, "lines lost through a rename CHAIN")
+
+    def test_move_into_a_directory_keeping_the_basename(self):
+        """The case `git log` recorded no rename edge for: same basename, new
+        directory. Recovered by matching basenames of vanished paths."""
+        (self.tmp / "sub").mkdir()
+        git("mv", "ours.txt", "sub/ours.txt", cwd=self.tmp)
+        git("commit", "-qm", "relocate", cwd=self.tmp)
+        self.assertEqual(self._ours(), 3, "lines lost through a directory move")
+
+    def test_untouched_repo_still_counts_nothing(self):
+        """The recovery paths must not invent lines for a repo we never touched."""
+        ours, _total = render_impact.targeted_counts(self.tmp,
+                                                     {"nobody@example.com"})
+        self.assertEqual(ours, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

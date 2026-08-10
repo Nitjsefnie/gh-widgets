@@ -343,6 +343,45 @@ def our_touched_files(dest, emails):
     return files
 
 
+def rename_closure(dest, paths):
+    """Extend `paths` with everything they were renamed INTO, transitively.
+
+    A rename made by somebody else after our commit moves our lines to a path
+    our own history never mentions, so the path set our commits name is not
+    enough. Following the chain forward recovers the current name.
+
+    Over-approximating is FREE here and under-approximating is the whole bug:
+    a file we never touched contributes zero lines, because only lines whose
+    author matches ours are counted. So this deliberately follows every chain
+    that starts at one of our paths, without trying to establish that the
+    rename happened after our commit.
+    """
+    # --diff-merges=first-parent: `git log --name-status` shows NOTHING for a
+    # merge commit by default, and a rename performed during a merge is
+    # therefore invisible. One real chain needed exactly that hop
+    # (.../tags/blocks/... -> .../tags/block/...), and without it 13 lines
+    # stayed lost after every other hop resolved.
+    out = git_out(dest, "log", "HEAD", "--diff-filter=R", "--name-status",
+                  "-M", "--diff-merges=first-parent", "--format=")
+    events = []
+    for line in out.split("\n"):
+        if line.startswith("R"):
+            parts = line.split("\t")
+            if len(parts) == 3:
+                events.append((parts[1], parts[2]))
+    reachable = set(paths)
+    # a chain can be discovered out of order, so iterate to a fixpoint rather
+    # than assuming one pass down the log catches every hop
+    changed = True
+    while changed:
+        changed = False
+        for old, new in events:
+            if old in reachable and new not in reachable:
+                reachable.add(new)
+                changed = True
+    return reachable
+
+
 def targeted_counts(dest, emails):
     """(ours, total) without blaming every file.
 
@@ -372,8 +411,27 @@ def targeted_counts(dest, emails):
             # pattern picks the FILES, not the lines
             if path in texts:
                 total += int(count)
+    touched = our_touched_files(dest, emails)
+    # The recovery scans walk the whole history, so only pay for them when a
+    # path we touched has actually vanished from the tree -- the only way a
+    # rename can have hidden our lines. Most repos skip this entirely.
+    gone = touched - texts
+    if gone:
+        touched = rename_closure(dest, touched)
+        # `git log` does not record every link that `git blame` follows: blame
+        # re-detects renames during its own walk, and one real case moved
+        # resources/.../pickaxe.json to generated/.../pickaxe.json with no R
+        # record joining them. Same basename, so add every current file
+        # sharing a vanished path's name. Blaming a file we never touched
+        # yields zero, so this can only cost time, never accuracy -- and it is
+        # scoped to the paths that actually went missing.
+        by_base = {}
+        for path in texts:
+            by_base.setdefault(path.rsplit("/", 1)[-1], []).append(path)
+        for path in gone:
+            touched.update(by_base.get(path.rsplit("/", 1)[-1], ()))
     ours = 0
-    for fname in our_touched_files(dest, emails) & texts:
+    for fname in touched & texts:
         out = git_out(dest, "blame", "--incremental", "-w", "HEAD", "--", fname)
         ours += blamed_lines_for(out, emails)
     return ours, total
