@@ -18,6 +18,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -146,6 +148,96 @@ class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
             ok, out = self._check_with_path(td)
         self.assertFalse(ok, "missing git-fame must be rejected")
         self.assertIn("CHECK FAILED", out)
+
+
+class TestPrefetchedClones(unittest.TestCase):
+    """The clone prefetch must not change WHAT is blamed, only when it starts.
+
+    The failure contract is the delicate part: a repo whose clone fails still
+    has to hand its error to the consumer AND leave the prefetch chain
+    running, or one dead repo silently serialises every repo after it.
+    """
+
+    @staticmethod
+    def _moved(n):
+        return [(f"o/r{i}", {"branch": "main", "head": f"h{i}"}) for i in range(n)]
+
+    def test_yields_every_repo_in_order(self):
+        seen = []
+        with mock.patch.object(render_impact, "clone_repo",
+                               side_effect=lambda *a: 0.5) as cl:
+            for repo, _t, dest, clone_s, _wait, err in \
+                    render_impact.prefetched_clones(self._moved(5)):
+                seen.append(repo)
+                self.assertIsNone(err)
+                self.assertEqual(clone_s, 0.5)
+                shutil.rmtree(dest, ignore_errors=True)
+        self.assertEqual(seen, [f"o/r{i}" for i in range(5)])
+        self.assertEqual(cl.call_count, 5)
+
+    def test_clone_runs_ahead_of_the_consumer(self):
+        """By the time repo i is handed over, repo i+1's clone is under way.
+
+        The generator SUBMITS the next clone before yielding, so the worker
+        thread may not have entered clone_repo at the instant the consumer
+        looks. Waiting for the count (rather than asserting it immediately)
+        tests that the prefetch happens without depending on thread timing.
+        """
+        started = []
+        lock = threading.Lock()
+
+        def record(repo, *_a):
+            with lock:
+                started.append(repo)
+            return 0.0
+
+        def count():
+            with lock:
+                return len(started)
+
+        with mock.patch.object(render_impact, "clone_repo", side_effect=record):
+            for i, (_repo, _t, dest, _c, _w, _e) in enumerate(
+                    render_impact.prefetched_clones(self._moved(4))):
+                want = min(i + 2, 4)
+                deadline = time.monotonic() + 5
+                while count() < want and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(count(), want,
+                                 f"prefetch did not run ahead at {i}")
+                shutil.rmtree(dest, ignore_errors=True)
+
+    def test_clone_failure_is_handed_over_not_raised(self):
+        def flaky(repo, *_a):
+            if repo == "o/r1":
+                raise RuntimeError("clone_failed")
+            return 0.1
+
+        errs, seen = {}, []
+        with mock.patch.object(render_impact, "clone_repo", side_effect=flaky):
+            for repo, _t, dest, _c, _w, err in \
+                    render_impact.prefetched_clones(self._moved(4)):
+                seen.append(repo)
+                if err is not None:
+                    errs[repo] = str(err)
+                shutil.rmtree(dest, ignore_errors=True)
+        self.assertEqual(seen, [f"o/r{i}" for i in range(4)],
+                         "a failed clone must not stop the chain")
+        self.assertEqual(list(errs), ["o/r1"])
+
+    def test_abandoning_the_generator_leaves_no_directories(self):
+        made = []
+
+        def record(_repo, _branch, dest):
+            made.append(Path(dest))
+            return 0.0
+
+        with mock.patch.object(render_impact, "clone_repo", side_effect=record):
+            gen = render_impact.prefetched_clones(self._moved(6))
+            _repo, _t, dest, _c, _w, _e = next(gen)
+            shutil.rmtree(dest, ignore_errors=True)
+            gen.close()
+        leftover = [p for p in made if p.exists()]
+        self.assertEqual(leftover, [], f"prefetch leaked {leftover}")
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+from concurrent import futures
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -230,11 +231,15 @@ DEBUG_TIMING = bool(os.environ.get("DEBUG_TIMING"))
 _TIMINGS = []
 
 
-def _record_timing(repo, clone_s, fame_s, total):
+def _record_timing(repo, clone_s, fame_s, total, wait_s=0.0):
+    """`clone_s` is how long the clone took; `wait_s` is how much of that the
+    blame loop actually blocked for. They diverge once clones are prefetched,
+    and the difference IS the saving -- reporting only one of them would hide
+    whether the overlap is working."""
     if DEBUG_TIMING:
-        _TIMINGS.append((repo, clone_s, fame_s, total))
-        print(f"    timing {repo}: clone {clone_s:6.1f}s  fame {fame_s:6.1f}s  "
-              f"({total:,} loc)", flush=True)
+        _TIMINGS.append((repo, clone_s, fame_s, total, wait_s))
+        print(f"    timing {repo}: clone {clone_s:6.1f}s  wait {wait_s:6.1f}s  "
+              f"fame {fame_s:6.1f}s  ({total:,} loc)", flush=True)
 
 
 def print_timing_summary():
@@ -247,28 +252,23 @@ def print_timing_summary():
     clone = sum(t[1] for t in _TIMINGS)
     fame = sum(t[2] for t in _TIMINGS)
     loc = sum(t[3] for t in _TIMINGS)
+    wait = sum(t[4] for t in _TIMINGS)
     print(f"\n=== blame pass timing ({len(_TIMINGS)} repos, {loc:,} loc) ===",
           flush=True)
-    print(f"  clone total {clone:8.1f}s", flush=True)
+    print(f"  clone total {clone:8.1f}s  (waited {wait:.1f}s, "
+          f"{clone - wait:.1f}s hidden behind blame)", flush=True)
     print(f"  fame  total {fame:8.1f}s", flush=True)
-    print(f"  phases sum  {clone + fame:8.1f}s", flush=True)
+    print(f"  phases sum  {wait + fame:8.1f}s  (blocking time, not clone wall)",
+          flush=True)
     print("  slowest repos by fame time:", flush=True)
-    for repo, c, f, n in sorted(_TIMINGS, key=lambda t: -t[2])[:10]:
-        print(f"    {f:7.1f}s fame  {c:6.1f}s clone  {n:>10,} loc  {repo}",
-              flush=True)
+    for repo, c, f, n, w in sorted(_TIMINGS, key=lambda t: -t[2])[:10]:
+        print(f"    {f:7.1f}s fame  {c:6.1f}s clone ({w:5.1f}s waited)  "
+              f"{n:>10,} loc  {repo}", flush=True)
 
 
-def blame_repo(repo, branch, dest, emails):
-    """Full-clone the default branch into `dest` (blame needs history, so
-    NOT --depth 1), aggregate surviving LOC per author email with git-fame,
-    and return (ours, total). The clone is deleted by the caller. Raises on
-    any failure.
-
-    `emails` is the derived set of addresses that count as ours, matched
-    EXACTLY. This used to be a substring test, which was wrong in kind: in a
-    third-party repo the commit-author email is attacker-controllable, so any
-    address merely containing our login was counted as ours.
-    """
+def clone_repo(repo, branch, dest):
+    """Full-clone the default branch into `dest` (blame needs history, so NOT
+    --depth 1). Returns the clone's own duration. Raises on failure."""
     cmd = ["git", "clone", "--single-branch"]
     if branch:
         cmd += ["--branch", branch]
@@ -276,9 +276,21 @@ def blame_repo(repo, branch, dest, emails):
     t0 = time.monotonic()
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        timeout=300, check=False)
-    clone_s = time.monotonic() - t0
     if r.returncode != 0 or not dest.exists():
         raise RuntimeError("clone_failed")
+    return time.monotonic() - t0
+
+
+def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
+    """Aggregate surviving LOC per author email with git-fame over the clone
+    already at `dest`, and return (ours, total). The clone is deleted by the
+    caller. Raises on any failure.
+
+    `emails` is the derived set of addresses that count as ours, matched
+    EXACTLY. This used to be a substring test, which was wrong in kind: in a
+    third-party repo the commit-author email is attacker-controllable, so any
+    address merely containing our login was counted as ours.
+    """
     t1 = time.monotonic()
     fm = subprocess.run(["git", "fame", "-e", "-w", "--format", "json"],
                         cwd=str(dest), capture_output=True, text=True,
@@ -290,7 +302,7 @@ def blame_repo(repo, branch, dest, emails):
     for row in data.get("data", []):
         if str(row[0]).strip().lower() in emails:
             ours += row[1]
-    _record_timing(repo, clone_s, fame_s, total)
+    _record_timing(repo, clone_s, fame_s, total, wait_s)
     return ours, total
 
 
@@ -323,27 +335,72 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails):
     return ourloc
 
 
+def prefetched_clones(moved):
+    """Yield `(repo, t, dest, clone_s, wait_s, error)` per entry of `moved`,
+    with the NEXT repo's clone already running in the background.
+
+    Clone and blame contend for nothing -- `git clone` waits on the network,
+    `git fame` saturates the CPUs -- so running one clone ahead hides it
+    behind blame time the loop was previously spending idle. Exactly one runs
+    ahead, which caps the extra disk at a single repository.
+
+    A clone failure is handed to the consumer as `error` rather than raised,
+    so the caller's per-repo failure contract still applies and, crucially,
+    the prefetch chain keeps running instead of stopping at the first bad
+    repo. The consumer owns deleting each `dest` it is given.
+    """
+    pool = futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch")
+    pending = {}
+    dirs = {}
+
+    def start(idx):
+        if idx < len(moved):
+            repo, t = moved[idx]
+            dirs[idx] = Path(tempfile.mkdtemp(prefix="impact-fame-"))
+            pending[idx] = pool.submit(clone_repo, repo, t["branch"], dirs[idx])
+
+    try:
+        start(0)
+        for i, (repo, t) in enumerate(moved):
+            t0 = time.monotonic()
+            try:
+                clone_s = pending.pop(i).result()
+                err = None
+            except Exception as e:  # pylint: disable=broad-except
+                clone_s, err = 0.0, e
+            wait_s = time.monotonic() - t0
+            start(i + 1)
+            yield repo, t, dirs.pop(i), clone_s, wait_s, err
+    finally:
+        for fut in pending.values():
+            fut.cancel()
+        pool.shutdown(wait=True)
+        for unused in dirs.values():
+            shutil.rmtree(unused, ignore_errors=True)
+
+
 def blame_moved(moved, ourloc, emails):
     """Clone, blame, and record each repo in `moved`, updating `ourloc` in
     place. The failure contract described in update_loc lives here."""
-    for i, (repo, t) in enumerate(moved, 1):
-        tmp = Path(tempfile.mkdtemp(prefix="impact-fame-"))
+    n = len(moved)
+    for i, (repo, t, tmp, clone_s, wait_s, err) in enumerate(prefetched_clones(moved), 1):
         try:
-            ours, total = blame_repo(repo, t["branch"], tmp, emails)
+            if err is not None:
+                raise err
+            ours, total = blame_repo(repo, tmp, emails, clone_s=clone_s, wait_s=wait_s)
             ourloc[repo] = {"ours": ours, "total": total,
                             "branch": t["branch"], "head": t["head"]}
-            sh = ours / total * 100 if total else 0
-            print(f"loc [{i}/{len(moved)}] ours {ours:>7,} / {total:>8,} "
-                  f"({sh:4.1f}%)  {repo}", flush=True)
-        except Exception as e:
+            print(f"loc [{i}/{n}] ours {ours:>7,} / {total:>8,} "
+                  f"({ours / total * 100 if total else 0:4.1f}%)  {repo}",
+                  flush=True)
+        except Exception as e:  # pylint: disable=broad-except
             old = ourloc.get(repo) or {}
             if "ours" in old:
-                print(f"loc [{i}/{len(moved)}] FAIL (kept old count) "
+                print(f"loc [{i}/{n}] FAIL (kept old count) "
                       f"{repo}: {str(e)[:60]}", flush=True)
             else:
                 ourloc[repo] = {"error": str(e)[:80], "head": t["head"]}
-                print(f"loc [{i}/{len(moved)}] FAIL {repo}: {str(e)[:60]}",
-                      flush=True)
+                print(f"loc [{i}/{n}] FAIL {repo}: {str(e)[:60]}", flush=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     print_timing_summary()
