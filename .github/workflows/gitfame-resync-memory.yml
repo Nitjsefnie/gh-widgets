@@ -348,9 +348,16 @@ jobs:
                   "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
                   "BLAME_METHOD=$BLAME_METHOD" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
-              echo "--- which build actually ran ---"
-              grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
-                { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
+              echo "--- which method and build actually ran ---"
+              # Every run identifies its method; only the methods that USE
+              # git-fame can be expected to identify a git-fame build. Demanding
+              # the git-fame line unconditionally fails every `targeted` run.
+              grep -m1 '^blame-method:' "/tmp/results/$LABEL.out" || \
+                { echo "FATAL: no blame-method line — the run is unidentified"; exit 1; }
+              if [ "$BLAME_METHOD" != "targeted" ]; then
+                grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
+                  { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
+              fi
               echo "--- repos blamed ---"
               grep -c '^loc \[' "/tmp/results/$LABEL.out" || true
               echo "::endgroup::"
@@ -375,16 +382,20 @@ jobs:
               size = os.path.getsize(svg) if os.path.exists(svg) else 0
               blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+([\d,]+) /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
               guard = re.search(r"^git-fame: (.+)$", txt, re.M)
+              method = re.search(r"^blame-method: (.+)$", txt, re.M)
               if d["rc"] != 0:
                   bad.append(f"{label}: rc={d['rc']}")
               if size == 0:
                   bad.append(f"{label}: impact.svg missing or empty")
               if not blamed:
                   bad.append(f"{label}: blamed ZERO repos — not a max-blame workload")
-              if not guard:
+              if not method:
+                  bad.append(f"{label}: no blame-method line")
+              if not guard and (method.group(1) if method else "") != "targeted":
                   bad.append(f"{label}: no git-fame identification line")
               print(f"{label}: rc={d['rc']} svg={size}B repos_blamed={len(blamed)} "
-                    f"guard={guard.group(1) if guard else 'NONE'}")
+                    f"method={method.group(1) if method else 'NONE'} "
+                    f"guard={guard.group(1) if guard else 'n/a'}")
           if bad:
               sys.exit("VALIDATION FAILED:\n  " + "\n  ".join(bad))
           print("all runs valid")
@@ -402,7 +413,7 @@ jobs:
               txt = open(f"/tmp/results/{label}.out", errors="replace").read()
               blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+[\d,]+ /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
               manifests[label] = {repo: int(tot.replace(",", "")) for tot, repo in blamed}
-              gf = re.search(r"^git-fame: (.+)$", txt, re.M)
+              gf = re.search(r"^blame-method: (.+)$", txt, re.M)
               gfp = max(((p["peak_rss_kb"], p["cmd"]) for p in d["top_processes_by_peak_rss_kb"]
                          if "git-fame" in p["cmd"] or "git fame" in p["cmd"]), default=(0, "-"))
               rows.append((label, d["rc"], d["wall_s"], d["cgroup_memory_peak_kb"],
