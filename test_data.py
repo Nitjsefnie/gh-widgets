@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Tests for the public GitHub data and snapshot contract."""
+import json
+import re
+import tempfile
+import unittest
+from pathlib import Path
+
+import ghwidgets_data as data
+
+
+def issue_node(**overrides):
+    node = {
+        "id": "I_1",
+        "number": 7,
+        "url": "https://github/x/y/issues/7",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-03T00:00:00Z",
+        "closedAt": "2026-01-03T00:00:00Z",
+        "state": "CLOSED",
+        "stateReason": "NOT_PLANNED",
+        "repository": {
+            "id": "R_1",
+            "nameWithOwner": "x/y",
+            "url": "https://github/x/y",
+            "isPrivate": False,
+            "owner": {"login": "x"},
+        },
+    }
+    node.update(overrides)
+    return node
+
+
+def pull_request_node(**overrides):
+    node = issue_node(
+        id="PR_1",
+        url="https://github/x/y/pull/7",
+        mergedAt="2026-01-04T00:00:00Z",
+        merged=True,
+    )
+    node.update(overrides)
+    return node
+
+
+def snapshot(**overrides):
+    value = {
+        "schema_version": data.SCHEMA_VERSION,
+        "generated_at": "2026-01-05T00:00:00+00:00",
+        "account": {"login": "me"},
+        "insiders": ["me", "org"],
+        "repositories": [],
+        "issues": [],
+        "pull_requests": [],
+    }
+    value.update(overrides)
+    return value
+
+
+class Normalization(unittest.TestCase):
+    def test_issue_keeps_current_final_state(self):
+        out = data.normalise_issue({
+            "id": "I_1", "number": 7, "url": "https://github/x/y/7",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-03T00:00:00Z",
+            "closedAt": "2026-01-03T00:00:00Z",
+            "state": "CLOSED", "stateReason": "NOT_PLANNED",
+            "repository": {"id": "R_1", "nameWithOwner": "x/y",
+                           "url": "https://github/x/y", "isPrivate": False,
+                           "owner": {"login": "x"}},
+        })
+        self.assertEqual(out["state_reason"], "NOT_PLANNED")
+        self.assertEqual(out["repository_id"], "R_1")
+
+    def test_issue_uses_normalized_public_keys(self):
+        self.assertEqual(data.normalise_issue(issue_node()), {
+            "node_id": "I_1",
+            "repository_id": "R_1",
+            "repository": "x/y",
+            "owner": "x",
+            "repository_url": "https://github/x/y",
+            "is_private": False,
+            "number": 7,
+            "url": "https://github/x/y/issues/7",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-03T00:00:00Z",
+            "closed_at": "2026-01-03T00:00:00Z",
+            "state": "CLOSED",
+            "state_reason": "NOT_PLANNED",
+        })
+
+    def test_pull_request_adds_merge_fields(self):
+        out = data.normalise_pull_request(pull_request_node())
+        self.assertEqual(out["node_id"], "PR_1")
+        self.assertEqual(out["merged_at"], "2026-01-04T00:00:00Z")
+        self.assertTrue(out["merged"])
+
+    def test_private_flag_is_normalized_to_bool(self):
+        out = data.normalise_issue(issue_node(
+            repository={
+                "id": "R_1", "nameWithOwner": "x/y",
+                "url": "https://github/x/y", "isPrivate": 1,
+                "owner": {"login": "x"},
+            }))
+        self.assertIs(out["is_private"], True)
+
+
+class SnapshotBuilding(unittest.TestCase):
+    def test_build_snapshot_sets_schema_and_sorts_insiders(self):
+        out = data.build_snapshot(
+            account={"login": "me"},
+            insiders={"org", "me"},
+            repositories=[{"id": "R_1"}],
+            issues=[{"node_id": "I_1"}],
+            pull_requests=[{"node_id": "PR_1"}],
+            generated_at="2026-01-05T00:00:00+00:00",
+        )
+        self.assertEqual(out, {
+            "schema_version": 1,
+            "generated_at": "2026-01-05T00:00:00+00:00",
+            "account": {"login": "me"},
+            "insiders": ["me", "org"],
+            "repositories": [{"id": "R_1"}],
+            "issues": [{"node_id": "I_1"}],
+            "pull_requests": [{"node_id": "PR_1"}],
+        })
+
+    def test_build_snapshot_defaults_to_utc_iso_seconds(self):
+        out = data.build_snapshot(
+            account={}, insiders=set(), repositories=[], issues=[],
+            pull_requests=[])
+        self.assertRegex(
+            out["generated_at"],
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$",
+        )
+
+    def test_build_snapshot_preserves_explicit_generated_at(self):
+        out = data.build_snapshot(
+            account={}, insiders=set(), repositories=[], issues=[],
+            pull_requests=[], generated_at="")
+        self.assertEqual(out["generated_at"], "")
+
+
+class SnapshotValidation(unittest.TestCase):
+    def test_snapshot_rejects_unknown_schema(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            path.write_text('{"schema_version":999}', encoding="utf-8")
+            with self.assertRaises(data.SnapshotVersionError):
+                data.load_snapshot(path)
+
+    def test_snapshot_requires_all_top_level_fields(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+            with self.assertRaises(data.SnapshotValidationError):
+                data.load_snapshot(path)
+
+    def test_snapshot_requires_collection_fields_to_be_lists(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            value = snapshot(insiders={"members": ["me"]})
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(data.SnapshotValidationError):
+                data.load_snapshot(path)
+
+    def test_snapshot_rejects_invalid_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            path.write_text("not json", encoding="utf-8")
+            with self.assertRaises(data.SnapshotValidationError):
+                data.load_snapshot(path)
+
+
+class SnapshotWriting(unittest.TestCase):
+    def test_write_snapshot_round_trips_atomically(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nested" / "snapshot.json"
+            value = snapshot()
+            data.write_snapshot(path, value)
+            self.assertEqual(data.load_snapshot(path), value)
+
+    def test_write_snapshot_validates_before_replacing_existing_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            value = snapshot()
+            data.write_snapshot(path, value)
+            with self.assertRaises(data.SnapshotValidationError):
+                data.write_snapshot(path, {"schema_version": 1})
+            self.assertEqual(data.load_snapshot(path), value)
+
+
+if __name__ == "__main__":
+    unittest.main()

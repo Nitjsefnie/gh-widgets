@@ -4,7 +4,7 @@
 # The three renderers share ghwidgets_common.py and assert its COMMON_VERSION
 # at startup, so they must be deployed together. Copying one without the other
 # leaves a working-looking install that refuses to run (by design). This script
-# stages all four into the target directory and moves them into place, so a
+# stages all five into the target directory and moves them into place, so a
 # partial copy is not something you can do by accident.
 #
 #   ./install.sh                    # -> /usr/local/bin
@@ -38,7 +38,8 @@ set -- \
     "render.py:render-gh-widgets.py" \
     "render-impact.py:render-impact.py" \
     "render-responsiveness.py:render-responsiveness.py" \
-    "ghwidgets_common.py:ghwidgets_common.py"
+    "ghwidgets_common.py:ghwidgets_common.py" \
+    "ghwidgets_data.py:ghwidgets_data.py"
 
 # Verify every source exists BEFORE touching the destination, so a missing
 # file aborts the whole install rather than half-applying it.
@@ -86,7 +87,12 @@ for dst in render-gh-widgets.py render-impact.py render-responsiveness.py; do
         exit 1
     fi
 done
-echo "verified: all renderers start and agree on COMMON_VERSION"
+if ! PYTHONPATH="$DEST${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -c 'import ghwidgets_data' >/dev/null 2>&1; then
+    echo "install.sh: ghwidgets_data.py failed to import after install" >&2
+    exit 1
+fi
+echo "verified: all renderers start and the public data module imports"
 
 # render-impact.py's blame pass needs the parallel-blame git-fame build; stock
 # git-fame blames one file per subprocess serially. Degraded, not broken — so
