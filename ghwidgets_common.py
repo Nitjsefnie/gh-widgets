@@ -300,6 +300,11 @@ def gql(token, query, variables=None, retries=3, timeout=20):
 
 Identity = namedtuple("Identity", "login database_id orgs insiders emails")
 
+
+class PaginationLimitError(RuntimeError):
+    """Raised when a bounded pagination run cannot reach its final page."""
+
+
 IDENTITY_QUERY = """
 query($login: String!) {
   user(login: $login) {
@@ -346,11 +351,12 @@ def our_emails(login, database_id, extra=None):
                      | {e.strip().lower() for e in extra if e.strip()})
 
 
-def fetch_identity(token, login, gql_fn=None):
+def fetch_identity(token, login, gql_fn=None, *, include_environment=True):
     """Resolve who we are from the token's own account.
 
     Returns an Identity carrying the canonical login (as GitHub spells it),
     the numeric databaseId, the org list, and the two derived sets.
+    ``include_environment=False`` omits additive environment configuration.
     """
     data = (gql_fn or gql)(token, IDENTITY_QUERY, {"login": login})
     user = data["user"]
@@ -358,12 +364,13 @@ def fetch_identity(token, login, gql_fn=None):
         raise RuntimeError(f"no such GitHub user: {login}")
     orgs = [o["login"] for o in user["organizations"]["nodes"]]
     canonical = user["login"]
+    extras = None if include_environment else ()
     return Identity(
         login=canonical,
         database_id=user.get("databaseId"),
         orgs=orgs,
-        insiders=insider_set(canonical, orgs),
-        emails=our_emails(canonical, user.get("databaseId")),
+        insiders=insider_set(canonical, orgs, extra=extras),
+        emails=our_emails(canonical, user.get("databaseId"), extra=extras),
     )
 
 
@@ -394,11 +401,21 @@ query($login: String!, $cursor: String) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
+        number
+        url
         merged
+        state
+        updatedAt
         createdAt
         mergedAt
         closedAt
-        repository { nameWithOwner isPrivate owner { login } }
+        repository {
+          id
+          nameWithOwner
+          url
+          isPrivate
+          owner { login }
+        }
       }
     }
   }
@@ -413,9 +430,21 @@ query($login: String!, $cursor: String) {
            orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
+        id
+        number
+        url
+        createdAt
+        updatedAt
+        closedAt
         state
         stateReason
-        repository { nameWithOwner isPrivate owner { login } }
+        repository {
+          id
+          nameWithOwner
+          url
+          isPrivate
+          owner { login }
+        }
       }
     }
   }
@@ -446,8 +475,9 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
     the last run are still missed until a --resync.
 
     There is no server-side "not in these orgs" filter, so callers pull the
-    list and filter locally with is_external. max_pages is a runaway guard,
-    not a real limit.
+    list and filter locally with is_external. ``max_pages`` is an optional
+    runaway guard. When set, reaching the limit before the connection ends
+    raises ``PaginationLimitError`` rather than returning a partial result.
 
     Returns (prs, prs_by_id): the union list and the keyed mapping to persist.
     """
@@ -456,8 +486,14 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
                     else "[OPEN, CLOSED, MERGED]")
     live = []
     cursor = None
-    for _ in range(max_pages):
+    pages = 0
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise PaginationLimitError(
+                f"pullRequests pagination limit {max_pages} reached after "
+                f"cursor {cursor!r}")
         page = g(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
+        pages += 1
         live.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break
@@ -485,13 +521,21 @@ def fetch_issues(token, login, max_pages=50, gql_fn=None):
     freeze: the full [OPEN, CLOSED] list is re-paged each run. The GraphQL
     `issues` connection returns issues ONLY (pull requests live under
     `pullRequests`), so there is no PR double-counting to guard against.
-    max_pages is a runaway guard, not a real limit.
+    ``max_pages`` is an optional runaway guard. When set, reaching the limit
+    before the connection ends raises ``PaginationLimitError`` rather than
+    returning a partial result.
     """
     g = gql_fn or gql
     issues = []
     cursor = None
-    for _ in range(max_pages):
+    pages = 0
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise PaginationLimitError(
+                f"issues pagination limit {max_pages} reached after "
+                f"cursor {cursor!r}")
         page = g(token, ISSUE_QUERY, {"login": login, "cursor": cursor})["user"]["issues"]
+        pages += 1
         issues.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break

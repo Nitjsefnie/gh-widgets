@@ -177,6 +177,35 @@ class FetchPullRequests(unittest.TestCase):
         common.fetch_pull_requests("t", "me", cached_prs=None, gql_fn=g)
         self.assertEqual(self.merged_calls, 0)
 
+    def test_no_limit_pages_until_has_next_page(self):
+        pages = iter([
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+             "nodes": [{"id": "PR_1", "merged": False}]},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None},
+             "nodes": [{"id": "PR_2", "merged": True}]},
+        ])
+
+        def gql_fn(*_args, **_kwargs):
+            return {"user": {"pullRequests": next(pages)}}
+
+        prs, by_id = common.fetch_pull_requests(
+            "t", "me", max_pages=None, gql_fn=gql_fn)
+        self.assertEqual([node["id"] for node in prs], ["PR_1", "PR_2"])
+        self.assertEqual(set(by_id), {"PR_1", "PR_2"})
+
+    def test_explicit_limit_raises_instead_of_returning_partial(self):
+        def gql_fn(*_args, **_kwargs):
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                "nodes": [{"id": "PR_1", "merged": False}],
+            }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_pull_requests("t", "me", max_pages=1,
+                                        gql_fn=gql_fn)
+        self.assertIn("pullRequests", str(raised.exception))
+        self.assertIn("c1", str(raised.exception))
+
 
 class EnvKnobs(unittest.TestCase):
     def test_default_when_unset(self):
@@ -350,13 +379,30 @@ class FetchIssues(unittest.TestCase):
                          "second run must hit the API again, not a cache")
         self.assertEqual(first, second)
 
-    def test_max_pages_is_a_runaway_guard(self):
-        # A server that never says hasNextPage: false must not loop forever.
+    def test_explicit_limit_raises_instead_of_returning_partial(self):
+        # A server that never says hasNextPage: false must not return a
+        # partial snapshot when an explicit safety limit is reached.
         endless = [{"pageInfo": {"hasNextPage": True, "endCursor": "c"},
                     "nodes": [{"id": "I"}]}]
-        common.fetch_issues("t", "me", max_pages=3,
-                            gql_fn=self.paged_gql(endless))
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_issues("t", "me", max_pages=3,
+                                gql_fn=self.paged_gql(endless))
         self.assertEqual(len(self.calls), 3)
+        self.assertIn("issues", str(raised.exception))
+        self.assertIn("c", str(raised.exception))
+
+    def test_no_limit_pages_until_has_next_page(self):
+        pages = iter([
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+             "nodes": [{"id": "I1"}]},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None},
+             "nodes": [{"id": "I2"}]},
+        ])
+        nodes = common.fetch_issues(
+            "t", "me", max_pages=None,
+            gql_fn=lambda *_args, **_kwargs: {
+                "user": {"issues": next(pages)}})
+        self.assertEqual([node["id"] for node in nodes], ["I1", "I2"])
 
 
 class XmlEscape(unittest.TestCase):

@@ -70,6 +70,17 @@ def normalise_pull_request(node: dict) -> dict:
     return out
 
 
+def _public_repository(repo: dict) -> dict:
+    """Keep only the public repository fields used by snapshot consumers."""
+    return {
+        "id": repo["id"],
+        "nameWithOwner": repo["nameWithOwner"],
+        "url": repo["url"],
+        "isPrivate": bool(repo["isPrivate"]),
+        "owner": {"login": repo["owner"]["login"]},
+    }
+
+
 def _validate_snapshot(snapshot: dict) -> dict:
     if not isinstance(snapshot, dict):
         raise SnapshotValidationError("snapshot must be a JSON object")
@@ -121,6 +132,44 @@ def build_snapshot(*, account: dict, insiders: set[str],
         "pull_requests": list(pull_requests),
     }
     return _validate_snapshot(snapshot)
+
+
+def fetch_authored_snapshot(token: str, login: str, *, gql_fn=None,
+                            max_pages: Optional[int] = None) -> dict:
+    """Fetch all public issues and pull requests authored by an account.
+
+    The token is used only for API calls and is deliberately absent from the
+    returned public snapshot. Environment-based insider and email additions
+    are also disabled so this boundary is deterministic and cannot publish
+    configuration or credentials.
+    """
+    identity = ghwidgets_common.fetch_identity(
+        token, login, gql_fn=gql_fn, include_environment=False)
+    pull_requests, _ = ghwidgets_common.fetch_pull_requests(
+        token, identity.login, cached_prs=None, max_pages=max_pages,
+        gql_fn=gql_fn)
+    issues = ghwidgets_common.fetch_issues(
+        token, identity.login, max_pages=max_pages, gql_fn=gql_fn)
+
+    public_pull_requests = [
+        node for node in pull_requests if not node["repository"]["isPrivate"]]
+    public_issues = [
+        node for node in issues if not node["repository"]["isPrivate"]]
+
+    repositories = {}
+    for node in [*public_pull_requests, *public_issues]:
+        repo = node["repository"]
+        repositories.setdefault(repo["id"], _public_repository(repo))
+
+    return build_snapshot(
+        account={"login": identity.login},
+        insiders=ghwidgets_common.insider_set(
+            identity.login, identity.orgs, extra=()),
+        repositories=list(repositories.values()),
+        issues=[normalise_issue(node) for node in public_issues],
+        pull_requests=[normalise_pull_request(node)
+                       for node in public_pull_requests],
+    )
 
 
 def load_snapshot(path: SnapshotPath) -> dict:

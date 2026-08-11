@@ -140,6 +140,74 @@ class SnapshotBuilding(unittest.TestCase):
         self.assertEqual(out["generated_at"], "")
 
 
+class AuthoredSnapshot(unittest.TestCase):
+    def test_fetch_excludes_private_records_and_credentials(self):
+        public_repo = {
+            "id": "R_public",
+            "nameWithOwner": "external/project",
+            "url": "https://github.com/external/project",
+            "isPrivate": False,
+            "owner": {"login": "external"},
+            "token": "repository-token-must-not-leak",
+        }
+        private_repo = {
+            "id": "R_private",
+            "nameWithOwner": "me/secret",
+            "url": "https://github.com/me/secret",
+            "isPrivate": True,
+            "owner": {"login": "me"},
+            "credential": "private-repository-credential",
+        }
+        public_issue = issue_node(id="I_public", repository=public_repo)
+        private_issue = issue_node(id="I_private", repository=private_repo)
+        public_pr = pull_request_node(id="PR_public", repository=public_repo)
+        private_pr = pull_request_node(id="PR_private", repository=private_repo)
+        calls = []
+
+        def gql_fn(token, query, variables=None, **_kwargs):
+            calls.append((token, query, variables))
+            if "organizations" in query:
+                return {"user": {
+                    "login": "Canonical",
+                    "databaseId": 42,
+                    "organizations": {"nodes": [{"login": "Org"}]},
+                }}
+            if "pullRequests" in query:
+                return {"user": {"pullRequests": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [public_pr, private_pr],
+                }}}
+            if "issues" in query:
+                return {"user": {"issues": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [public_issue, private_issue],
+                }}}
+            raise AssertionError("unexpected GraphQL query")
+
+        # The high-level producer receives all inputs explicitly. It must not
+        # pull additive insider/email configuration from the environment.
+        with mock.patch.object(
+                data.ghwidgets_common, "env_list",
+                side_effect=AssertionError("environment must not be read")):
+            out = data.fetch_authored_snapshot(
+                "top-secret-token", "requested-login", gql_fn=gql_fn)
+
+        self.assertEqual(out["account"], {"login": "Canonical"})
+        self.assertEqual(out["insiders"], ["canonical", "org"])
+        self.assertEqual([node["node_id"] for node in out["issues"]],
+                         ["I_public"])
+        self.assertEqual([node["node_id"] for node in out["pull_requests"]],
+                         ["PR_public"])
+        self.assertEqual([repo["id"] for repo in out["repositories"]],
+                         ["R_public"])
+        encoded = json.dumps(out, sort_keys=True)
+        self.assertNotIn("top-secret-token", encoded)
+        self.assertNotIn("repository-token-must-not-leak", encoded)
+        self.assertNotIn("private-repository-credential", encoded)
+        self.assertEqual([call[0] for call in calls],
+                         ["top-secret-token"] * len(calls))
+
+
 class SnapshotValidation(unittest.TestCase):
     def test_snapshot_rejects_unknown_schema(self):
         with tempfile.TemporaryDirectory() as td:
