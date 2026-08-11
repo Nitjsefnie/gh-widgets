@@ -136,23 +136,51 @@ input format for the renderer-private profile, impact, or responsiveness data.
 acquires the complete authored issue and pull-request history, following every
 page until GitHub reports the final page. Pagination cursor failures and an
 explicit safety limit fail loudly instead of returning a plausible partial
-snapshot. The normalized snapshot contains `account`, `insiders`,
-`repositories`, `issues`, and `pull_requests`; issue and pull-request records
-use stable snake_case keys.
+snapshot. Its exact v1 top-level shape is:
 
-The producer publishes public data only: private repositories are removed,
-credentials are never serialized, and `insiders` contains the account plus
-organizations whose membership is publicly visible. Private memberships are
-used only transiently for authenticated classification and do not cross the
-public boundary. Environment-based insider and email additions are not read by
-the public producer.
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-01-05T00:00:00Z",
+  "account": {"login": "account-login"},
+  "repositories": [],
+  "issues": [],
+  "pull_requests": []
+}
+```
 
-`load_snapshot()` validates the schema and required collections.
-`write_snapshot()` validates before using the locked, atomic writer in strict
-mode, so lock or filesystem failures raise instead of silently losing a
-snapshot. Consumers that embed or submodule gh-widgets must pin the exact
-gh-widgets commit defining this contract and upgrade it deliberately with
-compatibility tests; an unpinned moving branch is not a supported interface.
+There are no membership, `insiders`, token, credential, or other unlisted
+fields. Repository records have exactly `id`, `nameWithOwner`, `url`,
+`isPrivate`, and `owner`; `owner` has exactly `login`, and `isPrivate` is
+always `false`. Issue records have exactly
+`node_id`, `repository_id`, `repository`, `owner`, `repository_url`,
+`is_private`, `number`, `url`, `created_at`, `updated_at`, `closed_at`,
+`state`, and `state_reason`; pull-request records add exactly `merged_at` and
+`merged`. Strings are non-empty, numbers are positive integers, booleans are
+actual booleans, nullable outcome timestamps are RFC 3339 strings or `null`,
+and every item references a repository in the same snapshot. States and final
+outcomes must be internally consistent: open items have no `closed_at`, closed
+issues have `COMPLETED` or `NOT_PLANNED`, and merged PRs are closed and have a
+`merged_at` timestamp.
+
+The supported public functions are `normalise_issue`,
+`normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
+`write_snapshot` (plus `SCHEMA_VERSION`). Arbitrary snapshot construction is
+internal (`_build_snapshot`) and is not a consumer API. The producer publishes
+public external data only: private repositories are removed, the account and
+explicitly public organization owners are excluded transiently during
+acquisition, and credentials are never serialized. Membership relationships
+are not part of the interchange contract. Environment-based insider and email
+additions are not read by the public producer.
+
+`load_snapshot()` and `write_snapshot()` perform the same exact nested
+validation. Invalid data raises the stable `SnapshotValidationError` (with
+unsupported versions reported as its `SnapshotVersionError` subclass) before
+`write_snapshot()` invokes the locked, atomic strict writer. Lock or filesystem
+failures raise separately instead of silently losing a snapshot. Consumers that
+embed or submodule gh-widgets must pin the exact gh-widgets commit defining
+this contract and upgrade it deliberately with compatibility tests; an
+unpinned moving branch is not a supported interface.
 
 The renderer CLIs and their SVG output remain unchanged and independently
 runnable; they do not consume public snapshots. `cache.json` and

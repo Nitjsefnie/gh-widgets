@@ -3,11 +3,14 @@
 
 The renderers' private caches are implementation details.  This module is the
 small, dependency-free boundary for consumers that need to exchange public
-GitHub data with the renderers.
+GitHub data with the renderers.  Only ``fetch_authored_snapshot`` constructs a
+supported snapshot; ``_build_snapshot`` is an internal producer helper whose
+input is always validated before it crosses the boundary.
 """
-import json
 from datetime import datetime, timezone
+import json
 from pathlib import Path
+import re
 from typing import Optional, Union
 
 import ghwidgets_common
@@ -15,16 +18,40 @@ import ghwidgets_common
 
 SCHEMA_VERSION: int = 1
 
-_REQUIRED_FIELDS = (
+_TOP_LEVEL_FIELDS = (
     "schema_version",
     "generated_at",
     "account",
-    "insiders",
     "repositories",
     "issues",
     "pull_requests",
 )
-_COLLECTION_FIELDS = ("insiders", "repositories", "issues", "pull_requests")
+_ACCOUNT_FIELDS = ("login",)
+_REPOSITORY_FIELDS = ("id", "nameWithOwner", "url", "isPrivate", "owner")
+_REPOSITORY_OWNER_FIELDS = ("login",)
+_ITEM_FIELDS = (
+    "node_id",
+    "repository_id",
+    "repository",
+    "owner",
+    "repository_url",
+    "is_private",
+    "number",
+    "url",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "state",
+    "state_reason",
+)
+_PULL_REQUEST_FIELDS = _ITEM_FIELDS + ("merged_at", "merged")
+_COLLECTION_FIELDS = ("repositories", "issues", "pull_requests")
+_STATES = frozenset(("OPEN", "CLOSED"))
+_ISSUE_REASONS = frozenset(("COMPLETED", "NOT_PLANNED", "REOPENED"))
+_RFC3339 = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
+)
 SnapshotPath = Union[str, Path]
 
 
@@ -81,6 +108,152 @@ def _public_repository(repo: dict) -> dict:
     }
 
 
+def _exact_keys(value, expected, context):
+    """Require a JSON object to have exactly the documented fields."""
+    if not isinstance(value, dict):
+        raise SnapshotValidationError(f"{context} must be an object")
+    expected = set(expected)
+    actual = set(value)
+    unknown = sorted(actual - expected, key=repr)
+    missing = sorted(expected - actual, key=repr)
+    if unknown:
+        raise SnapshotValidationError(
+            f"{context} has unknown field(s): {', '.join(map(str, unknown))}")
+    if missing:
+        raise SnapshotValidationError(
+            f"{context} missing required field(s): {', '.join(map(str, missing))}")
+
+
+def _string(value, context):
+    if type(value) is not str or not value:
+        raise SnapshotValidationError(f"{context} must be a non-empty string")
+
+
+def _boolean(value, context):
+    if type(value) is not bool:
+        raise SnapshotValidationError(f"{context} must be a boolean")
+
+
+def _integer(value, context):
+    if type(value) is not int:
+        raise SnapshotValidationError(f"{context} must be an integer")
+
+
+def _timestamp(value, context, *, nullable=False):
+    if nullable and value is None:
+        return
+    if type(value) is not str or not value or not _RFC3339.fullmatch(value):
+        raise SnapshotValidationError(
+            f"{context} must be a non-empty RFC 3339 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SnapshotValidationError(
+            f"{context} must be a non-empty RFC 3339 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SnapshotValidationError(
+            f"{context} must be a non-empty RFC 3339 timestamp")
+
+
+def _nullable_string(value, context, allowed=None):
+    if value is None:
+        return
+    if type(value) is not str:
+        raise SnapshotValidationError(f"{context} must be a string or null")
+    if allowed is not None and value not in allowed:
+        raise SnapshotValidationError(f"{context} has an invalid value")
+
+
+def _validate_account(account):
+    _exact_keys(account, _ACCOUNT_FIELDS, "snapshot account")
+    _string(account["login"], "snapshot account.login")
+
+
+def _validate_repository(repository, index):
+    context = f"snapshot repositories[{index}]"
+    _exact_keys(repository, _REPOSITORY_FIELDS, context)
+    _string(repository["id"], f"{context}.id")
+    _string(repository["nameWithOwner"], f"{context}.nameWithOwner")
+    _string(repository["url"], f"{context}.url")
+    if repository["isPrivate"] is not False:
+        raise SnapshotValidationError(
+            f"{context}.isPrivate must be false for public snapshots")
+    _exact_keys(repository["owner"], _REPOSITORY_OWNER_FIELDS,
+                f"{context}.owner")
+    _string(repository["owner"]["login"], f"{context}.owner.login")
+
+
+def _validate_item(item, index, kind, repository_by_id):
+    context = f"snapshot {kind}[{index}]"
+    fields = _PULL_REQUEST_FIELDS if kind == "pull_requests" else _ITEM_FIELDS
+    _exact_keys(item, fields, context)
+    for field in ("node_id", "repository_id", "repository", "owner",
+                  "repository_url"):
+        _string(item[field], f"{context}.{field}")
+    if item["is_private"] is not False:
+        raise SnapshotValidationError(
+            f"{context}.is_private must be false for public snapshots")
+    _integer(item["number"], f"{context}.number")
+    if item["number"] < 1:
+        raise SnapshotValidationError(f"{context}.number must be positive")
+    _string(item["url"], f"{context}.url")
+    _timestamp(item["created_at"], f"{context}.created_at")
+    _timestamp(item["updated_at"], f"{context}.updated_at")
+    _timestamp(item["closed_at"], f"{context}.closed_at", nullable=True)
+    if item["state"] not in _STATES:
+        raise SnapshotValidationError(f"{context}.state has an invalid value")
+    _nullable_string(item["state_reason"], f"{context}.state_reason",
+                     _ISSUE_REASONS)
+
+    repository = repository_by_id.get(item["repository_id"])
+    if repository is None:
+        raise SnapshotValidationError(
+            f"{context}.repository_id references an absent repository")
+    if item["repository"] != repository["nameWithOwner"]:
+        raise SnapshotValidationError(
+            f"{context}.repository does not match its repository record")
+    if item["owner"] != repository["owner"]["login"]:
+        raise SnapshotValidationError(
+            f"{context}.owner does not match its repository record")
+    if item["repository_url"] != repository["url"]:
+        raise SnapshotValidationError(
+            f"{context}.repository_url does not match its repository record")
+
+    if item["state"] == "OPEN":
+        if item["closed_at"] is not None:
+            raise SnapshotValidationError(
+                f"{context} open state cannot have closed_at")
+        if item["state_reason"] not in (None, "REOPENED"):
+            raise SnapshotValidationError(
+                f"{context} open state has an inconsistent state_reason")
+    else:
+        if item["closed_at"] is None:
+            raise SnapshotValidationError(
+                f"{context} closed state requires closed_at")
+        if kind == "issues" and item["state_reason"] not in (
+                "COMPLETED", "NOT_PLANNED"):
+            raise SnapshotValidationError(
+                f"{context} closed issue has an inconsistent state_reason")
+        if kind == "pull_requests" and item["state_reason"] not in (
+                None, "COMPLETED", "NOT_PLANNED"):
+            raise SnapshotValidationError(
+                f"{context} closed PR has an inconsistent state_reason")
+
+    if kind == "pull_requests":
+        _boolean(item["merged"], f"{context}.merged")
+        _timestamp(item["merged_at"], f"{context}.merged_at", nullable=True)
+        if item["merged"]:
+            if item["state"] != "CLOSED" or item["closed_at"] is None:
+                raise SnapshotValidationError(
+                    f"{context} merged PR must be closed")
+            if item["merged_at"] is None:
+                raise SnapshotValidationError(
+                    f"{context} merged PR requires merged_at")
+        elif item["merged_at"] is not None:
+            raise SnapshotValidationError(
+                f"{context} unmerged PR cannot have merged_at")
+
+
 def _validate_snapshot(snapshot: dict) -> dict:
     if not isinstance(snapshot, dict):
         raise SnapshotValidationError("snapshot must be a JSON object")
@@ -89,44 +262,53 @@ def _validate_snapshot(snapshot: dict) -> dict:
         raise SnapshotValidationError(
             "snapshot missing required field(s): schema_version")
     version = snapshot["schema_version"]
-    if not isinstance(version, int) or isinstance(version, bool):
+    if type(version) is not int:
         raise SnapshotValidationError("snapshot schema_version must be an integer")
     if version != SCHEMA_VERSION:
         raise SnapshotVersionError(
             f"unsupported snapshot schema_version: {version}")
 
-    missing = [key for key in _REQUIRED_FIELDS if key not in snapshot]
-    if missing:
-        raise SnapshotValidationError(
-            "snapshot missing required field(s): " + ", ".join(missing))
-
-    if not isinstance(snapshot["generated_at"], str):
-        raise SnapshotValidationError("snapshot generated_at must be a string")
-    if not isinstance(snapshot["account"], dict):
-        raise SnapshotValidationError("snapshot account must be an object")
+    _exact_keys(snapshot, _TOP_LEVEL_FIELDS, "snapshot")
+    _timestamp(snapshot["generated_at"], "snapshot generated_at")
+    _validate_account(snapshot["account"])
     for field in _COLLECTION_FIELDS:
         if not isinstance(snapshot[field], list):
+            raise SnapshotValidationError(f"snapshot {field} must be a list")
+
+    repository_by_id = {}
+    for index, repository in enumerate(snapshot["repositories"]):
+        _validate_repository(repository, index)
+        repository_id = repository["id"]
+        if repository_id in repository_by_id:
             raise SnapshotValidationError(
-                f"snapshot {field} must be a list")
+                f"duplicate repository node_id: {repository_id}")
+        repository_by_id[repository_id] = repository
+        if repository["owner"]["login"].casefold() == \
+                snapshot["account"]["login"].casefold():
+            raise SnapshotValidationError(
+                f"snapshot repositories[{index}] is owned by the account")
+
+    item_ids = set(repository_by_id)
+    for kind in ("issues", "pull_requests"):
+        for index, item in enumerate(snapshot[kind]):
+            _validate_item(item, index, kind, repository_by_id)
+            node_id = item["node_id"]
+            if node_id in item_ids:
+                raise SnapshotValidationError(f"duplicate item node_id: {node_id}")
+            item_ids.add(node_id)
     return snapshot
 
 
-def build_snapshot(*, account: dict, insiders: set[str],
-                   repositories: list[dict], issues: list[dict],
-                   pull_requests: list[dict],
-                   generated_at: Optional[str] = None) -> dict:
-    """Build and validate a versioned public snapshot.
-
-    ``insiders`` is a set at the acquisition boundary, but snapshots use a
-    sorted list so their JSON representation is deterministic.
-    """
+def _build_snapshot(*, account: dict, repositories: list[dict],
+                    issues: list[dict], pull_requests: list[dict],
+                    generated_at: Optional[str] = None) -> dict:
+    """Build the only supported v1 snapshot shape, for internal producers."""
     timestamp = (generated_at if generated_at is not None else datetime.now(
         timezone.utc).isoformat(timespec="seconds"))
     snapshot = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": timestamp,
         "account": account,
-        "insiders": sorted(insiders),
         "repositories": list(repositories),
         "issues": list(issues),
         "pull_requests": list(pull_requests),
@@ -152,20 +334,26 @@ def fetch_authored_snapshot(token: str, login: str, *, gql_fn=None,
     issues = ghwidgets_common.fetch_issues(
         token, identity.login, max_pages=max_pages, gql_fn=gql_fn)
 
+    # Public organization memberships are the only membership relationship
+    # used for the public classification.  The set is transient and never
+    # crosses the snapshot boundary; concealed/private memberships are not
+    # serialized or used to make a public ownership claim.
+    public_insiders = ghwidgets_common.insider_set(
+        identity.login, identity.public_orgs, extra=())
     public_pull_requests = [
-        node for node in pull_requests if not node["repository"]["isPrivate"]]
+        node for node in pull_requests
+        if ghwidgets_common.is_external(node, public_insiders)]
     public_issues = [
-        node for node in issues if not node["repository"]["isPrivate"]]
+        node for node in issues
+        if ghwidgets_common.is_external(node, public_insiders)]
 
     repositories = {}
     for node in [*public_pull_requests, *public_issues]:
         repo = node["repository"]
         repositories.setdefault(repo["id"], _public_repository(repo))
 
-    return build_snapshot(
+    return _build_snapshot(
         account={"login": identity.login},
-        insiders=ghwidgets_common.insider_set(
-            identity.login, identity.public_orgs, extra=()),
         repositories=list(repositories.values()),
         issues=[normalise_issue(node) for node in public_issues],
         pull_requests=[normalise_pull_request(node)

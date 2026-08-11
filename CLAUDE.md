@@ -37,13 +37,32 @@ login)` pages the complete authored issue and pull-request history. It follows
 every cursor to the final page; cursor failures and explicit safety limits
 raise rather than silently publishing partial data.
 
-The producer is public-only: private repositories are filtered, credentials
-are never serialized, and `insiders` contains the account plus only publicly
-visible organization memberships. Private memberships remain transient
-authenticated state, and environment insider/email additions are not read by
-the public producer. `load_snapshot()` validates the version and required
-collections. `write_snapshot()` validates before a locked, atomic strict write
-and raises on lock or filesystem failure.
+The v1 top-level keys are exactly `schema_version`, `generated_at`, `account`,
+`repositories`, `issues`, and `pull_requests`; membership relationships and
+`insiders` are not serialized. `account` is exactly `{login}`. A repository is
+exactly `{id, nameWithOwner, url, isPrivate, owner}`, with `owner` exactly
+`{login}` and `isPrivate` always `false`. An issue is exactly
+`{node_id, repository_id, repository, owner, repository_url, is_private,
+number, url, created_at, updated_at, closed_at, state, state_reason}`. A pull
+request has those exact fields plus `merged_at` and `merged`. Strings are
+non-empty, numbers are positive integers, booleans are actual booleans, and
+timestamps are non-empty RFC 3339 strings (or `null` only where documented as
+an outcome). Every item must reference an included repository; duplicate IDs,
+unknown/missing fields, private flags, credentials, invalid states, and
+inconsistent closed/merged outcomes are rejected.
+
+The supported public functions are `normalise_issue`,
+`normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
+`write_snapshot`, plus `SCHEMA_VERSION`. Arbitrary construction is internal
+(`_build_snapshot`) and is not a consumer API. The producer is public-only and
+external-only: private repositories are filtered, the account and explicitly
+public organization owners are excluded transiently, credentials are never
+serialized, and environment insider/email additions are not read by the public
+producer. Membership data never crosses the boundary. `load_snapshot()` and
+`write_snapshot()` both enforce the full nested schema. Invalid data raises
+`SnapshotValidationError`; unsupported versions raise its
+`SnapshotVersionError` subclass. `write_snapshot()` validates before a locked,
+atomic strict write and raises on lock or filesystem failure.
 
 A consumer must pin the exact gh-widgets commit/submodule that defines this
 contract and upgrade it deliberately with compatibility tests; an unpinned

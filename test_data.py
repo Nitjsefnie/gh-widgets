@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the public GitHub data and snapshot contract."""
+import copy
 import json
 import tempfile
 import unittest
@@ -42,15 +43,68 @@ def pull_request_node(**overrides):
     return node
 
 
+def repository_record(**overrides):
+    value = {
+        "id": "R_1",
+        "nameWithOwner": "external/project",
+        "url": "https://github.com/external/project",
+        "isPrivate": False,
+        "owner": {"login": "external"},
+    }
+    value.update(overrides)
+    return value
+
+
+def issue_record(**overrides):
+    value = {
+        "node_id": "I_1",
+        "repository_id": "R_1",
+        "repository": "external/project",
+        "owner": "external",
+        "repository_url": "https://github.com/external/project",
+        "is_private": False,
+        "number": 7,
+        "url": "https://github.com/external/project/issues/7",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-03T00:00:00Z",
+        "closed_at": "2026-01-03T00:00:00Z",
+        "state": "CLOSED",
+        "state_reason": "COMPLETED",
+    }
+    value.update(overrides)
+    return value
+
+
+def pull_request_record(**overrides):
+    value = {
+        "node_id": "PR_1",
+        "repository_id": "R_1",
+        "repository": "external/project",
+        "owner": "external",
+        "repository_url": "https://github.com/external/project",
+        "is_private": False,
+        "number": 8,
+        "url": "https://github.com/external/project/pull/8",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-04T00:00:00Z",
+        "closed_at": "2026-01-04T00:00:00Z",
+        "state": "CLOSED",
+        "state_reason": None,
+        "merged_at": "2026-01-04T00:00:00Z",
+        "merged": True,
+    }
+    value.update(overrides)
+    return value
+
+
 def snapshot(**overrides):
     value = {
         "schema_version": data.SCHEMA_VERSION,
         "generated_at": "2026-01-05T00:00:00+00:00",
         "account": {"login": "me"},
-        "insiders": ["me", "org"],
-        "repositories": [],
-        "issues": [],
-        "pull_requests": [],
+        "repositories": [repository_record()],
+        "issues": [issue_record()],
+        "pull_requests": [pull_request_record()],
     }
     value.update(overrides)
     return value
@@ -105,28 +159,22 @@ class Normalization(unittest.TestCase):
 
 
 class SnapshotBuilding(unittest.TestCase):
-    def test_build_snapshot_sets_schema_and_sorts_insiders(self):
-        out = data.build_snapshot(
+    def test_arbitrary_snapshot_builder_is_private(self):
+        self.assertFalse(hasattr(data, "build_snapshot"))
+
+    def test_private_builder_sets_schema_without_memberships(self):
+        out = data._build_snapshot(
             account={"login": "me"},
-            insiders={"org", "me"},
-            repositories=[{"id": "R_1"}],
-            issues=[{"node_id": "I_1"}],
-            pull_requests=[{"node_id": "PR_1"}],
+            repositories=[repository_record()],
+            issues=[issue_record()],
+            pull_requests=[pull_request_record()],
             generated_at="2026-01-05T00:00:00+00:00",
         )
-        self.assertEqual(out, {
-            "schema_version": 1,
-            "generated_at": "2026-01-05T00:00:00+00:00",
-            "account": {"login": "me"},
-            "insiders": ["me", "org"],
-            "repositories": [{"id": "R_1"}],
-            "issues": [{"node_id": "I_1"}],
-            "pull_requests": [{"node_id": "PR_1"}],
-        })
+        self.assertEqual(out, snapshot())
 
     def test_build_snapshot_defaults_to_utc_iso_seconds(self):
-        out = data.build_snapshot(
-            account={}, insiders=set(), repositories=[], issues=[],
+        out = data._build_snapshot(
+            account={"login": "me"}, repositories=[], issues=[],
             pull_requests=[])
         self.assertRegex(
             out["generated_at"],
@@ -134,10 +182,36 @@ class SnapshotBuilding(unittest.TestCase):
         )
 
     def test_build_snapshot_preserves_explicit_generated_at(self):
-        out = data.build_snapshot(
-            account={}, insiders=set(), repositories=[], issues=[],
-            pull_requests=[], generated_at="")
-        self.assertEqual(out["generated_at"], "")
+        out = data._build_snapshot(
+            account={"login": "me"}, repositories=[], issues=[],
+            pull_requests=[], generated_at="2026-01-05T00:00:00Z")
+        self.assertEqual(out["generated_at"], "2026-01-05T00:00:00Z")
+
+    def test_private_builder_rejects_nested_credentials(self):
+        cases = [
+            {"login": "me", "token": "secret"},
+            repository_record(token="secret"),
+            issue_record(token="secret"),
+            pull_request_record(token="secret"),
+        ]
+        for invalid in cases:
+            with self.subTest(invalid=invalid):
+                kwargs = {
+                    "account": {"login": "me"},
+                    "repositories": [repository_record()],
+                    "issues": [issue_record()],
+                    "pull_requests": [pull_request_record()],
+                }
+                if "login" in invalid:
+                    kwargs["account"] = invalid
+                elif "merged" in invalid:
+                    kwargs["pull_requests"] = [invalid]
+                elif "node_id" in invalid:
+                    kwargs["issues"] = [invalid]
+                else:
+                    kwargs["repositories"] = [invalid]
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._build_snapshot(**kwargs)
 
 
 class AuthoredSnapshot(unittest.TestCase):
@@ -165,16 +239,38 @@ class AuthoredSnapshot(unittest.TestCase):
             "isPrivate": False,
             "owner": {"login": "PrivateOrg"},
         }
+        public_repo_owned_by_account = {
+            "id": "R_account_public",
+            "nameWithOwner": "Canonical/public-project",
+            "url": "https://github.com/Canonical/public-project",
+            "isPrivate": False,
+            "owner": {"login": "Canonical"},
+        }
+        public_repo_owned_by_public_org = {
+            "id": "R_public_org",
+            "nameWithOwner": "PublicOrg/public-project",
+            "url": "https://github.com/PublicOrg/public-project",
+            "isPrivate": False,
+            "owner": {"login": "PublicOrg"},
+        }
         public_issue = issue_node(id="I_public", repository=public_repo)
         private_issue = issue_node(id="I_private", repository=private_repo)
         public_issue_owned_by_private_member = issue_node(
             id="I_public_private_member",
             repository=public_repo_owned_by_private_member)
+        public_issue_owned_by_account = issue_node(
+            id="I_public_account", repository=public_repo_owned_by_account)
+        public_issue_owned_by_public_org = issue_node(
+            id="I_public_org", repository=public_repo_owned_by_public_org)
         public_pr = pull_request_node(id="PR_public", repository=public_repo)
         private_pr = pull_request_node(id="PR_private", repository=private_repo)
         public_pr_owned_by_private_member = pull_request_node(
             id="PR_public_private_member",
             repository=public_repo_owned_by_private_member)
+        public_pr_owned_by_account = pull_request_node(
+            id="PR_public_account", repository=public_repo_owned_by_account)
+        public_pr_owned_by_public_org = pull_request_node(
+            id="PR_public_org", repository=public_repo_owned_by_public_org)
         calls = []
 
         def gql_fn(token, query, variables=None, **_kwargs):
@@ -196,13 +292,17 @@ class AuthoredSnapshot(unittest.TestCase):
                 return {"user": {"pullRequests": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [public_pr, private_pr,
-                               public_pr_owned_by_private_member],
+                               public_pr_owned_by_private_member,
+                               public_pr_owned_by_account,
+                               public_pr_owned_by_public_org],
                 }}}
             if "issues" in query:
                 return {"user": {"issues": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [public_issue, private_issue,
-                               public_issue_owned_by_private_member],
+                               public_issue_owned_by_private_member,
+                               public_issue_owned_by_account,
+                               public_issue_owned_by_public_org],
                 }}}
             raise AssertionError("unexpected GraphQL query")
 
@@ -215,8 +315,7 @@ class AuthoredSnapshot(unittest.TestCase):
                 "top-secret-token", "requested-login", gql_fn=gql_fn)
 
         self.assertEqual(out["account"], {"login": "Canonical"})
-        self.assertEqual(out["insiders"], ["canonical", "publicorg"])
-        self.assertNotIn("privateorg", out["insiders"])
+        self.assertNotIn("insiders", out)
         self.assertEqual([node["node_id"] for node in out["issues"]],
                          ["I_public", "I_public_private_member"])
         self.assertEqual([node["node_id"] for node in out["pull_requests"]],
@@ -246,7 +345,7 @@ class AuthoredSnapshot(unittest.TestCase):
                 "top-secret-token", "requested-login", gql_fn=object())
 
         self.assertTrue(fetch_identity.call_args.kwargs["include_public_orgs"])
-        self.assertEqual(out["insiders"], ["canonical", "publicorg"])
+        self.assertNotIn("insiders", out)
 
 
 class SnapshotValidation(unittest.TestCase):
@@ -264,13 +363,106 @@ class SnapshotValidation(unittest.TestCase):
             with self.assertRaises(data.SnapshotValidationError):
                 data.load_snapshot(path)
 
+    def test_snapshot_rejects_membership_top_level_field(self):
+        value = snapshot(insiders=["me"])
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(value)
+
+    def test_snapshot_rejects_unknown_top_level_field(self):
+        value = snapshot(extra="must not cross boundary")
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(value)
+
     def test_snapshot_requires_collection_fields_to_be_lists(self):
+        for field in ("repositories", "issues", "pull_requests"):
+            with self.subTest(field=field):
+                value = snapshot(**{field: {"items": []}})
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._validate_snapshot(value)
+
+    def test_snapshot_rejects_unknown_and_missing_nested_fields(self):
+        cases = []
+        value = snapshot(account={"login": "me", "token": "secret"})
+        cases.append(value)
+        value = snapshot(account={})
+        cases.append(value)
+        value = snapshot(repositories=[repository_record(token="secret")])
+        cases.append(value)
+        value = snapshot(repositories=[{
+            key: value for key, value in repository_record().items()
+            if key != "owner"
+        }])
+        cases.append(value)
+        value = snapshot(issues=[issue_record(credential="secret")])
+        cases.append(value)
+        value = snapshot(pull_requests=[pull_request_record(api_key="secret")])
+        cases.append(value)
+        for invalid in cases:
+            with self.subTest(snapshot=invalid):
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._validate_snapshot(invalid)
+
+    def test_snapshot_rejects_private_repositories_and_items(self):
+        private_repo = repository_record(isPrivate=True)
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(repositories=[private_repo]))
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(
+                issues=[issue_record(is_private=True)]))
+
+    def test_snapshot_rejects_bad_types_and_timestamps(self):
+        cases = [
+            snapshot(account={"login": 1}),
+            snapshot(repositories=[repository_record(isPrivate=0)]),
+            snapshot(issues=[issue_record(number=True)]),
+            snapshot(issues=[issue_record(created_at="")]),
+            snapshot(issues=[issue_record(updated_at="yesterday")]),
+            snapshot(generated_at=""),
+            snapshot(generated_at="not-rfc3339"),
+        ]
+        for invalid in cases:
+            with self.subTest(snapshot=invalid):
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._validate_snapshot(invalid)
+
+    def test_snapshot_rejects_invalid_state_and_outcome_combinations(self):
+        cases = [
+            snapshot(issues=[issue_record(state="OPEN")]),
+            snapshot(issues=[issue_record(
+                state="OPEN", closed_at=None, state_reason="COMPLETED")]),
+            snapshot(issues=[issue_record(
+                state="CLOSED", closed_at=None, state_reason="COMPLETED")]),
+            snapshot(issues=[issue_record(
+                state="CLOSED", state_reason="REOPENED")]),
+            snapshot(pull_requests=[pull_request_record(
+                state="OPEN", closed_at=None)]),
+            snapshot(pull_requests=[pull_request_record(
+                merged=True, merged_at=None)]),
+            snapshot(pull_requests=[pull_request_record(
+                merged=False, merged_at="2026-01-04T00:00:00Z")]),
+        ]
+        for invalid in cases:
+            with self.subTest(snapshot=invalid):
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._validate_snapshot(invalid)
+
+    def test_snapshot_rejects_duplicate_ids_and_broken_references(self):
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(
+                issues=[issue_record(), issue_record()]))
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(
+                pull_requests=[pull_request_record(node_id="I_1")]))
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(
+                issues=[issue_record(repository_id="R_missing")]))
+
+    def test_canonical_fixture_round_trips_exactly(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "snapshot.json"
-            value = snapshot(insiders={"members": ["me"]})
-            path.write_text(json.dumps(value), encoding="utf-8")
-            with self.assertRaises(data.SnapshotValidationError):
-                data.load_snapshot(path)
+            value = snapshot()
+            data.write_snapshot(path, value)
+            self.assertEqual(data.load_snapshot(path), value)
 
     def test_snapshot_rejects_invalid_json(self):
         with tempfile.TemporaryDirectory() as td:
@@ -294,8 +486,32 @@ class SnapshotWriting(unittest.TestCase):
             value = snapshot()
             data.write_snapshot(path, value)
             with self.assertRaises(data.SnapshotValidationError):
-                data.write_snapshot(path, {"schema_version": 1})
+                invalid = copy.deepcopy(value)
+                invalid["issues"][0]["token"] = "must not be written"
+                data.write_snapshot(path, invalid)
             self.assertEqual(data.load_snapshot(path), value)
+
+    def test_load_snapshot_rejects_nested_credentials(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            invalid = snapshot()
+            invalid["account"]["password"] = "secret"
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.assertRaises(data.SnapshotValidationError):
+                data.load_snapshot(path)
+
+    def test_load_and_write_reject_membership_input(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            invalid = snapshot(insiders=["me"])
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.assertRaises(data.SnapshotValidationError):
+                data.load_snapshot(path)
+
+            data.write_snapshot(path, snapshot())
+            with self.assertRaises(data.SnapshotValidationError):
+                data.write_snapshot(path, invalid)
+            self.assertEqual(data.load_snapshot(path), snapshot())
 
     def test_write_snapshot_raises_when_atomic_write_fails(self):
         with tempfile.TemporaryDirectory() as td:
