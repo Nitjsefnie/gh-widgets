@@ -2,6 +2,7 @@ widgets/
 *.pyc
 __pycache__/
 .venv/
+.worktrees/
 
 # never commit: the secrecy-check literal list
 .secrecy-literals
