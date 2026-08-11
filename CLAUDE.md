@@ -51,6 +51,21 @@ an outcome). Every item must reference an included repository; duplicate IDs,
 unknown/missing fields, private flags, credentials, invalid states, and
 inconsistent closed/merged outcomes are rejected.
 
+The complete allowed state matrix is:
+
+| record | `state` | `closed_at` | `state_reason` | `merged` | `merged_at` |
+|---|---|---|---|---|---|
+| issue | `OPEN` | `null` | `null` or `REOPENED` | — | — |
+| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` | — | — |
+| pull request | `OPEN` | `null` | `null` or `REOPENED` | `false` | `null` |
+| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `false` | `null` |
+| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `true` | RFC 3339 |
+
+No other state/state-reason/null combination is valid. Open items cannot have
+`closed_at`; closed issues cannot have a null or `REOPENED` reason; closed PRs
+cannot have `REOPENED`; merged PRs must be closed with `merged_at`; and
+unmerged PRs must have `merged_at: null`.
+
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
 `write_snapshot`, plus `SCHEMA_VERSION`. Arbitrary construction is internal

@@ -110,7 +110,7 @@ def _public_repository(repo: dict) -> dict:
 
 def _exact_keys(value, expected, context):
     """Require a JSON object to have exactly the documented fields."""
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise SnapshotValidationError(f"{context} must be an object")
     expected = set(expected)
     actual = set(value)
@@ -200,6 +200,7 @@ def _validate_item(item, index, kind, repository_by_id):
     _timestamp(item["created_at"], f"{context}.created_at")
     _timestamp(item["updated_at"], f"{context}.updated_at")
     _timestamp(item["closed_at"], f"{context}.closed_at", nullable=True)
+    _string(item["state"], f"{context}.state")
     if item["state"] not in _STATES:
         raise SnapshotValidationError(f"{context}.state has an invalid value")
     _nullable_string(item["state_reason"], f"{context}.state_reason",
@@ -255,7 +256,7 @@ def _validate_item(item, index, kind, repository_by_id):
 
 
 def _validate_snapshot(snapshot: dict) -> dict:
-    if not isinstance(snapshot, dict):
+    if type(snapshot) is not dict:
         raise SnapshotValidationError("snapshot must be a JSON object")
 
     if "schema_version" not in snapshot:
@@ -272,7 +273,7 @@ def _validate_snapshot(snapshot: dict) -> dict:
     _timestamp(snapshot["generated_at"], "snapshot generated_at")
     _validate_account(snapshot["account"])
     for field in _COLLECTION_FIELDS:
-        if not isinstance(snapshot[field], list):
+        if type(snapshot[field]) is not list:
             raise SnapshotValidationError(f"snapshot {field} must be a list")
 
     repository_by_id = {}
@@ -309,9 +310,9 @@ def _build_snapshot(*, account: dict, repositories: list[dict],
         "schema_version": SCHEMA_VERSION,
         "generated_at": timestamp,
         "account": account,
-        "repositories": list(repositories),
-        "issues": list(issues),
-        "pull_requests": list(pull_requests),
+        "repositories": repositories,
+        "issues": issues,
+        "pull_requests": pull_requests,
     }
     return _validate_snapshot(snapshot)
 

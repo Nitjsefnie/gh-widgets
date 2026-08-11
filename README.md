@@ -159,9 +159,20 @@ always `false`. Issue records have exactly
 `merged`. Strings are non-empty, numbers are positive integers, booleans are
 actual booleans, nullable outcome timestamps are RFC 3339 strings or `null`,
 and every item references a repository in the same snapshot. States and final
-outcomes must be internally consistent: open items have no `closed_at`, closed
-issues have `COMPLETED` or `NOT_PLANNED`, and merged PRs are closed and have a
-`merged_at` timestamp.
+outcomes must be internally consistent. The complete allowed state matrix is:
+
+| record | `state` | `closed_at` | `state_reason` | `merged` | `merged_at` |
+|---|---|---|---|---|---|
+| issue | `OPEN` | `null` | `null` or `REOPENED` | — | — |
+| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` | — | — |
+| pull request | `OPEN` | `null` | `null` or `REOPENED` | `false` | `null` |
+| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `false` | `null` |
+| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `true` | RFC 3339 |
+
+Those are all valid combinations. In particular, an open item cannot have a
+close timestamp, a closed issue cannot have a null or `REOPENED` reason, a
+closed PR cannot have `REOPENED`, a merged PR must be closed and have
+`merged_at`, and an unmerged PR must have `merged_at: null`.
 
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and

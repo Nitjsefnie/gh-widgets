@@ -110,6 +110,23 @@ def snapshot(**overrides):
     return value
 
 
+class HostileDict(dict):
+    """A dict subclass that hides an extra field from ordinary iteration."""
+
+    def __iter__(self):
+        return iter(("login",))
+
+    def keys(self):
+        return ("login",)
+
+
+class HostileList(list):
+    """A list subclass that hides its contents from ordinary iteration."""
+
+    def __iter__(self):
+        return iter(())
+
+
 class Normalization(unittest.TestCase):
     def test_issue_keeps_current_final_state(self):
         out = data.normalise_issue({
@@ -212,6 +229,33 @@ class SnapshotBuilding(unittest.TestCase):
                     kwargs["repositories"] = [invalid]
                 with self.assertRaises(data.SnapshotValidationError):
                     data._build_snapshot(**kwargs)
+
+    def test_private_builder_rejects_hostile_container_subclasses(self):
+        cases = [
+            snapshot(account=HostileDict(login="me", token="secret")),
+            snapshot(repositories=HostileList([repository_record()])),
+            snapshot(issues=HostileList([issue_record()])),
+            snapshot(pull_requests=HostileList([pull_request_record()])),
+        ]
+        for invalid in cases:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._build_snapshot(
+                        account=invalid["account"],
+                        repositories=invalid["repositories"],
+                        issues=invalid["issues"],
+                        pull_requests=invalid["pull_requests"],
+                        generated_at=invalid["generated_at"])
+
+    def test_private_builder_rejects_unhashable_state(self):
+        invalid = snapshot(issues=[issue_record(state=[])])
+        with self.assertRaises(data.SnapshotValidationError):
+            data._build_snapshot(
+                account=invalid["account"],
+                repositories=invalid["repositories"],
+                issues=invalid["issues"],
+                pull_requests=invalid["pull_requests"],
+                generated_at=invalid["generated_at"])
 
 
 class AuthoredSnapshot(unittest.TestCase):
@@ -425,6 +469,11 @@ class SnapshotValidation(unittest.TestCase):
                 with self.assertRaises(data.SnapshotValidationError):
                     data._validate_snapshot(invalid)
 
+    def test_snapshot_rejects_unhashable_state(self):
+        invalid = snapshot(issues=[issue_record(state=[])])
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(invalid)
+
     def test_snapshot_rejects_invalid_state_and_outcome_combinations(self):
         cases = [
             snapshot(issues=[issue_record(state="OPEN")]),
@@ -512,6 +561,43 @@ class SnapshotWriting(unittest.TestCase):
             with self.assertRaises(data.SnapshotValidationError):
                 data.write_snapshot(path, invalid)
             self.assertEqual(data.load_snapshot(path), snapshot())
+
+    def test_write_rejects_hostile_containers_before_replacing_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            value = snapshot()
+            data.write_snapshot(path, value)
+            invalid = snapshot(
+                account=HostileDict(login="me", token="secret"))
+            with self.assertRaises(data.SnapshotValidationError):
+                data.write_snapshot(path, invalid)
+            self.assertEqual(data.load_snapshot(path), value)
+
+    def test_write_rejects_unhashable_state_before_replacing_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            value = snapshot()
+            data.write_snapshot(path, value)
+            invalid = snapshot(issues=[issue_record(state=[])])
+            with self.assertRaises(data.SnapshotValidationError):
+                data.write_snapshot(path, invalid)
+            self.assertEqual(data.load_snapshot(path), value)
+
+    def test_load_rejects_hostile_containers_and_unhashable_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            path.write_text("{}", encoding="utf-8")
+            cases = [
+                snapshot(account=HostileDict(login="me", token="secret")),
+                snapshot(repositories=HostileList([repository_record()])),
+                snapshot(issues=[issue_record(state=[])]),
+            ]
+            for invalid in cases:
+                with self.subTest(invalid=invalid):
+                    with mock.patch.object(
+                            data.json, "loads", return_value=invalid):
+                        with self.assertRaises(data.SnapshotValidationError):
+                            data.load_snapshot(path)
 
     def test_write_snapshot_raises_when_atomic_write_fails(self):
         with tempfile.TemporaryDirectory() as td:
