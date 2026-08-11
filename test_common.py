@@ -112,7 +112,8 @@ class FetchIdentity(unittest.TestCase):
         return _gql
 
     def test_derives_insiders_and_emails(self):
-        me = common.fetch_identity("t", "octocat", gql_fn=self.fake_gql())
+        me = common.fetch_identity("t", "octocat", gql_fn=self.fake_gql(),
+                                   include_public_orgs=True)
         self.assertEqual(me.login, "Octocat")
         self.assertEqual(me.database_id, 42)
         self.assertEqual(me.orgs, ["OrgOne"])
@@ -136,7 +137,8 @@ class FetchIdentity(unittest.TestCase):
                              "organizations": pages[variables["cursor"]]}}
 
         me = common.fetch_identity("t", "octocat", gql_fn=gql_fn,
-                                   include_environment=False)
+                                   include_environment=False,
+                                   include_public_orgs=True)
         self.assertEqual(calls, [None, "org-c1"])
         self.assertEqual(me.orgs, ["PublicOne", "PrivateOne", "PublicTwo"])
         self.assertEqual(me.public_orgs, ["PublicOne", "PublicTwo"])
@@ -186,8 +188,42 @@ class FetchIdentity(unittest.TestCase):
                              }}}
 
         me = common.fetch_identity("t", "octocat", gql_fn=gql_fn,
-                                   include_environment=False)
+                                   include_environment=False,
+                                   include_public_orgs=True)
         self.assertEqual(me.orgs, ["Concealed"])
+        self.assertEqual(me.public_orgs, [])
+
+    def test_missing_page_info_fails_even_for_a_short_organization_page(self):
+        def gql_fn(token, query, variables=None, **kw):
+            return {"user": {"login": "Octocat", "databaseId": 42,
+                             "organizations": {
+                                 "nodes": [{"login": "OrgOne"}],
+                             }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_identity("t", "octocat", gql_fn=gql_fn)
+        self.assertIn("organizations", str(raised.exception))
+        self.assertIn("pageInfo", str(raised.exception))
+
+    def test_ordinary_identity_fetch_does_not_acquire_public_memberships(self):
+        payload = {"user": {"login": "Octocat", "databaseId": 42,
+                            "organizations": {
+                                "pageInfo": {"hasNextPage": False,
+                                             "endCursor": None},
+                                "nodes": [{"login": "PrivateOrg"}],
+                            }}}
+        with mock.patch.object(common, "gql", return_value=payload), \
+                mock.patch.object(
+                    common, "fetch_public_organizations",
+                    side_effect=AssertionError("public acquisition is opt-in")):
+            me = common.fetch_identity("t", "octocat")
+        self.assertEqual(me.orgs, ["PrivateOrg"])
+        self.assertEqual(me.public_orgs, [])
+
+    def test_legacy_five_argument_identity_defaults_to_empty_public_orgs(self):
+        me = common.Identity(
+            "Octocat", 42, ["PrivateOrg"], {"octocat", "privateorg"},
+            {"octocat@users.noreply.github.com"})
         self.assertEqual(me.public_orgs, [])
     def test_uses_the_canonical_login_not_the_argument(self):
         # Queried as "OCTOCAT", GitHub answers "Octocat"; the noreply address

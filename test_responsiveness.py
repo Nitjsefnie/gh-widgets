@@ -256,6 +256,8 @@ def fake_gql(nodes=(), orgs=("myorg",), error=None):
         if "organizations" in query:
             return {"user": {"login": "me", "databaseId": 1,
                              "organizations": {
+                                 "pageInfo": {"hasNextPage": False,
+                                              "endCursor": None},
                                  "nodes": [{"login": o} for o in orgs]}}}
         return {"user": {"pullRequests": {
             "pageInfo": {"hasNextPage": False, "endCursor": None},

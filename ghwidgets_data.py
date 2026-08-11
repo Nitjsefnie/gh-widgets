@@ -144,7 +144,8 @@ def fetch_authored_snapshot(token: str, login: str, *, gql_fn=None,
     configuration or credentials.
     """
     identity = ghwidgets_common.fetch_identity(
-        token, login, gql_fn=gql_fn, include_environment=False)
+        token, login, gql_fn=gql_fn, include_environment=False,
+        include_public_orgs=True)
     pull_requests, _ = ghwidgets_common.fetch_pull_requests(
         token, identity.login, cached_prs=None, max_pages=max_pages,
         gql_fn=gql_fn)

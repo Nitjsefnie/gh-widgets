@@ -308,7 +308,7 @@ class Identity(namedtuple(
     the authenticated token: render-time ownership classification needs that
     information.  ``public_orgs`` is the only membership collection suitable
     for a public snapshot.  The optional default keeps five-field callers
-    compatible while the new field is populated by ``fetch_identity``.
+    compatible without treating authenticated organizations as public.
     """
 
     __slots__ = ()
@@ -316,7 +316,7 @@ class Identity(namedtuple(
     def __new__(cls, login, database_id, orgs, insiders, emails,
                 public_orgs=None):
         if public_orgs is None:
-            public_orgs = list(orgs)
+            public_orgs = []
         return super().__new__(
             cls, login, database_id, orgs, insiders, emails, public_orgs)
 
@@ -419,12 +419,14 @@ def fetch_public_organizations(login, request_fn=None):
 
 
 def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
-                   public_orgs_fn=None):
+                   include_public_orgs=False):
     """Resolve who we are from the token's own account.
 
     Returns an Identity carrying the canonical login (as GitHub spells it),
     the numeric databaseId, the org list, and the two derived sets.
     ``include_environment=False`` omits additive environment configuration.
+    Public-membership acquisition is opt-in for the snapshot producer via
+    ``include_public_orgs``; ordinary renderer callers remain GraphQL-only.
     """
     g = gql_fn or gql
     # The GraphQL connection is the authoritative transient membership set;
@@ -446,15 +448,11 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
         connection = user.get("organizations") or {}
         org_nodes.extend(connection.get("nodes") or [])
         page_info = connection.get("pageInfo")
-        if page_info is None:
-            # Old injected fixtures omitted pageInfo.  Accept them only when
-            # the short page proves it cannot be the old 100-item truncation;
-            # a full page without pagination metadata fails explicitly.
-            if len(connection.get("nodes") or []) >= 100:
-                raise PaginationLimitError(
-                    "organizations pagination missing pageInfo after cursor "
-                    f"{cursor!r}")
-            break
+        if page_info is None or "hasNextPage" not in page_info:
+            raise PaginationLimitError(
+                "organizations pagination missing pageInfo or hasNextPage "
+                "after cursor "
+                f"{cursor!r}")
         if not page_info.get("hasNextPage"):
             break
         next_cursor = page_info.get("endCursor")
@@ -471,16 +469,15 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
         cursor = next_cursor
 
     orgs = [o["login"] for o in org_nodes]
-    if public_orgs_fn is not None:
-        public_orgs = list(public_orgs_fn(canonical, orgs))
-    else:
+    public_orgs = []
+    if include_public_orgs:
         explicit_visibility = all("isPublic" in node for node in org_nodes)
         if explicit_visibility and org_nodes:
             public_orgs = [node["login"] for node in org_nodes
                            if node.get("isPublic") is True]
         elif g is gql:
-            # Production uses the public REST view so concealed memberships
-            # from the authenticated GraphQL view cannot be serialized.
+            # Only the snapshot producer opts into this unauthenticated view;
+            # ordinary identity consumers retain their GraphQL-only behavior.
             public_orgs = fetch_public_organizations(canonical)
         else:
             # A custom injected transport cannot establish visibility without

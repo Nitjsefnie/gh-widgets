@@ -230,6 +230,24 @@ class AuthoredSnapshot(unittest.TestCase):
         self.assertEqual([call[0] for call in calls],
                          ["top-secret-token"] * len(calls))
 
+    def test_snapshot_producer_opts_into_public_membership_acquisition(self):
+        identity = data.ghwidgets_common.Identity(
+            "Canonical", 42, ["PrivateOrg"], {"canonical", "privateorg"},
+            {"canonical@users.noreply.github.com"}, ["PublicOrg"])
+        with mock.patch.object(
+                data.ghwidgets_common, "fetch_identity",
+                return_value=identity) as fetch_identity, \
+                mock.patch.object(
+                    data.ghwidgets_common, "fetch_pull_requests",
+                    return_value=([], {})), \
+                mock.patch.object(
+                    data.ghwidgets_common, "fetch_issues", return_value=[]):
+            out = data.fetch_authored_snapshot(
+                "top-secret-token", "requested-login", gql_fn=object())
+
+        self.assertTrue(fetch_identity.call_args.kwargs["include_public_orgs"])
+        self.assertEqual(out["insiders"], ["canonical", "publicorg"])
+
 
 class SnapshotValidation(unittest.TestCase):
     def test_snapshot_rejects_unknown_schema(self):
