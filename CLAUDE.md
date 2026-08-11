@@ -26,20 +26,27 @@ stale module. `install.sh --units` additionally installs `units/`, reloads
 systemd, enables both timers and proves they load. Everything it installs is a
 *copy*, so `diff` against the repo before and after touching either side.
 
-**Public snapshot consumers.** `ghwidgets_data.py` is the versioned public
-boundary, currently schema `1`: it publishes only public authored issues,
-pull requests, repository metadata, account identity, and public insider
-owners. It never publishes a token or private cache fields. A consumer such as
-ghpulse must pin the gh-widgets commit/submodule that defines the snapshot
-schema and renderer adapter, then upgrade that pin with compatibility tests;
-tracking an unpinned moving branch is not a supported interface.
+**Public snapshot consumers.** `ghwidgets_data.py` is the supported public
+boundary for ghpulse, currently schema version `1`. Its snapshot is an
+acquisition/interchange contract, not an input format for renderer-private
+profile, impact, or responsiveness data. `fetch_authored_snapshot(token,
+login)` pages the complete authored issue and pull-request history. It follows
+every cursor to the final page; cursor failures and explicit safety limits
+raise rather than silently publishing partial data.
 
-All three renderers accept `--snapshot-file PATH`. The file replaces only the
-matching authored-data section(s); without that flag the commands remain
-standalone and use their existing GraphQL/cache paths. `--render-only` requires
-the sections used by the renderer, validates them before any GraphQL call, and
-renders without credentials. A missing section fails clearly with
-`snapshot missing required section: NAME`.
+The producer is public-only: private repositories are filtered, credentials
+are never serialized, and `insiders` contains the account plus only publicly
+visible organization memberships. Private memberships remain transient
+authenticated state, and environment insider/email additions are not read by
+the public producer. `load_snapshot()` validates the version and required
+collections. `write_snapshot()` validates before a locked, atomic strict write
+and raises on lock or filesystem failure.
+
+A consumer must pin the exact gh-widgets commit/submodule that defines this
+contract and upgrade it deliberately with compatibility tests; an unpinned
+moving branch is not supported. The renderer CLIs, flags, caches, and SVG
+output remain unchanged and standalone. `cache.json` and `impact-cache.json`
+are separate private renderer caches, not the public integration API.
 
 **Two caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and

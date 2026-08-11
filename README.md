@@ -127,27 +127,36 @@ GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widgets.token OUT_DIR=/var/www/example/wid
 
 ## Public snapshots
 
-`ghwidgets_data.py` is the importable public-data boundary for consumers that
-need to acquire authored GitHub issues and pull requests once and render them
-in more than one process. `fetch_authored_snapshot()` returns schema version
-`1` with `account`, `insiders`, `repositories`, `issues`, and `pull_requests`.
-Issue and pull-request records use stable snake_case keys; private repositories
-and credentials are excluded before a snapshot is written. `load_snapshot()`
-validates the version and shape, while `write_snapshot()` performs a locked,
-atomic write.
+`ghwidgets_data.py` is the supported importable boundary for consumers such as
+ghpulse. Its public snapshot is an acquisition/interchange contract, not an
+input format for the renderer-private profile, impact, or responsiveness data.
 
-A consumer that embeds or submodules gh-widgets must pin the gh-widgets commit
-that defines the snapshot schema and renderer adapter it uses. Upgrade that
-pin deliberately with the consumer's compatibility tests; do not silently
-track an unreviewed moving branch.
+`SCHEMA_VERSION` is currently `1`. `fetch_authored_snapshot(token, login)`
+acquires the complete authored issue and pull-request history, following every
+page until GitHub reports the final page. Pagination cursor failures and an
+explicit safety limit fail loudly instead of returning a plausible partial
+snapshot. The normalized snapshot contains `account`, `insiders`,
+`repositories`, `issues`, and `pull_requests`; issue and pull-request records
+use stable snake_case keys.
 
-Each renderer accepts `--snapshot-file PATH`. Snapshot sections replace only
-the matching authored-data inputs; a normal invocation still fetches any other
-inputs through its existing cache and GraphQL path, and remains standalone
-when no snapshot flag is supplied. Add `--render-only` to render without
-credentials or GraphQL. It validates the sections needed by that renderer
-before writing any SVG and reports a missing input as
-`snapshot missing required section: NAME`.
+The producer publishes public data only: private repositories are removed,
+credentials are never serialized, and `insiders` contains the account plus
+organizations whose membership is publicly visible. Private memberships are
+used only transiently for authenticated classification and do not cross the
+public boundary. Environment-based insider and email additions are not read by
+the public producer.
+
+`load_snapshot()` validates the schema and required collections.
+`write_snapshot()` validates before using the locked, atomic writer in strict
+mode, so lock or filesystem failures raise instead of silently losing a
+snapshot. Consumers that embed or submodule gh-widgets must pin the exact
+gh-widgets commit defining this contract and upgrade it deliberately with
+compatibility tests; an unpinned moving branch is not a supported interface.
+
+The renderer CLIs and their SVG output remain unchanged and independently
+runnable; they do not consume public snapshots. `cache.json` and
+`impact-cache.json` remain separate private implementation caches and are not
+the public integration API.
 
 ## Caching
 
@@ -158,6 +167,9 @@ renderer caches the data that cannot change and refetches only what can.
 - `CACHE_FILE` — cache location, default `/var/lib/gh-widgets/cache.json`.
   Missing, unreadable, corrupt, or schema-mismatched caches are not errors: the
   run falls back to a full fetch.
+- `cache.json` and `impact-cache.json` are private renderer implementation
+  details. Do not use either cache as an interchange format for another
+  process; use the versioned `ghwidgets_data` API instead.
 - Settled calendar days and `MERGED` pull requests are cached. Open and closed
   PRs, issues, and the trailing 7 days of calendar are refetched every run —
   closed items can be reopened, so they are never treated as final.

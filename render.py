@@ -46,10 +46,6 @@ from collections import namedtuple
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-# The three entry points intentionally carry parallel snapshot adapters so
-# each remains independently installable.
-# pylint: disable=duplicate-code
-
 
 def _load_common():
     """Load ghwidgets_common.py from beside this script.
@@ -71,23 +67,7 @@ def _load_common():
     return mod
 
 
-def _load_data():
-    """Load the public snapshot module from beside this renderer."""
-    path = Path(__file__).resolve().with_name("ghwidgets_data.py")
-    if not path.exists():
-        raise SystemExit(
-            f"error: {path} is missing — it must sit beside this script "
-            f"(install.sh copies all public data modules)")
-    spec = importlib.util.spec_from_file_location("ghwidgets_data", path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"error: cannot load {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 common = _load_common()
-data = _load_data()
 
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
@@ -120,121 +100,6 @@ def load_cache(path):
     the shared loader takes the version as a parameter.)
     """
     return common.load_cache(path, CACHE_VERSION)
-
-
-def load_snapshot(path):
-    """Load a public snapshot with renderer-specific missing-section errors."""
-    try:
-        return data.load_snapshot(path)
-    except data.SnapshotValidationError as exc:
-        prefix = "snapshot missing required field(s): "
-        message = str(exc)
-        if message.startswith(prefix):
-            missing = message[len(prefix):].split(", ")
-            for section in ("account", "insiders", "repositories", "issues",
-                            "pull_requests"):
-                if section in missing:
-                    raise ValueError(
-                        f"snapshot missing required section: {section}") from exc
-        raise
-
-
-def _require_snapshot_sections(snapshot, sections):
-    """Fail before any fetch when render-only input is incomplete."""
-    for section in sections:
-        if section not in snapshot:
-            raise ValueError(f"snapshot missing required section: {section}")
-
-
-def _snapshot_repository(node):
-    """Adapt a normalized public repository to the renderer's API shape."""
-    name = node.get("nameWithOwner", node.get("repository", ""))
-    owner = node.get("owner", {})
-    if isinstance(owner, str):
-        owner = {"login": owner}
-    owner = dict(owner)
-    owner.setdefault("login", name.split("/", 1)[0] if "/" in name else name)
-    return {
-        "id": node.get("id", node.get("repository_id", name)),
-        "nameWithOwner": name,
-        "url": node.get("url", node.get("repository_url", "")),
-        "isPrivate": bool(node.get("isPrivate", node.get("is_private", False))),
-        "owner": owner,
-        "stargazerCount": int(node.get("stargazerCount", 0)),
-        "forkCount": int(node.get("forkCount", 0)),
-        "languages": node.get("languages", {"edges": []}),
-    }
-
-
-def _snapshot_item(node, pull_request=False):
-    """Adapt one normalized public issue/PR to the legacy renderer shape."""
-    repository = node.get("repository")
-    if isinstance(repository, dict):
-        repo = dict(repository)
-    else:
-        name = repository or node.get("repository_name", "")
-        owner = node.get("owner")
-        if isinstance(owner, dict):
-            owner = owner.get("login")
-        repo = {
-            "nameWithOwner": name,
-            "isPrivate": bool(node.get("is_private", False)),
-            "owner": {"login": owner or (
-                name.split("/", 1)[0] if "/" in name else name)},
-        }
-    out = {
-        "id": node.get("id", node.get("node_id")),
-        "number": int(node.get("number", 0)),
-        "url": node.get("url", ""),
-        "createdAt": node.get("createdAt", node.get("created_at")),
-        "updatedAt": node.get("updatedAt", node.get("updated_at")),
-        "closedAt": node.get("closedAt", node.get("closed_at")),
-        "state": node.get("state"),
-        "stateReason": node.get("stateReason", node.get("state_reason")),
-        "repository": repo,
-    }
-    if pull_request:
-        out["mergedAt"] = node.get("mergedAt", node.get("merged_at"))
-        out["merged"] = bool(node.get("merged", False))
-    return out
-
-
-def _snapshot_user(snapshot, requested_login=None):
-    """Build the minimum profile payload needed for snapshot-only rendering.
-
-    The public acquisition contract intentionally contains authored items, not
-    private profile-cache fields. Missing profile counters therefore render as
-    zero in ``--render-only`` mode rather than triggering a network request.
-    """
-    account = dict(snapshot.get("account") or {})
-    nested = account.get("user")
-    if isinstance(nested, dict):
-        user = dict(nested)
-    else:
-        user = account
-    login = user.get("login") or requested_login or "unknown"
-    insiders = list(snapshot.get("insiders") or [])
-    organisations = [{"login": value} for value in insiders
-                     if str(value).casefold() != str(login).casefold()]
-    repos = [_snapshot_repository(repo)
-             for repo in snapshot.get("repositories", [])]
-    user.setdefault("login", login)
-    user.setdefault("name", login)
-    user.setdefault("followers", {"totalCount": 0})
-    user.setdefault("organizations", {"nodes": organisations})
-    user.setdefault("repositories", {
-        "totalCount": len(repos), "nodes": repos})
-    user.setdefault("contributionsCollection", {
-        "contributionCalendar": {"totalContributions": 0, "weeks": []}})
-    return user
-
-
-def _snapshot_records(snapshot):
-    """Return raw-shaped authored records from a public snapshot."""
-    prs = [_snapshot_item(node, pull_request=True)
-           for node in snapshot.get("pull_requests", [])]
-    issues = [_snapshot_item(node) for node in snapshot.get("issues", [])]
-    return prs, issues
 
 
 def cache_complete(cache):
@@ -609,49 +474,27 @@ def parse_args():
                    help="Color theme (env: THEME)")
     p.add_argument("--resync", action="store_true",
                    help="Discard the cache and refetch everything")
-    p.add_argument("--snapshot-file",
-                   help="Read normalized public data from this JSON snapshot")
-    p.add_argument("--render-only", action="store_true",
-                   help="Render from --snapshot-file without GraphQL")
     args = p.parse_args()
 
-    if args.render_only and not args.snapshot_file:
-        p.error("--render-only requires --snapshot-file")
-    snapshot_only = args.render_only and args.snapshot_file
-    if not args.user and not snapshot_only:
+    if not args.user:
         p.error("--user (or env GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
-    if not token and not snapshot_only:
+    if not token:
         p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
     return args, token
 
 
-def load_inputs(args, token, cache_file, snapshot=None):
+def load_inputs(args, token, cache_file):
     """Fetch (or, on failure, recover from the cache) every input the cards
     need. Returns (user, prs, issues, stale), where `stale` is the cache's
     fetched_at when rendering from cache and None on a successful fetch."""
-    if args.render_only:
-        _require_snapshot_sections(
-            snapshot, ("account", "insiders", "repositories", "issues",
-                       "pull_requests"))
-        prs, issues = _snapshot_records(snapshot)
-        return (_snapshot_user(snapshot, args.user), prs, issues, None)
-
     cache = {} if args.resync else load_cache(cache_file)
     try:
         user, days = fetch(token, args.user, cache.get("calendar_days") or None)
-        if snapshot is not None and "pull_requests" in snapshot:
-            prs, _ = _snapshot_records(snapshot)
-            prs_by_id = {node["id"]: node for node in prs}
-        else:
-            prs, prs_by_id = fetch_pull_requests(
-                token, args.user, cache.get("prs") or None)
-        if snapshot is not None and "issues" in snapshot:
-            _, issues = _snapshot_records(snapshot)
-        else:
-            issues = fetch_issues(token, args.user)
+        prs, prs_by_id = fetch_pull_requests(token, args.user, cache.get("prs") or None)
+        issues = fetch_issues(token, args.user)
     except Exception:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
@@ -739,16 +582,12 @@ def write_cards(C, out, user, prs, issues, stale):
 def main():
     args, token = parse_args()
 
-    snapshot = load_snapshot(args.snapshot_file) \
-        if args.snapshot_file else None
-
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
-    user, prs, issues, stale = load_inputs(
-        args, token, cache_file, snapshot=snapshot)
+    user, prs, issues, stale = load_inputs(args, token, cache_file)
     write_cards(C, out, user, prs, issues, stale)
 
 
