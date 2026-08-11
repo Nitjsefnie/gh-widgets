@@ -37,7 +37,7 @@
 - Produces: `SCHEMA_VERSION: int = 1`.
 - Produces: `normalise_issue(node: dict) -> dict`.
 - Produces: `normalise_pull_request(node: dict) -> dict`.
-- Produces: `build_snapshot(*, account: dict, insiders: set[str], repositories: list[dict], issues: list[dict], pull_requests: list[dict], generated_at: str | None = None) -> dict`.
+- Produces internally: `_build_snapshot(*, account: dict, repositories: list[dict], issues: list[dict], pull_requests: list[dict], generated_at: str | None = None) -> dict`; arbitrary-input construction is not a supported public API.
 - Produces: `load_snapshot(path: str | Path) -> dict`.
 - Produces: `write_snapshot(path: str | Path, snapshot: dict) -> None`.
 
@@ -92,7 +92,7 @@ def normalise_issue(node):
     }
 ```
 
-The PR equivalent adds `merged_at` and `merged`. Validation requires top-level `schema_version`, `generated_at`, `account`, `insiders`, `repositories`, `issues`, and `pull_requests`; all collection fields must be lists.
+The PR equivalent adds `merged_at` and `merged`. Validation is the mandatory trust boundary used by build, write, and load. It requires exactly the top-level keys `schema_version`, `generated_at`, `account`, `repositories`, `issues`, and `pull_requests`; rejects unknown or missing nested keys; validates exact scalar/container types, non-empty RFC 3339 timestamps, allowed states/outcomes, public repository flags, and item-to-repository references; and rejects private records or credential-bearing/extra fields. The serialized contract contains no organisation-membership or insider list because an offline loader cannot prove the public provenance of an arbitrary membership claim.
 
 - [ ] **Step 4: Implement atomic snapshot writing**
 
@@ -156,7 +156,7 @@ Change both pagers to loop while `hasNextPage`. When `max_pages is not None` and
 
 - [ ] **Step 4: Implement the high-level fetch**
 
-`fetch_authored_snapshot` calls `fetch_identity`, `fetch_pull_requests(..., max_pages=None)`, and `fetch_issues(..., max_pages=None)`, rejects private repositories, normalizes nodes, deduplicates repositories by node ID, and calls `build_snapshot`. It must accept `gql_fn` for fixture tests and never read environment variables.
+`fetch_authored_snapshot` calls `fetch_identity`, `fetch_pull_requests(..., max_pages=None)`, and `fetch_issues(..., max_pages=None)`. It uses account login plus explicitly public organisations only as a transient owner-exclusion set, rejects private and non-external repositories before serialization, normalizes nodes, deduplicates repositories by node ID, and calls the private builder. It must accept `gql_fn` for fixture tests and never read environment variables. Membership relationships never enter the returned snapshot.
 
 - [ ] **Step 5: Run acquisition and regression tests**
 
