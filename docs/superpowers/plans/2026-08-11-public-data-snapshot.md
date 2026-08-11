@@ -195,7 +195,7 @@ Revert the Task 3 implementation commit that added `--snapshot-file`, `--render-
 
 - [ ] **Step 2: Prove the renderer tree matches the reviewed Task 2 baseline**
 
-Run: `git diff 511be777 -- render.py render-impact.py render-responsiveness.py test_render.py test_impact.py test_responsiveness.py`  
+Run: `git diff 511be7775f951ea6e904908882d0090a3d1f39cd -- render.py render-impact.py render-responsiveness.py test_render.py test_impact.py test_responsiveness.py`
 Expected: no output.
 
 - [ ] **Step 3: Update operational documentation**
@@ -205,8 +205,8 @@ Document the public module, snapshot schema/version, complete/fail-loud acquisit
 - [ ] **Step 4: Verify public API and standalone behavior**
 
 Run: `python3 -m unittest discover -v`  
-Run: `python3 -m py_compile ghwidgets_common.py ghwidgets_data.py render.py render-impact.py render-responsiveness.py`  
-Run: `git diff --check`  
+Run: `python3 -m py_compile ghwidgets_common.py ghwidgets_data.py render.py render-impact.py render-responsiveness.py`
+Run: `git diff --check`
 Expected: all exit 0; renderer commands require no new flags or files.
 
 - [ ] **Step 5: Commit**
