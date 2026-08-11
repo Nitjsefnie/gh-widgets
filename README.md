@@ -57,14 +57,15 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-All three renderers share `ghwidgets_common.py` and `ghwidgets_data.py`, and
-assert the common module's `COMMON_VERSION` on startup, so the five files have
-to travel together.
-`install.sh` stages them into the destination and moves them into place, then
-starts every entry point to prove the install is coherent. A hand-rolled `cp`
-of one file leaves a
-renderer that refuses to run — deliberately, since the alternative is rendering
-wrong numbers from a stale module.
+`install.sh` stages a five-file deployment set: the three renderer entry
+points, their existing `ghwidgets_common.py` runtime dependency, and the
+separately installed `ghwidgets_data.py` public API for pinned consumers.
+The renderers assert `ghwidgets_common.py`'s `COMMON_VERSION` on startup;
+they do not import `ghwidgets_data.py`. The installer moves the complete set
+into place and starts every entry point to prove the renderer deployment is
+coherent. A hand-rolled copy that omits `ghwidgets_common.py` can leave a
+renderer refusing to run, deliberately preventing rendering from a stale
+shared module.
 
 Note the rename: `render.py` installs as `render-gh-widgets.py` (the name the
 units use). The scripts find the shared module relative to their own path, so

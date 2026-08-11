@@ -17,14 +17,17 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs the five Python files to `/usr/local/bin`
+unit.** Bare, it installs a five-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`,
-`render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_data.py`). Each renderer asserts the
-shared module's `COMMON_VERSION` at startup, so a partial copy yields a renderer
-that refuses to run — deliberately, since the alternative is rendering from a
-stale module. `install.sh --units` additionally installs `units/`, reloads
-systemd, enables both timers and proves they load. Everything it installs is a
-*copy*, so `diff` against the repo before and after touching either side.
+`render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_data.py`). The
+three renderers retain their existing `ghwidgets_common.py` runtime dependency
+and assert its `COMMON_VERSION` at startup. `ghwidgets_data.py` is installed
+alongside as the separate public API for pinned consumers; the renderers do not
+import it. A partial renderer deployment missing `ghwidgets_common.py` refuses
+to run, deliberately preventing rendering from a stale module. `install.sh --units`
+additionally installs `units/`, reloads systemd, enables both timers and proves
+them load. Everything it installs is a *copy*, so `diff` against the repo before
+and after touching either side.
 
 **Public snapshot consumers.** `ghwidgets_data.py` is the supported public
 boundary for ghpulse, currently schema version `1`. Its snapshot is an
