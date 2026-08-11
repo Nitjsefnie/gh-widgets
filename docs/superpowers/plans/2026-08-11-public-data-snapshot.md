@@ -4,7 +4,7 @@
 
 **Goal:** Expose gh-widgets' GitHub identity, pagination, normalization, and snapshot handling as a stable importable API while preserving every standalone renderer.
 
-**Architecture:** Add one dependency-free module beside `ghwidgets_common.py`. Existing GraphQL primitives remain in `ghwidgets_common`; the new module owns normalized records and a versioned atomic snapshot. Existing CLIs keep their default fetch/cache path and gain only additive snapshot inputs.
+**Architecture:** Add one dependency-free module beside `ghwidgets_common.py`. Existing GraphQL primitives remain in `ghwidgets_common`; the new module owns normalized records and a versioned atomic snapshot. Existing CLIs keep their existing fetch/cache/render path unchanged; ghpulse imports the public module through a pinned submodule.
 
 **Tech Stack:** Python 3.9+ stdlib, GitHub GraphQL, `unittest`, existing gh-widgets cache locking/atomic-write utilities.
 
@@ -21,10 +21,8 @@
 
 - Create `ghwidgets_data.py`: normalization, complete paging orchestration, snapshot validation/read/write.
 - Modify `ghwidgets_common.py`: make existing issue/PR paging accept an explicit no-limit mode without changing current callers.
-- Modify `render.py`, `render-impact.py`, `render-responsiveness.py`: accept optional snapshot input while preserving default behavior.
 - Create `test_data.py`: public contract, pagination, normalization, atomic snapshot tests.
-- Modify renderer tests only for additive snapshot paths.
-- Modify `README.md` and `CLAUDE.md`: public API, standalone compatibility, snapshot schema/version.
+- Modify `README.md` and `CLAUDE.md`: public API, standalone compatibility, snapshot schema/version, and pinned-consumer usage.
 
 ---
 
@@ -174,7 +172,7 @@ git commit -m "feat: expose complete authored-item acquisition"
 
 ---
 
-### Task 3: Additive snapshot inputs and standalone compatibility
+### Task 3: Remove renderer coupling and document the public API
 
 **Files:**
 - Modify: `render.py`
@@ -187,54 +185,35 @@ git commit -m "feat: expose complete authored-item acquisition"
 - Modify: `CLAUDE.md`
 
 **Interfaces:**
-- Consumes: `load_snapshot(path) -> dict`.
-- Produces: optional `--snapshot-file PATH` on all renderer CLIs.
-- Produces: `--render-only`, which requires every data section used by that renderer and performs no GraphQL call.
-- Preserves: invocation without either flag is byte-for-byte equivalent in behavior to the pre-change standalone path.
+- Preserves: renderer source, tests, CLI flags, cache behavior, and SVG output at the Task 2 baseline.
+- Documents: `ghwidgets_data` as the supported consumer boundary for ghpulse.
+- Documents: the public snapshot is an interchange/acquisition contract, not an input format for renderer-private profile, impact, or responsiveness data.
 
-- [ ] **Step 1: Write failing CLI and no-network tests**
+- [ ] **Step 1: Remove the accidental renderer snapshot feature**
 
-For each renderer, parse a snapshot path and patch its GraphQL function to raise if called. A render-only fixture containing the renderer's required sections must write the expected SVG. A missing section must exit non-zero with `snapshot missing required section: <name>`.
+Revert the Task 3 implementation commit that added `--snapshot-file`, `--render-only`, renderer adapters, and their tests. Do not revert the reviewed Task 1/2 public module or acquisition changes.
 
-- [ ] **Step 2: Run focused renderer tests**
+- [ ] **Step 2: Prove the renderer tree matches the reviewed Task 2 baseline**
 
-Run: `python3 -m unittest -v test_render.py test_impact.py test_responsiveness.py`  
-Expected: failures for unknown arguments.
+Run: `git diff 511be777 -- render.py render-impact.py render-responsiveness.py test_render.py test_impact.py test_responsiveness.py`  
+Expected: no output.
 
-- [ ] **Step 3: Add snapshot argument parsing and data selection**
+- [ ] **Step 3: Update operational documentation**
 
-Use a single rule in every renderer:
+Document the public module, snapshot schema/version, complete/fail-loud acquisition, strict atomic writes, public-only membership boundary, and exact-commit pinning for consumers. State explicitly that renderer CLIs remain unchanged and standalone and that their two private caches are not the public integration API.
 
-```python
-snapshot = data.load_snapshot(args.snapshot_file) if args.snapshot_file else None
-if args.render_only and snapshot is None:
-    parser.error("--render-only requires --snapshot-file")
-```
-
-Snapshot sections replace only matching fetched sections. Without `--render-only`, absent sections continue through the renderer's existing fetch/cache path. With `--render-only`, absent required sections fail before any network call.
-
-- [ ] **Step 4: Verify old standalone behavior**
+- [ ] **Step 4: Verify public API and standalone behavior**
 
 Run: `python3 -m unittest discover -v`  
-Expected: all existing and new tests pass.
+Run: `python3 -m py_compile ghwidgets_common.py ghwidgets_data.py render.py render-impact.py render-responsiveness.py`  
+Run: `git diff --check`  
+Expected: all exit 0; renderer commands require no new flags or files.
 
-- [ ] **Step 5: Update operational documentation**
-
-Document the public module, snapshot schema/version, pinned-consumer rule, render-only behavior, and the guarantee that normal commands remain standalone. Keep the two private cache files distinct.
-
-- [ ] **Step 6: Run quality gates**
-
-Run: `python3 -m unittest discover -v`  
-Run: `python3 -m pyright`  
-Run: `python3 -m pylint ghwidgets_common.py ghwidgets_data.py render.py render-impact.py render-responsiveness.py`  
-Run: `scripts/secrecy-check.sh`  
-Expected: all exit 0.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add render.py render-impact.py render-responsiveness.py test_render.py test_impact.py test_responsiveness.py README.md CLAUDE.md
-git commit -m "feat: render from versioned GitHub snapshots"
+git commit -m "docs: define the public gh-widgets boundary"
 ```
 
 ---
@@ -253,9 +232,9 @@ Run: `python3 -m unittest discover -v`
 Run: `tmpdir=$(mktemp -d) && ./install.sh "$tmpdir"`  
 Expected: all tests pass; install stages all five Python modules and every entry point starts coherently.
 
-- [ ] **Step 2: Verify legacy help and new flags**
+- [ ] **Step 2: Verify legacy help and unchanged renderer surface**
 
-Run each renderer with `--help`; existing flags remain and `--snapshot-file`/`--render-only` appear. Run the existing commands against fixture inputs to prove no snapshot is required.
+Run each renderer with `--help`; existing flags remain and neither `--snapshot-file` nor `--render-only` appears. Run the existing commands against fixture inputs to prove standalone rendering requires no public snapshot.
 
 - [ ] **Step 3: Record the pin**
 
