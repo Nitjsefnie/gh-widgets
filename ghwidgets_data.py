@@ -164,7 +164,7 @@ def fetch_authored_snapshot(token: str, login: str, *, gql_fn=None,
     return build_snapshot(
         account={"login": identity.login},
         insiders=ghwidgets_common.insider_set(
-            identity.login, identity.orgs, extra=()),
+            identity.login, identity.public_orgs, extra=()),
         repositories=list(repositories.values()),
         issues=[normalise_issue(node) for node in public_issues],
         pull_requests=[normalise_pull_request(node)

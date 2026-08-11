@@ -34,6 +34,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import namedtuple
 from pathlib import Path
@@ -298,7 +299,26 @@ def gql(token, query, variables=None, retries=3, timeout=20):
 
 # ------------------------------------------------------------------ identity
 
-Identity = namedtuple("Identity", "login database_id orgs insiders emails")
+class Identity(namedtuple(
+        "Identity",
+        "login database_id orgs insiders emails public_orgs")):
+    """Resolved account identity and its transient/public org views.
+
+    ``orgs`` and ``insiders`` intentionally retain every membership visible to
+    the authenticated token: render-time ownership classification needs that
+    information.  ``public_orgs`` is the only membership collection suitable
+    for a public snapshot.  The optional default keeps five-field callers
+    compatible while the new field is populated by ``fetch_identity``.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, login, database_id, orgs, insiders, emails,
+                public_orgs=None):
+        if public_orgs is None:
+            public_orgs = list(orgs)
+        return super().__new__(
+            cls, login, database_id, orgs, insiders, emails, public_orgs)
 
 
 class PaginationLimitError(RuntimeError):
@@ -306,11 +326,14 @@ class PaginationLimitError(RuntimeError):
 
 
 IDENTITY_QUERY = """
-query($login: String!) {
+query($login: String!, $cursor: String) {
   user(login: $login) {
     login
     databaseId
-    organizations(first: 100) { nodes { login } }
+    organizations(first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { login }
+    }
   }
 }
 """
@@ -351,26 +374,128 @@ def our_emails(login, database_id, extra=None):
                      | {e.strip().lower() for e in extra if e.strip()})
 
 
-def fetch_identity(token, login, gql_fn=None, *, include_environment=True):
+def fetch_public_organizations(login, request_fn=None):
+    """Fetch only memberships GitHub exposes publicly for ``login``.
+
+    This deliberately uses the unauthenticated ``/users/:login/orgs`` REST
+    endpoint.  The authenticated GraphQL organization connection can include
+    concealed memberships, which are useful transiently for ownership
+    classification but must never enter a public snapshot.
+    """
+    request_fn = request_fn or urllib.request.urlopen
+    page = 1
+    public_orgs = []
+    while True:
+        encoded_login = urllib.parse.quote(login, safe="")
+        url = (f"https://api.github.com/users/{encoded_login}/orgs"
+               f"?per_page=100&page={page}")
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": (
+                    "gh-widgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)"
+                ),
+            },
+        )
+        try:
+            with request_fn(req, timeout=20) as response:
+                body = json.loads(response.read())
+                link = response.headers.get("Link", "")
+        except (urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"could not retrieve public organization memberships for {login}"
+            ) from exc
+        if not isinstance(body, list):
+            raise RuntimeError(
+                f"invalid public organization response for {login}")
+        public_orgs.extend(
+            org["login"] for org in body
+            if isinstance(org, dict) and org.get("login"))
+        if 'rel="next"' not in link:
+            break
+        page += 1
+    return public_orgs
+
+
+def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
+                   public_orgs_fn=None):
     """Resolve who we are from the token's own account.
 
     Returns an Identity carrying the canonical login (as GitHub spells it),
     the numeric databaseId, the org list, and the two derived sets.
     ``include_environment=False`` omits additive environment configuration.
     """
-    data = (gql_fn or gql)(token, IDENTITY_QUERY, {"login": login})
-    user = data["user"]
-    if not user:
-        raise RuntimeError(f"no such GitHub user: {login}")
-    orgs = [o["login"] for o in user["organizations"]["nodes"]]
-    canonical = user["login"]
+    g = gql_fn or gql
+    # The GraphQL connection is the authoritative transient membership set;
+    # page it fully rather than silently accepting the old first-100 cap.
+    org_nodes = []
+    cursor = None
+    seen_cursors = {None}
+    canonical = None
+    database_id = None
+    while True:
+        data = g(token, IDENTITY_QUERY,
+                 {"login": login, "cursor": cursor})
+        user = data["user"]
+        if not user:
+            raise RuntimeError(f"no such GitHub user: {login}")
+        if canonical is None:
+            canonical = user["login"]
+            database_id = user.get("databaseId")
+        connection = user.get("organizations") or {}
+        org_nodes.extend(connection.get("nodes") or [])
+        page_info = connection.get("pageInfo")
+        if page_info is None:
+            # Old injected fixtures omitted pageInfo.  Accept them only when
+            # the short page proves it cannot be the old 100-item truncation;
+            # a full page without pagination metadata fails explicitly.
+            if len(connection.get("nodes") or []) >= 100:
+                raise PaginationLimitError(
+                    "organizations pagination missing pageInfo after cursor "
+                    f"{cursor!r}")
+            break
+        if not page_info.get("hasNextPage"):
+            break
+        next_cursor = page_info.get("endCursor")
+        if not next_cursor:
+            raise PaginationLimitError(
+                "organizations pagination stalled after cursor "
+                f"{cursor!r}: hasNextPage=true but endCursor is missing")
+        if next_cursor in seen_cursors:
+            raise PaginationLimitError(
+                "organizations pagination stalled after cursor "
+                f"{cursor!r}: endCursor {next_cursor!r} repeats an earlier "
+                "cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+    orgs = [o["login"] for o in org_nodes]
+    if public_orgs_fn is not None:
+        public_orgs = list(public_orgs_fn(canonical, orgs))
+    else:
+        explicit_visibility = all("isPublic" in node for node in org_nodes)
+        if explicit_visibility and org_nodes:
+            public_orgs = [node["login"] for node in org_nodes
+                           if node.get("isPublic") is True]
+        elif g is gql:
+            # Production uses the public REST view so concealed memberships
+            # from the authenticated GraphQL view cannot be serialized.
+            public_orgs = fetch_public_organizations(canonical)
+        else:
+            # A custom injected transport cannot establish visibility without
+            # an explicit marker. Fail closed for the serialized view rather
+            # than treating authenticated memberships as public.
+            public_orgs = [node["login"] for node in org_nodes
+                           if node.get("isPublic") is True]
     extras = None if include_environment else ()
     return Identity(
         login=canonical,
-        database_id=user.get("databaseId"),
+        database_id=database_id,
         orgs=orgs,
         insiders=insider_set(canonical, orgs, extra=extras),
-        emails=our_emails(canonical, user.get("databaseId"), extra=extras),
+        emails=our_emails(canonical, database_id, extra=extras),
+        public_orgs=public_orgs,
     )
 
 
@@ -486,18 +611,31 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
                     else "[OPEN, CLOSED, MERGED]")
     live = []
     cursor = None
+    seen_cursors = {None}
     pages = 0
     while True:
         if max_pages is not None and pages >= max_pages:
             raise PaginationLimitError(
                 f"pullRequests pagination limit {max_pages} reached after "
                 f"cursor {cursor!r}")
-        page = g(token, q, {"login": login, "cursor": cursor})["user"]["pullRequests"]
+        page = g(token, q, {"login": login, "cursor": cursor})["user"][
+            "pullRequests"]
         pages += 1
         live.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break
-        cursor = page["pageInfo"]["endCursor"]
+        next_cursor = page["pageInfo"].get("endCursor")
+        if not next_cursor:
+            raise PaginationLimitError(
+                "pullRequests pagination stalled after cursor "
+                f"{cursor!r}: hasNextPage=true but endCursor is missing")
+        if next_cursor in seen_cursors:
+            raise PaginationLimitError(
+                "pullRequests pagination stalled after cursor "
+                f"{cursor!r}: endCursor {next_cursor!r} repeats an earlier "
+                "cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
     known = dict(cached_prs or {})
     live_ids = set()
     for node in live:
@@ -528,18 +666,31 @@ def fetch_issues(token, login, max_pages=50, gql_fn=None):
     g = gql_fn or gql
     issues = []
     cursor = None
+    seen_cursors = {None}
     pages = 0
     while True:
         if max_pages is not None and pages >= max_pages:
             raise PaginationLimitError(
                 f"issues pagination limit {max_pages} reached after "
                 f"cursor {cursor!r}")
-        page = g(token, ISSUE_QUERY, {"login": login, "cursor": cursor})["user"]["issues"]
+        page = g(token, ISSUE_QUERY, {"login": login, "cursor": cursor})["user"][
+            "issues"]
         pages += 1
         issues.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             break
-        cursor = page["pageInfo"]["endCursor"]
+        next_cursor = page["pageInfo"].get("endCursor")
+        if not next_cursor:
+            raise PaginationLimitError(
+                "issues pagination stalled after cursor "
+                f"{cursor!r}: hasNextPage=true but endCursor is missing")
+        if next_cursor in seen_cursors:
+            raise PaginationLimitError(
+                "issues pagination stalled after cursor "
+                f"{cursor!r}: endCursor {next_cursor!r} repeats an earlier "
+                "cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
     return issues
 
 

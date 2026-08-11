@@ -158,10 +158,23 @@ class AuthoredSnapshot(unittest.TestCase):
             "owner": {"login": "me"},
             "credential": "private-repository-credential",
         }
+        public_repo_owned_by_private_member = {
+            "id": "R_public_private_member",
+            "nameWithOwner": "PrivateOrg/public-project",
+            "url": "https://github.com/PrivateOrg/public-project",
+            "isPrivate": False,
+            "owner": {"login": "PrivateOrg"},
+        }
         public_issue = issue_node(id="I_public", repository=public_repo)
         private_issue = issue_node(id="I_private", repository=private_repo)
+        public_issue_owned_by_private_member = issue_node(
+            id="I_public_private_member",
+            repository=public_repo_owned_by_private_member)
         public_pr = pull_request_node(id="PR_public", repository=public_repo)
         private_pr = pull_request_node(id="PR_private", repository=private_repo)
+        public_pr_owned_by_private_member = pull_request_node(
+            id="PR_public_private_member",
+            repository=public_repo_owned_by_private_member)
         calls = []
 
         def gql_fn(token, query, variables=None, **_kwargs):
@@ -170,17 +183,26 @@ class AuthoredSnapshot(unittest.TestCase):
                 return {"user": {
                     "login": "Canonical",
                     "databaseId": 42,
-                    "organizations": {"nodes": [{"login": "Org"}]},
+                    "organizations": {
+                        "pageInfo": {"hasNextPage": False,
+                                     "endCursor": None},
+                        "nodes": [
+                            {"login": "PublicOrg", "isPublic": True},
+                            {"login": "PrivateOrg", "isPublic": False},
+                        ],
+                    },
                 }}
             if "pullRequests" in query:
                 return {"user": {"pullRequests": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [public_pr, private_pr],
+                    "nodes": [public_pr, private_pr,
+                               public_pr_owned_by_private_member],
                 }}}
             if "issues" in query:
                 return {"user": {"issues": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [public_issue, private_issue],
+                    "nodes": [public_issue, private_issue,
+                               public_issue_owned_by_private_member],
                 }}}
             raise AssertionError("unexpected GraphQL query")
 
@@ -193,13 +215,14 @@ class AuthoredSnapshot(unittest.TestCase):
                 "top-secret-token", "requested-login", gql_fn=gql_fn)
 
         self.assertEqual(out["account"], {"login": "Canonical"})
-        self.assertEqual(out["insiders"], ["canonical", "org"])
+        self.assertEqual(out["insiders"], ["canonical", "publicorg"])
+        self.assertNotIn("privateorg", out["insiders"])
         self.assertEqual([node["node_id"] for node in out["issues"]],
-                         ["I_public"])
+                         ["I_public", "I_public_private_member"])
         self.assertEqual([node["node_id"] for node in out["pull_requests"]],
-                         ["PR_public"])
+                         ["PR_public", "PR_public_private_member"])
         self.assertEqual([repo["id"] for repo in out["repositories"]],
-                         ["R_public"])
+                         ["R_public", "R_public_private_member"])
         encoded = json.dumps(out, sort_keys=True)
         self.assertNotIn("top-secret-token", encoded)
         self.assertNotIn("repository-token-must-not-leak", encoded)

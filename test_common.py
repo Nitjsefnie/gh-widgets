@@ -105,7 +105,10 @@ class FetchIdentity(unittest.TestCase):
         def _gql(token, query, variables=None, **kw):
             return {"user": {"login": login, "databaseId": database_id,
                              "organizations": {
-                                 "nodes": [{"login": o} for o in orgs]}}}
+                                 "pageInfo": {"hasNextPage": False,
+                                              "endCursor": None},
+                                 "nodes": [{"login": o, "isPublic": True}
+                                           for o in orgs]}}}
         return _gql
 
     def test_derives_insiders_and_emails(self):
@@ -113,9 +116,79 @@ class FetchIdentity(unittest.TestCase):
         self.assertEqual(me.login, "Octocat")
         self.assertEqual(me.database_id, 42)
         self.assertEqual(me.orgs, ["OrgOne"])
+        self.assertEqual(me.public_orgs, ["OrgOne"])
         self.assertEqual(me.insiders, {"octocat", "orgone"})
         self.assertIn("42+octocat@users.noreply.github.com", me.emails)
 
+    def test_pages_all_organizations_and_keeps_private_membership_transient(self):
+        calls = []
+        pages = {
+            None: {"pageInfo": {"hasNextPage": True, "endCursor": "org-c1"},
+                   "nodes": [{"login": "PublicOne", "isPublic": True},
+                             {"login": "PrivateOne", "isPublic": False}]},
+            "org-c1": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [{"login": "PublicTwo", "isPublic": True}]},
+        }
+
+        def gql_fn(token, query, variables=None, **kw):
+            calls.append(variables["cursor"])
+            return {"user": {"login": "Octocat", "databaseId": 42,
+                             "organizations": pages[variables["cursor"]]}}
+
+        me = common.fetch_identity("t", "octocat", gql_fn=gql_fn,
+                                   include_environment=False)
+        self.assertEqual(calls, [None, "org-c1"])
+        self.assertEqual(me.orgs, ["PublicOne", "PrivateOne", "PublicTwo"])
+        self.assertEqual(me.public_orgs, ["PublicOne", "PublicTwo"])
+        # Private knowledge remains available to external classification but
+        # is a separate field from the serialized public membership list.
+        self.assertIn("privateone", me.insiders)
+
+    def test_missing_organization_cursor_fails_explicitly(self):
+        def gql_fn(token, query, variables=None, **kw):
+            return {"user": {"login": "Octocat", "databaseId": 42,
+                             "organizations": {
+                                 "pageInfo": {"hasNextPage": True,
+                                              "endCursor": None},
+                                 "nodes": [],
+                             }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_identity("t", "octocat", gql_fn=gql_fn)
+        self.assertIn("organizations", str(raised.exception))
+        self.assertIn("None", str(raised.exception))
+
+    def test_repeated_organization_cursor_fails_explicitly(self):
+        calls = []
+
+        def gql_fn(token, query, variables=None, **kw):
+            calls.append(variables["cursor"])
+            return {"user": {"login": "Octocat", "databaseId": 42,
+                             "organizations": {
+                                 "pageInfo": {"hasNextPage": True,
+                                              "endCursor": "same"},
+                                 "nodes": [],
+                             }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_identity("t", "octocat", gql_fn=gql_fn)
+        self.assertEqual(calls, [None, "same"])
+        self.assertIn("organizations", str(raised.exception))
+        self.assertIn("same", str(raised.exception))
+
+    def test_custom_transport_without_visibility_fails_closed_for_public_orgs(self):
+        def gql_fn(token, query, variables=None, **kw):
+            return {"user": {"login": "Octocat", "databaseId": 42,
+                             "organizations": {
+                                 "pageInfo": {"hasNextPage": False,
+                                              "endCursor": None},
+                                 "nodes": [{"login": "Concealed"}],
+                             }}}
+
+        me = common.fetch_identity("t", "octocat", gql_fn=gql_fn,
+                                   include_environment=False)
+        self.assertEqual(me.orgs, ["Concealed"])
+        self.assertEqual(me.public_orgs, [])
     def test_uses_the_canonical_login_not_the_argument(self):
         # Queried as "OCTOCAT", GitHub answers "Octocat"; the noreply address
         # must be built from GitHub's spelling.
@@ -133,6 +206,40 @@ class FetchIdentity(unittest.TestCase):
         # rejects the ENTIRE query, so asking for email breaks identity
         # resolution outright.
         self.assertNotIn("email", common.IDENTITY_QUERY)
+
+
+class FetchPublicOrganizations(unittest.TestCase):
+    class Response:
+        def __init__(self, body, link=""):
+            self.body = body
+            self.headers = {"Link": link}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.body).encode()
+
+    def test_public_endpoint_is_paginated_without_authentication(self):
+        calls = []
+
+        def request_fn(request, timeout=None):
+            calls.append(request)
+            if len(calls) == 1:
+                return self.Response(
+                    [{"login": "PublicOne"}],
+                    '<https://api.github.com/users/Octocat/orgs?page=2>; '
+                    'rel="next"')
+            return self.Response([{"login": "PublicTwo"}])
+
+        orgs = common.fetch_public_organizations("Octocat",
+                                                request_fn=request_fn)
+        self.assertEqual(orgs, ["PublicOne", "PublicTwo"])
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(calls[0].has_header("Authorization"))
 
 
 class FetchPullRequests(unittest.TestCase):
@@ -205,6 +312,36 @@ class FetchPullRequests(unittest.TestCase):
                                         gql_fn=gql_fn)
         self.assertIn("pullRequests", str(raised.exception))
         self.assertIn("c1", str(raised.exception))
+
+    def test_missing_next_cursor_raises_without_limit(self):
+        def gql_fn(*_args, **_kwargs):
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": True, "endCursor": None},
+                "nodes": [],
+            }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_pull_requests("t", "me", max_pages=None,
+                                       gql_fn=gql_fn)
+        self.assertIn("pullRequests", str(raised.exception))
+        self.assertIn("None", str(raised.exception))
+
+    def test_repeated_next_cursor_raises_without_limit(self):
+        calls = []
+
+        def gql_fn(token, query, variables=None, **_kwargs):
+            calls.append(variables["cursor"])
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "same"},
+                "nodes": [],
+            }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_pull_requests("t", "me", max_pages=None,
+                                       gql_fn=gql_fn)
+        self.assertEqual(calls, [None, "same"])
+        self.assertIn("pullRequests", str(raised.exception))
+        self.assertIn("same", str(raised.exception))
 
 
 class EnvKnobs(unittest.TestCase):
@@ -382,14 +519,20 @@ class FetchIssues(unittest.TestCase):
     def test_explicit_limit_raises_instead_of_returning_partial(self):
         # A server that never says hasNextPage: false must not return a
         # partial snapshot when an explicit safety limit is reached.
-        endless = [{"pageInfo": {"hasNextPage": True, "endCursor": "c"},
-                    "nodes": [{"id": "I"}]}]
+        endless = [
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+             "nodes": [{"id": "I"}]},
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c2"},
+             "nodes": [{"id": "I"}]},
+            {"pageInfo": {"hasNextPage": True, "endCursor": "c3"},
+             "nodes": [{"id": "I"}]},
+        ]
         with self.assertRaises(common.PaginationLimitError) as raised:
             common.fetch_issues("t", "me", max_pages=3,
                                 gql_fn=self.paged_gql(endless))
         self.assertEqual(len(self.calls), 3)
         self.assertIn("issues", str(raised.exception))
-        self.assertIn("c", str(raised.exception))
+        self.assertIn("c3", str(raised.exception))
 
     def test_no_limit_pages_until_has_next_page(self):
         pages = iter([
@@ -403,6 +546,34 @@ class FetchIssues(unittest.TestCase):
             gql_fn=lambda *_args, **_kwargs: {
                 "user": {"issues": next(pages)}})
         self.assertEqual([node["id"] for node in nodes], ["I1", "I2"])
+
+    def test_missing_next_cursor_raises_without_limit(self):
+        def gql_fn(*_args, **_kwargs):
+            return {"user": {"issues": {
+                "pageInfo": {"hasNextPage": True, "endCursor": None},
+                "nodes": [],
+            }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_issues("t", "me", max_pages=None, gql_fn=gql_fn)
+        self.assertIn("issues", str(raised.exception))
+        self.assertIn("None", str(raised.exception))
+
+    def test_repeated_next_cursor_raises_without_limit(self):
+        calls = []
+
+        def gql_fn(token, query, variables=None, **_kwargs):
+            calls.append(variables["cursor"])
+            return {"user": {"issues": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "same"},
+                "nodes": [],
+            }}}
+
+        with self.assertRaises(common.PaginationLimitError) as raised:
+            common.fetch_issues("t", "me", max_pages=None, gql_fn=gql_fn)
+        self.assertEqual(calls, [None, "same"])
+        self.assertIn("issues", str(raised.exception))
+        self.assertIn("same", str(raised.exception))
 
 
 class XmlEscape(unittest.TestCase):
