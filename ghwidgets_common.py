@@ -201,22 +201,30 @@ def _write_cache(path, payload):
         tmp.unlink(missing_ok=True)  # a no-op once os.replace has moved it
 
 
-def save_cache(path, payload, timeout=CACHE_LOCK_TIMEOUT):
+def save_cache(path, payload, timeout=CACHE_LOCK_TIMEOUT, *, strict=False):
     """Replace the whole cache, atomically and under the writers' lock.
-    A failed save must not fail the run.
+    A failed save must not fail the run by default. With ``strict=True``,
+    lock or write failures are raised instead, and an unavailable lock is not
+    bypassed.
 
-    The lock is best-effort here: this caller writes every key it owns from
-    freshly fetched data, so proceeding without it can at worst drop the other
-    writer's PR refresh — which its next hourly run redoes.
+    For the default best-effort caller, proceeding without the lock can at
+    worst drop the other writer's PR refresh — which its next hourly run
+    redoes.
     """
     try:
         with cache_lock(path, timeout) as locked:
             if not locked:
+                if strict:
+                    raise TimeoutError(f"cache lock unavailable for {path}")
                 print(f"warning: writing {path} without the cache lock",
                       file=sys.stderr)
             _write_cache(path, payload)
+        return True
     except Exception as e:
         print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
+        if strict:
+            raise
+        return False
 
 
 def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):

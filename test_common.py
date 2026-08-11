@@ -271,6 +271,18 @@ class CacheWriting(unittest.TestCase):
         self.assertEqual(
             [p.name for p in Path(self.td.name).glob("*.tmp")], [])
 
+    def test_strict_save_raises_when_write_fails(self):
+        with mock.patch.object(common.os, "replace",
+                               side_effect=OSError("no space left")):
+            with self.assertRaises(OSError):
+                common.save_cache(self.path, {"version": 1}, strict=True)
+
+    def test_strict_save_raises_when_lock_is_unavailable(self):
+        with common.cache_lock(self.path):
+            with self.assertRaises(TimeoutError):
+                common.save_cache(self.path, {"version": 1}, timeout=0.1,
+                                  strict=True)
+
 
 class VersionContract(unittest.TestCase):
     def test_every_script_pins_the_current_version(self):

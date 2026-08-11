@@ -137,4 +137,5 @@ def load_snapshot(path: SnapshotPath) -> dict:
 def write_snapshot(path: SnapshotPath, snapshot: dict) -> None:
     """Validate and atomically write a public snapshot under the common lock."""
     _validate_snapshot(snapshot)
-    ghwidgets_common.save_cache(path, snapshot)
+    if not ghwidgets_common.save_cache(path, snapshot, strict=True):
+        raise OSError(f"could not write snapshot {path}")

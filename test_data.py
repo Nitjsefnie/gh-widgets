@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Tests for the public GitHub data and snapshot contract."""
 import json
-import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import ghwidgets_data as data
 
@@ -187,6 +187,16 @@ class SnapshotWriting(unittest.TestCase):
             with self.assertRaises(data.SnapshotValidationError):
                 data.write_snapshot(path, {"schema_version": 1})
             self.assertEqual(data.load_snapshot(path), value)
+
+    def test_write_snapshot_raises_when_atomic_write_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            with mock.patch.object(
+                    data.ghwidgets_common, "_write_cache",
+                    side_effect=OSError("no space left")):
+                with self.assertRaises(OSError):
+                    data.write_snapshot(path, snapshot())
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":
