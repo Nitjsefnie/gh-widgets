@@ -36,9 +36,13 @@ def pull_request_node(**overrides):
     node = issue_node(
         id="PR_1",
         url="https://github/x/y/pull/7",
+        state="MERGED",
         mergedAt="2026-01-04T00:00:00Z",
         merged=True,
     )
+    # PullRequest does not expose the Issue `stateReason` field in the
+    # production query.
+    node.pop("stateReason")
     node.update(overrides)
     return node
 
@@ -88,8 +92,7 @@ def pull_request_record(**overrides):
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-04T00:00:00Z",
         "closed_at": "2026-01-04T00:00:00Z",
-        "state": "CLOSED",
-        "state_reason": None,
+        "state": "MERGED",
         "merged_at": "2026-01-04T00:00:00Z",
         "merged": True,
     }
@@ -164,6 +167,8 @@ class Normalization(unittest.TestCase):
         self.assertEqual(out["node_id"], "PR_1")
         self.assertEqual(out["merged_at"], "2026-01-04T00:00:00Z")
         self.assertTrue(out["merged"])
+        self.assertEqual(out["state"], "MERGED")
+        self.assertNotIn("state_reason", out)
 
     def test_private_flag_is_normalized_to_bool(self):
         out = data.normalise_issue(issue_node(
@@ -391,6 +396,82 @@ class AuthoredSnapshot(unittest.TestCase):
         self.assertTrue(fetch_identity.call_args.kwargs["include_public_orgs"])
         self.assertNotIn("insiders", out)
 
+    def test_fetch_accepts_production_pull_request_states(self):
+        repos = [
+            {
+                "id": "R_merged",
+                "nameWithOwner": "external/merged",
+                "url": "https://github.com/external/merged",
+                "isPrivate": False,
+                "owner": {"login": "external"},
+            },
+            {
+                "id": "R_open",
+                "nameWithOwner": "external/open",
+                "url": "https://github.com/external/open",
+                "isPrivate": False,
+                "owner": {"login": "external"},
+            },
+            {
+                "id": "R_closed",
+                "nameWithOwner": "external/closed",
+                "url": "https://github.com/external/closed",
+                "isPrivate": False,
+                "owner": {"login": "external"},
+            },
+        ]
+        prs = [
+            pull_request_node(
+                id="PR_merged", repository=repos[0], state="MERGED",
+                merged=True, closedAt="2026-01-04T00:00:00Z",
+                mergedAt="2026-01-04T00:00:00Z"),
+            pull_request_node(
+                id="PR_open", repository=repos[1], state="OPEN",
+                merged=False, closedAt=None, mergedAt=None),
+            pull_request_node(
+                id="PR_closed", repository=repos[2], state="CLOSED",
+                merged=False, closedAt="2026-01-04T00:00:00Z",
+                mergedAt=None),
+        ]
+
+        def gql_fn(token, query, variables=None, **_kwargs):
+            if "organizations" in query:
+                return {"user": {
+                    "login": "Canonical",
+                    "databaseId": 42,
+                    "organizations": {
+                        "pageInfo": {"hasNextPage": False,
+                                     "endCursor": None},
+                        "nodes": [],
+                    },
+                }}
+            if "pullRequests" in query:
+                return {"user": {"pullRequests": {
+                    "pageInfo": {"hasNextPage": False,
+                                 "endCursor": None},
+                    "nodes": prs,
+                }}}
+            if "issues" in query:
+                return {"user": {"issues": {
+                    "pageInfo": {"hasNextPage": False,
+                                 "endCursor": None},
+                    "nodes": [],
+                }}}
+            raise AssertionError("unexpected GraphQL query")
+
+        out = data.fetch_authored_snapshot(
+            "top-secret-token", "requested-login", gql_fn=gql_fn)
+        self.assertEqual(
+            [(pr["node_id"], pr["state"], pr["merged"], pr["merged_at"])
+             for pr in out["pull_requests"]], [
+                 ("PR_merged", "MERGED", True,
+                  "2026-01-04T00:00:00Z"),
+                 ("PR_open", "OPEN", False, None),
+                 ("PR_closed", "CLOSED", False, None),
+             ])
+        self.assertTrue(all("state_reason" not in pr
+                            for pr in out["pull_requests"]))
+
 
 class SnapshotValidation(unittest.TestCase):
     def test_snapshot_rejects_unknown_schema(self):
@@ -484,11 +565,25 @@ class SnapshotValidation(unittest.TestCase):
             snapshot(issues=[issue_record(
                 state="CLOSED", state_reason="REOPENED")]),
             snapshot(pull_requests=[pull_request_record(
-                state="OPEN", closed_at=None)]),
+                state="OPEN", merged=False, closed_at="2026-01-04T00:00:00Z",
+                merged_at=None)]),
             snapshot(pull_requests=[pull_request_record(
-                merged=True, merged_at=None)]),
+                state="OPEN", merged=True,
+                merged_at="2026-01-04T00:00:00Z")]),
             snapshot(pull_requests=[pull_request_record(
-                merged=False, merged_at="2026-01-04T00:00:00Z")]),
+                state="CLOSED", merged=False, closed_at=None,
+                merged_at=None)]),
+            snapshot(pull_requests=[pull_request_record(
+                state="CLOSED", merged=True,
+                merged_at="2026-01-04T00:00:00Z")]),
+            snapshot(pull_requests=[pull_request_record(
+                state="MERGED", merged=False,
+                merged_at=None)]),
+            snapshot(pull_requests=[pull_request_record(
+                state="MERGED", merged=True, closed_at=None,
+                merged_at="2026-01-04T00:00:00Z")]),
+            snapshot(pull_requests=[pull_request_record(
+                state="MERGED", state_reason=None)]),
         ]
         for invalid in cases:
             with self.subTest(snapshot=invalid):

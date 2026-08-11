@@ -44,9 +44,12 @@ _ITEM_FIELDS = (
     "state",
     "state_reason",
 )
-_PULL_REQUEST_FIELDS = _ITEM_FIELDS + ("merged_at", "merged")
+_PULL_REQUEST_FIELDS = tuple(
+    field for field in _ITEM_FIELDS if field != "state_reason") + (
+        "merged_at", "merged")
 _COLLECTION_FIELDS = ("repositories", "issues", "pull_requests")
-_STATES = frozenset(("OPEN", "CLOSED"))
+_ISSUE_STATES = frozenset(("OPEN", "CLOSED"))
+_PULL_REQUEST_STATES = frozenset(("OPEN", "CLOSED", "MERGED"))
 _ISSUE_REASONS = frozenset(("COMPLETED", "NOT_PLANNED", "REOPENED"))
 _RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
@@ -63,9 +66,9 @@ class SnapshotVersionError(SnapshotValidationError):
     """Raised when a snapshot uses a schema version this module cannot read."""
 
 
-def _normalise_item(node):
+def _normalise_item(node, *, include_state_reason):
     repo = node["repository"]
-    return {
+    out = {
         "node_id": node["id"],
         "repository_id": repo["id"],
         "repository": repo["nameWithOwner"],
@@ -78,18 +81,20 @@ def _normalise_item(node):
         "updated_at": node["updatedAt"],
         "closed_at": node.get("closedAt"),
         "state": node["state"],
-        "state_reason": node.get("stateReason"),
     }
+    if include_state_reason:
+        out["state_reason"] = node.get("stateReason")
+    return out
 
 
 def normalise_issue(node: dict) -> dict:
     """Convert a GitHub GraphQL issue node to its public record shape."""
-    return _normalise_item(node)
+    return _normalise_item(node, include_state_reason=True)
 
 
 def normalise_pull_request(node: dict) -> dict:
     """Convert a GitHub GraphQL pull-request node to its public record shape."""
-    out = _normalise_item(node)
+    out = _normalise_item(node, include_state_reason=False)
     out.update({
         "merged_at": node.get("mergedAt"),
         "merged": bool(node.get("merged")),
@@ -201,10 +206,13 @@ def _validate_item(item, index, kind, repository_by_id):
     _timestamp(item["updated_at"], f"{context}.updated_at")
     _timestamp(item["closed_at"], f"{context}.closed_at", nullable=True)
     _string(item["state"], f"{context}.state")
-    if item["state"] not in _STATES:
+    states = (_PULL_REQUEST_STATES if kind == "pull_requests"
+              else _ISSUE_STATES)
+    if item["state"] not in states:
         raise SnapshotValidationError(f"{context}.state has an invalid value")
-    _nullable_string(item["state_reason"], f"{context}.state_reason",
-                     _ISSUE_REASONS)
+    if kind == "issues":
+        _nullable_string(item["state_reason"], f"{context}.state_reason",
+                         _ISSUE_REASONS)
 
     repository = repository_by_id.get(item["repository_id"])
     if repository is None:
@@ -220,39 +228,39 @@ def _validate_item(item, index, kind, repository_by_id):
         raise SnapshotValidationError(
             f"{context}.repository_url does not match its repository record")
 
-    if item["state"] == "OPEN":
-        if item["closed_at"] is not None:
-            raise SnapshotValidationError(
-                f"{context} open state cannot have closed_at")
-        if item["state_reason"] not in (None, "REOPENED"):
-            raise SnapshotValidationError(
-                f"{context} open state has an inconsistent state_reason")
+    if kind == "issues":
+        if item["state"] == "OPEN":
+            if item["closed_at"] is not None:
+                raise SnapshotValidationError(
+                    f"{context} open state cannot have closed_at")
+            if item["state_reason"] not in (None, "REOPENED"):
+                raise SnapshotValidationError(
+                    f"{context} open state has an inconsistent state_reason")
+        else:
+            if item["closed_at"] is None:
+                raise SnapshotValidationError(
+                    f"{context} closed state requires closed_at")
+            if item["state_reason"] not in ("COMPLETED", "NOT_PLANNED"):
+                raise SnapshotValidationError(
+                    f"{context} closed issue has an inconsistent state_reason")
     else:
-        if item["closed_at"] is None:
-            raise SnapshotValidationError(
-                f"{context} closed state requires closed_at")
-        if kind == "issues" and item["state_reason"] not in (
-                "COMPLETED", "NOT_PLANNED"):
-            raise SnapshotValidationError(
-                f"{context} closed issue has an inconsistent state_reason")
-        if kind == "pull_requests" and item["state_reason"] not in (
-                None, "COMPLETED", "NOT_PLANNED"):
-            raise SnapshotValidationError(
-                f"{context} closed PR has an inconsistent state_reason")
-
-    if kind == "pull_requests":
         _boolean(item["merged"], f"{context}.merged")
         _timestamp(item["merged_at"], f"{context}.merged_at", nullable=True)
-        if item["merged"]:
-            if item["state"] != "CLOSED" or item["closed_at"] is None:
+        if item["state"] == "OPEN":
+            if item["merged"] is not False or item["closed_at"] is not None \
+                    or item["merged_at"] is not None:
                 raise SnapshotValidationError(
-                    f"{context} merged PR must be closed")
-            if item["merged_at"] is None:
+                    f"{context} open PR has inconsistent merge fields")
+        elif item["state"] == "CLOSED":
+            if item["merged"] is not False or item["closed_at"] is None \
+                    or item["merged_at"] is not None:
                 raise SnapshotValidationError(
-                    f"{context} merged PR requires merged_at")
-        elif item["merged_at"] is not None:
-            raise SnapshotValidationError(
-                f"{context} unmerged PR cannot have merged_at")
+                    f"{context} closed PR has inconsistent merge fields")
+        else:
+            if item["merged"] is not True or item["closed_at"] is None \
+                    or item["merged_at"] is None:
+                raise SnapshotValidationError(
+                    f"{context} merged PR has inconsistent merge fields")
 
 
 def _validate_snapshot(snapshot: dict) -> dict:

@@ -44,27 +44,34 @@ exactly `{id, nameWithOwner, url, isPrivate, owner}`, with `owner` exactly
 `{login}` and `isPrivate` always `false`. An issue is exactly
 `{node_id, repository_id, repository, owner, repository_url, is_private,
 number, url, created_at, updated_at, closed_at, state, state_reason}`. A pull
-request has those exact fields plus `merged_at` and `merged`. Strings are
-non-empty, numbers are positive integers, booleans are actual booleans, and
-timestamps are non-empty RFC 3339 strings (or `null` only where documented as
-an outcome). Every item must reference an included repository; duplicate IDs,
+request has exactly those fields except `state_reason`, plus exactly
+`merged_at` and `merged`. The PR source does not produce the issue
+`state_reason` field, so adding it to a PR is rejected. Strings are non-empty,
+numbers are positive integers, booleans are actual booleans, and timestamps
+are non-empty RFC 3339 strings (or `null` only where documented as an
+outcome). Every item must reference an included repository; duplicate IDs,
 unknown/missing fields, private flags, credentials, invalid states, and
 inconsistent closed/merged outcomes are rejected.
 
-The complete allowed state matrix is:
+The complete allowed issue state matrix is:
 
-| record | `state` | `closed_at` | `state_reason` | `merged` | `merged_at` |
-|---|---|---|---|---|---|
-| issue | `OPEN` | `null` | `null` or `REOPENED` | — | — |
-| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` | — | — |
-| pull request | `OPEN` | `null` | `null` or `REOPENED` | `false` | `null` |
-| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `false` | `null` |
-| pull request | `CLOSED` | RFC 3339 | `null`, `COMPLETED`, or `NOT_PLANNED` | `true` | RFC 3339 |
+| record | `state` | `closed_at` | `state_reason` |
+|---|---|---|---|
+| issue | `OPEN` | `null` | `null` or `REOPENED` |
+| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` |
+
+The complete allowed pull-request state matrix is:
+
+| record | `state` | `merged` | `closed_at` | `merged_at` |
+|---|---|---|---|---|
+| pull request | `OPEN` | `false` | `null` | `null` |
+| pull request | `CLOSED` | `false` | RFC 3339 | `null` |
+| pull request | `MERGED` | `true` | RFC 3339 | RFC 3339 |
 
 No other state/state-reason/null combination is valid. Open items cannot have
-`closed_at`; closed issues cannot have a null or `REOPENED` reason; closed PRs
-cannot have `REOPENED`; merged PRs must be closed with `merged_at`; and
-unmerged PRs must have `merged_at: null`.
+`closed_at`; closed issues cannot have a null or `REOPENED` reason; PRs do not
+have a `state_reason` field; a `MERGED` PR must have both outcome timestamps;
+and `OPEN` or `CLOSED` PRs must be unmerged with `merged_at: null`.
 
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
