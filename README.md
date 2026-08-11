@@ -57,8 +57,9 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-All three renderers share `ghwidgets_common.py` and assert its
-`COMMON_VERSION` on startup, so the four files have to travel together.
+All three renderers share `ghwidgets_common.py` and `ghwidgets_data.py`, and
+assert the common module's `COMMON_VERSION` on startup, so the five files have
+to travel together.
 `install.sh` stages them into the destination and moves them into place, then
 starts every entry point to prove the install is coherent. A hand-rolled `cp`
 of one file leaves a
@@ -123,6 +124,30 @@ Same contract as the impact knobs: an unparseable value aborts the run.
 GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
 GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widgets.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
 ```
+
+## Public snapshots
+
+`ghwidgets_data.py` is the importable public-data boundary for consumers that
+need to acquire authored GitHub issues and pull requests once and render them
+in more than one process. `fetch_authored_snapshot()` returns schema version
+`1` with `account`, `insiders`, `repositories`, `issues`, and `pull_requests`.
+Issue and pull-request records use stable snake_case keys; private repositories
+and credentials are excluded before a snapshot is written. `load_snapshot()`
+validates the version and shape, while `write_snapshot()` performs a locked,
+atomic write.
+
+A consumer that embeds or submodules gh-widgets must pin the gh-widgets commit
+that defines the snapshot schema and renderer adapter it uses. Upgrade that
+pin deliberately with the consumer's compatibility tests; do not silently
+track an unreviewed moving branch.
+
+Each renderer accepts `--snapshot-file PATH`. Snapshot sections replace only
+the matching authored-data inputs; a normal invocation still fetches any other
+inputs through its existing cache and GraphQL path, and remains standalone
+when no snapshot flag is supplied. Add `--render-only` to render without
+credentials or GraphQL. It validates the sections needed by that renderer
+before writing any SVG and reports a missing input as
+`snapshot missing required section: NAME`.
 
 ## Caching
 

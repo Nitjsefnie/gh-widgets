@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -33,6 +34,81 @@ if spec is None or spec.loader is None:
     raise SystemExit("error: cannot load render-impact.py")
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
+
+
+def public_snapshot():
+    """A normalized public snapshot suitable for renderer consumers."""
+    return {
+        "schema_version": 1,
+        "generated_at": "2026-08-01T00:00:00+00:00",
+        "account": {"login": "me"},
+        "insiders": ["me"],
+        "repositories": [{
+            "id": "R1", "nameWithOwner": "other/project",
+            "url": "https://github.com/other/project", "isPrivate": False,
+            "owner": {"login": "other"},
+        }],
+        "issues": [{
+            "node_id": "I1", "repository_id": "R1",
+            "repository": "other/project", "owner": "other",
+            "repository_url": "https://github.com/other/project",
+            "is_private": False, "number": 1,
+            "url": "https://github.com/other/project/issues/1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "closed_at": "2026-01-02T00:00:00Z",
+            "state": "CLOSED", "state_reason": "COMPLETED",
+        }],
+        "pull_requests": [{
+            "node_id": "P1", "repository_id": "R1",
+            "repository": "other/project", "owner": "other",
+            "repository_url": "https://github.com/other/project",
+            "is_private": False, "number": 2,
+            "url": "https://github.com/other/project/pull/2",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "closed_at": "2026-01-02T00:00:00Z",
+            "state": "CLOSED", "state_reason": None,
+            "merged_at": "2026-01-02T00:00:00Z", "merged": True,
+        }],
+    }
+
+
+class SnapshotInput(unittest.TestCase):
+    def test_render_only_uses_normalized_snapshot_without_graphql(self):
+        with tempfile.TemporaryDirectory() as td:
+            snapshot_file = Path(td) / "snapshot.json"
+            snapshot_file.write_text(json.dumps(public_snapshot()),
+                                     encoding="utf-8")
+            out = Path(td) / "out"
+            argv = ["render-impact.py", "--snapshot-file", str(snapshot_file),
+                    "--render-only", "--out-dir", str(out)]
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(render_impact, "gql",
+                                      side_effect=AssertionError("network called")), \
+                    mock.patch.object(render_impact, "check_git_fame"), \
+                    mock.patch.dict(os.environ, {}, clear=True):
+                render_impact.main()
+            self.assertTrue((out / "impact.svg").exists())
+
+    def test_render_only_reports_missing_required_section(self):
+        missing = public_snapshot()
+        del missing["issues"]
+        with tempfile.TemporaryDirectory() as td:
+            snapshot_file = Path(td) / "snapshot.json"
+            snapshot_file.write_text(json.dumps(public_snapshot()),
+                                     encoding="utf-8")
+            with mock.patch.object(render_impact.data, "load_snapshot",
+                                   return_value=missing), \
+                    mock.patch.object(sys, "argv", [
+                        "render-impact.py", "--snapshot-file",
+                        str(snapshot_file), "--render-only",
+                        "--out-dir", str(Path(td) / "out")]), \
+                    mock.patch.object(render_impact, "check_git_fame"), \
+                    mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(
+                        ValueError, r"snapshot missing required section: issues"):
+                    render_impact.main()
 
 
 def git(*args, cwd):

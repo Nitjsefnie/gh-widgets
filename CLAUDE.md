@@ -17,14 +17,29 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs the four Python files to `/usr/local/bin`
+unit.** Bare, it installs the five Python files to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`,
-`render-responsiveness.py`, `ghwidgets_common.py`). Each renderer asserts the
+`render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_data.py`). Each renderer asserts the
 shared module's `COMMON_VERSION` at startup, so a partial copy yields a renderer
 that refuses to run — deliberately, since the alternative is rendering from a
 stale module. `install.sh --units` additionally installs `units/`, reloads
 systemd, enables both timers and proves they load. Everything it installs is a
 *copy*, so `diff` against the repo before and after touching either side.
+
+**Public snapshot consumers.** `ghwidgets_data.py` is the versioned public
+boundary, currently schema `1`: it publishes only public authored issues,
+pull requests, repository metadata, account identity, and public insider
+owners. It never publishes a token or private cache fields. A consumer such as
+ghpulse must pin the gh-widgets commit/submodule that defines the snapshot
+schema and renderer adapter, then upgrade that pin with compatibility tests;
+tracking an unpinned moving branch is not a supported interface.
+
+All three renderers accept `--snapshot-file PATH`. The file replaces only the
+matching authored-data section(s); without that flag the commands remain
+standalone and use their existing GraphQL/cache paths. `--render-only` requires
+the sections used by the renderer, validates them before any GraphQL call, and
+renders without credentials. A missing section fails clearly with
+`snapshot missing required section: NAME`.
 
 **Two caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and

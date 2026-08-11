@@ -78,6 +78,10 @@ from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# The three entry points intentionally carry parallel snapshot adapters so
+# each remains independently installable.
+# pylint: disable=duplicate-code
+
 
 def _load_common():
     """Load ghwidgets_common.py from beside this script — see render.py."""
@@ -95,7 +99,23 @@ def _load_common():
     return mod
 
 
+def _load_data():
+    """Load the public snapshot module from beside this renderer."""
+    path = Path(__file__).resolve().with_name("ghwidgets_data.py")
+    if not path.exists():
+        raise SystemExit(
+            f"error: {path} is missing — it must sit beside this script "
+            f"(install.sh copies all public data modules)")
+    spec = importlib.util.spec_from_file_location("ghwidgets_data", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 common = _load_common()
+data = _load_data()
 
 REQUIRED_COMMON = 3
 common.check_version(REQUIRED_COMMON)
@@ -120,6 +140,65 @@ stamp_cache_notice = common.stamp_cache_notice
 
 Row = namedtuple("Row", "raw n hours repo")
 Scored = namedtuple("Scored", "score n hours repo")
+
+
+def load_snapshot(path):
+    """Load a public snapshot with renderer-specific missing-section errors."""
+    try:
+        return data.load_snapshot(path)
+    except data.SnapshotValidationError as exc:
+        prefix = "snapshot missing required field(s): "
+        message = str(exc)
+        if message.startswith(prefix):
+            missing = message[len(prefix):].split(", ")
+            for section in ("account", "insiders", "repositories", "issues",
+                            "pull_requests"):
+                if section in missing:
+                    raise ValueError(
+                        f"snapshot missing required section: {section}") from exc
+        raise
+
+
+def _require_snapshot_sections(snapshot, sections):
+    """Fail before any fetch when render-only input is incomplete."""
+    for section in sections:
+        if section not in snapshot:
+            raise ValueError(f"snapshot missing required section: {section}")
+
+
+def _snapshot_item(node):
+    """Adapt one normalized public PR to the legacy renderer shape."""
+    repository = node.get("repository")
+    if isinstance(repository, dict):
+        repo = dict(repository)
+    else:
+        name = repository or node.get("repository_name", "")
+        owner = node.get("owner")
+        if isinstance(owner, dict):
+            owner = owner.get("login")
+        repo = {
+            "nameWithOwner": name,
+            "isPrivate": bool(node.get("is_private", False)),
+            "owner": {"login": owner or (
+                name.split("/", 1)[0] if "/" in name else name)},
+        }
+    return {
+        "id": node.get("id", node.get("node_id")),
+        "number": int(node.get("number", 0)),
+        "url": node.get("url", ""),
+        "createdAt": node.get("createdAt", node.get("created_at")),
+        "updatedAt": node.get("updatedAt", node.get("updated_at")),
+        "closedAt": node.get("closedAt", node.get("closed_at")),
+        "mergedAt": node.get("mergedAt", node.get("merged_at")),
+        "merged": bool(node.get("merged", False)),
+        "state": node.get("state"),
+        "stateReason": node.get("stateReason", node.get("state_reason")),
+        "repository": repo,
+    }
+
+
+def _snapshot_prs(snapshot):
+    return [_snapshot_item(node) for node in snapshot.get("pull_requests", [])]
 
 
 def metric_knobs():
@@ -393,14 +472,21 @@ def parse_args():
                    default=os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE),
                    help="JSON cache path, shared with render-impact.py "
                         "(env: CACHE_FILE)")
+    p.add_argument("--snapshot-file",
+                   help="Read normalized public data from this JSON snapshot")
+    p.add_argument("--render-only", action="store_true",
+                   help="Render from --snapshot-file without GraphQL")
     args = p.parse_args()
 
-    if not args.user:
+    if args.render_only and not args.snapshot_file:
+        p.error("--render-only requires --snapshot-file")
+    snapshot_only = args.render_only and args.snapshot_file
+    if not args.user and not snapshot_only:
         p.error("--user (or env GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
-    if not token:
+    if not token and not snapshot_only:
         p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
     return args, token
 
@@ -484,15 +570,38 @@ def build_card(C, prs, insiders, knobs):
     return render_responsiveness(C, scored), notes
 
 
-def load_inputs(args, token):
+def load_inputs(args, token, snapshot=None):
     """Fetch the PRs (updating the shared cache) or, on failure, recover them
     from that cache. Returns (prs, insiders, stale), where `stale` is the
     cached fetch time when rendering from cache and None after a live fetch.
     """
+    if args.render_only:
+        if snapshot is None:
+            raise ValueError("--render-only requires --snapshot-file")
+        _require_snapshot_sections(
+            snapshot, ("account", "insiders", "pull_requests"))
+        return (_snapshot_prs(snapshot),
+                frozenset(str(value).casefold()
+                          for value in snapshot["insiders"]), None)
+
     cache = common.load_cache(args.cache_file, IMPACT_CACHE_VERSION)
+    snapshot_prs = (_snapshot_prs(snapshot)
+                    if snapshot is not None and "pull_requests" in snapshot
+                    else None)
+    snapshot_insiders = (snapshot.get("insiders", [])
+                         if snapshot is not None else [])
     try:
-        insiders, prs, prs_by_id = fetch_prs(token, args.user,
-                                             cache.get("prs") or None)
+        if snapshot_prs is not None:
+            prs = snapshot_prs
+            prs_by_id = {node["id"]: node for node in prs}
+            insiders = frozenset(str(value).casefold()
+                                 for value in snapshot_insiders)
+            if not insiders:
+                insiders, _unused_prs, _unused_by_id = fetch_prs(
+                    token, args.user, cache.get("prs") or None)
+        else:
+            insiders, prs, prs_by_id = fetch_prs(
+                token, args.user, cache.get("prs") or None)
     except Exception:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # the cache and exits 0 — but only with a usable cache. Without one,
@@ -511,12 +620,14 @@ def load_inputs(args, token):
 
 def main():
     args, token = parse_args()
+    snapshot = load_snapshot(args.snapshot_file) \
+        if args.snapshot_file else None
 
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    prs, insiders, stale = load_inputs(args, token)
+    prs, insiders, stale = load_inputs(args, token, snapshot=snapshot)
     svg, notes = build_card(C, prs, insiders, metric_knobs())
     if stale and cache_is_stale(stale):
         # The stamp is a CAVEAT, not a label: it appears only when the data is
