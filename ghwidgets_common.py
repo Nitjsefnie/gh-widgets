@@ -38,6 +38,7 @@ import urllib.parse
 import urllib.request
 from collections import namedtuple
 from pathlib import Path
+from typing import Optional
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
@@ -418,6 +419,9 @@ def fetch_public_organizations(login, request_fn=None):
     return public_orgs
 
 
+# The identity query deliberately keeps pagination, visibility, and derived
+# sets together so the transient membership data cannot leak into snapshots.
+# pylint: disable=too-many-locals
 def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
                    include_public_orgs=False):
     """Resolve who we are from the token's own account.
@@ -494,6 +498,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
         emails=our_emails(canonical, database_id, extra=extras),
         public_orgs=public_orgs,
     )
+# pylint: enable=too-many-locals
 
 
 def is_external(node, insiders):
@@ -574,7 +579,11 @@ query($login: String!, $cursor: String) {
 """
 
 
-def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None):
+# The live/cached/sweep reconciliation is intentionally one function so its
+# state transitions remain atomic and easy to audit.
+# pylint: disable=too-many-locals
+def fetch_pull_requests(token, login, cached_prs=None,
+                        max_pages: Optional[int] = 50, gql_fn=None):
     """Fetch the user's authored PRs and merge with the cached set.
 
     MERGED is the only one-way PR state, so with a warm cache the live query
@@ -647,9 +656,10 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages=50, gql_fn=None
             if not node["merged"] and pid not in live_ids:
                 known[pid] = {**node, "merged": True}
     return list(known.values()), known
+# pylint: enable=too-many-locals
 
 
-def fetch_issues(token, login, max_pages=50, gql_fn=None):
+def fetch_issues(token, login, max_pages: Optional[int] = 50, gql_fn=None):
     """Page through every ISSUE the user has authored, every run.
 
     Issues can be REOPENED, so unlike PRs there is no immutable slice to

@@ -9,6 +9,9 @@ from unittest import mock
 
 import ghwidgets_data as data
 
+# These tests intentionally exercise the private snapshot boundary helpers.
+# pylint: disable=protected-access
+
 
 def issue_node(**overrides):
     node = {
@@ -264,7 +267,7 @@ class SnapshotBuilding(unittest.TestCase):
 
 
 class AuthoredSnapshot(unittest.TestCase):
-    def test_fetch_excludes_private_records_and_credentials(self):
+    def test_fetch_excludes_private_records_and_credentials(self):  # pylint: disable=too-many-locals
         public_repo = {
             "id": "R_public",
             "nameWithOwner": "external/project",
@@ -340,18 +343,22 @@ class AuthoredSnapshot(unittest.TestCase):
             if "pullRequests" in query:
                 return {"user": {"pullRequests": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [public_pr, private_pr,
-                               public_pr_owned_by_private_member,
-                               public_pr_owned_by_account,
-                               public_pr_owned_by_public_org],
+                    "nodes": [
+                        public_pr, private_pr,
+                        public_pr_owned_by_private_member,
+                        public_pr_owned_by_account,
+                        public_pr_owned_by_public_org,
+                    ],
                 }}}
             if "issues" in query:
                 return {"user": {"issues": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [public_issue, private_issue,
-                               public_issue_owned_by_private_member,
-                               public_issue_owned_by_account,
-                               public_issue_owned_by_public_org],
+                    "nodes": [
+                        public_issue, private_issue,
+                        public_issue_owned_by_private_member,
+                        public_issue_owned_by_account,
+                        public_issue_owned_by_public_org,
+                    ],
                 }}}
             raise AssertionError("unexpected GraphQL query")
 

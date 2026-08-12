@@ -127,11 +127,15 @@ class FetchIdentity(unittest.TestCase):
             None: {"pageInfo": {"hasNextPage": True, "endCursor": "org-c1"},
                    "nodes": [{"login": "PublicOne", "isPublic": True},
                              {"login": "PrivateOne", "isPublic": False}]},
-            "org-c1": {"pageInfo": {"hasNextPage": False, "endCursor": None},
-                        "nodes": [{"login": "PublicTwo", "isPublic": True}]},
+            "org-c1": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{"login": "PublicTwo", "isPublic": True}],
+            },
         }
 
         def gql_fn(token, query, variables=None, **kw):
+            self.assertIsNotNone(variables)
+            assert variables is not None
             calls.append(variables["cursor"])
             return {"user": {"login": "Octocat", "databaseId": 42,
                              "organizations": pages[variables["cursor"]]}}
@@ -164,6 +168,8 @@ class FetchIdentity(unittest.TestCase):
         calls = []
 
         def gql_fn(token, query, variables=None, **kw):
+            self.assertIsNotNone(variables)
+            assert variables is not None
             calls.append(variables["cursor"])
             return {"user": {"login": "Octocat", "databaseId": 42,
                              "organizations": {
@@ -225,6 +231,7 @@ class FetchIdentity(unittest.TestCase):
             "Octocat", 42, ["PrivateOrg"], {"octocat", "privateorg"},
             {"octocat@users.noreply.github.com"})
         self.assertEqual(me.public_orgs, [])
+
     def test_uses_the_canonical_login_not_the_argument(self):
         # Queried as "OCTOCAT", GitHub answers "Octocat"; the noreply address
         # must be built from GitHub's spelling.
@@ -271,8 +278,8 @@ class FetchPublicOrganizations(unittest.TestCase):
                     'rel="next"')
             return self.Response([{"login": "PublicTwo"}])
 
-        orgs = common.fetch_public_organizations("Octocat",
-                                                request_fn=request_fn)
+        orgs = common.fetch_public_organizations(
+            "Octocat", request_fn=request_fn)
         self.assertEqual(orgs, ["PublicOne", "PublicTwo"])
         self.assertEqual(len(calls), 2)
         self.assertFalse(calls[0].has_header("Authorization"))
@@ -345,7 +352,7 @@ class FetchPullRequests(unittest.TestCase):
 
         with self.assertRaises(common.PaginationLimitError) as raised:
             common.fetch_pull_requests("t", "me", max_pages=1,
-                                        gql_fn=gql_fn)
+                                       gql_fn=gql_fn)
         self.assertIn("pullRequests", str(raised.exception))
         self.assertIn("c1", str(raised.exception))
 
@@ -366,6 +373,8 @@ class FetchPullRequests(unittest.TestCase):
         calls = []
 
         def gql_fn(token, query, variables=None, **_kwargs):
+            self.assertIsNotNone(variables)
+            assert variables is not None
             calls.append(variables["cursor"])
             return {"user": {"pullRequests": {
                 "pageInfo": {"hasNextPage": True, "endCursor": "same"},
@@ -599,6 +608,8 @@ class FetchIssues(unittest.TestCase):
         calls = []
 
         def gql_fn(token, query, variables=None, **_kwargs):
+            self.assertIsNotNone(variables)
+            assert variables is not None
             calls.append(variables["cursor"])
             return {"user": {"issues": {
                 "pageInfo": {"hasNextPage": True, "endCursor": "same"},

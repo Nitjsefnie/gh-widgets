@@ -116,6 +116,9 @@ def _public_repository(repo: dict) -> dict:
     }
 
 
+# These validators deliberately reject dict/list subclasses.  The snapshot
+# boundary must not execute attacker-controlled container behavior.
+# pylint: disable=unidiomatic-typecheck
 def _exact_keys(value, expected, context):
     """Require a JSON object to have exactly the documented fields."""
     if type(value) is not dict:
@@ -194,7 +197,7 @@ def _validate_repository(repository, index):
     _string(repository["owner"]["login"], f"{context}.owner.login")
 
 
-def _validate_item(item, index, kind, repository_by_id):
+def _validate_item(item, index, kind, repository_by_id):  # pylint: disable=too-many-branches,too-many-statements
     context = f"snapshot {kind}[{index}]"
     fields = _PULL_REQUEST_FIELDS if kind == "pull_requests" else _ITEM_FIELDS
     _exact_keys(item, fields, context)
@@ -314,6 +317,9 @@ def _validate_snapshot(snapshot: dict) -> dict:
                 raise SnapshotValidationError(f"duplicate item node_id: {node_id}")
             item_ids.add(node_id)
     return snapshot
+
+
+# pylint: enable=unidiomatic-typecheck
 
 
 def _build_snapshot(*, account: dict, repositories: list[dict],
