@@ -50,7 +50,10 @@ _PULL_REQUEST_FIELDS = tuple(
 _COLLECTION_FIELDS = ("repositories", "issues", "pull_requests")
 _ISSUE_STATES = frozenset(("OPEN", "CLOSED"))
 _PULL_REQUEST_STATES = frozenset(("OPEN", "CLOSED", "MERGED"))
-_ISSUE_REASONS = frozenset(("COMPLETED", "NOT_PLANNED", "REOPENED"))
+# GitHub may add a new enum member before this consumer is updated. Keep the
+# exact source spelling for reconciliation while bounding the value that can
+# cross the public snapshot boundary.
+MAX_STATE_REASON_LENGTH = 64
 _RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
     r"(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
@@ -160,11 +163,14 @@ def _timestamp(value, context, *, nullable=False):
             f"{context} must be a non-empty RFC 3339 timestamp")
 
 
-def _nullable_string(value, context, allowed=None):
+def _nullable_string(value, context, allowed=None, max_length=None):
     if value is None:
         return
-    if type(value) is not str:
+    if type(value) is not str or not value or not value.strip():
         raise SnapshotValidationError(f"{context} must be a string or null")
+    if max_length is not None and len(value) > max_length:
+        raise SnapshotValidationError(
+            f"{context} exceeds the maximum length of {max_length}")
     if allowed is not None and value not in allowed:
         raise SnapshotValidationError(f"{context} has an invalid value")
 
@@ -211,8 +217,10 @@ def _validate_item(item, index, kind, repository_by_id):
     if item["state"] not in states:
         raise SnapshotValidationError(f"{context}.state has an invalid value")
     if kind == "issues":
-        _nullable_string(item["state_reason"], f"{context}.state_reason",
-                         _ISSUE_REASONS)
+        _nullable_string(
+            item["state_reason"], f"{context}.state_reason",
+            max_length=MAX_STATE_REASON_LENGTH,
+        )
 
     repository = repository_by_id.get(item["repository_id"])
     if repository is None:
@@ -233,14 +241,14 @@ def _validate_item(item, index, kind, repository_by_id):
             if item["closed_at"] is not None:
                 raise SnapshotValidationError(
                     f"{context} open state cannot have closed_at")
-            if item["state_reason"] not in (None, "REOPENED"):
+            if item["state_reason"] in ("COMPLETED", "NOT_PLANNED"):
                 raise SnapshotValidationError(
                     f"{context} open state has an inconsistent state_reason")
         else:
             if item["closed_at"] is None:
                 raise SnapshotValidationError(
                     f"{context} closed state requires closed_at")
-            if item["state_reason"] not in ("COMPLETED", "NOT_PLANNED"):
+            if item["state_reason"] in (None, "REOPENED"):
                 raise SnapshotValidationError(
                     f"{context} closed issue has an inconsistent state_reason")
     else:

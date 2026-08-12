@@ -396,6 +396,26 @@ class AuthoredSnapshot(unittest.TestCase):
         self.assertTrue(fetch_identity.call_args.kwargs["include_public_orgs"])
         self.assertNotIn("insiders", out)
 
+    def test_snapshot_producer_retains_unknown_issue_reason(self):
+        identity = data.ghwidgets_common.Identity(
+            "Canonical", 42, [], set(), set(), [])
+        issue = issue_node(
+            id="I_future", repository=repository_record(
+                id="R_future", nameWithOwner="external/future"),
+            stateReason="FUTURE_REASON_V2",
+        )
+        with mock.patch.object(
+                data.ghwidgets_common, "fetch_identity",
+                return_value=identity), mock.patch.object(
+                    data.ghwidgets_common, "fetch_pull_requests",
+                    return_value=([], {})), mock.patch.object(
+                        data.ghwidgets_common, "fetch_issues",
+                        return_value=[issue]):
+            out = data.fetch_authored_snapshot(
+                "top-secret-token", "requested-login", gql_fn=object())
+
+        self.assertEqual(out["issues"][0]["state_reason"], "FUTURE_REASON_V2")
+
     def test_fetch_accepts_production_pull_request_states(self):
         repos = [
             {
@@ -589,6 +609,20 @@ class SnapshotValidation(unittest.TestCase):
             with self.subTest(snapshot=invalid):
                 with self.assertRaises(data.SnapshotValidationError):
                     data._validate_snapshot(invalid)
+
+    def test_snapshot_preserves_bounded_unknown_issue_reason(self):
+        unknown = "FUTURE_REASON_V2"
+        value = snapshot(issues=[issue_record(state_reason=unknown)])
+        self.assertIs(data._validate_snapshot(value), value)
+        self.assertEqual(value["issues"][0]["state_reason"], unknown)
+
+    def test_snapshot_rejects_empty_or_overlong_issue_reason(self):
+        for reason in ("", " " * data.MAX_STATE_REASON_LENGTH,
+                       "x" * (data.MAX_STATE_REASON_LENGTH + 1)):
+            with self.subTest(reason=reason):
+                with self.assertRaises(data.SnapshotValidationError):
+                    data._validate_snapshot(
+                        snapshot(issues=[issue_record(state_reason=reason)]))
 
     def test_snapshot_rejects_duplicate_ids_and_broken_references(self):
         with self.assertRaises(data.SnapshotValidationError):
