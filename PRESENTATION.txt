@@ -15,7 +15,7 @@ maintainer-accept rates.
 **impact** — below. It's the interesting one.
 
 ## impact.svg — share, not volume
-Contribution graphs reward noise. `impact.svg` asks a harder question: *of the work in this repo, how much is mine?* Three ranked tables — Pull Requests, Issues, and **Live Code** — each scored `WilsonLowerBound(mine/total, z) * mine^gamma`, so a 1-of-1 repo can't outrank a sustained relationship.
+Contribution graphs reward noise. `impact.svg` asks a harder question: *of the work in this repo, how much is mine?* Three ranked tables — Pull Requests, Issues, and **Live Code** — each starts from `WilsonLowerBound(mine/total, z) * mine^gamma`, so a 1-of-1 repo can't outrank a sustained relationship. Accepted PRs and issues keep full credit for 30 days, then decay gently toward half credit; surviving code does not decay because it already measures present impact.
 
 Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone.
 

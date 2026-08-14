@@ -11,9 +11,8 @@ Writes ONE SVG to OUT_DIR:
                 Each repo is ranked by an impact score:
                 WilsonLowerBound(our/total, z=2.58) * our**gamma with
                 gamma 1.0 (PRs), 1.75 (issues), 0.5 (live code).
-                The score is DISPLAYED rescaled so each section's leader
-                reads SCORE_MAX (10.00) and the rest keep their ratios to
-                it; the ranking and the bars are unaffected.
+                PRs/issues decay after 30 days (one-year half-life, 0.5 floor);
+                live code does not. An undecayed 10.00 anchor exposes aging.
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -80,6 +79,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+from collections import namedtuple
 from concurrent import futures
 from datetime import datetime, timezone
 from pathlib import Path
@@ -109,6 +109,12 @@ CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 
 TOP_N = 5
+
+DECAY_GRACE_DAYS = 30.0
+DECAY_HALF_LIFE_DAYS = 365.0
+DECAY_FLOOR = 0.5
+
+ImpactRow = namedtuple("ImpactRow", "score base share ours total repo")
 
 # Re-exported so call sites stay short and patchable, same as render.py.
 FONT = common.FONT
@@ -703,42 +709,67 @@ def wilson(w, n, z):
     return (p + z * z / (2 * n) - z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)) / d
 
 
-def impact_rows(our_counts, total_of, gamma, z):
-    """Rank repos by WilsonLowerBound(our/total, z) * our**gamma.
-    our_counts: {repo: our}; total_of: repo -> total. Returns rows of
-    (score, share_pct, our, total, repo), best first; our==0 rows (no
-    contribution) are excluded."""
+def contribution_freshness(stamps, now):
+    """Mean bounded weight; unknown dates retain full credit."""
+    def weight(stamp):
+        if not stamp:
+            return 1.0
+        accepted = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if accepted.tzinfo is None:
+            raise ValueError(f"impact timestamp has no timezone: {stamp!r}")
+        age_days = max(0.0, (now - accepted).total_seconds() / (24 * 60 * 60))
+        if age_days <= DECAY_GRACE_DAYS:
+            return 1.0
+        remainder = 2 ** (-(age_days - DECAY_GRACE_DAYS) / DECAY_HALF_LIFE_DAYS)
+        return DECAY_FLOOR + (1 - DECAY_FLOOR) * remainder
+
+    return sum(weight(stamp) for stamp in stamps) / len(stamps) if stamps else 1.0
+
+
+def impact_rows(our_counts, total_of, gamma, z, freshness_of=None):
+    """Rank repos by decayed WilsonLowerBound(our/total, z) * our**gamma.
+    Rows retain their undecayed base so normalisation cannot hide decay."""
     rows = []
     for repo, w in our_counts.items():
         n = total_of(repo)
         if w and n:
-            rows.append((wilson(w, n, z) * (w ** gamma),
-                         w / n * 100, w, n, repo))
+            base_score = wilson(w, n, z) * (w ** gamma)
+            freshness = freshness_of(repo) if freshness_of else 1.0
+            rows.append(ImpactRow(base_score * freshness, base_score,
+                                  w / n * 100, w, n, repo))
     rows.sort(reverse=True)
     return rows
 
 
 def pr_table(prs, totals, insiders, knobs):
     our_merged = {}
+    merged_at = {}
     for pr in prs:
         if pr["merged"] and common.is_external(pr, insiders):
             r = pr["repository"]["nameWithOwner"]
             our_merged[r] = our_merged.get(r, 0) + 1
+            merged_at.setdefault(r, []).append(pr.get("mergedAt") or pr.get("closedAt"))
+    now = datetime.now(timezone.utc)
     return impact_rows(our_merged,
                        lambda r: (totals.get(r) or {}).get("merged_prs", 0),
-                       knobs["pr_gamma"], knobs["z"])
+                       knobs["pr_gamma"], knobs["z"],
+                       lambda r: contribution_freshness(merged_at[r], now))
 
 
 def issue_table(issues, totals, insiders, knobs):
     our_completed = {}
+    completed_at = {}
     for it in issues:
         if (it["state"] == "CLOSED" and it["stateReason"] == "COMPLETED"
                 and common.is_external(it, insiders)):
             r = it["repository"]["nameWithOwner"]
             our_completed[r] = our_completed.get(r, 0) + 1
+            completed_at.setdefault(r, []).append(it.get("closedAt"))
+    now = datetime.now(timezone.utc)
     return impact_rows(our_completed,
                        lambda r: (totals.get(r) or {}).get("issues", 0),
-                       knobs["issue_gamma"], knobs["z"])
+                       knobs["issue_gamma"], knobs["z"],
+                       lambda r: contribution_freshness(completed_at[r], now))
 
 
 def loc_table(ourloc, knobs):
@@ -754,8 +785,8 @@ COL_TOTAL = 340  # total, right-anchored
 COL_SHARE = 390  # share, right-anchored
 COL_SCORE = 500  # impact score, right-anchored (long header clears share)
 BAR_X = 20
-BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score in section
-SCORE_MAX = 10.0  # displayed score of each section's leader; rest scale to it
+BAR_MAX_W = CARD_W - 2 * BAR_X  # full width = strongest undecayed raw score
+SCORE_MAX = 10.0  # display anchor for the strongest undecayed raw score
 REPO_CHARS = 34  # owner/name truncation budget
 
 
@@ -780,19 +811,20 @@ def render_section(C, y, title, rows, accent):
                      f'no external contributions yet</text>')
         y += 16
         return parts, y
-    best = top[0][0] or 1
-    for score, share, w, n, repo in top:
-        bar_w = max(score / best * BAR_MAX_W, 2)
-        scaled = score / best * SCORE_MAX
+    # Every undecayed row anchors this; a top-five-only anchor would jump.
+    best = max(row.base for row in rows) or 1
+    for row in top:
+        bar_w = max(row.score / best * BAR_MAX_W, 2)
+        scaled = row.score / best * SCORE_MAX
         parts.append(
             f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">'
-            f'{xml_escape(truncate(repo, REPO_CHARS))}</text>'
-            f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{w}</text>'
-            f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{fmt_short(n)}</text>'
-            f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{share:.1f}%</text>'
+            f'{xml_escape(truncate(row.repo, REPO_CHARS))}</text>'
+            f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{row.ours}</text>'
+            f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{fmt_short(row.total)}</text>'
+            f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{row.share:.1f}%</text>'
             f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{scaled:.2f}</text>'
-            # rating bar: length = score normalized to the section's top
-            # score (row #1 = full width), Dota-hero-stats style
+            # Rating bar uses the same undecayed 10-point anchor as the label,
+            # so a stale leader's bar can visibly stop short of full width.
             f'<rect x="{BAR_X}" y="{y + 5}" width="{BAR_MAX_W}" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
             f'<rect x="{BAR_X}" y="{y + 5}" width="{bar_w:.1f}" height="3" rx="1.5" fill="{accent}"/>')
         y += 22

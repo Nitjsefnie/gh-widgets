@@ -23,6 +23,7 @@ import time
 import unittest
 from concurrent import futures
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -439,3 +440,143 @@ class TestCloneLookahead(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "lots"}):
             with self.assertRaises(SystemExit):
                 render_impact.clone_lookahead()
+
+
+class TestImpactTimeDecay(unittest.TestCase):
+    """Recent work keeps full credit; older accepted work fades gently."""
+
+    NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = TestImpactTimeDecay.NOW
+            return value if tz is not None else value.replace(tzinfo=None)
+
+    @classmethod
+    def stamp(cls, age_days):
+        return (cls.NOW - timedelta(days=age_days)).isoformat().replace(
+            "+00:00", "Z")
+
+    @staticmethod
+    def repository(name):
+        owner = name.split("/", 1)[0]
+        return {"nameWithOwner": name, "isPrivate": False,
+                "owner": {"login": owner}}
+
+    @classmethod
+    def pull_request(cls, repo, age_days=None):
+        stamp = None if age_days is None else cls.stamp(age_days)
+        return {"merged": True, "mergedAt": stamp, "closedAt": stamp,
+                "repository": cls.repository(repo)}
+
+    @classmethod
+    def issue(cls, repo, age_days):
+        stamp = cls.stamp(age_days)
+        return {"state": "CLOSED", "stateReason": "COMPLETED",
+                "closedAt": stamp, "repository": cls.repository(repo)}
+
+    def test_pr_decay_averages_merges_instead_of_refreshing_the_repo(self):
+        """One fresh merge must not make an old merge fresh again."""
+        repo = "outside/project"
+        prs = [self.pull_request(repo, 30), self.pull_request(repo, 395)]
+        totals = {repo: {"merged_prs": 4}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+
+        # Base score: (2/4) * 2 = 1.  The two merge weights are 1 and
+        # 0.75, so their mean freshness is 0.875.
+        self.assertAlmostEqual(rows[0][0], 0.875)
+
+    def test_unknown_merge_date_keeps_full_credit(self):
+        """An old cache entry without timestamps must not be guessed stale."""
+        repo = "outside/project"
+        prs = [self.pull_request(repo, None), self.pull_request(repo, 395)]
+        totals = {repo: {"merged_prs": 4}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+
+        self.assertAlmostEqual(rows[0][0], 0.875)
+
+    def test_closed_date_backs_up_missing_merge_date(self):
+        """An inferred merge must age from its known closure date."""
+        repo = "outside/project"
+        pr = self.pull_request(repo, None)
+        pr["closedAt"] = self.stamp(395)
+        totals = {repo: {"merged_prs": 2}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table([pr], totals, frozenset(), knobs)
+
+        self.assertAlmostEqual(rows[0][0], 0.375)
+
+    def test_issue_decay_uses_completion_date(self):
+        """Issue impact begins aging from maintainer acceptance."""
+        repo = "outside/project"
+        issues = [self.issue(repo, 395)]
+        totals = {repo: {"issues": 2}}
+        knobs = {"z": 0.0, "issue_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.issue_table(
+                issues, totals, frozenset(), knobs)
+
+        # Base score 1/2, multiplied by the 0.75 bounded-decay weight.
+        self.assertAlmostEqual(rows[0][0], 0.375)
+
+    def test_decay_changes_ranking_instead_of_only_the_label(self):
+        """A smaller fresh contribution should pass a larger stale one."""
+        old = "outside/old"
+        fresh = "outside/fresh"
+        prs = ([self.pull_request(old, 395) for _ in range(2)]
+               + [self.pull_request(fresh, 30) for _ in range(3)])
+        totals = {old: {"merged_prs": 4}, fresh: {"merged_prs": 10}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+
+        # Undecayed: old=1.0 and fresh=0.9. Decayed: old=0.75.
+        self.assertEqual(rows[0][-1], fresh)
+
+    def test_display_anchor_does_not_hide_decay(self):
+        """A stale section leader must be allowed to display below 10."""
+        repo = "outside/project"
+        prs = [self.pull_request(repo, 395)]
+        totals = {repo: {"merged_prs": 2}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+        parts, _ = render_impact.render_section(
+            render_impact.THEMES["tokyonight"], 88, "Pull Requests",
+            rows, "#fff")
+
+        self.assertIn('>7.50</text>', "".join(parts))
+
+    def test_undecayed_anchor_survives_outside_the_top_five(self):
+        """Dropping a stale raw leader must not move the 10-point scale."""
+        anchor = "outside/stale-anchor"
+        prs = [self.pull_request(anchor, 395) for _ in range(2)]
+        totals = {anchor: {"merged_prs": 4}}
+        for i in range(5):
+            repo = f"outside/fresh-{i}"
+            prs.extend(self.pull_request(repo, 30) for _ in range(3))
+            totals[repo] = {"merged_prs": 10}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+        parts, _ = render_impact.render_section(
+            render_impact.THEMES["tokyonight"], 88, "Pull Requests",
+            rows, "#fff")
+        svg = "".join(parts)
+
+        self.assertNotIn(anchor, svg)
+        self.assertEqual(svg.count('>9.00</text>'), 5)
+        self.assertEqual(svg.count('width="432.0" height="3"'), 5)

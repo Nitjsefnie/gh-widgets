@@ -93,6 +93,19 @@ reported, because a stale override is exactly the drift this replaced:
 Each table ranks repos by `WilsonLowerBound(mine/total, z) * mine**gamma`. The
 defaults are the validated values; override only if you know why.
 
+Pull-request and issue scores also carry a bounded per-contribution freshness
+weight. A merged PR or completed issue keeps full credit for 30 days. After
+that its weight is `0.5 + 0.5 * 2**(-(age_days - 30) / 365)`, so historical
+work approaches but never falls below half credit. A repo's freshness is the
+mean of its contributions' weights; one new contribution therefore cannot
+refresh the whole history. PR age starts at merge, issue age at completion,
+and live code does not decay because surviving lines already describe current
+impact.
+
+Display scores remain anchored to the section's strongest **undecayed** raw
+score. Fresh work can still read 10.00, but an inactive leader can fall below
+10.00 instead of having its decay hidden by renormalization.
+
 | Variable | Default | Effect |
 |---|---|---|
 | `IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |
