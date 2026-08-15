@@ -57,9 +57,10 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-`install.sh` stages a five-file deployment set: the three renderer entry
-points, their existing `ghwidgets_common.py` runtime dependency, and the
-separately installed `ghwidgets_data.py` public API for pinned consumers.
+`install.sh` stages a six-file deployment set: the three renderer entry
+points, `render-impact.py`'s `impact_loc.py` sibling, their existing
+`ghwidgets_common.py` runtime dependency, and the separately installed
+`ghwidgets_data.py` public API for pinned consumers.
 The renderers assert `ghwidgets_common.py`'s `COMMON_VERSION` on startup;
 they do not import `ghwidgets_data.py`. The installer moves the complete set
 into place and starts every entry point to prove the renderer deployment is
@@ -68,8 +69,8 @@ renderer refusing to run, deliberately preventing rendering from a stale
 shared module.
 
 Note the rename: `render.py` installs as `render-gh-widgets.py` (the name the
-units use). The scripts find the shared module relative to their own path, so
-the rename is safe.
+units use). The scripts find their sibling modules relative to their own path,
+so the rename is safe.
 
 ## Who counts as "you"
 

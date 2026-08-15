@@ -74,6 +74,20 @@ class TestImpactCacheLoading(unittest.TestCase):
                 render_impact.load_cache(path)
 
 
+class TestImpactModuleSplit(unittest.TestCase):
+    """The clone/blame implementation lives in a sibling module."""
+
+    def test_loc_module_is_loaded_from_render_impact_directory(self):
+        loc_module = getattr(render_impact, "_LOC_MODULE")
+        loc_path = getattr(loc_module, "__file__", None)
+        assert isinstance(loc_path, str)
+        render_path = getattr(render_impact, "__file__", None)
+        assert isinstance(render_path, str)
+        self.assertEqual(Path(loc_path).name, "impact_loc.py")
+        self.assertEqual(Path(loc_path).parent,
+                         Path(render_path).parent)
+
+
 class TestGitFameParallel(unittest.TestCase):
     """The blame pass depends on a git-fame that supports --jobs."""
 

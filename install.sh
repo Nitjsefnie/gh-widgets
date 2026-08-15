@@ -1,10 +1,11 @@
 #!/bin/sh
-# gh-widgets — install the renderers and their shared module.
+# gh-widgets — install the renderers and their shared modules.
 #
 # The three renderers share ghwidgets_common.py and assert its COMMON_VERSION
 # at startup, so they must be deployed together. Copying one without the other
-# leaves a working-looking install that refuses to run (by design). This script
-# stages all five into the target directory and moves them into place, so a
+# leaves a working-looking install that refuses to run (by design). render-
+# impact.py also loads impact_loc.py beside itself. This script stages all six
+# into the target directory and moves them into place, so a
 # partial copy is not something you can do by accident.
 #
 #   ./install.sh                    # -> /usr/local/bin
@@ -37,6 +38,7 @@ UNITS="gh-widgets.service gh-widgets.timer gh-widgets-resync.service gh-widgets-
 set -- \
     "render.py:render-gh-widgets.py" \
     "render-impact.py:render-impact.py" \
+    "impact_loc.py:impact_loc.py" \
     "render-responsiveness.py:render-responsiveness.py" \
     "ghwidgets_common.py:ghwidgets_common.py" \
     "ghwidgets_data.py:ghwidgets_data.py"
