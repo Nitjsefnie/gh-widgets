@@ -52,6 +52,28 @@ def fame(cwd, *extra):
     return out.stdout
 
 
+class TestImpactCacheLoading(unittest.TestCase):
+    """The impact wrapper keeps structural validation at its boundary."""
+
+    def test_validating_wrapper_rejects_shape_generic_loader_accepts(self):
+        payload = {
+            "version": render_impact.CACHE_VERSION,
+            "totals": {"outside/project": {"issues": 1}},
+            "ourloc": {},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "impact-cache.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            self.assertEqual(
+                render_impact.common.load_cache(
+                    path, render_impact.CACHE_VERSION),
+                payload)
+            with self.assertRaisesRegex(
+                    render_impact.common.CacheShapeError, "merged_prs"):
+                render_impact.load_cache(path)
+
+
 class TestGitFameParallel(unittest.TestCase):
     """The blame pass depends on a git-fame that supports --jobs."""
 

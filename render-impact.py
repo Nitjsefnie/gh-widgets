@@ -138,6 +138,7 @@ def metric_knobs():
     }
 
 
+# Validating entry point: the out-of-repo /root/oss-contrib/scripts/impact-picks.py depends on this check; removing it or switching to common.load_cache changes that consumer's behavior.
 def load_cache(path):
     """Read the JSON cache, checked against THIS script's schema version."""
     cache = common.load_cache(path, CACHE_VERSION)
