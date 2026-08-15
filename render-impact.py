@@ -108,6 +108,68 @@ common.check_version(REQUIRED_COMMON)
 CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 
+
+class CacheShapeError(ValueError):
+    """Raised when a populated impact-cache map no longer has its schema."""
+
+
+def _validate_count(name, repo, field, value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise CacheShapeError(
+            f"impact cache {name}[{repo!r}].{field!r} must be a "
+            "non-negative integer")
+
+
+def _validate_impact_map(cache, name, required_fields):
+    """Validate fields only for repositories represented in a cache map.
+
+    A missing or empty map is a legitimate no-contribution result. Once the
+    producer has written an entry, however, a missing field is structural
+    drift and must not be converted to a ranking zero.
+    """
+    if name not in cache:
+        return
+    entries = cache[name]
+    if not isinstance(entries, dict):
+        raise CacheShapeError(
+            f"impact cache field {name!r} must be a map")
+    for repo, entry in entries.items():
+        if not isinstance(entry, dict):
+            raise CacheShapeError(
+                f"impact cache {name}[{repo!r}] must be a map")
+        for field in required_fields:
+            if field not in entry:
+                raise CacheShapeError(
+                    f"impact cache {name}[{repo!r}] missing field {field!r}")
+            _validate_count(name, repo, field, entry[field])
+
+
+def validate_cache_shape(cache):
+    """Reject structural drift in populated ranking inputs.
+
+    Repositories absent from a map remain valid: an empty map means there is
+    no contribution in that metric. ``ourloc`` entries without ``ours`` are
+    failed-blame records and retain the existing filtering behaviour; entries
+    that do contain ``ours`` must also contain ``total``.
+    """
+    _validate_impact_map(cache, "totals", ("merged_prs", "issues"))
+    if "ourloc" not in cache:
+        return
+    entries = cache["ourloc"]
+    if not isinstance(entries, dict):
+        raise CacheShapeError("impact cache field 'ourloc' must be a map")
+    for repo, entry in entries.items():
+        if not isinstance(entry, dict):
+            raise CacheShapeError(
+                f"impact cache ourloc[{repo!r}] must be a map")
+        if "ours" in entry and "total" not in entry:
+            raise CacheShapeError(
+                f"impact cache ourloc[{repo!r}] missing field 'total'")
+        if "ours" in entry:
+            _validate_count("ourloc", repo, "ours", entry["ours"])
+            _validate_count("ourloc", repo, "total", entry["total"])
+
+
 TOP_N = 5
 
 DECAY_GRACE_DAYS = 30.0
@@ -145,7 +207,9 @@ def metric_knobs():
 
 def load_cache(path):
     """Read the JSON cache, checked against THIS script's schema version."""
-    return common.load_cache(path, CACHE_VERSION)
+    cache = common.load_cache(path, CACHE_VERSION)
+    validate_cache_shape(cache)
+    return cache
 
 
 def cache_complete(cache):
@@ -710,11 +774,15 @@ def wilson(w, n, z):
 
 
 def contribution_freshness(stamps, now):
-    """Mean bounded weight; unknown dates retain full credit."""
+    """Mean bounded weight; missing or malformed dates fail loudly."""
     def weight(stamp):
         if not stamp:
-            return 1.0
-        accepted = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            raise ValueError("impact timestamp is missing")
+        try:
+            accepted = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"impact timestamp is invalid: {stamp!r}") from exc
         if accepted.tzinfo is None:
             raise ValueError(f"impact timestamp has no timezone: {stamp!r}")
         age_days = max(0.0, (now - accepted).total_seconds() / (24 * 60 * 60))

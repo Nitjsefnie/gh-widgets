@@ -490,17 +490,16 @@ class TestImpactTimeDecay(unittest.TestCase):
         # 0.75, so their mean freshness is 0.875.
         self.assertAlmostEqual(rows[0][0], 0.875)
 
-    def test_unknown_merge_date_keeps_full_credit(self):
-        """An old cache entry without timestamps must not be guessed stale."""
+    def test_unknown_merge_date_fails_loudly(self):
+        """A merged contribution without a timestamp must not get full credit."""
         repo = "outside/project"
         prs = [self.pull_request(repo, None), self.pull_request(repo, 395)]
         totals = {repo: {"merged_prs": 4}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
         with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
-            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
-
-        self.assertAlmostEqual(rows[0][0], 0.875)
+            with self.assertRaisesRegex(ValueError, "impact timestamp"):
+                render_impact.pr_table(prs, totals, frozenset(), knobs)
 
     def test_closed_date_backs_up_missing_merge_date(self):
         """An inferred merge must age from its known closure date."""
@@ -580,3 +579,85 @@ class TestImpactTimeDecay(unittest.TestCase):
         self.assertNotIn(anchor, svg)
         self.assertEqual(svg.count('>9.00</text>'), 5)
         self.assertEqual(svg.count('width="432.0" height="3"'), 5)
+
+
+class TestImpactCacheShape(unittest.TestCase):
+    """Cache maps reject structural field drift without rejecting empty maps."""
+
+    @staticmethod
+    def total_entry(**overrides):
+        entry = {"issues": 4, "merged_prs": 2,
+                 "branch": "main", "head": "abc123"}
+        entry.update(overrides)
+        return entry
+
+    @staticmethod
+    def loc_entry(**overrides):
+        entry = {"ours": 2, "total": 10,
+                 "branch": "main", "head": "abc123"}
+        entry.update(overrides)
+        return entry
+
+    @classmethod
+    def cache(cls, **overrides):
+        payload = {
+            "version": render_impact.CACHE_VERSION,
+            "totals": {},
+            "ourloc": {},
+        }
+        payload.update(overrides)
+        return payload
+
+    @staticmethod
+    def load(payload):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "impact-cache.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            return render_impact.load_cache(path)
+
+    def test_populated_totals_missing_merged_prs_fails_loudly(self):
+        payload = self.cache(
+            totals={"outside/project": self.total_entry(
+                merged_prs=None)})
+        del payload["totals"]["outside/project"]["merged_prs"]
+
+        with self.assertRaisesRegex(ValueError, r"totals.*merged_prs"):
+            self.load(payload)
+
+    def test_repository_absent_from_empty_totals_still_works(self):
+        loaded = self.load(self.cache())
+
+        rows = render_impact.pr_table(
+            [], loaded["totals"], frozenset(),
+            {"z": 2.58, "pr_gamma": 1.0})
+
+        self.assertEqual(rows, [])
+
+    def test_ourloc_entry_with_ours_missing_total_fails_loudly(self):
+        payload = self.cache(
+            ourloc={"outside/project": self.loc_entry()})
+        del payload["ourloc"]["outside/project"]["total"]
+
+        with self.assertRaisesRegex(ValueError, r"ourloc.*total"):
+            self.load(payload)
+
+    def test_ourloc_entry_missing_ours_keeps_filtering(self):
+        payload = self.cache(
+            ourloc={"outside/project": self.loc_entry(ours=None)})
+        del payload["ourloc"]["outside/project"]["ours"]
+
+        loaded = self.load(payload)
+        rows = render_impact.loc_table(
+            loaded["ourloc"], {"z": 2.58, "loc_gamma": 0.5})
+
+        self.assertEqual(rows, [])
+
+    def test_unparseable_timestamp_fails_loudly(self):
+        repo = "outside/project"
+        pr = TestImpactTimeDecay.pull_request(repo, 0)
+        pr["mergedAt"] = "not-a-timestamp"
+
+        with self.assertRaisesRegex(ValueError, "impact timestamp"):
+            render_impact.pr_table(
+                [pr], {repo: {"merged_prs": 2}}, frozenset(),
+                {"z": 0.0, "pr_gamma": 1.0})
