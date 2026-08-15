@@ -495,6 +495,75 @@ class CacheWriting(unittest.TestCase):
                                   strict=True)
 
 
+class CacheShape(unittest.TestCase):
+    """Impact cache maps reject structural field drift without rejecting
+    empty maps."""
+
+    @staticmethod
+    def total_entry(**overrides):
+        entry = {"issues": 4, "merged_prs": 2,
+                 "branch": "main", "head": "abc123"}
+        entry.update(overrides)
+        return entry
+
+    @staticmethod
+    def loc_entry(**overrides):
+        entry = {"ours": 2, "total": 10,
+                 "branch": "main", "head": "abc123"}
+        entry.update(overrides)
+        return entry
+
+    @classmethod
+    def cache(cls, **overrides):
+        payload = {
+            "version": 1,
+            "totals": {},
+            "ourloc": {},
+        }
+        payload.update(overrides)
+        return payload
+
+    @staticmethod
+    def load(payload):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "impact-cache.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = common.load_cache(path, 1)
+            common.validate_cache_shape(loaded)
+            return loaded
+
+    def test_populated_totals_missing_merged_prs_fails_loudly(self):
+        payload = self.cache(
+            totals={"outside/project": self.total_entry(
+                merged_prs=None)})
+        del payload["totals"]["outside/project"]["merged_prs"]
+
+        with self.assertRaisesRegex(ValueError, r"totals.*merged_prs"):
+            self.load(payload)
+
+    def test_repository_absent_from_empty_totals_still_works(self):
+        loaded = self.load(self.cache())
+
+        self.assertEqual(loaded["totals"], {})
+
+    def test_ourloc_entry_with_ours_missing_total_fails_loudly(self):
+        payload = self.cache(
+            ourloc={"outside/project": self.loc_entry()})
+        del payload["ourloc"]["outside/project"]["total"]
+
+        with self.assertRaisesRegex(ValueError, r"ourloc.*total"):
+            self.load(payload)
+
+    def test_ourloc_entry_missing_ours_keeps_filtering(self):
+        payload = self.cache(
+            ourloc={"outside/project": self.loc_entry(ours=None)})
+        del payload["ourloc"]["outside/project"]["ours"]
+
+        loaded = self.load(payload)
+
+        self.assertNotIn("ours", loaded["ourloc"]["outside/project"])
+
+
 class VersionContract(unittest.TestCase):
     def test_every_script_pins_the_current_version(self):
         # A partial copy to /usr/local/bin must fail loudly, which only works

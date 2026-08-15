@@ -64,8 +64,7 @@ fail renders from the cache, stamps the cache timestamp on the card, and
 exits 0; with no cache to fall back on it exits non-zero and the existing
 SVG keeps serving.
 
-Deps: Python stdlib + the `git` CLI + git-fame (pip) for the blame pass.
-Requires Python 3.9+.
+Deps: Python stdlib + the `git` CLI + git-fame (pip) for the blame pass. Requires Python 3.9+.
 """
 import argparse
 import contextlib
@@ -107,77 +106,11 @@ common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
-
-
-class CacheShapeError(ValueError):
-    """Raised when a populated impact-cache map no longer has its schema."""
-
-
-def _validate_count(name, repo, field, value):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise CacheShapeError(
-            f"impact cache {name}[{repo!r}].{field!r} must be a "
-            "non-negative integer")
-
-
-def _validate_impact_map(cache, name, required_fields):
-    """Validate fields only for repositories represented in a cache map.
-
-    A missing or empty map is a legitimate no-contribution result. Once the
-    producer has written an entry, however, a missing field is structural
-    drift and must not be converted to a ranking zero.
-    """
-    if name not in cache:
-        return
-    entries = cache[name]
-    if not isinstance(entries, dict):
-        raise CacheShapeError(
-            f"impact cache field {name!r} must be a map")
-    for repo, entry in entries.items():
-        if not isinstance(entry, dict):
-            raise CacheShapeError(
-                f"impact cache {name}[{repo!r}] must be a map")
-        for field in required_fields:
-            if field not in entry:
-                raise CacheShapeError(
-                    f"impact cache {name}[{repo!r}] missing field {field!r}")
-            _validate_count(name, repo, field, entry[field])
-
-
-def validate_cache_shape(cache):
-    """Reject structural drift in populated ranking inputs.
-
-    Repositories absent from a map remain valid: an empty map means there is
-    no contribution in that metric. ``ourloc`` entries without ``ours`` are
-    failed-blame records and retain the existing filtering behaviour; entries
-    that do contain ``ours`` must also contain ``total``.
-    """
-    _validate_impact_map(cache, "totals", ("merged_prs", "issues"))
-    if "ourloc" not in cache:
-        return
-    entries = cache["ourloc"]
-    if not isinstance(entries, dict):
-        raise CacheShapeError("impact cache field 'ourloc' must be a map")
-    for repo, entry in entries.items():
-        if not isinstance(entry, dict):
-            raise CacheShapeError(
-                f"impact cache ourloc[{repo!r}] must be a map")
-        if "ours" in entry and "total" not in entry:
-            raise CacheShapeError(
-                f"impact cache ourloc[{repo!r}] missing field 'total'")
-        if "ours" in entry:
-            _validate_count("ourloc", repo, "ours", entry["ours"])
-            _validate_count("ourloc", repo, "total", entry["total"])
-
-
 TOP_N = 5
-
 DECAY_GRACE_DAYS = 30.0
 DECAY_HALF_LIFE_DAYS = 365.0
 DECAY_FLOOR = 0.5
-
 ImpactRow = namedtuple("ImpactRow", "score base share ours total repo")
-
 # Re-exported so call sites stay short and patchable, same as render.py.
 FONT = common.FONT
 THEMES = common.THEMES
@@ -208,7 +141,7 @@ def metric_knobs():
 def load_cache(path):
     """Read the JSON cache, checked against THIS script's schema version."""
     cache = common.load_cache(path, CACHE_VERSION)
-    validate_cache_shape(cache)
+    common.validate_cache_shape(cache)
     return cache
 
 
