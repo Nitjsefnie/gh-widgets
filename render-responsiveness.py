@@ -5,8 +5,9 @@ gh-widgets — render the self-hosted "External Responsiveness" SVG.
 Writes ONE SVG to OUT_DIR:
   responsiveness.svg   one ranked table of the external repos where we do
                        high-volume work AND get fast turnaround: per repo,
-                       n = merged PRs authored by the account and t = the
-                       TRIMMED-MEAN hours from PR creation to merge. Score:
+                       n = PRs authored by the account that are merged or
+                       still open, and t = the TRIMMED-MEAN hours they waited
+                       — to the merge, or to NOW for one still open. Score:
                        n**gamma * 1/(1 + t/half_life) with gamma 0.5 and
                        half_life 24 h — i.e. volume with diminishing
                        returns, damped by how long a typical PR sits.
@@ -53,7 +54,7 @@ Configuration (env vars or CLI flags, in that order of precedence):
   GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
   RESP_GAMMA         volume exponent                (default 0.5)
   RESP_HALF_LIFE_H   hours at which speed hits 0.5  (default 24.0)
-  RESP_MIN_PRS       merged PRs needed to be ranked (default 3)
+  RESP_MIN_PRS       PRs needed to be ranked         (default 3)
 
 Who counts as external is DERIVED from the token's own account (login + orgs +
 GH_EXTRA_INSIDERS) via common.fetch_identity, exactly as render-impact.py
@@ -167,8 +168,16 @@ def parse_ts(s):
     return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
 
 
-def turnaround_hours(node):
-    """Hours from PR creation to merge, or None if the cache cannot say.
+def turnaround_hours(node, now):
+    """Hours the PR waited: creation to merge, or creation to `now` if it is
+    still open. None if the cache cannot say.
+
+    An open PR is counted at its CURRENT age on purpose. Scoring merges alone
+    measures only the requests that were eventually answered, so a repo that
+    never answers at all looks perfect — it has no slow merges — while one
+    that answers late looks worse than it is. A PR still sitting there is the
+    repo's turnaround, measured so far, and it lengthens on every render until
+    somebody acts on it.
 
     closedAt stands in for a missing mergedAt: for a merged PR they are the
     same instant, and the cache can hold a node that was last fetched while
@@ -177,27 +186,41 @@ def turnaround_hours(node):
     until the next MERGED sweep or --resync).
     """
     created = node.get("createdAt")
-    end = node.get("mergedAt") or node.get("closedAt")
-    if not created or not end:
+    if not created:
         return None
-    hours = (parse_ts(end) - parse_ts(created)).total_seconds() / 3600
+    if node.get("merged"):
+        end = node.get("mergedAt") or node.get("closedAt")
+        if not end:
+            return None
+        end = parse_ts(end)
+    else:
+        end = now
+    hours = (end - parse_ts(created)).total_seconds() / 3600
     return max(hours, 0.0)  # clock skew must not manufacture a negative wait
 
 
-def turnaround_by_repo(prs, insiders):
-    """{repo: [hours, ...]} over MERGED PRs in external repos, plus the count
-    of merged external PRs the cache carries no usable timestamps for.
+def turnaround_by_repo(prs, insiders, now=None):
+    """{repo: [hours, ...]} over merged AND still-open PRs in external repos,
+    plus the count of those the cache carries no usable timestamps for.
+
+    A PR that is closed without merging is neither: it was answered, with a
+    no, and its wait says nothing about how long this repo leaves work
+    hanging.
 
     The skipped count is returned rather than swallowed: it is the difference
     between "this repo is slow" and "we do not know yet", and the card says
     which it is.
     """
+    now = now or datetime.now(timezone.utc)
     by_repo = {}
     skipped = 0
     for node in prs:
-        if not node.get("merged") or not common.is_external(node, insiders):
+        live = node.get("state") == "OPEN" and not node.get("merged")
+        if not (node.get("merged") or live):
             continue
-        hours = turnaround_hours(node)
+        if not common.is_external(node, insiders):
+            continue
+        hours = turnaround_hours(node, now)
         if hours is None:
             skipped += 1
             continue
@@ -243,9 +266,11 @@ def trimmed_mean(values):
 
 
 def volume(n, knobs):
-    """Merged-PR count with diminishing returns, mirroring the live-code
-    table's gamma in render-impact.py: the 30th PR in a repo says less about
-    the relationship than the 3rd did."""
+    """PR count with diminishing returns, mirroring the live-code table's
+    gamma in render-impact.py: the 30th PR in a repo says less about the
+    relationship than the 3rd did. Open PRs count here too, but they drag
+    their own weight: each one enters the turnaround at its full current age,
+    and the speed damping falls off far faster than gamma 0.5 climbs."""
     return n ** knobs["gamma"]
 
 
@@ -310,8 +335,8 @@ def fmt_duration(hours):
 
 
 CARD_W = 520
-COL_N = 300        # merged PRs, right-anchored
-COL_TIME = 390     # mean turnaround, right-anchored
+COL_N = 300        # merged + still-open PRs, right-anchored
+COL_TIME = 390     # mean wait, right-anchored
 COL_SCORE = 500    # responsiveness score, right-anchored
 BAR_X = 20
 BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score
@@ -331,13 +356,13 @@ def plural(n, word):
 def render_rows(C, y, scored):
     parts = [
         f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
-        f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">merged</text>'
-        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">avg merge</text>'
+        f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">PRs</text>'
+        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">avg wait</text>'
         f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">responsiveness</text>']
     y += 17
     if not scored:
         parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
-                     f'no external merged PRs yet</text>')
+                     f'no external PRs yet</text>')
         return parts, y + 16
     for row in scored:
         bar_w = max(row.score / SCORE_MAX * BAR_MAX_W, 2)
@@ -475,7 +500,7 @@ def build_card(C, prs, insiders, knobs):
     Returns (svg, notes) — `notes` is what the card deliberately does not say,
     carried out to the run's stdout instead.
     """
-    by_repo, skipped = turnaround_by_repo(prs, insiders)
+    by_repo, skipped = turnaround_by_repo(prs, insiders)  # ages open PRs to now
     rows, excluded_repos, excluded_prs = responsiveness_rows(by_repo, knobs)
     scored = rescale(rows)[:TOP_N]
     notes = {"shown": len(scored), "ranked": len(rows),
@@ -538,7 +563,7 @@ def main():
     # simply had no cached merge time.
     if notes["excluded_repos"]:
         print(f"  {plural(notes['excluded_repos'], 'repo')} "
-              f"({plural(notes['excluded_prs'], 'merged PR')}) below the "
+              f"({plural(notes['excluded_prs'], 'PR')}) below the "
               f"n >= {notes['min_prs']} floor")
     if notes["skipped"]:
         print(f"  {plural(notes['skipped'], 'merged PR')} skipped: no cached "

@@ -123,15 +123,19 @@ failed run.
 ## Tuning the responsiveness score (`render-responsiveness.py`)
 
 The board ranks repos by `n**gamma * 1/(1 + t/half_life)`, where `n` is your
-merged PRs in the repo and `t` is the **trimmed-mean** hours from PR creation
-to merge (mean of the p10..p90 range, inclusive; plain mean for fewer than 4
-PRs).
+PRs in the repo that are merged or **still open**, and `t` is the
+**trimmed-mean** hours they waited (mean of the p10..p90 range, inclusive;
+plain mean for fewer than 4 PRs). A merged PR's wait ends at the merge; an
+open one is counted at its age right now, so it grows on every render until
+somebody acts on it. Without that, a repo that never answers would have no
+slow merges to average and would outrank one that answers late. A PR closed
+without merging is excluded: it was answered, with a no.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `RESP_GAMMA` | `0.5` | How much raw PR volume counts against turnaround. |
 | `RESP_HALF_LIFE_H` | `24.0` | Turnaround at which the speed factor is 0.5 (0.25 at three times it). |
-| `RESP_MIN_PRS` | `3` | Merged PRs a repo needs before it is ranked at all. |
+| `RESP_MIN_PRS` | `3` | PRs (merged or open) a repo needs before it is ranked at all. |
 
 Same contract as the impact knobs: an unparseable value aborts the run.
 

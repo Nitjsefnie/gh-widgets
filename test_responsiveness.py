@@ -29,11 +29,12 @@ INSIDERS = frozenset({"me", "myorg"})
 
 
 def pr(repo, hours, merged=True, private=False, created="2026-01-01T00:00:00Z",
-       end_field="mergedAt"):
+       end_field="mergedAt", state=None):
     """One cached PR node: `hours` from creation to merge (None = no end)."""
     node = {
         "id": f"{repo}#{hours}#{created}",
         "merged": merged,
+        "state": state or ("MERGED" if merged else "CLOSED"),
         "createdAt": created,
         "mergedAt": None,
         "closedAt": None,
@@ -71,9 +72,50 @@ class Population(unittest.TestCase):
     def test_excludes_private_repos(self):
         self.assertEqual(self.by_repo(prs("a/secret", [1, 1, 1], private=True)), {})
 
-    def test_excludes_unmerged_prs(self):
+    def test_excludes_prs_closed_without_merging(self):
+        """A rejected PR was answered; its wait says nothing about latency."""
         nodes = prs("a/x", [1, 2], merged=False) + prs("a/x", [3])
         self.assertEqual(self.by_repo(nodes), {"a/x": [3.0]})
+
+    def test_open_prs_count_at_their_current_age(self):
+        """A PR still waiting IS the turnaround, measured so far."""
+        now = datetime.datetime(2026, 1, 4, tzinfo=datetime.timezone.utc)
+        nodes = (prs("a/x", [3])
+                 + [pr("a/x", None, merged=False, state="OPEN",
+                       created="2026-01-01T00:00:00Z")])
+        by_repo, skipped = resp.turnaround_by_repo(nodes, INSIDERS, now)
+        self.assertEqual(by_repo, {"a/x": [3.0, 72.0]})
+        self.assertEqual(skipped, 0)
+
+    def test_an_open_pr_ages_between_renders(self):
+        """The same PR must score worse tomorrow than it does today."""
+        node = pr("a/x", None, merged=False, state="OPEN",
+                  created="2026-01-01T00:00:00Z")
+        day = datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc)
+        week = datetime.datetime(2026, 1, 8, tzinfo=datetime.timezone.utc)
+        first = resp.turnaround_by_repo([node], INSIDERS, day)[0]["a/x"]
+        later = resp.turnaround_by_repo([node], INSIDERS, week)[0]["a/x"]
+        self.assertEqual((first, later), ([24.0], [168.0]))
+
+    def test_an_open_pr_without_a_creation_date_is_skipped(self):
+        node = pr("a/x", None, merged=False, state="OPEN")
+        node["createdAt"] = None
+        by_repo, skipped = resp.turnaround_by_repo(
+            [node], INSIDERS,
+            datetime.datetime(2026, 1, 4, tzinfo=datetime.timezone.utc))
+        self.assertEqual((by_repo, skipped), ({}, 1))
+
+    def test_never_answering_scores_below_answering_slowly(self):
+        """The perversity this replaces: silence must not beat a slow merge."""
+        now = datetime.datetime(2026, 2, 1, tzinfo=datetime.timezone.utc)
+        slow = prs("slow/repo", [200, 200, 200])
+        silent = (prs("silent/repo", [1, 1, 1])
+                  + [pr("silent/repo", None, merged=False, state="OPEN",
+                        created=f"2026-01-{i + 1:02d}T00:00:00Z")
+                     for i in range(6)])
+        by_repo, _ = resp.turnaround_by_repo(slow + silent, INSIDERS, now)
+        rows, _, _ = resp.responsiveness_rows(by_repo, resp.metric_knobs())
+        self.assertEqual([r.repo for r in rows][0], "slow/repo")
 
     def test_closed_at_stands_in_for_a_missing_merged_at(self):
         # For a merged PR, closedAt IS the merge time; the cache can carry a
@@ -312,7 +354,7 @@ class RenderCard(unittest.TestCase):
 
     def test_empty_board_still_renders(self):
         svg = self.render(prs("me/mine", [1.0] * 3))
-        self.assertIn("no external merged PRs yet", svg)
+        self.assertIn("no external PRs yet", svg)
 
     def test_only_the_top_rows_are_drawn(self):
         nodes = []
@@ -359,7 +401,7 @@ class CacheContract(unittest.TestCase):
             out = Path(td) / "out"
             run_main(cache_file, out,
                      gql_fn=fake_gql(prs("myorg/thing", [1.0] * 3)))
-            self.assertIn("no external merged PRs yet",
+            self.assertIn("no external PRs yet",
                           (out / "responsiveness.svg").read_text())
 
     def test_schema_version_is_pinned_to_render_impacts_cache(self):
