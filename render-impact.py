@@ -12,8 +12,8 @@ Writes ONE SVG to OUT_DIR:
                 WilsonLowerBound(our/total, z=2.58) * our**gamma with
                 gamma 1.0 (PRs), 1.75 (issues), 0.5 (live code).
                 PRs/issues decay from acceptance (7-day half-life, 0.05
-                floor); live code does not. An undecayed 10.00 anchor exposes
-                aging.
+                floor); live code does not. Scores are renormalised so the
+                strongest row in each section reads 10.00.
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -423,8 +423,9 @@ def render_section(C, y, title, rows, accent):
                      f'no external contributions yet</text>')
         y += 16
         return parts, y
-    # Every undecayed row anchors this; a top-five-only anchor would jump.
-    best = max(row.base for row in rows) or 1
+    # Every row anchors this, not just the rendered five, so a repo dropping
+    # out of the top five cannot rescale the ones that stay.
+    best = max(row.score for row in rows) or 1
     for row in top:
         bar_w = max(row.score / best * BAR_MAX_W, 2)
         scaled = row.score / best * SCORE_MAX

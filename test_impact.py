@@ -579,8 +579,8 @@ class TestImpactTimeDecay(unittest.TestCase):
         # Undecayed: old=1.0 and fresh=0.9. Decayed: old=0.525.
         self.assertEqual(rows[0][-1], fresh)
 
-    def test_display_anchor_does_not_hide_decay(self):
-        """A stale section leader must be allowed to display below 10."""
+    def test_display_anchor_renormalises_the_leader_to_ten(self):
+        """The strongest row always reads 10.00 on a full-width bar."""
         repo = "outside/project"
         prs = [self.pull_request(repo, 7)]
         totals = {repo: {"merged_prs": 2}}
@@ -591,18 +591,17 @@ class TestImpactTimeDecay(unittest.TestCase):
         parts, _ = render_impact.render_section(
             render_impact.THEMES["tokyonight"], 88, "Pull Requests",
             rows, "#fff")
+        svg = "".join(parts)
 
-        self.assertIn('>5.25</text>', "".join(parts))
+        self.assertIn('>10.00</text>', svg)
+        self.assertIn('width="480.0" height="3"', svg)
 
-    def test_undecayed_anchor_survives_outside_the_top_five(self):
-        """Dropping a stale raw leader must not move the 10-point scale."""
-        anchor = "outside/stale-anchor"
-        prs = [self.pull_request(anchor, 7) for _ in range(2)]
-        totals = {anchor: {"merged_prs": 4}}
-        for i in range(5):
-            repo = f"outside/fresh-{i}"
-            prs.extend(self.pull_request(repo, 0) for _ in range(3))
-            totals[repo] = {"merged_prs": 10}
+    def test_decay_shows_in_the_gap_below_the_leader(self):
+        """Renormalising the leader must not flatten the rows beneath it."""
+        fresh, stale = "outside/fresh", "outside/stale"
+        prs = ([self.pull_request(fresh, 0) for _ in range(3)]
+               + [self.pull_request(stale, 7) for _ in range(2)])
+        totals = {fresh: {"merged_prs": 6}, stale: {"merged_prs": 4}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
         with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
@@ -612,9 +611,33 @@ class TestImpactTimeDecay(unittest.TestCase):
             rows, "#fff")
         svg = "".join(parts)
 
-        self.assertNotIn(anchor, svg)
-        self.assertEqual(svg.count('>9.00</text>'), 5)
-        self.assertEqual(svg.count('width="432.0" height="3"'), 5)
+        # fresh: (3/6)*3 * 1.0 = 1.5 -> 10.00.  stale: (2/4)*2 * 0.525
+        # = 0.525, i.e. 3.50 of the leader's ten points.
+        self.assertIn('>10.00</text>', svg)
+        self.assertIn('>3.50</text>', svg)
+
+    def test_anchor_ignores_rows_dropped_below_the_top_five(self):
+        """A sixth repo falling off the card must not rescale the five."""
+        prs, totals = [], {}
+        for i in range(5):
+            repo = f"outside/fresh-{i}"
+            prs.extend(self.pull_request(repo, 0) for _ in range(3))
+            totals[repo] = {"merged_prs": 10}
+        dropped = "outside/dropped"
+        prs.append(self.pull_request(dropped, 7))
+        totals[dropped] = {"merged_prs": 100}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
+        parts, _ = render_impact.render_section(
+            render_impact.THEMES["tokyonight"], 88, "Pull Requests",
+            rows, "#fff")
+        svg = "".join(parts)
+
+        self.assertNotIn(dropped, svg)
+        self.assertEqual(svg.count('>10.00</text>'), 5)
+        self.assertEqual(svg.count('width="480.0" height="3"'), 5)
 
     def test_unparseable_timestamp_fails_loudly(self):
         repo = "outside/project"

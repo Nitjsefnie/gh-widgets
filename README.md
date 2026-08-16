@@ -103,9 +103,11 @@ refresh the whole history. PR age starts at merge, issue age at completion,
 and live code does not decay because surviving lines already describe current
 impact.
 
-Display scores remain anchored to the section's strongest **undecayed** raw
-score. Fresh work can still read 10.00, but an inactive leader can fall below
-10.00 instead of having its decay hidden by renormalization.
+Display scores are renormalised so the strongest row in each section reads
+10.00, anchored on **every** scored repo rather than the rendered five — a repo
+falling out of the top five therefore cannot rescale the rows that remain.
+Decay shows up in the ranking and in the gaps between rows, not in the leader's
+own number.
 
 | Variable | Default | Effect |
 |---|---|---|
