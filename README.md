@@ -95,9 +95,9 @@ Each table ranks repos by `WilsonLowerBound(mine/total, z) * mine**gamma`. The
 defaults are the validated values; override only if you know why.
 
 Pull-request and issue scores also carry a bounded per-contribution freshness
-weight. A merged PR or completed issue keeps full credit for 30 days. After
-that its weight is `0.5 + 0.5 * 2**(-(age_days - 30) / 365)`, so historical
-work approaches but never falls below half credit. A repo's freshness is the
+weight. A merged PR or completed issue starts aging immediately: its weight is
+`0.05 + 0.95 * 2**(-age_days / 7)`, so credit halves within a week and settles
+at a twentieth rather than reaching zero. A repo's freshness is the
 mean of its contributions' weights; one new contribution therefore cannot
 refresh the whole history. PR age starts at merge, issue age at completion,
 and live code does not decay because surviving lines already describe current

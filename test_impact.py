@@ -479,7 +479,7 @@ class TestCloneLookahead(unittest.TestCase):
 
 
 class TestImpactTimeDecay(unittest.TestCase):
-    """Recent work keeps full credit; older accepted work fades gently."""
+    """Credit decays from acceptance; a week-old contribution is worth half."""
 
     NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -515,7 +515,7 @@ class TestImpactTimeDecay(unittest.TestCase):
     def test_pr_decay_averages_merges_instead_of_refreshing_the_repo(self):
         """One fresh merge must not make an old merge fresh again."""
         repo = "outside/project"
-        prs = [self.pull_request(repo, 30), self.pull_request(repo, 395)]
+        prs = [self.pull_request(repo, 0), self.pull_request(repo, 7)]
         totals = {repo: {"merged_prs": 4}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
@@ -523,13 +523,13 @@ class TestImpactTimeDecay(unittest.TestCase):
             rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
 
         # Base score: (2/4) * 2 = 1.  The two merge weights are 1 and
-        # 0.75, so their mean freshness is 0.875.
-        self.assertAlmostEqual(rows[0][0], 0.875)
+        # 0.525, so their mean freshness is 0.7625.
+        self.assertAlmostEqual(rows[0][0], 0.7625)
 
     def test_unknown_merge_date_fails_loudly(self):
         """A merged contribution without a timestamp must not get full credit."""
         repo = "outside/project"
-        prs = [self.pull_request(repo, None), self.pull_request(repo, 395)]
+        prs = [self.pull_request(repo, None), self.pull_request(repo, 7)]
         totals = {repo: {"merged_prs": 4}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
@@ -541,19 +541,19 @@ class TestImpactTimeDecay(unittest.TestCase):
         """An inferred merge must age from its known closure date."""
         repo = "outside/project"
         pr = self.pull_request(repo, None)
-        pr["closedAt"] = self.stamp(395)
+        pr["closedAt"] = self.stamp(7)
         totals = {repo: {"merged_prs": 2}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
         with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
             rows = render_impact.pr_table([pr], totals, frozenset(), knobs)
 
-        self.assertAlmostEqual(rows[0][0], 0.375)
+        self.assertAlmostEqual(rows[0][0], 0.2625)
 
     def test_issue_decay_uses_completion_date(self):
         """Issue impact begins aging from maintainer acceptance."""
         repo = "outside/project"
-        issues = [self.issue(repo, 395)]
+        issues = [self.issue(repo, 7)]
         totals = {repo: {"issues": 2}}
         knobs = {"z": 0.0, "issue_gamma": 1.0}
 
@@ -561,28 +561,28 @@ class TestImpactTimeDecay(unittest.TestCase):
             rows = render_impact.issue_table(
                 issues, totals, frozenset(), knobs)
 
-        # Base score 1/2, multiplied by the 0.75 bounded-decay weight.
-        self.assertAlmostEqual(rows[0][0], 0.375)
+        # Base score 1/2, multiplied by the 0.525 bounded-decay weight.
+        self.assertAlmostEqual(rows[0][0], 0.2625)
 
     def test_decay_changes_ranking_instead_of_only_the_label(self):
         """A smaller fresh contribution should pass a larger stale one."""
         old = "outside/old"
         fresh = "outside/fresh"
-        prs = ([self.pull_request(old, 395) for _ in range(2)]
-               + [self.pull_request(fresh, 30) for _ in range(3)])
+        prs = ([self.pull_request(old, 7) for _ in range(2)]
+               + [self.pull_request(fresh, 0) for _ in range(3)])
         totals = {old: {"merged_prs": 4}, fresh: {"merged_prs": 10}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
         with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
             rows = render_impact.pr_table(prs, totals, frozenset(), knobs)
 
-        # Undecayed: old=1.0 and fresh=0.9. Decayed: old=0.75.
+        # Undecayed: old=1.0 and fresh=0.9. Decayed: old=0.525.
         self.assertEqual(rows[0][-1], fresh)
 
     def test_display_anchor_does_not_hide_decay(self):
         """A stale section leader must be allowed to display below 10."""
         repo = "outside/project"
-        prs = [self.pull_request(repo, 395)]
+        prs = [self.pull_request(repo, 7)]
         totals = {repo: {"merged_prs": 2}}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 
@@ -592,16 +592,16 @@ class TestImpactTimeDecay(unittest.TestCase):
             render_impact.THEMES["tokyonight"], 88, "Pull Requests",
             rows, "#fff")
 
-        self.assertIn('>7.50</text>', "".join(parts))
+        self.assertIn('>5.25</text>', "".join(parts))
 
     def test_undecayed_anchor_survives_outside_the_top_five(self):
         """Dropping a stale raw leader must not move the 10-point scale."""
         anchor = "outside/stale-anchor"
-        prs = [self.pull_request(anchor, 395) for _ in range(2)]
+        prs = [self.pull_request(anchor, 7) for _ in range(2)]
         totals = {anchor: {"merged_prs": 4}}
         for i in range(5):
             repo = f"outside/fresh-{i}"
-            prs.extend(self.pull_request(repo, 30) for _ in range(3))
+            prs.extend(self.pull_request(repo, 0) for _ in range(3))
             totals[repo] = {"merged_prs": 10}
         knobs = {"z": 0.0, "pr_gamma": 1.0}
 

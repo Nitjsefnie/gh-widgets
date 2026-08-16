@@ -11,8 +11,9 @@ Writes ONE SVG to OUT_DIR:
                 Each repo is ranked by an impact score:
                 WilsonLowerBound(our/total, z=2.58) * our**gamma with
                 gamma 1.0 (PRs), 1.75 (issues), 0.5 (live code).
-                PRs/issues decay after 30 days (one-year half-life, 0.5 floor);
-                live code does not. An undecayed 10.00 anchor exposes aging.
+                PRs/issues decay from acceptance (7-day half-life, 0.05
+                floor); live code does not. An undecayed 10.00 anchor exposes
+                aging.
 
 Configuration (env vars or CLI flags, in that order of precedence):
   GH_USER     (required) GitHub username
@@ -102,9 +103,9 @@ common.check_version(REQUIRED_COMMON)
 CACHE_VERSION = 1
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/impact-cache.json"
 TOP_N = 5
-DECAY_GRACE_DAYS = 30.0
-DECAY_HALF_LIFE_DAYS = 365.0
-DECAY_FLOOR = 0.5
+DECAY_GRACE_DAYS = 0.0
+DECAY_HALF_LIFE_DAYS = 7.0
+DECAY_FLOOR = 0.05
 ImpactRow = namedtuple("ImpactRow", "score base share ours total repo")
 # Re-exported so call sites stay short and patchable, same as render.py.
 FONT = common.FONT
