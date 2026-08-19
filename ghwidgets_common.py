@@ -706,8 +706,9 @@ def fetch_pull_requests(token, login, cached_prs=None,
     known = dict(cached_prs or {})
     repair_ids = {
         pid for pid, node in known.items()
-        if node.get("merged") and not (node.get("mergedAt")
-                                        or node.get("closedAt"))
+        if node.get("merged")
+        and any(key in node for key in ("mergedAt", "closedAt", "updatedAt"))
+        and not (node.get("mergedAt") or node.get("closedAt"))
     }
     live_ids = set()
     for node in live:
@@ -721,7 +722,10 @@ def fetch_pull_requests(token, login, cached_prs=None,
         for pid, node in known.items():
             if not node["merged"] and pid not in live_ids:
                 known[pid] = {**node, "merged": True}
-                repair_ids.add(pid)
+                if (any(key in node for key in
+                        ("mergedAt", "closedAt", "updatedAt"))
+                        and not (node.get("mergedAt") or node.get("closedAt"))):
+                    repair_ids.add(pid)
         if repair_ids:
             # Reuse the cold-cache query so an incomplete cached or inferred
             # merge is replaced before the warm cache is persisted.
