@@ -225,29 +225,32 @@ everything, so it takes far longer than an incremental run.
 > silence would otherwise be ambiguous between "not used" and "guard broken".
 
 > **`BLAME_METHOD` — how the per-repo line counts are produced.**
-> `fame` (default) runs git-fame over every file; `targeted` blames only the
-> files our own commits touched and takes `total` from a line count of the
-> files `git grep -I .` calls text; `both` runs the two and **fails** on any
-> disagreement. `targeted` is 11.4s against 489.9s over 59 repos — and is NOT
-> safe to enable yet.
+> `targeted` (**the default**, `impact_loc.py`) blames only the files our own
+> commits touched and takes `total` from a line count of the files
+> `git grep -I .` calls text; `fame` runs git-fame over every file; `both`
+> runs the two and **fails** on any disagreement. The unit sets no
+> `BLAME_METHOD`, so production renders with `targeted` and git-fame does not
+> run at all there. Blame phase 535.6s -> 61.2s over 59 repos.
 >
-> **Why `targeted` is off.** A rename made by somebody ELSE after our commit
-> moves our lines to a path our own history never mentions, so they go
-> uncounted. Measured over the fleet with production's real address set:
-> 54/59 agree, and the five that do not under-count `ours` by up to 99%
-> (warior456/Sculk-Depths 313 -> 4, tiagolauer/OwlSQL 430 -> 258,
-> AgoraDMV/DeltaTrack 2,852 -> 2,776, LunarVagabond/Pipe-Deck 262 -> 212,
-> Brandcraf06/AdaPaxels 1 -> 0). `total` is exact in every case, so the error
-> is purely in candidate-file selection. Fixing it means resolving our touched
-> paths forward through the rename chain (`git log --diff-filter=R
-> --name-status`), not blaming more files.
+> **Why the weekly `both` audit exists.** `targeted` selects candidate files
+> from our own history, so a rename made by somebody ELSE after our commit
+> used to move our lines to a path that history never mentions — measured
+> under-counts of up to 99% (warior456/Sculk-Depths 313 -> 4, and four more).
+> `rename_closure()` now resolves our touched paths forward through the rename
+> chain (`git log --diff-filter=R --name-status`, including
+> `--diff-merges=first-parent`, because a rename performed in a merge is
+> otherwise invisible). `total` was exact throughout; the error was purely in
+> candidate-file selection.
 >
-> **The 59/59 result that briefly justified enabling it was measured without
-> `GH_EXTRA_EMAILS`** — the derived noreply addresses alone. Every future
-> measurement of this must carry the production address set, which is why the
-> workflow now passes it; auditing a different identity than the one that
-> renders the card is not an audit. `gitfame-resync-memory.yml` runs `both`
-> every Monday 05:23 UTC and fails on any disagreement.
+> That fix is verified, not proven: the ground truth is blame's own rename
+> detection and it is not reconstructible from `git log`. What makes shipping
+> it reasonable is the audit — `gitfame-resync-memory.yml` runs `both` every
+> Monday 05:23 UTC and fails on any disagreement. **It must carry the
+> production address set**: the earlier 59/59 that briefly justified enabling
+> `targeted` was measured on the derived noreply addresses alone, and auditing
+> a different identity than the one that renders the card is not an audit. The
+> workflow passes `GH_EXTRA_EMAILS` for exactly that reason; the current 59/59
+> is with it.
 >
 > Two more ways to get a silent zero, both now regression-tested, both hit
 > while writing this: a GitHub noreply address like
