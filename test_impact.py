@@ -933,3 +933,47 @@ class TestCheckoutPin(unittest.TestCase):
                     render_impact.prefetched_clones(moved, depth=1):
                 shutil.rmtree(dest, ignore_errors=True)
         self.assertEqual(seen, ["pinned"])
+
+
+class TestMethodAgreementGate(unittest.TestCase):
+    """Under `both`, a disagreement has to end the run non-zero.
+
+    The comparison used to print and return None, so the only thing that
+    could fail on it was a caller grepping the log — and a log nobody parses
+    makes the audit indistinguishable from not running one.
+    """
+
+    loc = getattr(render_impact, "_LOC_MODULE")
+
+    def compare(self, method, disagreements):
+        with mock.patch.object(self.loc, "BLAME_METHOD", method), \
+                mock.patch.object(self.loc, "_DISAGREEMENTS", disagreements), \
+                redirect_stdout(io.StringIO()):
+            return self.loc.print_method_comparison()
+
+    def test_agreement_reports_zero(self):
+        self.assertEqual(self.compare("both", []), 0)
+
+    def test_each_disagreement_is_counted(self):
+        rows = [("o/a", 1, 2, 3, 4), ("o/b", 1, 2, 3, 4)]
+        self.assertEqual(self.compare("both", rows), 2)
+
+    def test_other_methods_report_nothing_to_check(self):
+        self.assertEqual(self.compare("targeted", [("o/a", 1, 2, 3, 4)]), 0)
+
+    def gate(self, method, disagreements):
+        with mock.patch.object(render_impact, "BLAME_METHOD", method), \
+                mock.patch.object(render_impact, "_DISAGREEMENTS",
+                                  disagreements), \
+                redirect_stdout(io.StringIO()):
+            return render_impact.check_method_agreement()
+
+    def test_gate_passes_when_the_methods_agree(self):
+        self.assertIsNone(self.gate("both", []))
+
+    def test_gate_exits_naming_the_disagreeing_count(self):
+        with self.assertRaisesRegex(SystemExit, "2 repo"):
+            self.gate("both", [("o/a", 1, 2, 3, 4), ("o/b", 1, 2, 3, 4)])
+
+    def test_gate_is_inert_under_the_shipped_default(self):
+        self.assertIsNone(self.gate("targeted", []))

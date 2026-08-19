@@ -372,9 +372,13 @@ def counts_for(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 
 
 def print_method_comparison():
-    """Report the fast path's agreement under ``BLAME_METHOD=both``."""
+    """Report the fast path's agreement under ``BLAME_METHOD=both``.
+
+    Returns the number of disagreeing repos so a caller can fail on it; the
+    count is zero under any other method, where nothing was compared.
+    """
     if BLAME_METHOD != "both":
-        return
+        return 0
     if _DISAGREEMENTS:
         print(f"\n=== targeted DISAGREES on {len(_DISAGREEMENTS)} repo(s) ===",
               flush=True)
@@ -383,6 +387,7 @@ def print_method_comparison():
                   flush=True)
     else:
         print("\n=== targeted agreed with git-fame on every repo ===", flush=True)
+    return len(_DISAGREEMENTS)
 
 
 def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,

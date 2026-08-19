@@ -286,6 +286,19 @@ def print_method_comparison():
     return _LOC_MODULE.print_method_comparison()
 
 
+def check_method_agreement():
+    """Fail the run when `both` finds the two counting methods disagreeing.
+
+    The fast path under-reports SILENTLY when it is wrong, so the audit that
+    certifies it cannot leave its verdict in a log: the process exit code is
+    the only signal a scheduled run reliably surfaces.
+    """
+    disagreed = print_method_comparison()
+    if disagreed:
+        raise SystemExit(f"error: targeted disagreed with git-fame on "
+                         f"{disagreed} repo(s)")
+
+
 def prefetched_clones(moved, depth=None):
     """Keep the original patchable prefetch entry point."""
     _sync_loc_state()
@@ -615,8 +628,10 @@ def main():
         print(f"wrote {out}/impact.svg "
               f"(pr repos={len(pr_rows)} issue repos={len(issue_rows)} "
               f"loc repos={len(loc_rows)})")
-    print_method_comparison()
     print_timing_summary()
+    # Last, so a disagreement still leaves the full report and the timings in
+    # the log it fails out of.
+    check_method_agreement()
 
 
 if __name__ == "__main__":
