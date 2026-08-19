@@ -725,14 +725,18 @@ class TestTopRowsFlag(unittest.TestCase):
         self.assertEqual(svg.count(">outside/repo-6<"), 3)
         self.assertEqual(svg.count(">outside/repo-7<"), 0)
 
+    def card_height(self, svg):
+        match = re.search(r'<svg[^>]*\bheight="(\d+)"', svg)
+        if match is None:
+            self.fail("card has no height")
+        return int(match.group(1))
+
     def test_taller_card_grows_to_fit_the_extra_rows(self):
         C = render_impact.THEMES["tokyonight"]
         rows = self.rows(8)
         short = render_impact.render_impact(C, rows, rows, rows, top_n=5)
         tall = render_impact.render_impact(C, rows, rows, rows, top_n=8)
-        self.assertGreater(len(tall), len(short))
-        self.assertNotEqual(re.search(r'height="(\d+)"', short).group(1),
-                            re.search(r'height="(\d+)"', tall).group(1))
+        self.assertGreater(self.card_height(tall), self.card_height(short))
 
 
 class TestTopRowsArgument(unittest.TestCase):
