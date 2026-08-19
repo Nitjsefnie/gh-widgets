@@ -354,6 +354,47 @@ class FetchPullRequests(unittest.TestCase):
             "invalid inferred merge must invoke the full-resync query")
         self.assertEqual(by_id["PR_open"], authoritative)
 
+    def test_persisted_incomplete_merge_resyncs_after_recent_sweep(self):
+        """A sweep hit cannot substitute for the required full rebuild."""
+        cached = {
+            "PR_open": {
+                "id": "PR_open", "merged": True, "state": "OPEN",
+                "mergedAt": None, "closedAt": None,
+            }
+        }
+        sweep_node = {
+            **cached["PR_open"], "state": "MERGED",
+            "mergedAt": "2026-08-02T00:00:00Z",
+            "closedAt": "2026-08-02T00:00:00Z",
+        }
+        authoritative = {
+            **sweep_node,
+            "mergedAt": "2026-08-03T00:00:00Z",
+            "closedAt": "2026-08-03T00:00:00Z",
+        }
+        calls = []
+
+        def gql_fn(_token, query, variables=None, **_kwargs):
+            calls.append(query)
+            if "states: [OPEN, CLOSED, MERGED]" in query:
+                nodes = [authoritative]
+            elif "states: [MERGED]" in query:
+                nodes = [sweep_node]
+            else:
+                nodes = []
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": nodes,
+            }}}
+
+        _prs, by_id = common.fetch_pull_requests(
+            "t", "me", cached_prs=cached, gql_fn=gql_fn)
+
+        self.assertEqual(
+            sum("states: [OPEN, CLOSED, MERGED]" in q for q in calls), 1,
+            "persisted incomplete merge must force the full-resync query")
+        self.assertEqual(by_id["PR_open"], authoritative)
+
     def test_cold_cache_runs_no_merged_sweep(self):
         # On a cold cache / --resync the [OPEN, CLOSED, MERGED] rebuild
         # already covers everything; sweeping again would double-fetch.
