@@ -370,6 +370,34 @@ python3 -m unittest discover -v
 Stdlib `unittest`, no network — the streak and external-contribution maths run
 against hand-built calendars. Nothing to install.
 
+## Auditing the blame method
+
+`BLAME_METHOD` selects how per-repo line counts are produced: `targeted` (the
+default) blames only the files your own commits touched, `fame` runs git-fame
+over every file, and `both` runs the two and compares them per repo. The fast
+path's failure mode is a silent under-count — a smaller number on the card,
+never an error — so `both` makes the renderer **exit non-zero** on any
+disagreement rather than reporting it into a log.
+
+`.github/workflows/targeted-blame-audit.yml` runs that comparison weekly. It
+must audit the identity that renders your card (`GH_EXTRA_EMAILS`), or it
+measures a different set of lines than production does.
+
+Comparing two runs only means something if they blame the same code, so pin
+the commits first:
+
+```sh
+scripts/resolve-repo-pins.py --user <login> --out pins.json
+IMPACT_REPO_PINS=pins.json BLAME_METHOD=both render-impact.py --resync
+```
+
+The manifest is `{repo: {branch, head}}`, resolved from the same query the
+renderer uses. With it set, every clone is detached to its pinned commit; a
+pin that cannot be honoured, an unreadable manifest, or a blamed repo the
+manifest does not mention ends the run rather than falling back to a live
+branch tip. Unset, clones follow the default branch as before — which is what
+production does.
+
 ## License
 
 MIT. See `LICENSE`.

@@ -247,13 +247,25 @@ everything, so it takes far longer than an incremental run.
 >
 > That fix is verified, not proven: the ground truth is blame's own rename
 > detection and it is not reconstructible from `git log`. What makes shipping
-> it reasonable is the audit — `gitfame-resync-memory.yml` runs `both` every
-> Monday 05:23 UTC and fails on any disagreement. **It must carry the
-> production address set**: the earlier 59/59 that briefly justified enabling
-> `targeted` was measured on the derived noreply addresses alone, and auditing
-> a different identity than the one that renders the card is not an audit. The
-> workflow passes `GH_EXTRA_EMAILS` for exactly that reason; the current 59/59
-> is with it.
+> it reasonable is the audit — **`targeted-blame-audit.yml`** runs `both` every
+> Monday 05:23 UTC. The verdict is the renderer's own exit code: under `both`
+> it exits non-zero on any disagreement, so nothing has to re-parse a log.
+> **It must carry the production address set**: the earlier 59/59 that briefly
+> justified enabling `targeted` was measured on the derived noreply addresses
+> alone, and auditing a different identity than the one that renders the card
+> is not an audit. The workflow passes `GH_EXTRA_EMAILS` for exactly that
+> reason.
+>
+> The audit lived inside `gitfame-resync-memory.yml` until 2026-08-19, under a
+> name that described only that workflow's other half. That one is now
+> dispatch-only memory measurement and carries no schedule.
+>
+> Both workflows resolve `IMPACT_REPO_PINS` first (`scripts/resolve-repo-pins.py`):
+> one commit per repo, fixed before any arm runs. Without it the two methods —
+> or the two git-fame builds — clone minutes apart and a repo that moves in
+> between is measured at two different sizes. Under a manifest, an unhonourable
+> pin or an unpinned candidate ends the run; there is deliberately no fallback
+> to the live branch tip.
 >
 > Two more ways to get a silent zero, both now regression-tested, both hit
 > while writing this: a GitHub noreply address like
