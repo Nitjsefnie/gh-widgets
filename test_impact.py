@@ -550,6 +550,23 @@ class TestImpactTimeDecay(unittest.TestCase):
 
         self.assertAlmostEqual(rows[0][0], 0.2625)
 
+    def test_updated_date_backs_up_missing_merge_and_close_dates(self):
+        """A merged record with only its last update can still be aged."""
+        repo = "outside/project"
+        pr = self.pull_request(repo, None)
+        pr["updatedAt"] = self.stamp(7)
+        totals = {repo: {"merged_prs": 2}}
+        knobs = {"z": 0.0, "pr_gamma": 1.0}
+
+        with mock.patch.object(render_impact, "datetime", self.FixedDateTime):
+            try:
+                rows = render_impact.pr_table(
+                    [pr], totals, frozenset(), knobs)
+            except ValueError as exc:
+                self.fail(f"updatedAt fallback raised: {exc}")
+
+        self.assertAlmostEqual(rows[0][0], 0.2625)
+
     def test_issue_decay_uses_completion_date(self):
         """Issue impact begins aging from maintainer acceptance."""
         repo = "outside/project"

@@ -320,6 +320,40 @@ class FetchPullRequests(unittest.TestCase):
         self.assertEqual(self.merged_calls, 1,
                          "merged sweep must be a single page, not paginated")
 
+    def test_invalid_inferred_merge_triggers_full_resync(self):
+        """A stale OPEN snapshot must be replaced by the full PR rebuild."""
+        cached = {
+            "PR_open": {
+                "id": "PR_open", "merged": False, "state": "OPEN",
+                "mergedAt": None, "closedAt": None,
+            }
+        }
+        authoritative = {
+            **cached["PR_open"], "merged": True, "state": "MERGED",
+            "mergedAt": "2026-08-18T19:27:50Z",
+            "closedAt": "2026-08-18T19:27:50Z",
+        }
+        calls = []
+
+        def gql_fn(_token, query, variables=None, **_kwargs):
+            calls.append(query)
+            if "states: [OPEN, CLOSED, MERGED]" in query:
+                nodes = [authoritative]
+            else:
+                nodes = []
+            return {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": nodes,
+            }}}
+
+        _prs, by_id = common.fetch_pull_requests(
+            "t", "me", cached_prs=cached, gql_fn=gql_fn)
+
+        self.assertEqual(
+            sum("states: [OPEN, CLOSED, MERGED]" in q for q in calls), 1,
+            "invalid inferred merge must invoke the full-resync query")
+        self.assertEqual(by_id["PR_open"], authoritative)
+
     def test_cold_cache_runs_no_merged_sweep(self):
         # On a cold cache / --resync the [OPEN, CLOSED, MERGED] rebuild
         # already covers everything; sweeping again would double-fetch.
