@@ -109,6 +109,11 @@ falling out of the top five therefore cannot rescale the rows that remain.
 Decay shows up in the ranking and in the gaps between rows, not in the leader's
 own number.
 
+Each section renders five rows by default. `-n N` (`--top N`) renders `N`
+instead — the ranking, the scores, and the ten-point anchor are unchanged, so
+widening the card only reveals rows that were already there. The card grows
+taller to fit them. `N` must be a whole number of at least 1.
+
 | Variable | Default | Effect |
 |---|---|---|
 | `IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |

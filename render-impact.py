@@ -407,7 +407,7 @@ def truncate(s, n):
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
-def render_section(C, y, title, rows, accent):
+def render_section(C, y, title, rows, accent, top_n=TOP_N):
     parts = [f'<text x="20" y="{y}" fill="{accent}" font-size="11" '
              f'font-weight="600">{title}</text>']
     y += 16
@@ -418,14 +418,15 @@ def render_section(C, y, title, rows, accent):
         f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">share</text>'
         f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">impact score</text>')
     y += 17
-    top = rows[:TOP_N]
+    top = rows[:top_n]
     if not top:
         parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
                      f'no external contributions yet</text>')
         y += 16
         return parts, y
-    # Every row anchors this, not just the rendered five, so a repo dropping
-    # out of the top five cannot rescale the ones that stay.
+    # Every row anchors this, not just the rendered ones, so a repo dropping
+    # out of the rendered slice — or `-n` changing how many that is — cannot
+    # rescale the rows that stay.
     best = max(row.score for row in rows) or 1
     for row in top:
         bar_w = max(row.score / best * BAR_MAX_W, 2)
@@ -445,7 +446,7 @@ def render_section(C, y, title, rows, accent):
     return parts, y
 
 
-def render_impact(C, pr_rows, issue_rows, loc_rows):
+def render_impact(C, pr_rows, issue_rows, loc_rows, top_n=TOP_N):
     y = 88
     body = f"""
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external impact</text>
@@ -455,7 +456,7 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
                 ("Issues", issue_rows, C["green"]),
                 ("Live Code", loc_rows, C["purple"]))
     for i, (title, rows, accent) in enumerate(sections):
-        parts, y = render_section(C, y, title, rows, accent)
+        parts, y = render_section(C, y, title, rows, accent, top_n)
         body += "\n  " + "\n  ".join(parts)
         if i < len(sections) - 1:
             y += 12
@@ -463,6 +464,17 @@ def render_impact(C, pr_rows, issue_rows, loc_rows):
                      f'stroke="{C["border"]}"/>')
             y += 24
     return base_card(C, CARD_W, y + 10, body)
+
+
+def positive_int(raw):
+    """A row count argparse can validate: whole, and at least one."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not an integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} is not at least 1")
+    return value
 
 
 def parse_args():
@@ -479,6 +491,11 @@ def parse_args():
     p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
                    choices=list(THEMES),
                    help="Color theme (env: THEME)")
+    p.add_argument("-n", "--top", type=positive_int, default=TOP_N,
+                   metavar="N",
+                   help=f"Rows to render per section (default: {TOP_N}). "
+                        f"Ranking and the ten-point anchor are unchanged; "
+                        f"only how many rows the card shows.")
     p.add_argument("--resync", action="store_true",
                    help="Discard the cache and refetch/re-blame everything")
     p.add_argument("--cache-file",
@@ -523,7 +540,8 @@ def fetch_all(token, user, cache, resync):
     return insiders, prs, prs_by_id, issues, totals, ourloc
 
 
-def write_card(C, out, prs, issues, totals, ourloc, insiders, stale):
+def write_card(C, out, prs, issues, totals, ourloc, insiders, stale,
+               top_n=TOP_N):
     """Render impact.svg from the inputs and write it, stamping the cache
     fetch time when stale. Returns the three section row lists."""
     knobs = metric_knobs()
@@ -532,7 +550,7 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale):
     loc_rows = loc_table(ourloc, knobs)
 
     with timed_phase("render_svg"):
-        svg = render_impact(C, pr_rows, issue_rows, loc_rows)
+        svg = render_impact(C, pr_rows, issue_rows, loc_rows, top_n)
         if stale:
             svg = stamp_cache_notice(C, svg, stale)
         (out / "impact.svg").write_text(svg)
@@ -588,7 +606,7 @@ def main():
             })
 
     pr_rows, issue_rows, loc_rows = write_card(
-        C, out, prs, issues, totals, ourloc, insiders, stale)
+        C, out, prs, issues, totals, ourloc, insiders, stale, args.top)
 
     if stale:
         print(f"fetch failed; rendered {out}/impact.svg from cache "

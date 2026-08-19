@@ -15,14 +15,16 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from concurrent import futures
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -665,3 +667,99 @@ class TestImpactTimeDecay(unittest.TestCase):
             render_impact.pr_table(
                 [pr], {repo: {"merged_prs": 2}}, frozenset(),
                 {"z": 0.0, "pr_gamma": 1.0})
+
+
+class TestTopRowsFlag(unittest.TestCase):
+    """`-n/--top` controls how many rows each section renders.
+
+    The default stays five, the flag only widens (or narrows) what is shown,
+    and it must never touch the ten-point anchor — that is computed over
+    every qualifying row precisely so the number a repo shows does not depend
+    on how many rows happen to be rendered.
+    """
+
+    @staticmethod
+    def rows(count):
+        return [render_impact.ImpactRow(
+            score=float(count - i), base=float(count - i),
+            share=10.0, ours=count - i, total=100, repo=f"outside/repo-{i}")
+            for i in range(count)]
+
+    def section(self, rows, **kw):
+        parts, _ = render_impact.render_section(
+            render_impact.THEMES["tokyonight"], 88, "Pull Requests",
+            rows, "#fff", **kw)
+        return "".join(parts)
+
+    def rendered_repos(self, svg):
+        return [r for r in range(12) if f">outside/repo-{r}<" in svg]
+
+    def test_default_renders_five(self):
+        svg = self.section(self.rows(8))
+        self.assertEqual(self.rendered_repos(svg), list(range(5)))
+
+    def test_top_n_widens_the_section(self):
+        svg = self.section(self.rows(8), top_n=8)
+        self.assertEqual(self.rendered_repos(svg), list(range(8)))
+
+    def test_top_n_narrows_the_section(self):
+        svg = self.section(self.rows(8), top_n=2)
+        self.assertEqual(self.rendered_repos(svg), list(range(2)))
+
+    def test_top_n_beyond_the_rows_renders_what_exists(self):
+        svg = self.section(self.rows(3), top_n=10)
+        self.assertEqual(self.rendered_repos(svg), list(range(3)))
+
+    def test_anchor_is_independent_of_top_n(self):
+        """Row two reads the same score whether or not row eight is shown."""
+        narrow = self.section(self.rows(8), top_n=2)
+        wide = self.section(self.rows(8), top_n=8)
+        self.assertIn('>10.00</text>', narrow)
+        self.assertIn('>8.75</text>', narrow)
+        self.assertIn('>8.75</text>', wide)
+
+    def test_render_impact_threads_top_n_into_every_section(self):
+        rows = self.rows(8)
+        svg = render_impact.render_impact(
+            render_impact.THEMES["tokyonight"], rows, rows, rows, top_n=7)
+        self.assertEqual(svg.count(">outside/repo-6<"), 3)
+        self.assertEqual(svg.count(">outside/repo-7<"), 0)
+
+    def test_taller_card_grows_to_fit_the_extra_rows(self):
+        C = render_impact.THEMES["tokyonight"]
+        rows = self.rows(8)
+        short = render_impact.render_impact(C, rows, rows, rows, top_n=5)
+        tall = render_impact.render_impact(C, rows, rows, rows, top_n=8)
+        self.assertGreater(len(tall), len(short))
+        self.assertNotEqual(re.search(r'height="(\d+)"', short).group(1),
+                            re.search(r'height="(\d+)"', tall).group(1))
+
+
+class TestTopRowsArgument(unittest.TestCase):
+    """The CLI half of `-n`: parsed, defaulted, and validated."""
+
+    def parse(self, *argv):
+        with mock.patch.object(
+                sys, "argv",
+                ["render-impact.py", "--user", "someone",
+                 "--token", "t", *argv]):
+            args, _token = render_impact.parse_args()
+        return args
+
+    def test_default_is_top_n(self):
+        self.assertEqual(self.parse().top, render_impact.TOP_N)
+
+    def test_short_and_long_forms_agree(self):
+        self.assertEqual(self.parse("-n", "10").top, 10)
+        self.assertEqual(self.parse("--top", "10").top, 10)
+
+    def test_zero_and_negative_are_rejected(self):
+        for bad in ("0", "-3"):
+            with self.subTest(bad=bad), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.parse("-n", bad)
+
+    def test_non_integer_is_rejected(self):
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.parse("-n", "five")
