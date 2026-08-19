@@ -268,7 +268,7 @@ class TestPrefetchedClones(unittest.TestCase):
     def test_abandoning_the_generator_leaves_no_directories(self):
         made = []
 
-        def record(_repo, _branch, dest):
+        def record(_repo, _branch, dest, _head=None):
             made.append(Path(dest))
             return 0.0
 
@@ -767,3 +767,169 @@ class TestTopRowsArgument(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 self.parse("-n", "five")
+
+
+class TestRepoPins(unittest.TestCase):
+    """`IMPACT_REPO_PINS` fixes the commit each repo is blamed at.
+
+    Without it, two runs — or two arms of one comparison — clone whatever the
+    default branch tips are at the moment each clone happens, so a repo that
+    moves mid-comparison silently makes the arms incomparable. Every failure
+    mode here is therefore fatal rather than skipped: an unhonoured pin that
+    degrades to live HEAD is exactly the outcome the manifest exists to stop.
+    """
+
+    loc = getattr(render_impact, "_LOC_MODULE")
+
+    def manifest(self, payload):
+        path = Path(tempfile.mkdtemp(prefix="ghw-pins-")) / "pins.json"
+        path.write_text(payload if isinstance(payload, str)
+                        else json.dumps(payload))
+        self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
+        return str(path)
+
+    def load(self, payload):
+        with mock.patch.dict(os.environ,
+                             {"IMPACT_REPO_PINS": self.manifest(payload)}):
+            return self.loc.load_repo_pins()
+
+    def test_no_manifest_means_no_pins(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.loc.load_repo_pins(), {})
+
+    def test_manifest_is_read_from_the_named_path(self):
+        pins = self.load({"o/r": {"branch": "main", "head": "c0ffee"}})
+        self.assertEqual(pins, {"o/r": {"branch": "main", "head": "c0ffee"}})
+
+    def test_branch_may_be_omitted(self):
+        self.assertEqual(self.load({"o/r": {"head": "c0ffee"}})["o/r"]["branch"],
+                         "")
+
+    def test_entry_without_a_head_is_fatal(self):
+        with self.assertRaises(SystemExit):
+            self.load({"o/r": {"branch": "main"}})
+
+    def test_non_object_manifest_is_fatal(self):
+        with self.assertRaises(SystemExit):
+            self.load(["o/r"])
+
+    def test_unparseable_manifest_is_fatal(self):
+        with self.assertRaises(SystemExit):
+            self.load("{not json")
+
+    def test_missing_manifest_is_fatal(self):
+        with mock.patch.dict(os.environ,
+                             {"IMPACT_REPO_PINS": "/nonexistent/pins.json"}):
+            with self.assertRaises(SystemExit):
+                self.loc.load_repo_pins()
+
+
+class TestPinnedUpdateLoc(unittest.TestCase):
+    """The manifest has to reach the clone, not just be parsed."""
+
+    loc = getattr(render_impact, "_LOC_MODULE")
+
+    def moved_with(self, pins, totals):
+        seen = []
+        env = {"IMPACT_REPO_PINS": ""} if pins is None else {
+            "IMPACT_REPO_PINS": self.write(pins)}
+        with mock.patch.dict(os.environ, env):
+            self.loc.update_loc(list(totals), totals, {}, True, {"e@x"},
+                                blame_fn=lambda moved, *_a: seen.extend(moved))
+        return seen
+
+    def write(self, pins):
+        path = Path(tempfile.mkdtemp(prefix="ghw-pins-")) / "pins.json"
+        path.write_text(json.dumps(pins))
+        self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
+        return str(path)
+
+    def test_pinned_head_replaces_the_live_head(self):
+        totals = {"o/r": {"branch": "main", "head": "live", "issues": 0,
+                          "merged_prs": 1}}
+        seen = self.moved_with({"o/r": {"branch": "main", "head": "pinned"}},
+                               totals)
+        self.assertEqual([t["head"] for _repo, t in seen], ["pinned"])
+
+    def test_pinned_branch_replaces_the_live_branch(self):
+        totals = {"o/r": {"branch": "main", "head": "live", "issues": 0,
+                          "merged_prs": 1}}
+        seen = self.moved_with({"o/r": {"branch": "trunk", "head": "pinned"}},
+                               totals)
+        self.assertEqual([t["branch"] for _repo, t in seen], ["trunk"])
+
+    def test_an_unpinned_candidate_is_fatal(self):
+        totals = {"o/r": {"branch": "main", "head": "live", "issues": 0,
+                          "merged_prs": 1},
+                  "o/late": {"branch": "main", "head": "live", "issues": 0,
+                             "merged_prs": 1}}
+        with self.assertRaisesRegex(SystemExit, "o/late"):
+            self.moved_with({"o/r": {"branch": "main", "head": "pinned"}},
+                            totals)
+
+    def test_without_a_manifest_the_live_head_is_used(self):
+        totals = {"o/r": {"branch": "main", "head": "live", "issues": 0,
+                          "merged_prs": 1}}
+        seen = self.moved_with(None, totals)
+        self.assertEqual([t["head"] for _repo, t in seen], ["live"])
+
+
+class TestCheckoutPin(unittest.TestCase):
+    """Honouring a pin against a real repository."""
+
+    loc = getattr(render_impact, "_LOC_MODULE")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-pin-repo-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        git("init", "-q", "-b", "main", ".", cwd=self.tmp)
+        git("config", "user.name", "Us", cwd=self.tmp)
+        git("config", "user.email", "us@example.com", cwd=self.tmp)
+        (self.tmp / "f.txt").write_text("one\n")
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-qm", "first", cwd=self.tmp)
+        self.first = subprocess.run(
+            ["git", "-C", str(self.tmp), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        (self.tmp / "f.txt").write_text("one\ntwo\n")
+        git("add", "-A", cwd=self.tmp)
+        git("commit", "-qm", "second", cwd=self.tmp)
+
+    def head(self):
+        return subprocess.run(["git", "-C", str(self.tmp), "rev-parse", "HEAD"],
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def test_detaches_to_the_pinned_commit(self):
+        self.loc.checkout_pin(self.tmp, self.first)
+        self.assertEqual(self.head(), self.first)
+        self.assertEqual((self.tmp / "f.txt").read_text(), "one\n")
+
+    def test_an_unreachable_commit_is_fatal(self):
+        with self.assertRaises(SystemExit):
+            self.loc.checkout_pin(self.tmp, "0" * 40)
+
+    def test_clone_repo_honours_the_pin(self):
+        seen = {}
+        with mock.patch.object(self.loc, "checkout_pin",
+                               side_effect=lambda d, h: seen.update(head=h)):
+            with mock.patch.object(self.loc.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess(
+                                       [], 0)):
+                self.loc.clone_repo("o/r", "main", self.tmp, head="pinned")
+        self.assertEqual(seen, {"head": "pinned"})
+
+    def test_prefetch_passes_the_pinned_head_to_the_clone(self):
+        seen = []
+
+        def record(_repo, _branch, dest, head=None):
+            seen.append(head)
+            shutil.rmtree(dest, ignore_errors=True)
+            return 0.1
+
+        moved = [("o/r", {"branch": "main", "head": "pinned"})]
+        with mock.patch.object(render_impact, "clone_repo", side_effect=record):
+            for _repo, _t, dest, _c, _w, _e in \
+                    render_impact.prefetched_clones(moved, depth=1):
+                shutil.rmtree(dest, ignore_errors=True)
+        self.assertEqual(seen, ["pinned"])

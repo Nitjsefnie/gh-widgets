@@ -125,8 +125,66 @@ def print_timing_summary():
           f"({elapsed - named:.1f}s unattributed)", flush=True)
 
 
-def clone_repo(repo, branch, dest):
-    """Full-clone the default branch into ``dest`` and return its duration."""
+def load_repo_pins():
+    """Read the commit manifest named by ``IMPACT_REPO_PINS``.
+
+    An empty result means "blame whatever the default branch tips are", which
+    is what production does. When a manifest IS named, every failure below is
+    fatal: a pin that quietly degrades to live HEAD would leave two arms of a
+    comparison blaming different trees while still reporting a clean run,
+    which is the exact outcome pinning exists to prevent.
+    """
+    path = os.environ.get("IMPACT_REPO_PINS", "").strip()
+    if not path:
+        return {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"error: IMPACT_REPO_PINS={path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise SystemExit(f"error: IMPACT_REPO_PINS={path}: not an object")
+    pins = {}
+    for repo, entry in raw.items():
+        head = entry.get("head") if isinstance(entry, dict) else None
+        branch = entry.get("branch") or "" if isinstance(entry, dict) else None
+        if not isinstance(head, str) or not head:
+            raise SystemExit(
+                f"error: IMPACT_REPO_PINS={path}: {repo} has no head commit")
+        if not isinstance(branch, str):
+            raise SystemExit(
+                f"error: IMPACT_REPO_PINS={path}: {repo} has a non-string branch")
+        pins[repo] = {"branch": branch, "head": head}
+    return pins
+
+
+def checkout_pin(dest, head):
+    """Detach ``dest`` to ``head``, fetching the commit if the clone lacks it.
+
+    A single-branch clone carries the pinned commit whenever it is an ancestor
+    of the branch tip, which is the normal case for a manifest resolved before
+    the run. A force-push can leave it absent, so ask the remote for it once
+    before giving up.
+    """
+    for fetch_first in (False, True):
+        if fetch_first:
+            subprocess.run(["git", "-C", str(dest), "fetch", "--quiet",
+                            "origin", head],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=300, check=False)
+        r = subprocess.run(["git", "-C", str(dest), "checkout", "--quiet",
+                            "--detach", head],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=300, check=False)
+        if r.returncode == 0:
+            return
+    raise SystemExit(f"error: pinned commit {head} is unreachable in {dest}")
+
+
+def clone_repo(repo, branch, dest, head=None):
+    """Full-clone the default branch into ``dest`` and return its duration.
+
+    ``head`` pins the checkout to one commit, so every arm of a comparison
+    blames the same tree even when the branch moves between runs."""
     # Peak memory of a --resync is dominated by concurrent clones, not blame,
     # so cap what each clone's index-pack allocates. Its thread count and delta
     # window buy throughput that CLONE_LOOKAHEAD concurrent clones already
@@ -142,6 +200,8 @@ def clone_repo(repo, branch, dest):
                        timeout=300, check=False)
     if r.returncode != 0 or not dest.exists():
         raise RuntimeError("clone_failed")
+    if head:
+        checkout_pin(dest, head)
     return time.monotonic() - t0
 
 
@@ -331,11 +391,22 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
     if blame_fn is None:
         blame_fn = blame_moved
     ourloc = dict(cached_ourloc)
+    pins = load_repo_pins()
     moved = []
     for repo in sorted(candidate_repos):
         t = totals.get(repo)
         if not t or not t["head"]:
             continue  # repo gone/renamed: keep any cached entry, skip
+        if pins:
+            # Blaming an unpinned repo would put one repo's counts on a moving
+            # target while every other repo is fixed, so refuse the whole run
+            # rather than quietly produce a half-pinned comparison.
+            pin = pins.get(repo)
+            if not pin:
+                raise SystemExit(f"error: {repo} is blamed but absent from "
+                                 f"IMPACT_REPO_PINS")
+            t = {**t, "head": pin["head"],
+                 "branch": pin["branch"] or t["branch"]}
         entry = ourloc.get(repo) or {}
         if (not resync and entry.get("head") == t["head"]
                 and ("ours" in entry or "error" in entry)):
@@ -366,7 +437,8 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
         if idx < len(moved) and idx not in pending:
             repo, t = moved[idx]
             dirs[idx] = Path(tempfile.mkdtemp(prefix="impact-fame-"))
-            pending[idx] = pool.submit(clone_fn, repo, t["branch"], dirs[idx])
+            pending[idx] = pool.submit(clone_fn, repo, t["branch"], dirs[idx],
+                                       t.get("head"))
 
     try:
         for i, entry in enumerate(moved):
