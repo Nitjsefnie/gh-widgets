@@ -360,7 +360,8 @@ def pr_table(prs, totals, insiders, knobs):
         if pr["merged"] and common.is_external(pr, insiders):
             r = pr["repository"]["nameWithOwner"]
             our_merged[r] = our_merged.get(r, 0) + 1
-            merged_at.setdefault(r, []).append(pr.get("mergedAt") or pr.get("closedAt"))
+            merged_at.setdefault(r, []).append(
+                pr.get("mergedAt") or pr.get("closedAt") or pr.get("updatedAt"))
     now = datetime.now(timezone.utc)
     return impact_rows(our_merged,
                        lambda r: (totals.get(r) or {}).get("merged_prs", 0),

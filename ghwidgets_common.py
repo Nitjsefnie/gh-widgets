@@ -704,6 +704,11 @@ def fetch_pull_requests(token, login, cached_prs=None,
         seen_cursors.add(next_cursor)
         cursor = next_cursor
     known = dict(cached_prs or {})
+    repair_ids = {
+        pid for pid, node in known.items()
+        if node.get("merged") and not (node.get("mergedAt")
+                                        or node.get("closedAt"))
+    }
     live_ids = set()
     for node in live:
         live_ids.add(node["id"])
@@ -716,6 +721,13 @@ def fetch_pull_requests(token, login, cached_prs=None,
         for pid, node in known.items():
             if not node["merged"] and pid not in live_ids:
                 known[pid] = {**node, "merged": True}
+                repair_ids.add(pid)
+        if any(pid in repair_ids and node.get("merged")
+               and not (node.get("mergedAt") or node.get("closedAt"))
+               for pid, node in known.items()):
+            # Reuse the cold-cache query so an inferred merge is replaced by
+            # the authoritative node before the warm cache is persisted.
+            return fetch_pull_requests(token, login, None, max_pages, gql_fn=g)
     return list(known.values()), known
 # pylint: enable=too-many-locals
 
