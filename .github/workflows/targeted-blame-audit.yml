@@ -1,0 +1,131 @@
+name: targeted-blame-audit
+
+# Proves the counting method production actually renders with.
+#
+# render-impact.py defaults to BLAME_METHOD=targeted: it blames only the files
+# our own commits touched, rather than running git-fame over every file. That
+# is ~9x faster and its failure mode is a SILENT UNDER-COUNT — a smaller number
+# on the card, never an error — so it cannot be left to a human to think of
+# checking. BLAME_METHOD=both runs git-fame as well and compares the two per
+# repo; the renderer exits non-zero on any disagreement, which is what fails
+# this workflow.
+#
+# Every repo is pinned to one commit, resolved before the run, so the two
+# methods provably blame the same tree rather than whatever each clone happened
+# to fetch.
+#
+# This is the correctness half of what used to live inside
+# gitfame-resync-memory.yml, whose name described only its other half. That
+# workflow is now dispatch-only measurement.
+#
+# Read-only: it renders into a temporary directory, publishes nothing, and
+# touches only public GitHub data.
+
+on:
+  schedule:
+    # GitHub delays scheduled events under load — a run created an hour after
+    # its cron time is normal, not a fault.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      user:
+        description: "GitHub login whose impact card is audited"
+        required: false
+        default: "Nitjsefnie"
+      extra_emails:
+        description: >-
+          Commit addresses beyond the derived noreply ones. MUST match
+          units/gh-widgets.service — auditing a different identity than the
+          one that renders the card is not an audit.
+        required: false
+        default: "zmatek.peter@gmail.com"
+      gitfame_ref:
+        description: "git-fame ref to audit against (the production pin)"
+        required: false
+        default: "65925d8263576dc02510f06aadbcf0386d4edada"
+
+concurrency:
+  group: targeted-blame-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    # A full re-blame of every external repo, twice over (git-fame and
+    # targeted), with no cache to fall back on.
+    timeout-minutes: 90
+
+    env:
+      # A schedule event carries NO inputs, so every `inputs.x` resolves
+      # through its `|| default`. Without that the audit would run with an
+      # empty identity and pass by measuring the wrong thing.
+      GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
+      GITFAME_REF: ${{ inputs.gitfame_ref || '65925d8263576dc02510f06aadbcf0386d4edada' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the git-fame build production is pinned to
+        run: |
+          set -euo pipefail
+          pip install -q "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GITFAME_REF"
+          git-fame --version
+          # Without --jobs the reference arm is a different workload (serial
+          # blame), which is slow enough to time the job out rather than fail
+          # it honestly.
+          git-fame --help | grep -q -- '--jobs'
+
+      - name: Resolve one commit per repo
+        run: |
+          set -euo pipefail
+          python3 scripts/resolve-repo-pins.py --out /tmp/pins.json
+
+      - name: Blame every repo both ways, at the pinned commits
+        env:
+          BLAME_METHOD: both
+          IMPACT_REPO_PINS: /tmp/pins.json
+          OUT_DIR: /tmp/out
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/out
+          echo "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS"
+          # pipefail is load-bearing: the renderer's exit code IS the verdict,
+          # and tee would otherwise report the pipeline as successful.
+          python3 render-impact.py --resync \
+            --cache-file /tmp/impact-cache.json 2>&1 | tee /tmp/audit.log
+
+      - name: Prove the audit actually compared something
+        run: |
+          set -euo pipefail
+          # A run that compared nothing exits 0 and reads exactly like a clean
+          # audit, so the count is asserted rather than assumed.
+          grep -m1 '^blame-method: both$' /tmp/audit.log \
+            || { echo "FATAL: the run did not identify itself as both"; exit 1; }
+          grep -m1 '^git-fame:' /tmp/audit.log \
+            || { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
+          compared=$(grep -c '^    compare ' /tmp/audit.log) || compared=0
+          pinned=$(python3 -c "import json;print(len(json.load(open('/tmp/pins.json'))))")
+          echo "compared $compared repo(s) against $pinned pinned repo(s)"
+          if [ "$compared" -lt 1 ]; then
+            echo "FATAL: no repo was compared — the audit proved nothing"
+            exit 1
+          fi
+
+      - name: Upload the manifest and the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: targeted-blame-audit
+          path: |
+            /tmp/pins.json
+            /tmp/audit.log
+          if-no-files-found: warn

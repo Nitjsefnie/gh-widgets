@@ -20,25 +20,14 @@ name: gitfame-resync-memory
 # publishes an SVG anywhere, and reads only public GitHub data.
 
 on:
-  # Weekly drift audit. render-impact.py counts lines the targeted way, which
-  # has one known blind spot: a rename made by SOMEBODY ELSE after our commit
-  # moves our lines to a path our own history never mentions. Under-counting
-  # is invisible in the rendered card, so the check cannot wait for a human to
-  # think of running it.
-  schedule:
-    # NOTE: a schedule event carries NO inputs, so every `inputs.x` below is
-    # spelled `inputs.x || <default>`. Without that the audit would run with
-    # an empty build list and pass by doing nothing.
-    # Verified as a SCHEDULE event, not just via dispatch: run 31424534870
-    # resolved builds->new, blame_method->both and the production
-    # GH_EXTRA_EMAILS purely from the `|| default` fallbacks, and reported
-    # 59/59. A dispatch cannot prove this -- it fills every input with its
-    # declared default and never takes that path.
-    #
-    # GitHub delays scheduled events under load: that run was created 56
-    # minutes after its cron time. Do not read a late start as a fault, and
-    # do not assume this fires at 05:23 sharp.
-    - cron: "23 5 * * 1"
+  # Dispatch only. This used to carry the weekly targeted-vs-git-fame drift
+  # audit as well, which had nothing to do with measuring memory and was
+  # undiscoverable under this name; it now lives in targeted-blame-audit.yml
+  # and runs on that schedule. What remains here is a measurement you ask for
+  # when you want it.
+  #
+  # The `inputs.x || <default>` spellings below are kept: they cost nothing and
+  # they are what let a non-dispatch trigger work at all, should one return.
   workflow_dispatch:
     inputs:
       repeats:
@@ -294,6 +283,18 @@ jobs:
           python3 -c "import ast,sys; ast.parse(open('/tmp/measure.py').read())"
           echo "measure.py parses"
 
+      - name: Resolve one commit per repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+        run: |
+          set -euo pipefail
+          # Every arm blames the same trees. Without this, the arms clone
+          # minutes apart and a repo that moves in between is measured at two
+          # different sizes -- which is indistinguishable, in the peak-memory
+          # number, from the difference this workflow exists to measure.
+          python3 scripts/resolve-repo-pins.py --out /tmp/pins.json
+
       - name: Prepare the cgroup
         run: |
           set -euo pipefail
@@ -366,6 +367,7 @@ jobs:
                   "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
                   "BLAME_METHOD=$BLAME_METHOD" \
                   "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS" \
+                  "IMPACT_REPO_PINS=/tmp/pins.json" \
                   python3 "$GITHUB_WORKSPACE/render-impact.py" --resync
               echo "--- which method and build actually ran ---"
               # Every run identifies its method; only the methods that USE
