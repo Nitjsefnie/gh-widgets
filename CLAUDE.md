@@ -198,8 +198,11 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > would only ever produce false "you can unpin now" pressure. If you want to
 > re-test the gap, re-run the measurement workflow, on a runner.
 >
-> Not reported upstream: `casperdcl/git-fame` is blocked by operator
-> instruction (2026-08-07, no expiry, no ask to be raised) — see
+> The measurement is now recorded upstream, on
+> <https://github.com/casperdcl/git-fame/pull/132#issuecomment-5342513092>
+> (2026-08-19, operator-instructed). That was a one-off lift of a standing
+> block on `casperdcl/git-fame` — no PR, no issue, nothing further there
+> without another explicit instruction. See
 > `/root/oss-contrib/repo-references/casperdcl-git-fame.md`.
 >
 > [#130](https://github.com/casperdcl/git-fame/issues/130) is a pre-existing,
