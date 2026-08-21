@@ -20,6 +20,12 @@ on:
       - 'LICENSE'
       - '.gitignore'
 
+# Least privilege: this job only reads the tree. Without an explicit
+# block it inherits the repository default, which can be read/write
+# for the whole token.
+permissions:
+  contents: read
+
 concurrency:
   # A push that supersedes an in-flight run for the same ref cancels it —
   # nothing is learned from CI for a commit that is already history.
@@ -31,11 +37,60 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
+      - name: Install the coverage toolchain
+        id: install
+        # The SUITE needs nothing — it is stdlib unittest against a pure
+        # stdlib runtime. This installs only what MEASURES it.
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-test.txt
+
       - name: Run tests
-        run: python3 -m unittest discover -v
+        id: unittest
+        # Still `unittest discover`, run under coverage. pytest is not the
+        # runner here and should not become one; it appears only in
+        # speed.yml, purely as a timing harness.
+        run: |
+          python3 -m coverage run --source=. --omit='test_*.py,scripts/*' \
+            -m unittest discover -v
+
+      - name: Coverage summary
+        # Renders whether or not the gate below passes — a coverage
+        # regression is only actionable if you can see WHICH file lost
+        # lines, and re-reading a scrolled CI log to find that is exactly
+        # the friction that gets a gate disabled.
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        run: |
+          {
+            echo '### Coverage'
+            echo
+            python3 -m coverage report --format=markdown --precision=1
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 -m coverage xml -o coverage.xml
+
+      - name: Upload coverage.xml
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
+
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        # A RATCHET, not a target. 81 sits just under the 83.2% measured
+        # when this landed, so ordinary churn stays green and a real
+        # regression goes red. Raise the floor by hand as coverage climbs —
+        # never lower it to make a red build green.
+        run: python3 -m coverage report --fail-under=81 --precision=1
