@@ -78,9 +78,14 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -309,8 +314,18 @@ jobs:
           fi
           echo "root subtree_control after: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
           sudo mkdir -p /sys/fs/cgroup/gfbench
-          ls /sys/fs/cgroup/gfbench/ | grep -E '^memory\.(peak|current)$' || \
-            { echo "FATAL: memory controller not delegated to the test cgroup"; exit 1; }
+          # Tested directly rather than `ls | grep`: the grep matched two
+          # exact filenames, so a test for those files says the same thing
+          # without the pipeline (shellcheck SC2010) — and this version
+          # actually prints what IS there when the check fails, which the
+          # original discarded.
+          if [ ! -e /sys/fs/cgroup/gfbench/memory.peak ] && \
+             [ ! -e /sys/fs/cgroup/gfbench/memory.current ]; then
+            echo "FATAL: memory controller not delegated to the test cgroup" >&2
+            echo "the cgroup exposes:" >&2
+            ls -1 /sys/fs/cgroup/gfbench/ >&2
+            exit 1
+          fi
 
       - name: Measure
         env:
@@ -520,7 +535,7 @@ jobs:
 
       - name: Upload raw results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gitfame-resync-memory
           path: |
