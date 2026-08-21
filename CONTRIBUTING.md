@@ -87,6 +87,61 @@ touches the network, and it must stay that way. If you add a rendering
 branch, add a case that pins its output; SVG regressions are invisible
 until someone looks at a broken README.
 
+**`unittest discover` is the runner and stays the runner.** pytest appears
+in `requirements-test.txt`, but only as the timing harness `speed.yml`
+uses: it collects these same TestCases unchanged and can emit
+`--junitxml`, which stdlib unittest cannot. Do not write a test against
+pytest fixtures or `assert`-rewriting — it would run in CI and then not
+run for anyone using the documented command.
+
+## CI
+
+Eleven workflows run, and a green suite is one of them. These you can run
+locally:
+
+```sh
+python3 -m unittest discover -v                                  # tests
+python3 -m coverage run --source=. --omit='test_*.py,scripts/*' \
+  -m unittest discover && python3 -m coverage report             # coverage
+git ls-files -co --exclude-standard '*.py' | xargs pylint        # lint
+git ls-files -co --exclude-standard '*.py' | xargs pycodestyle   # lint
+pyright                                                          # types
+pip-audit -r requirements-dev.txt -r requirements-test.txt       # audit
+actionlint .github/workflows/*.yml && zizmor .github/workflows/  # actionlint
+```
+
+`pip install -r requirements-dev.txt -r requirements-test.txt` gets the
+pinned toolchain. Coverage is gated at **81%** — a ratchet set under the
+current number, not a target. Raise it as coverage climbs; never lower it
+to turn a build green.
+
+The rest need GitHub: `codeql` (security analysis, Python only — this repo
+has no JS; weekly cron, because a query published today would otherwise
+only ever run against files touched after it shipped), `speed` (benchmarks
+this commit against the last release *on the same runner*, failing at
+>30%), `release` (tags `v<VERSION>` once every other check on the commit
+passes), and the three bespoke `gitfame-*` / `targeted-blame-audit`
+measurement workflows that were already here.
+
+**Release = edit `VERSION`.** One bare semver line at the repo root, no
+leading `v`. `REPO_VERSION` in `ghwidgets_common.py` reads it — and note
+it is NOT `COMMON_VERSION`, which is the interface-compatibility marker
+between that module and the renderers. Bumping one never means the other
+moved. A deployed copy has no `VERSION` beside it (`install.sh` copies the
+scripts to `/usr/local/bin/`), so `REPO_VERSION` reads `"unknown"` there,
+which is correct rather than a bug.
+
+**Actions are hash-pinned**, with the version in a trailing comment. Do
+not "tidy" one back to `@v4`: a tag is a moving pointer, and these jobs
+hold a repository token. Dependabot keeps the hashes current.
+
+**`.gitignore` is deny-by-default**: `*` first, then each shipped path
+named back. Note the shape of this repo — the renderers and their tests
+live at the ROOT, so the root block names back `*.py` directly, which is
+exactly why `__pycache__/` must stay denied and never re-opened. A new
+file of an unlisted type is invisible to git and will NOT appear in
+`git status`; `git check-ignore -v <path>` names the rule hiding it.
+
 ## House style
 
 - **Python** — stdlib only, type hints where they help, no framework.
