@@ -45,12 +45,16 @@ jobs:
           # There is no requirements.txt here (runtime is pure stdlib), so
           # the cache must be keyed off the dev pins explicitly or
           # setup-python fails the job looking for one.
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements-*.txt
 
       - name: Install pyright
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          # requirements-test.txt too, or pyright cannot resolve the pytest
+          # import in test_compare_durations.py and reports it as an error.
+          # The runtime is stdlib, so this IS the whole set of third-party
+          # names pyright needs to know about.
+          pip install -r requirements-dev.txt -r requirements-test.txt
 
       - name: pyright
         run: pyright

@@ -47,7 +47,7 @@ jobs:
           # There is no requirements.txt here (runtime is pure stdlib), so
           # the cache must be keyed off the dev pins explicitly or
           # setup-python fails the job looking for one.
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: requirements-*.txt
 
       - name: Install linters
         id: install

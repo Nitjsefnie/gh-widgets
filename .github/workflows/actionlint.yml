@@ -62,6 +62,12 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          # There is no requirements.txt or pyproject.toml here (the runtime
+          # is pure stdlib), so setup-python's pip cache has nothing to key
+          # on by default and FAILS THE JOB looking for one. Point it at the
+          # pins that do exist. The glob covers requirements-test.txt too,
+          # so a change to the coverage pins invalidates the cache as well.
+          cache-dependency-path: requirements-*.txt
 
       - name: Install actionlint
         # Downloaded and checksum-verified rather than piped from the
