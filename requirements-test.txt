@@ -1,0 +1,18 @@
+# Test-only toolchain, pinned so a tool release cannot turn CI red on an
+# unchanged commit (same reason as requirements-dev.txt).
+#
+# The SUITE itself is stdlib unittest and needs nothing. These two exist
+# for the two CI jobs that measure it rather than run it:
+#
+#   coverage — `coverage run -m unittest discover`, plus the
+#   `--format=markdown` and `--fail-under` calls the workflow makes
+#   directly, so the gate is a step of its own and the summary still
+#   renders when it is red.
+#
+#   pytest — used ONLY by speed.yml, as a timing harness. It collects the
+#   existing unittest TestCases unchanged and can emit --junitxml, which
+#   stdlib unittest cannot. Nothing in the suite is written against pytest
+#   and nothing should be: `python3 -m unittest discover` stays the way
+#   these tests are run.
+coverage==7.15.4
+pytest==9.1.1
