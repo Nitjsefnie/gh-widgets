@@ -45,6 +45,32 @@ from typing import Optional
 COMMON_VERSION = 3
 
 
+def _read_repo_version() -> str:
+    """The repo's release version, from the root VERSION file.
+
+    DISTINCT FROM COMMON_VERSION above, which is an interface-compatibility
+    marker between this module and the renderers that load it. This one
+    names a release: .github/workflows/release.yml tags when the file
+    changes, and speed.yml benchmarks against the release it names.
+
+    Returns "unknown" when the file is not there, which is the NORMAL case
+    in a deploy: install.sh copies the scripts to /usr/local/bin/ without
+    the repo around them, so a deployed renderer has no VERSION beside it.
+    Reporting "unknown" is correct there; raising would break the deploy
+    over a cosmetic field.
+    """
+    try:
+        text = (Path(__file__).resolve().parent / "VERSION").read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return "unknown"
+    return text.strip() or "unknown"
+
+
+REPO_VERSION = _read_repo_version()
+
+
 def check_version(required):
     """Fail loudly if this module is not the version the caller pins.
 
