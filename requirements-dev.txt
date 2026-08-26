@@ -1,7 +1,7 @@
 # Lint / format / type-check toolchain (issue #5). Versions pinned so a
 # tool release cannot turn CI red on an unchanged commit.
 # The test runner is stdlib unittest — no test dependency to declare.
-autoflake==2.3.3
+autoflake==2.4.0
 autopep8==2.3.2
 isort==8.0.1
 pycodestyle==2.14.0
