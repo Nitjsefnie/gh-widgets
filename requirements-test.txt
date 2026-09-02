@@ -14,5 +14,5 @@
 #   stdlib unittest cannot. Nothing in the suite is written against pytest
 #   and nothing should be: `python3 -m unittest discover` stays the way
 #   these tests are run.
-coverage==7.15.4
+coverage==7.16.0
 pytest==9.1.1
