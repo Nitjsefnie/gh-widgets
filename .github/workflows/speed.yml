@@ -254,21 +254,33 @@ jobs:
         # rather than one release later.
         run: |
           # shellcheck disable=SC2046
-          python3 head/scripts/ci/compare_durations.py \
+          if python3 head/scripts/ci/compare_durations.py \
             --base $(ls reports/base-*.xml) \
             --head $(ls reports/head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
             --base-label "$BASE_TAG" \
-            --summary-file "$GITHUB_STEP_SUMMARY"
+            --summary-file "$GITHUB_STEP_SUMMARY"; then
+            unit_status=0
+          else
+            unit_status=$?
+          fi
 
           # Keep renderer workloads in their own testcase intersection and gate.
           # shellcheck disable=SC2046
-          python3 head/scripts/ci/compare_durations.py \
+          if python3 head/scripts/ci/compare_durations.py \
             --base $(ls reports/bench-base-*.xml) \
             --head $(ls reports/bench-head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
             --base-label "$BASE_TAG renderer workloads" \
-            --summary-file "$GITHUB_STEP_SUMMARY"
+            --summary-file "$GITHUB_STEP_SUMMARY"; then
+            renderer_status=0
+          else
+            renderer_status=$?
+          fi
+
+          if [ "$unit_status" -ne 0 ] || [ "$renderer_status" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Upload JUnit reports
         if: ${{ !cancelled() }}

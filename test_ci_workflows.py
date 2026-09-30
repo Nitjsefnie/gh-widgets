@@ -91,44 +91,64 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         ET.ElementTree(suite).write(path, encoding="utf-8",
                                     xml_declaration=True)
 
+    def _write_comparison_reports(self, root, unit_head, renderer_head):
+        reports = root / "reports"
+        for round_number in (1, 2):
+            self._write_report(
+                reports / f"base-{round_number}.xml", "unit",
+                "test_unit", 0.10)
+            self._write_report(
+                reports / f"head-{round_number}.xml", "unit",
+                "test_unit", unit_head)
+            self._write_report(
+                reports / f"bench-base-{round_number}.xml", "e2e",
+                "bench.render", 0.20)
+            self._write_report(
+                reports / f"bench-head-{round_number}.xml", "e2e",
+                "bench.render", renderer_head)
+
+    @staticmethod
+    def _execute_compare(root):
+        comparator = root / "head" / "scripts" / "ci" / (
+            "compare_durations.py")
+        comparator.parent.mkdir(parents=True)
+        shutil.copyfile(REPO_ROOT / "scripts" / "ci" /
+                        "compare_durations.py", comparator)
+        summary = root / "summary.md"
+        env = {
+            **os.environ,
+            "BASE_TAG": "fixture-baseline",
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "MAX_REGRESSION": "0.30",
+        }
+        completed = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c",
+             TestSpeedWorkflowRendererGate._run_block("Compare")],
+            cwd=root, env=env, capture_output=True, text=True,
+            check=False)
+        return completed, summary
+
     def test_compare_runs_once_for_each_report_family(self):
         with tempfile.TemporaryDirectory(prefix="ghw-speed-compare-shape-") as td:
             root = Path(td)
-            reports = root / "reports"
-            for round_number in (1, 2):
-                self._write_report(
-                    reports / f"base-{round_number}.xml", "unit",
-                    "test_unit", 0.10)
-                self._write_report(
-                    reports / f"head-{round_number}.xml", "unit",
-                    "test_unit", 0.11)
-                self._write_report(
-                    reports / f"bench-base-{round_number}.xml", "e2e",
-                    "bench.render", 0.20)
-                self._write_report(
-                    reports / f"bench-head-{round_number}.xml", "e2e",
-                    "bench.render", 0.21)
-
-            comparator = root / "head" / "scripts" / "ci" / (
-                "compare_durations.py")
-            comparator.parent.mkdir(parents=True)
-            shutil.copyfile(REPO_ROOT / "scripts" / "ci" /
-                            "compare_durations.py", comparator)
-            summary = root / "summary.md"
-            env = {
-                **os.environ,
-                "BASE_TAG": "fixture-baseline",
-                "GITHUB_STEP_SUMMARY": str(summary),
-                "MAX_REGRESSION": "0.30",
-            }
-            completed = subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c",
-                 self._run_block("Compare")],
-                cwd=root, env=env, capture_output=True, text=True,
-                check=False)
+            self._write_comparison_reports(root, 0.11, 0.21)
+            completed, summary = self._execute_compare(root)
 
             self.assertEqual(completed.returncode, 0,
                              completed.stdout + completed.stderr)
+            summary_text = summary.read_text(encoding="utf-8")
+            self.assertIn("fixture-baseline`", summary_text)
+            self.assertIn("fixture-baseline renderer workloads`",
+                          summary_text)
+
+    def test_unit_regression_still_runs_renderer_comparison(self):
+        with tempfile.TemporaryDirectory(
+                prefix="ghw-speed-compare-failure-shape-") as td:
+            root = Path(td)
+            self._write_comparison_reports(root, 0.20, 0.20)
+            completed, summary = self._execute_compare(root)
+
+            self.assertEqual(completed.returncode, 1)
             summary_text = summary.read_text(encoding="utf-8")
             self.assertIn("fixture-baseline`", summary_text)
             self.assertIn("fixture-baseline renderer workloads`",
