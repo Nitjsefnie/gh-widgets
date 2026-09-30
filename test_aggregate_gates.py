@@ -5,6 +5,26 @@ from unittest import mock
 from scripts.ci import aggregate_gates as ag
 
 
+# The push-triggered workflows that deliberately do NOT belong in GATES, each
+# with the reason, so the completeness assertion at the end of
+# `test_every_commit_gate_is_in_table_and_filters_match` stays a real check
+# rather than a hole. An exclusion added without a reason here is the defect.
+NOT_A_GATE = {
+    # release is push-only and waits on CI itself; including it here
+    # would deadlock. aggregate must never evaluate its own run.
+    'release', 'aggregate',
+    # coverage-ratchet is main-only because it holds the repository's only
+    # `contents: write` token, and a `pull_request` trigger from a
+    # same-repository branch would retain that write scope. It adds nothing on
+    # a pull request either: tests.yml's coverage-gate step already runs the
+    # same `coverage_ratchet.py gate` there, so folding it into the aggregate
+    # would re-run the whole suite to reach a verdict the PR gate has already
+    # reached. Checkable: look at the `push:` block of that workflow and at
+    # the gate step in tests.yml.
+    'coverage-ratchet',
+}
+
+
 class FakeTransport:
     """Return real API-shaped fixtures without opening a connection."""
 
@@ -568,9 +588,7 @@ class WorkflowDriftTests(unittest.TestCase):
             triggers = self.triggers(text)
             if not set(triggers) & {'push', 'pull_request', 'pull_request_target'}:
                 continue
-            # release is push-only and waits on CI itself; including it here
-            # would deadlock. aggregate must never evaluate its own run.
-            if name in {'release', 'aggregate'}:
+            if name in NOT_A_GATE:
                 continue
             with self.subTest(workflow=path.name):
                 self.assertIn(name, ag.GATES, 'new commit gate must join GATES')
