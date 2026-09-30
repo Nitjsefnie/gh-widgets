@@ -35,7 +35,9 @@ if [ -f "$MAIN_ROOT/.secrecy-literals" ]; then
 fi
 
 if [ -f "$MAIN_ROOT/.env" ]; then
-  AUTH_DB="$(sed -n 's/^[[:space:]]*\(export[[:space:]]\+\)\?DATABASE_URL_AUTH[[:space:]]*=[[:space:]]*//p' "$MAIN_ROOT/.env" \
+  # -E, not a BRE \?: BSD sed (macOS) reads \? as a literal and matches
+  # nothing, so the auth-DB name silently vanished there.
+  AUTH_DB="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?DATABASE_URL_AUTH[[:space:]]*=[[:space:]]*//p' "$MAIN_ROOT/.env" \
     | head -n1 | tr -d '"'"'"'' | sed 's/?.*$//' | sed 's#.*/##' | tr -d '[:space:]')"
   if [ -n "${AUTH_DB:-}" ] && [ "${#AUTH_DB}" -ge 4 ]; then
     NEEDLES+=("$AUTH_DB")
