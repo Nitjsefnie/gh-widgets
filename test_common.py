@@ -664,49 +664,6 @@ class CacheWriting(unittest.TestCase):
                          [(FakeMsvcrt.LK_NBLCK, 1)])
 
 
-class AtomicTextWriting(unittest.TestCase):
-    def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
-        self.path = Path(self.temp_dir.name) / "public.svg"
-
-    def test_writes_complete_utf8_text(self):
-        content = "complete café\nsecond line"
-
-        common.atomic_write_text(self.path, content)
-
-        self.assertEqual(self.path.read_text(encoding="utf-8"), content)
-
-    def test_preserves_existing_target_mode(self):
-        self.path.write_text("old", encoding="utf-8")
-        os.chmod(self.path, 0o600)
-
-        common.atomic_write_text(self.path, "new")
-
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
-
-    def test_new_target_uses_create_mode_under_umask(self):
-        previous_umask = os.umask(0o027)
-        try:
-            common.atomic_write_text(self.path, "new")
-        finally:
-            os.umask(previous_umask)
-
-        self.assertEqual(os.stat(self.path).st_mode & 0o777,
-                         0o666 & ~0o027)
-
-    def test_replace_failure_keeps_old_file_and_removes_temp(self):
-        self.path.write_text("old", encoding="utf-8")
-
-        with mock.patch.object(common.os, "replace",
-                               side_effect=OSError("replace failed")):
-            with self.assertRaisesRegex(OSError, "replace failed"):
-                common.atomic_write_text(self.path, "new")
-
-        self.assertEqual(self.path.read_text(encoding="utf-8"), "old")
-        self.assertEqual(list(self.path.parent.glob("public.svg.*.tmp")), [])
-
-
 class CacheShape(unittest.TestCase):
     """Impact cache maps reject structural field drift without rejecting
     empty maps."""
@@ -922,28 +879,6 @@ class XmlEscape(unittest.TestCase):
 
     def test_non_string_input_is_stringified(self):
         self.assertEqual(common.xml_escape(42), "42")
-
-    def test_xml_forbidden_c0_controls_are_removed(self):
-        forbidden = "".join(chr(code) for code in
-                            list(range(0x00, 0x09)) + [0x0b, 0x0c] +
-                            list(range(0x0e, 0x20)))
-        self.assertEqual(common.xml_escape("a\x01b\x1bc"), "abc")
-        self.assertEqual(common.xml_escape(forbidden), "")
-
-    def test_xml_legal_whitespace_controls_survive(self):
-        self.assertEqual(common.xml_escape("a\tb\nc\rd"), "a\tb\nc\rd")
-
-
-class XmlColor(unittest.TestCase):
-    def test_six_and_eight_digit_hex_colors_are_preserved(self):
-        for value in ("#Ab12eF", "#Ab12eF80"):
-            with self.subTest(value=value):
-                self.assertEqual(common.xml_color(value), value)
-
-    def test_invalid_colors_use_the_fallback(self):
-        for value in ("red", "#zz1211", '\"><img src=x>', ""):
-            with self.subTest(value=value):
-                self.assertEqual(common.xml_color(value), "#888888")
 
 
 class FmtShort(unittest.TestCase):

@@ -912,27 +912,31 @@ def stamp_cache_notice(C, svg, fetched_at):
 def atomic_write_text(path, text):
     """Atomically replace a UTF-8 text file through a unique sibling temp.
 
-    Preserve an existing target's mode. New files use the normal create mode
-    under the process umask because mkstemp's 0600 mode would make deployed,
-    publicly served SVGs unreadable by nginx.
+    Every published file has mode 0644, regardless of umask or the prior
+    target mode. On Windows only the read-only attribute is meaningful; 0644
+    keeps the file writable by its owner, so it is not read-only.
     """
     path = Path(path)
     fd, tmp_name = tempfile.mkstemp(
         dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
-        try:
-            mode = os.stat(path).st_mode & 0o7777
-        except FileNotFoundError:
-            umask = os.umask(0)
-            os.umask(umask)
-            mode = 0o666 & ~umask
-        os.chmod(tmp, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             fd = None
             stream.write(text)
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     finally:
         if fd is not None:
-            os.close(fd)
-        tmp.unlink(missing_ok=True)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp, 0o666)
+        except OSError:
+            pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
