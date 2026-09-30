@@ -60,71 +60,74 @@ def _json_bytes(payload):
                       separators=(",", ":")).encode("utf-8")
 
 
+def _dispatch_totals(compact, payload_dir):
+    totals = _read_json(payload_dir, "totals.json")
+    data = {}
+    for match in TOTALS_ALIAS.finditer(compact):
+        repo = f"{match.group('owner')}/{match.group('name')}"
+        if repo in totals:
+            total = totals[repo]
+            data[match.group("alias")] = {
+                "defaultBranchRef": {
+                    "name": total["branch"],
+                    "target": {"oid": total["head"]},
+                },
+                "issues": {"totalCount": total["issues"]},
+                "pullRequests": {"totalCount": total["merged_prs"]},
+            }
+    if not data:
+        raise RuntimeError("offline totals query had no fixture aliases")
+    return _json_bytes({"data": data})
+
+
+def _dispatch_pull_requests(compact, variables, payload_dir):
+    payload = _read_json(payload_dir, "pull-requests.json")
+    state_match = re.search(r"states\s*:\s*\[([^\]]+)\]", compact)
+    states = set()
+    if state_match:
+        states = {state.strip() for state in
+                  state_match.group(1).split(",") if state.strip()}
+    if states == {"MERGED"}:
+        connection = payload["merged_page"]
+    else:
+        key = "live_pages" if "MERGED" not in states else "all_pages"
+        pages = payload[key]
+        cursor = variables.get("cursor")
+        page_index = 0 if cursor is None else 1
+        if page_index >= len(pages):
+            raise RuntimeError(f"unknown offline PR cursor: {cursor!r}")
+        connection = pages[page_index]
+    return _json_bytes({"data": {"user": {"pullRequests": connection}}})
+
+
+def _dispatch_issues(variables, payload_dir):
+    pages = _read_json(payload_dir, "issues.json")["pages"]
+    cursor = variables.get("cursor")
+    page_index = 0 if cursor is None else 1
+    if page_index >= len(pages):
+        raise RuntimeError(f"unknown offline issue cursor: {cursor!r}")
+    return _json_bytes({"data": {"user": {"issues": pages[page_index]}}})
+
+
 def _graphql_dispatch(request, parsed_url, payload_dir):
     query, variables = _graphql_body(request, parsed_url)
     compact = re.sub(r"\s+", " ", query)
 
     if "repository(" in compact:
-        totals = _read_json(payload_dir, "totals.json")
-        data = {}
-        for match in TOTALS_ALIAS.finditer(compact):
-            repo = f"{match.group('owner')}/{match.group('name')}"
-            if repo in totals:
-                total = totals[repo]
-                data[match.group("alias")] = {
-                    "defaultBranchRef": {
-                        "name": total["branch"],
-                        "target": {"oid": total["head"]},
-                    },
-                    "issues": {"totalCount": total["issues"]},
-                    "pullRequests": {
-                        "totalCount": total["merged_prs"]},
-                }
-        if not data:
-            raise RuntimeError("offline totals query had no fixture aliases")
-        return _json_bytes({"data": data})
-
+        return _dispatch_totals(compact, payload_dir)
     if "repositories(" in compact:
-        return _json_bytes({"data": _read_json(payload_dir,
-                                              "profile-core.json")})
-
+        profile = _read_json(payload_dir, "profile-core.json")
+        return _json_bytes({"data": profile})
     if ("databaseId" in compact or
             ("organizations" in compact and "repositories" not in compact) or
             ("viewer" in compact and "login" in compact)):
         return _json_bytes({"data": _read_json(payload_dir, "identity.json")})
-
     if "contributionCalendar" in compact:
         return _json_bytes({"data": _read_json(payload_dir, "calendar.json")})
-
     if "pullRequests(" in compact:
-        payload = _read_json(payload_dir, "pull-requests.json")
-        state_match = re.search(r"states\s*:\s*\[([^\]]+)\]", compact)
-        states = set()
-        if state_match:
-            states = {state.strip() for state in
-                      state_match.group(1).split(",") if state.strip()}
-        if states == {"MERGED"}:
-            connection = payload["merged_page"]
-        else:
-            key = "live_pages" if "MERGED" not in states else "all_pages"
-            pages = payload[key]
-            cursor = variables.get("cursor")
-            page_index = 0 if cursor is None else 1
-            if page_index >= len(pages):
-                raise RuntimeError(f"unknown offline PR cursor: {cursor!r}")
-            connection = pages[page_index]
-        return _json_bytes({"data": {"user": {
-            "pullRequests": connection}}})
-
+        return _dispatch_pull_requests(compact, variables, payload_dir)
     if "issues(" in compact:
-        payload = _read_json(payload_dir, "issues.json")
-        cursor = variables.get("cursor")
-        page_index = 0 if cursor is None else 1
-        pages = payload["pages"]
-        if page_index >= len(pages):
-            raise RuntimeError(f"unknown offline issue cursor: {cursor!r}")
-        return _json_bytes({"data": {"user": {"issues": pages[page_index]}}})
-
+        return _dispatch_issues(variables, payload_dir)
     raise RuntimeError("unmatched offline GraphQL fixture query")
 
 
@@ -156,8 +159,8 @@ def install():
             return FixtureResponse(dispatch(request, payload_dir))
         return original(request, *args, **kwargs)
 
-    offline_urlopen._gh_bench_shim = True
-    offline_urlopen._gh_bench_original = original
+    setattr(offline_urlopen, "_gh_bench_shim", True)
+    setattr(offline_urlopen, "_gh_bench_original", original)
     urllib.request.urlopen = offline_urlopen
 
 

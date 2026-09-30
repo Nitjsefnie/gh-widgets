@@ -63,31 +63,20 @@ def _capture_outputs(out_dir, destination):
                 shutil.copyfile(path, destination / path.name)
 
 
-def _run_workload(side, repo_root, round_number, work_root, fixture_root,
-                  workload):
-    name, script_name, expected_svgs, pristine_cache = workload
-    renderer = repo_root / script_name
-    result = {"name": f"bench.{name}", "time": 0.0, "skipped": False,
-              "failure": None, "stdout": "", "stderr": ""}
-    if not renderer.is_file():
-        result["skipped"] = True
-        return result
-
-    run_dir = work_root / "runs" / f"{side}-{round_number}" / name
-    run_dir.mkdir(parents=True, exist_ok=False)
+def _prepare_cache(run_dir, fixture_root, pristine_cache):
     profile_cache = run_dir / "cache.json"
     impact_cache = run_dir / "impact-cache.json"
     shutil.copyfile(fixture_root / "caches" / "profile-cache.json",
                     profile_cache)
     shutil.copyfile(fixture_root / "caches" / "impact-cache.json",
                     impact_cache)
-    cache_file = (profile_cache if pristine_cache == "profile-cache.json"
-                  else impact_cache)
-    out_dir = run_dir / "out"
-    output_dir = (work_root / "outputs" / f"{side}-{round_number}" / name)
-    env = _renderer_environment(fixture_root, Path(__file__).resolve().parent,
-                                cache_file, out_dir)
+    if pristine_cache == "profile-cache.json":
+        return profile_cache
+    return impact_cache
 
+
+def _run_renderer(renderer, repo_root, env):
+    result = {"time": 0.0, "failure": None, "stdout": "", "stderr": ""}
     started = time.perf_counter()
     try:
         completed = subprocess.run(
@@ -110,24 +99,50 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
     except OSError as exc:
         result["time"] = time.perf_counter() - started
         result["failure"] = f"could not run renderer: {exc}"
+    return result
 
+
+def _validate_live_result(result, out_dir, expected_svgs):
+    if result["failure"] is not None:
+        return
+    missing = [svg for svg in expected_svgs
+               if not (out_dir / svg).is_file()
+               or (out_dir / svg).stat().st_size == 0]
+    if missing:
+        result["failure"] = "renderer did not write SVG(s): " + ", ".join(
+            missing)
+    elif "fetch failed" in result["stdout"].lower():
+        result["failure"] = (
+            "renderer used the degraded cache-recovery path\n"
+            f"stdout:\n{result['stdout']}")
+    elif not any(line.startswith("wrote ")
+                 for line in result["stdout"].splitlines()):
+        result["failure"] = (
+            "renderer did not print a live-path wrote summary\n"
+            f"stdout:\n{result['stdout']}")
+
+
+def _run_workload(side, repo_root, round_number, work_root, fixture_root,
+                  workload):
+    name, script_name = workload[:2]
+    renderer = repo_root / script_name
+    result = {"name": f"bench.{name}", "time": 0.0, "skipped": False,
+              "failure": None, "stdout": "", "stderr": ""}
+    if not renderer.is_file():
+        result["skipped"] = True
+        return result
+
+    run_dir = work_root / "runs" / f"{side}-{round_number}" / name
+    run_dir.mkdir(parents=True, exist_ok=False)
+    cache_file = _prepare_cache(run_dir, fixture_root, workload[3])
+    out_dir = run_dir / "out"
+    output_dir = work_root / "outputs" / f"{side}-{round_number}" / name
+    env = _renderer_environment(fixture_root, Path(__file__).resolve().parent,
+                                cache_file, out_dir)
+
+    result.update(_run_renderer(renderer, repo_root, env))
     _capture_outputs(out_dir, output_dir)
-    if result["failure"] is None:
-        missing = [svg for svg in expected_svgs
-                   if not (out_dir / svg).is_file()
-                   or (out_dir / svg).stat().st_size == 0]
-        if missing:
-            result["failure"] = "renderer did not write SVG(s): " + ", ".join(
-                missing)
-        elif "fetch failed" in result["stdout"].lower():
-            result["failure"] = (
-                "renderer used the degraded cache-recovery path\n"
-                f"stdout:\n{result['stdout']}")
-        elif not any(line.startswith("wrote ")
-                     for line in result["stdout"].splitlines()):
-            result["failure"] = (
-                "renderer did not print a live-path wrote summary\n"
-                f"stdout:\n{result['stdout']}")
+    _validate_live_result(result, out_dir, workload[2])
     return result
 
 
@@ -137,6 +152,33 @@ def _decode(value):
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+def _compare_workload_outputs(output_root, workload_name, head_rounds):
+    round_files = []
+    diffs = []
+    for round_dir in head_rounds:
+        svg_dir = round_dir / workload_name
+        svg_files = {path.name: path.read_bytes()
+                     for path in sorted(svg_dir.glob("*.svg"))}
+        if svg_files:
+            round_files.append((round_dir.name, svg_files))
+    if len(round_files) != len(head_rounds):
+        return [f"{workload_name}: SVG output missing in a head round"]
+
+    reference_round, reference_files = round_files[0]
+    for round_name, files in round_files[1:]:
+        if set(files) != set(reference_files):
+            diffs.append(
+                f"{workload_name}: SVG file set differs between "
+                f"{reference_round} and {round_name}")
+            continue
+        for filename in sorted(reference_files):
+            if files[filename] != reference_files[filename]:
+                diffs.append(
+                    f"{workload_name}/{filename}: bytes differ between "
+                    f"{reference_round} and {round_name}")
+    return diffs
 
 
 def _selfcheck(work_root, results):
@@ -152,31 +194,9 @@ def _selfcheck(work_root, results):
 
     diffs = []
     for result, workload in zip(results, WORKLOADS):
-        if result["skipped"]:
-            continue
-        workload_name = workload[0]
-        round_files = []
-        for round_dir in head_rounds:
-            svg_dir = round_dir / workload_name
-            svg_files = {path.name: path.read_bytes()
-                         for path in sorted(svg_dir.glob("*.svg"))}
-            if svg_files:
-                round_files.append((round_dir.name, svg_files))
-        if len(round_files) != len(head_rounds):
-            diffs.append(f"{workload_name}: SVG output missing in a head round")
-            continue
-        reference_round, reference_files = round_files[0]
-        for round_name, files in round_files[1:]:
-            if set(files) != set(reference_files):
-                diffs.append(
-                    f"{workload_name}: SVG file set differs between "
-                    f"{reference_round} and {round_name}")
-                continue
-            for filename in sorted(reference_files):
-                if files[filename] != reference_files[filename]:
-                    diffs.append(
-                        f"{workload_name}/{filename}: bytes differ between "
-                        f"{reference_round} and {round_name}")
+        if not result["skipped"]:
+            diffs.extend(_compare_workload_outputs(
+                output_root, workload[0], head_rounds))
 
     if diffs:
         message = "SVG selfcheck failed:\n" + "\n".join(diffs)
@@ -197,8 +217,8 @@ def _write_junit(path, results):
     suite = ET.Element("testsuite", {
         "name": "renderer-e2e",
         "tests": str(len(results)),
-        "failures": str(sum(result["failure"] is not None
-                             for result in results)),
+        "failures": str(sum(
+            result["failure"] is not None for result in results)),
         "errors": "0",
         "skipped": str(sum(result["skipped"] for result in results)),
         "time": f"{sum(result['time'] for result in results):.6f}",

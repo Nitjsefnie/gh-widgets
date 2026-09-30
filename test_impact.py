@@ -924,53 +924,6 @@ class TestCheckoutPin(unittest.TestCase):
                 self.loc.clone_repo("o/r", "main", self.tmp, head="pinned")
         self.assertEqual(seen, {"head": "pinned"})
 
-    def test_clone_repo_uses_local_mirror_when_present(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-local-mirror-") as td:
-            mirror = Path(td) / "outside__project"
-            mirror.mkdir()
-            dest = Path(td) / "clone"
-            dest.mkdir()  # the mocked git command does not create its target
-            with mock.patch.dict(os.environ,
-                                 {"CLONE_SOURCE_DIR": str(Path(td))}):
-                with mock.patch.object(
-                        self.loc.subprocess, "run",
-                        return_value=subprocess.CompletedProcess([], 0)) as run:
-                    self.loc.clone_repo("outside/project", "main", dest)
-
-            command = run.call_args.args[0]
-            self.assertEqual(command[-2:], [str(mirror), str(dest)])
-            self.assertNotIn("--branch", command)
-
-    def test_clone_repo_uses_network_url_when_mirror_is_unset(self):
-        dest = self.tmp / "clone-unset"
-        dest.mkdir()
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CLONE_SOURCE_DIR", None)
-            with mock.patch.object(
-                    self.loc.subprocess, "run",
-                    return_value=subprocess.CompletedProcess([], 0)) as run:
-                self.loc.clone_repo("outside/project", "main", dest)
-
-        command = run.call_args.args[0]
-        self.assertEqual(command[-4:], ["--branch", "main",
-                                        "https://github.com/outside/project.git",
-                                        str(dest)])
-
-    def test_clone_repo_falls_back_when_mirror_repo_is_missing(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-incomplete-mirror-") as td:
-            dest = Path(td) / "clone"
-            dest.mkdir()
-            with mock.patch.dict(os.environ,
-                                 {"CLONE_SOURCE_DIR": str(Path(td))}):
-                with mock.patch.object(
-                        self.loc.subprocess, "run",
-                        return_value=subprocess.CompletedProcess([], 0)) as run:
-                    self.loc.clone_repo("outside/project", "main", dest)
-
-        command = run.call_args.args[0]
-        self.assertIn("https://github.com/outside/project.git", command)
-        self.assertEqual(command[-1], str(dest))
-
     def test_prefetch_passes_the_pinned_head_to_the_clone(self):
         seen = []
 

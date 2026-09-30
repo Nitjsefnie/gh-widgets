@@ -1,5 +1,6 @@
 """Offline tests for the deterministic renderer benchmark fixtures."""
 import importlib.util
+import contextlib
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ import unittest
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -27,12 +29,21 @@ def load_module(name, path):
 
 fixture_setup = load_module("bench_fixture_setup", BENCH_DIR / "fixture_setup.py")
 e2e_bench = load_module("bench_e2e_bench", BENCH_DIR / "e2e_bench.py")
+render_impact = load_module("bench_render_impact",
+                            REPO_ROOT / "render-impact.py")
 
 
 def file_bytes(root, subdir):
     base = root / subdir
     return {path.relative_to(base).as_posix(): path.read_bytes()
             for path in sorted(base.rglob("*")) if path.is_file()}
+
+
+def class_temp_path(test_case, prefix):
+    stack = contextlib.ExitStack()
+    test_case.addClassCleanup(stack.close)
+    return Path(stack.enter_context(tempfile.TemporaryDirectory(
+        prefix=prefix)))
 
 
 class TestFixtureSetup(unittest.TestCase):
@@ -54,16 +65,12 @@ class TestFixtureSetup(unittest.TestCase):
 class TestPayloadDispatcher(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory(prefix="ghw-bench-dispatch-")
-        cls.fixture_root = Path(cls.temp.name) / "fixture"
+        cls.fixture_root = class_temp_path(
+            cls, "ghw-bench-dispatch-") / "fixture"
         fixture_setup.build(cls.fixture_root)
         cls.payloads = cls.fixture_root / "payloads"
         cls.shim = load_module("bench_sitecustomize_test",
                                BENCH_DIR / "sitecustomize.py")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.temp.cleanup()
 
     def graphql(self, query, variables=None):
         request = urllib.request.Request(
@@ -74,8 +81,7 @@ class TestPayloadDispatcher(unittest.TestCase):
             method="POST")
         return json.loads(self.shim.dispatch(request, self.payloads))
 
-    def test_dispatches_every_renderer_request_shape_and_passes_foreign_urls(self):
-        original_urlopen = urllib.request.urlopen
+    def test_dispatches_identity_viewer_and_rest_orgs(self):
         identity = self.graphql("query { user { login databaseId "
                                 "organizations { nodes { login } } } }")
         self.assertEqual(identity["data"]["user"]["login"], "bench-user")
@@ -84,61 +90,98 @@ class TestPayloadDispatcher(unittest.TestCase):
         viewer = self.graphql("query { viewer { login } }")
         self.assertEqual(viewer["data"]["viewer"]["login"], "bench-user")
 
-        calendar = self.graphql("query { user { contributionsCollection { "
-                                "contributionCalendar { weeks } } } }")
-        self.assertIn("weeks", calendar["data"]["user"]
-                      ["contributionsCollection"]["contributionCalendar"])
-
-        pr_query = "query { user { pullRequests(states: [OPEN, CLOSED]) "
-        first_prs = self.graphql(pr_query, {"cursor": None})
-        first_connection = first_prs["data"]["user"]["pullRequests"]
-        self.assertTrue(first_connection["pageInfo"]["hasNextPage"])
-        second_prs = self.graphql(
-            pr_query, {"cursor": first_connection["pageInfo"]["endCursor"]})
-        self.assertFalse(second_prs["data"]["user"]["pullRequests"]
-                         ["pageInfo"]["hasNextPage"])
-
-        issue_query = "query { user { issues(states: [OPEN, CLOSED]) "
-        first_issues = self.graphql(issue_query, {"cursor": None})
-        issue_connection = first_issues["data"]["user"]["issues"]
-        self.assertTrue(issue_connection["pageInfo"]["hasNextPage"])
-        second_issues = self.graphql(
-            issue_query,
-            {"cursor": issue_connection["pageInfo"]["endCursor"]})
-        self.assertFalse(second_issues["data"]["user"]["issues"]
-                         ["pageInfo"]["hasNextPage"])
-
-        totals = self.graphql(
-            'query { a0: repository(owner:"outside-owner-a",'
-            'name:"project-alpha") { defaultBranchRef { target { oid } } } }')
-        total_node = totals["data"]["a0"]
-        self.assertRegex(total_node["defaultBranchRef"]["target"]["oid"],
-                         r"^[0-9a-f]{40}$")
-
         orgs = urllib.request.Request(
             "https://api.github.com/users/bench-user/orgs?per_page=100&page=1")
         self.assertEqual(json.loads(self.shim.dispatch(orgs, self.payloads)),
                          [{"id": 9001, "login": "bench-org",
                            "url": "https://api.github.com/orgs/bench-org"}])
-        self.assertIsNone(self.shim.dispatch(
-            urllib.request.Request("https://example.invalid/api"),
-            self.payloads))
+
+    def test_dispatches_calendar_and_both_pr_pages(self):
+        calendar = self.graphql("query { user { contributionsCollection { "
+                                "contributionCalendar { weeks } } } }")
+        self.assertIn("weeks", calendar["data"]["user"]
+                      ["contributionsCollection"]["contributionCalendar"])
+
+        query = "query { user { pullRequests(states: [OPEN, CLOSED]) "
+        first_page = self.graphql(query, {"cursor": None})
+        connection = first_page["data"]["user"]["pullRequests"]
+        self.assertTrue(connection["pageInfo"]["hasNextPage"])
+        second_page = self.graphql(
+            query, {"cursor": connection["pageInfo"]["endCursor"]})
+        self.assertFalse(second_page["data"]["user"]["pullRequests"]
+                         ["pageInfo"]["hasNextPage"])
+
+    def test_dispatches_both_issue_pages_and_totals_alias(self):
+        query = "query { user { issues(states: [OPEN, CLOSED]) "
+        first_page = self.graphql(query, {"cursor": None})
+        connection = first_page["data"]["user"]["issues"]
+        self.assertTrue(connection["pageInfo"]["hasNextPage"])
+        second_page = self.graphql(
+            query, {"cursor": connection["pageInfo"]["endCursor"]})
+        self.assertFalse(second_page["data"]["user"]["issues"]
+                         ["pageInfo"]["hasNextPage"])
+
+        totals = self.graphql(
+            'query { a0: repository(owner:"outside-owner-a",'
+            'name:"project-alpha") { defaultBranchRef { target { oid } } } }')
+        self.assertRegex(totals["data"]["a0"]["defaultBranchRef"]
+                         ["target"]["oid"], r"^[0-9a-f]{40}$")
+
+    def test_foreign_urls_pass_through_without_installing_the_shim(self):
+        original_urlopen = urllib.request.urlopen
+        request = urllib.request.Request("https://example.invalid/api")
+        self.assertIsNone(self.shim.dispatch(request, self.payloads))
         self.assertIs(urllib.request.urlopen, original_urlopen)
+
+
+class TestCloneSourceMirror(unittest.TestCase):
+    """Use offline mirror paths only when a matching local repo exists."""
+
+    loc = getattr(render_impact, "_LOC_MODULE")
+
+    def clone_command(self, mirror_state):
+        with tempfile.TemporaryDirectory(prefix="ghw-local-mirror-") as td:
+            root = Path(td)
+            mirror = root / "outside__project"
+            if mirror_state == "present":
+                mirror.mkdir()
+            dest = root / "clone"
+            dest.mkdir()
+            with mock.patch.dict(os.environ, {}, clear=True):
+                if mirror_state != "unset":
+                    os.environ["CLONE_SOURCE_DIR"] = str(root)
+                with mock.patch.object(
+                        self.loc.subprocess, "run",
+                        return_value=subprocess.CompletedProcess([], 0)) as run:
+                    self.loc.clone_repo("outside/project", "main", dest)
+                    command = run.call_args.args[0]
+            return command, str(mirror), str(dest)
+
+    def test_clone_uses_local_mirror_when_present(self):
+        command, mirror, dest = self.clone_command("present")
+        self.assertEqual(command[-2:], [mirror, dest])
+        self.assertNotIn("--branch", command)
+
+    def test_clone_uses_network_url_when_mirror_is_unset(self):
+        command, _mirror, dest = self.clone_command("unset")
+        self.assertEqual(command[-4:], ["--branch", "main",
+                                        "https://github.com/outside/project.git",
+                                        dest])
+
+    def test_clone_falls_back_when_mirror_repo_is_missing(self):
+        command, _mirror, dest = self.clone_command("missing")
+        self.assertIn("https://github.com/outside/project.git", command)
+        self.assertEqual(command[-1], dest)
 
 
 class TestHarness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory(prefix="ghw-bench-harness-")
-        cls.root = Path(cls.temp.name)
+        cls.root = class_temp_path(cls, "ghw-bench-harness-")
         cls.fixture_root = cls.root / "fixture"
         fixture_setup.build(cls.fixture_root)
         cls.repo_root = cls.root / "renderer-stubs"
         cls.repo_root.mkdir()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.temp.cleanup()
 
     def write_stubs(self, degraded=()):
         scripts = {
@@ -217,11 +260,14 @@ class TestHarness(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         cases = {case.get("name"): case
                  for case in ET.parse(report).getroot().findall("testcase")}
-        self.assertIsNotNone(cases["bench.render"].find("failure"))
-        self.assertIn("fetch failed", cases["bench.render"].find("failure").text)
-        self.assertIsNotNone(cases["bench.render-impact"].find("failure"))
-        self.assertIn("exited with code 7",
-                      cases["bench.render-impact"].find("failure").text)
+        render_failure = cases["bench.render"].find("failure")
+        if render_failure is None:
+            self.fail("degraded renderer did not emit a JUnit failure")
+        self.assertIn("fetch failed", render_failure.text or "")
+        impact_failure = cases["bench.render-impact"].find("failure")
+        if impact_failure is None:
+            self.fail("nonzero renderer did not emit a JUnit failure")
+        self.assertIn("exited with code 7", impact_failure.text or "")
 
     def test_missing_renderer_is_skipped(self):
         self.write_stubs()
