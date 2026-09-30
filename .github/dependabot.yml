@@ -49,3 +49,14 @@ updates:
       prefix: "ci"
     labels:
       - dependencies
+    # github/codeql-action/init and .../analyze are separate dependencies to
+    # Dependabot, so ungrouped it files ONE HALF-BUMP PR PER PIN, and a tree
+    # whose init and analyze pins disagree fails every CodeQL run with a
+    # configuration error (#22/#23 both went red that way). The group keeps
+    # every action bump in one atomic PR; the in-tree tripwire is
+    # test_ci_workflows.py.
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
