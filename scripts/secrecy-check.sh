@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Fails if a forbidden literal appears in the tree or in committed history.
 # Literals come from the MAIN checkout's .secrecy-literals (gitignored, one
-# per line) and from its .env's DATABASE_URL_AUTH — a linked worktree never
-# has either, so they are resolved through --git-common-dir below. Findings
-# name commits and files, never the value.
+# per line) and from its .env's DATABASE_URL_AUTH. A linked worktree does not
+# check either file out, and worktree-local copies are ignored — the main
+# checkout is the single source, resolved through --git-common-dir below.
+# Findings name commits and files, never the value.
 #
 #   scripts/secrecy-check.sh          tree + history
 #   scripts/secrecy-check.sh --tree   tree only
