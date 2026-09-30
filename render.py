@@ -72,7 +72,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 6
+REQUIRED_COMMON = 7
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -85,6 +85,7 @@ save_cache = common.save_cache
 fmt_short = common.fmt_short
 xml_escape = common.xml_escape
 xml_color = common.xml_color
+atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 
@@ -564,10 +565,10 @@ def write_cards(C, out, user, prs, issues, stale):
     for name, svg in svgs.items():
         if stale:
             svg = stamp_cache_notice(C, svg, stale)
-        (out / name).write_text(svg)
-    (out / "last-updated.txt").write_text(
-        stale or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    )
+        atomic_write_text(out / name, svg)
+    atomic_write_text(
+        out / "last-updated.txt",
+        stale or datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
     if stale:
         print(f"fetch failed; rendered {out}/{{stats,streak,languages,external}}.svg "

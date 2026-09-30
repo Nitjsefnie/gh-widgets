@@ -97,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 6
+REQUIRED_COMMON = 7
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -114,6 +114,7 @@ gql = common.gql
 save_cache = common.save_cache
 fmt_short = common.fmt_short
 xml_escape = common.xml_escape
+atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 
@@ -566,7 +567,7 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale,
         svg = render_impact(C, pr_rows, issue_rows, loc_rows, top_n)
         if stale:
             svg = stamp_cache_notice(C, svg, stale)
-        (out / "impact.svg").write_text(svg)
+        atomic_write_text(out / "impact.svg", svg)
     return pr_rows, issue_rows, loc_rows
 
 
