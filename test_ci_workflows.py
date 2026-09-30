@@ -8,6 +8,7 @@ import re
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -128,6 +129,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             check=False)
         return completed, summary
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
     def test_compare_runs_once_for_each_report_family(self):
         with tempfile.TemporaryDirectory(prefix="ghw-speed-compare-shape-") as td:
             root = Path(td)
@@ -141,6 +150,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             self.assertIn("fixture-baseline renderer workloads`",
                           summary_text)
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
     def test_unit_regression_still_runs_renderer_comparison(self):
         with tempfile.TemporaryDirectory(
                 prefix="ghw-speed-compare-failure-shape-") as td:
