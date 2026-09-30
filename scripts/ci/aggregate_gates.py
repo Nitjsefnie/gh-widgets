@@ -14,6 +14,15 @@ is the deliberate exception: its own event is pull_request_target.
 WHY CANCEL IS NOT ALWAYS RED. Concurrency cancels an obsolete branch revision.
 A newer run of the same workflow, branch and event proves supersession, which
 gates nothing. Without that evidence a cancellation is a failure.
+Policy supersession also requires attribution to the current pull request.
+
+POLICY IDENTITY LIMITS. Nonempty pull_requests associations must include this
+PR, before selecting its newest eligible run. GitHub omits that attribution
+for fork PRs: absent or empty lists remain eligible on SHA/event/timestamp,
+with the degradation stated in the summary. Second-resolution timestamps
+cannot distinguish an earlier run from an edit in the same second. Ties are
+accepted, allowing at worst a one-second stale window, because rejecting ties
+would falsely fail the common opened-at-creation path.
 
 Release is deliberately absent: it waits on this check, so waiting on release
 would deadlock. Network, classification and unknown-state errors fail closed.
@@ -276,13 +285,43 @@ def _timestamp(value: Any) -> str:
     return value
 
 
-def _latest(runs: list[dict], name: str, event: str, sha: str, *, created_after: str | None = None) -> dict | None:
+def _policy_number(value: Any) -> int:
+    if not isinstance(value, str) or re.fullmatch(r'[0-9]+', value) is None or int(value) < 1:
+        raise AggregationError('required policy gate has no valid GATE_PR_NUMBER string')
+    return int(value)
+
+
+def _attributable(run: dict, pr_number: int) -> bool:
+    associations = run.get('pull_requests', [])
+    if not isinstance(associations, list):
+        raise AggregationError('policy run pull_requests is not a list')
+    numbers = []
+    for association in associations:
+        if not isinstance(association, dict):
+            raise AggregationError('policy run has a malformed pull_requests entry')
+        number = association.get('number')
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise AggregationError('policy run pull_requests entry has no valid integer number')
+        numbers.append(number)
+    return not numbers or pr_number in numbers
+
+
+def _policy_result(result: Result, run: dict) -> Result:
+    if not run.get('pull_requests'):
+        return Result(result.verdict, result.detail + '; policy run not attributable to a PR (fork); accepted on timestamp')
+    return result
+
+
+def _latest(runs: list[dict], name: str, event: str, sha: str, *, created_after: str | None = None,
+            pr_number: int | None = None) -> dict | None:
     matching = [run for run in runs if run.get('name') == name
                 and run.get('event') == event]
     for run in matching:
         _sha(run.get('head_sha'))
         _run_id(run, name)
     matching = [run for run in matching if run['head_sha'] == sha]
+    if pr_number is not None:
+        matching = [run for run in matching if _attributable(run, pr_number)]
     if created_after is not None:
         # Policy input changes without a new SHA. Canonical Zulu timestamps
         # compare chronologically as strings after both formats are validated.
@@ -297,7 +336,7 @@ def _run_id(run: dict, name: str) -> int:
     return identifier
 
 
-def _completed(transport: Transport, repo: str, name: str, run: dict) -> Result:
+def _completed(transport: Transport, repo: str, name: str, run: dict, *, pr_number: int | None = None) -> Result:
     conclusion = run.get('conclusion')
     url = run.get('html_url')
     if not isinstance(url, str) or not url:
@@ -320,9 +359,14 @@ def _completed(transport: Transport, repo: str, name: str, run: dict) -> Result:
     for candidate in newer:
         if (candidate.get('name') == name and candidate.get('head_branch') == branch
                 and candidate.get('event') == run['event']):
+            if pr_number is not None and not _attributable(candidate, pr_number):
+                continue
             identifier = _run_id(candidate, name)
             if identifier > run['id']:
-                return Result('superseded', f'{url}; superseded by run {identifier} on {branch}')
+                detail = f'{url}; superseded by run {identifier} on {branch}'
+                if pr_number is not None and not candidate.get('pull_requests'):
+                    detail += '; superseding policy run not attributable to a PR (fork)'
+                return Result('superseded', detail)
     return Result('FAILED', f'{url}; cancelled without a newer run on {branch}')
 
 
@@ -338,7 +382,8 @@ def _not_applicable(gate: Gate, event: str, pr_action: str | None) -> Result:
 
 def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
                    pr_action: str | None, decisions: dict[str, str],
-                   runs: list[dict], policy_updated_at: str | None) -> tuple[dict[str, Result], dict[str, Result]]:
+                   runs: list[dict], policy_updated_at: str | None,
+                   pr_number: int | None) -> tuple[dict[str, Result], dict[str, Result]]:
     results, pending = {}, {}
     for name, gate in GATES.items():
         # Applicability wins over any stale run at this SHA. In particular,
@@ -347,15 +392,22 @@ def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
             results[name] = _not_applicable(gate, event, pr_action)
             continue
         run = _latest(runs, name, gate.events.get(event, ''), sha,
-                      created_after=policy_updated_at if gate.kind == 'pr' else None)
+                      created_after=policy_updated_at if gate.kind == 'pr' else None,
+                      pr_number=pr_number if gate.kind == 'pr' else None)
         if run is None:
             pending[name] = Result('never-reported', 'should have run but never reported')
         elif run.get('status') in ('queued', 'in_progress'):
             pending[name] = Result('timed-out', f'{run.get("html_url", "run URL unavailable")} ({run["status"]})')
         elif run.get('status') == 'completed':
-            results[name] = _completed(transport, repo, name, run)
+            results[name] = _completed(transport, repo, name, run,
+                                       pr_number=pr_number if gate.kind == 'pr' else None)
         else:
             raise AggregationError(f'{name}: unknown workflow status {run.get("status")!r}')
+        if run is not None and gate.kind == 'pr':
+            if name in pending:
+                pending[name] = _policy_result(pending[name], run)
+            else:
+                results[name] = _policy_result(results[name], run)
     return results, pending
 
 
@@ -363,6 +415,7 @@ def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
 def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[str],  # pylint: disable=too-many-arguments,too-many-locals
                    event: str, pr_action: str | None = None, capped: bool = False,
                    policy_updated_at: str | None = None,
+                   pr_number: str | None = None,
                    timeout: float = 40 * 60, poll_interval: float = 20,
                    clock: Callable[[], float] = time.monotonic,
                    sleep: Callable[[float], None] = time.sleep) -> dict[str, Result]:
@@ -370,8 +423,10 @@ def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[st
     if timeout < 0 or poll_interval <= 0:
         raise AggregationError('timeout must be nonnegative and poll interval positive')
     decisions = classify(changed, event=event, pr_action=pr_action)
+    policy_pr_number = None
     if decisions['pr gate'] == 'run':
         policy_updated_at = _timestamp(policy_updated_at)
+        policy_pr_number = _policy_number(pr_number)
     if capped:
         # At the PR diff cap the code deny-lists cannot justify a skip.
         decisions.update({name: 'run' for name, gate in GATES.items() if gate.kind == 'deny'})
@@ -380,7 +435,7 @@ def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[st
         results, pending = _inspect_gates(
             transport, repo, sha, event, pr_action, decisions,
             _list_items(_api(transport, f'repos/{repo}/actions/runs?head_sha={sha}&per_page=100', paginate=True)),
-            policy_updated_at)
+            policy_updated_at, policy_pr_number)
         if not pending or clock() >= deadline:
             results.update(pending)
             return {name: results[name] for name in GATES}
@@ -422,7 +477,8 @@ def _context_results(transport: Transport, environment: dict[str, str]) -> dict[
         default_branch=environment.get('GATE_DEFAULT_BRANCH', ''), payload=payload)
     return evaluate_gates(transport, repo, sha, changed=changed, capped=capped,
                           event=event, pr_action=environment.get('GATE_PR_ACTION'),
-                          policy_updated_at=environment.get('GATE_POLICY_UPDATED_AT'))
+                          policy_updated_at=environment.get('GATE_POLICY_UPDATED_AT'),
+                          pr_number=environment.get('GATE_PR_NUMBER'))
 
 
 def main(argv: list[str] | None = None, *, transport: Transport | None = None,
