@@ -30,6 +30,10 @@ Environment=THEME=tokyonight
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
 Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
 StateDirectory=gh-widgets
+# systemd resets this directory's mode at each start, so declare it here.
+StateDirectoryMode=0700
+# UMask=0077 keeps renderer-created files 0600 even if their code changes.
+UMask=0077
 
 # render.py takes no --cache-file (env only); render-responsiveness.py has no
 # --resync at all — it has no cache of its own, it renders from the impact

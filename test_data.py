@@ -2,6 +2,9 @@
 """Tests for the public GitHub data and snapshot contract."""
 import copy
 import json
+import os
+import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -664,6 +667,17 @@ class SnapshotWriting(unittest.TestCase):
             value = snapshot()
             data.write_snapshot(path, value)
             self.assertEqual(data.load_snapshot(path), value)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_write_snapshot_creates_a_private_file_under_default_umask(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "snapshot.json"
+            original_umask = os.umask(0o022)
+            try:
+                data.write_snapshot(path, snapshot())
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            finally:
+                os.umask(original_umask)
 
     def test_write_snapshot_validates_before_replacing_existing_file(self):
         with tempfile.TemporaryDirectory() as td:
