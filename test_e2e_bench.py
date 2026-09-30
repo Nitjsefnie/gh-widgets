@@ -162,7 +162,7 @@ class TestCloneSourceMirror(unittest.TestCase):
                 if mirror_state != "unset":
                     os.environ["CLONE_SOURCE_DIR"] = str(root)
                 with mock.patch.object(
-                        self.loc.subprocess, "run",
+                        self.loc, "_run_clone_command",
                         return_value=subprocess.CompletedProcess([], 0)) as run:
                     self.loc.clone_repo("outside/project", "main", dest)
                     command = run.call_args.args[0]

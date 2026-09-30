@@ -58,7 +58,13 @@ def _stop_clone_processes(processes, grace_s=1.0):
         except subprocess.TimeoutExpired:
             pass
     for proc in processes:
-        _signal_clone_process(proc, signal.SIGKILL)
+        if os.name == "posix":
+            _signal_clone_process(proc, signal.SIGKILL)
+        elif proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
     for proc in processes:
         proc.wait()
 
@@ -652,7 +658,9 @@ def _acquire_scratch_owner_lock(scratch, create):
     """Acquire an exclusive owner lock, or return None when it is absent."""
     lock_path = _scratch_owner_lock_path(scratch)
     try:
-        stream = lock_path.open("a+b" if create else "r+b")
+        # The returned handle deliberately stays open while this process owns
+        # the scratch, so the context manager ends in its caller's cleanup.
+        stream = lock_path.open("a+b" if create else "r+b")  # pylint: disable=consider-using-with
     except FileNotFoundError:
         if create:
             raise
