@@ -489,19 +489,12 @@ class WorkflowDriftTests(unittest.TestCase):
         self.assertIn('python3 scripts/ci/aggregate_gates.py', block)
         self.assertIn('GATE_POLICY_UPDATED_AT: ${{ github.event.pull_request.updated_at }}', text)
 
-    def test_contributing_count_matches_all_workflow_files(self):
+    def test_contributing_enumerates_exactly_all_workflow_files(self):
         root = ag.Path(__file__).resolve().parent
-        numbers: dict[str, int] = dict(zip((
-            'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
-            'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen',
-            'Eighteen', 'Nineteen', 'Twenty'), range(1, 21)))
         text = (root / 'CONTRIBUTING.md').read_text(encoding='utf-8')
-        match = ag.re.search(r'(\w+) workflows run, and a green suite is one of them\.', text)
-        if match is None:
-            self.fail('CONTRIBUTING is missing the workflow count')
-        word = match.group(1)
-        self.assertEqual(numbers.get(word, int(word) if word.isdigit() else 0),
-                         len(list((root / '.github/workflows').glob('*.yml'))))
+        names = ag.re.findall(r'^- `([a-z][a-z-]*\.yml)`', text, ag.re.MULTILINE)
+        self.assertEqual(set(names), {path.name for path in (root / '.github/workflows').glob('*.yml')})
+        self.assertEqual(len(names), len(set(names)), 'workflow list has duplicate entries')
 
 
 class CliTests(unittest.TestCase):
