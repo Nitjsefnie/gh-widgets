@@ -498,13 +498,76 @@ class TestTheWriteIsAtomicAndPrivate(_Case):
         self.assertEqual(self.committed()["floor"], 88.0)
         self.assertEqual(set(self.root.glob(".*.tmp")), set(litter))
 
-    def test_the_written_file_is_readable_and_world_readable(self):
-        # mkstemp creates 0600. This file is repo-visible and carries no
-        # secret, so publishing it at the mkstemp mode would be a surprise
-        # for the next person on the box.
+    def test_the_writer_asks_for_a_world_readable_mode(self):
+        """The claim that holds on every platform: the writer REQUESTS 0644.
+
+        mkstemp creates its inode at 0600 unconditionally. This file is
+        repo-visible and carries no secret, so publishing it at the mkstemp
+        mode would surprise the next person on the box, and — the reason the
+        chmod exists — git does not record the non-executable bit, so a raise
+        would leave a tracked file at 0600 that a fresh checkout elsewhere
+        brings back at 0644.
+
+        Asserted by recording the request rather than by reading `st_mode`
+        back, because that is the platform-independent form of the same claim
+        and it runs on the Windows cells where `st_mode` reports 0666 for a
+        writable file and asserts nothing at all.
+        """
+        requested = []
+        with mock.patch.object(ratchet.os, "chmod",
+                               side_effect=lambda path, mode:
+                               requested.append((path, mode))):
+            self.run_verb("raise", commit=SHA)
+        self.assertEqual([mode for _, mode in requested], [0o644],
+                         "the writer must ask for 0644 on the file it "
+                         "publishes, and exactly once")
+
+    def test_the_written_file_is_not_read_only(self):
+        """The property, on every platform: what was published is writable.
+
+        This is the part of the guarantee that must never stop running, and it
+        is expressed the way every platform agrees on — `os.access` against the
+        file, not a POSIX mode literal. A Windows run asserts exactly this and
+        not one bit more, because it cannot.
+        """
+        self.run_verb("raise", commit=SHA)
+        self.assertTrue(os.access(self.floor_path, os.W_OK),
+                        "the file the ratchet published is not writable")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission modes only")
+    def test_the_written_mode_is_0644_where_posix_modes_exist(self):
+        """The literal, only where the literal means something.
+
+        On Windows `os.chmod` only toggles the read-only attribute and
+        `st_mode` reports 0666 for any writable file, so asserting 0644 there
+        asserts a fact the platform does not have — this case went red on all
+        four Windows cells for exactly that reason. It is skipped rather than
+        rewritten because the fact it checks is genuinely POSIX-only; the two
+        cases above carry the guarantee everywhere, and the first of them
+        checks the stronger thing (the writer ASKS for 0644) rather than the
+        weaker thing (the filesystem ended up at 0644). Same idiom, and the same
+        problem, as `test_atomic_write.py`.
+        """
         self.run_verb("raise", commit=SHA)
         mode = stat.S_IMODE(self.floor_path.stat().st_mode)
         self.assertEqual(mode, 0o644)
+
+    @unittest.skipUnless(
+        sys.platform == "win32", "Windows read-only semantics")
+    def test_windows_reports_0666_for_the_file_it_wrote(self):
+        """The assumption the skip above rests on, checked where it holds.
+
+        The POSIX-only case is skipped on the strength of a claim about this
+        platform, so the claim should be pinned rather than trusted: if Windows
+        ever grows real permission bits — or if a change stops publishing a
+        writable file — this goes red, and the skip above becomes reviewable
+        rather than permanent.
+        """
+        self.run_verb("raise", commit=SHA)
+        mode = stat.S_IMODE(self.floor_path.stat().st_mode)
+        self.assertIn(mode, (0o666, 0o644),
+                      "a writable file on Windows reports 0666; if that has "
+                      "changed, the POSIX-only case can come back")
 
     def test_the_file_is_never_truncated_in_place(self):
         # An in-place write would replace the inode; this one must not.
