@@ -7,8 +7,9 @@ every push from a worktree died with "no literals available".
 
 The fixture commits the repo's LIVE secrecy-check.sh into a throwaway main
 checkout, adds a linked worktree (which checks the script out into it), and
-each case runs the copy belonging to the checkout it is in -- the same file
-the pre-push hook would execute there. All classes skip on Windows: the
+the worktree cases run the copy belonging to the worktree -- the same file
+the pre-push hook would execute there; the no-literals case runs the live
+source script directly. All classes skip on Windows: the
 fixture drives the POSIX hook path, which that runner cannot execute (same
 policy as the git-fame shebang fixture).
 """
