@@ -187,14 +187,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         # Every command below moves or compares bytes, and none of them can
-        # run code: `gh` and the coreutils are preinstalled on the runner, and
-        # nothing here reads from, writes to, or executes anything under a
-        # checkout, because there is none.
-        #
-        # The byte comparison is what makes the write conditional: the ratchet
-        # exits 0 whether or not it moved anything, so the only honest signal
-        # that there is something to commit is that main's copy of the file and
-        # the candidate differ.
+        # run code: `gh`, `jq` and the coreutils are preinstalled on the
+        # runner, and nothing here reads from, writes to, or executes anything
+        # under a checkout, because there is none.
         #
         # PRECONDITION, NOT A GUARANTEE: the commit this step makes is itself
         # a push to main, so it starts one more run of this workflow. That run
@@ -205,8 +200,59 @@ jobs:
         # is no cap and no hysteresis, by design: a floor with a ceiling is a
         # ceiling, not a ratchet.
         run: |
-          gh api "repos/$REPO/contents/coverage-floor.json?ref=main" \
-            --jq .content | base64 -d > committed-floor.json
+          # EVERY `gh api` IN THIS JOB IS CONDITIONAL, and that is load-bearing
+          # rather than decorative. This step runs under GitHub's default shell
+          # for `run:` — `bash -e {0}` — so `-e` is ON and `pipefail` is OFF
+          # (this workflow declares no `shell:`, unlike tests.yml which pins
+          # `shell: bash`). Two consequences, both measured rather than assumed:
+          #
+          #   * `x="$(cmd)"` propagates cmd's status out of the step, so an
+          #     UNGUARDED fetch fails the job — and a failed job here is a
+          #     `completed/failure` check run named `raise`, which is the
+          #     release block this step exists to avoid. The `.sha` fetch was
+          #     unguarded for exactly one round; that is the bug this fixes.
+          #   * a pipeline reports its LAST stage, so the `.content` fetch's
+          #     failure was masked: it wrote an empty file, `diff` said
+          #     "different", and the run walked on to a PUT that then failed
+          #     and was annotated. Safe by luck. Turning `pipefail` on later
+          #     would change that silently, so nothing here depends on it.
+          #
+          # So: no assignment consumes a `gh api` result, and no network call
+          # rides a pipeline. Both reads come from ONE request, so there is no
+          # second fetch to leave unguarded in the first place.
+          handled() {
+            echo "coverage-ratchet: $1" >&2
+            {
+              echo "### Coverage floor NOT raised"
+              echo
+              echo "$1"
+              echo
+              echo "Nothing is corrupted: \`coverage-floor.json\` on \`main\`"
+              echo "still carries its previous floor, and the next push to"
+              echo "\`main\` measures again and retries."
+              echo
+              echo '```'
+              echo "when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "run:  $GITHUB_RUN_ID ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if ! gh api "repos/$REPO/contents/coverage-floor.json?ref=main" \
+              > blob.json; then
+            handled "could not read coverage-floor.json from main; not writing"
+          fi
+          if ! jq -r .sha blob.json > blob_sha.txt \
+               || ! jq -r '.content | @base64d' blob.json \
+                    > committed-floor.json; then
+            handled "the blob GitHub returned could not be decoded; not writing"
+          fi
+
+          # The comparison is what makes the write conditional: the ratchet
+          # exits 0 whether or not it moved anything, so the only honest signal
+          # that there is something to commit is that main's copy of the file
+          # and the candidate differ.
           if diff -q committed-floor.json candidate/candidate-coverage-floor.json \
                >/dev/null; then
             echo "floor unchanged — nothing to commit"
@@ -226,37 +272,13 @@ jobs:
           # `continue-on-error` still reports a `failure` conclusion on this
           # job's check run, so it would block the release exactly as hard.
           # The tolerance has to be in the exit status, and it is below.
-          blob_sha="$(gh api \
-            "repos/$REPO/contents/coverage-floor.json?ref=main" --jq .sha)"
           if gh api --method PUT "repos/$REPO/contents/coverage-floor.json" \
               -f message='Raise the coverage floor' \
               -f branch=main \
-              -f sha="$blob_sha" \
+              -f sha="$(cat blob_sha.txt)" \
               -F content="$(base64 -w0 < candidate/candidate-coverage-floor.json)" \
               --jq '.commit.sha'; then
             echo "Raised the floor on main."
             exit 0
           fi
-
-          # The write did not happen. Nothing is corrupted and nothing is lost:
-          # the floor on main is still the last value the ratchet legitimately
-          # recorded, and the next push to main measures again and retries. The
-          # durable record of that is the step summary, not this log — a stderr
-          # line is scrolled away and read by nobody, which is the same reason
-          # this repository writes its numbers into files rather than into
-          # commit messages.
-          echo "Could not raise the floor; the next push to main retries." >&2
-          {
-            echo "### Coverage floor NOT raised"
-            echo
-            echo "The compare-and-swap PUT was rejected or \`gh api\` failed, so"
-            echo "\`coverage-floor.json\` on \`main\` still carries its previous"
-            echo "floor. Nothing is corrupted and the next push to \`main\`"
-            echo "measures again and retries."
-            echo
-            echo '```'
-            echo "when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "run:  $GITHUB_RUN_ID ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          handled "the compare-and-swap PUT was rejected, or gh api failed; not writing"

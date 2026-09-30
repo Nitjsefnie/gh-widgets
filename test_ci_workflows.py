@@ -41,6 +41,12 @@ MANIFEST_ENTRY = re.compile(
 # means rather than whichever one happens to be second.
 WRITE_STEP_NAME = "Raise the floor if coverage climbed"
 
+# A shell statement that INVOKES `gh api`, guarded or not — as opposed to one
+# that merely names it in a message. The optional `if ` is what makes this the
+# conditional form, so a bare call is matched by the same pattern and then
+# rejected by the assertion that reads the match.
+GH_API_CALL = re.compile(r"^(?:if |if ! )?gh api\b")
+
 # What the job holding the repository's only write token may never do. Not a
 # list of the tools that were planted in it — a deny-list of three is defeated
 # by a fourth interpreter or a renamed script, and the point of the case using
@@ -266,6 +272,25 @@ def _steps(job):
                             if content == "with:"), None)
         if with_indent is not None:
             step["with"] = _block(step["body"], with_indent, "with")
+    return out
+
+
+def _run_lines(step):
+    """A step's `run:` block as raw stripped lines.
+
+    `_command` folds the block into one string, which is right for matching a
+    command and wrong for asking a question about WHICH LINE something is on —
+    "is every network call conditional" is a question about lines.
+    """
+    out, run_indent = [], None
+    for at, content in step["body"]:
+        if run_indent is not None:
+            if at <= run_indent:
+                break
+            out.append(content)
+            continue
+        if _partition(content)[0] == "run":
+            run_indent = at
     return out
 
 
@@ -892,6 +917,52 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             [token for token in WRITE_JOB_FORBIDDEN
              if token in plants["a path into a tree"]], ["scripts/"])
 
+    def test_no_network_call_in_the_write_job_is_unconditional(self):
+        """Every `gh api` here must be conditional, on the statement that starts it.
+
+        This step runs under GitHub's default `bash -e {0}` — `-e` on,
+        `pipefail` off — so `x="$(gh api ...)"` propagates gh's status out of
+        the step and fails the job. A failed job is a `completed/failure` check
+        run named `raise`, which is the release block this step exists to
+        avoid. The `.sha` fetch was unguarded for one whole round while the PUT
+        beside it was guarded, and nothing noticed: the shape cases below read
+        the PUT's guard and had no way to see a fetch that had none.
+
+        Asserted over whole STATEMENTS, not lines — a pipe planted on a
+        continuation line is invisible to a line scan, which is how my first
+        version of this case missed one — and over the COUNT as well as the
+        shape, so deleting a guarded call outright is as loud as leaving one
+        unguarded. Comment lines are skipped: this file's own comments name
+        `gh api` more often than its code does.
+        """
+        statements, current = [], []
+        for line in _run_lines(_write_step()):
+            if line.strip().startswith("#"):
+                continue
+            current.append(line.strip())
+            if not line.strip().endswith("\\"):
+                statements.append(" ".join(current))
+                current = []
+        if current:
+            statements.append(" ".join(current))
+
+        # A statement INVOKES gh api; a statement that merely mentions it —
+        # `handled "…or gh api failed…"` — does not, and counting those made
+        # this case fail on its own error message.
+        calls = [s for s in statements if GH_API_CALL.match(s)]
+        self.assertEqual(len(calls), 2, calls)
+        for call in calls:
+            self.assertTrue(
+                call.startswith("if "),
+                f"a network call starts outside a conditional: {call!r}")
+            self.assertNotIn("|", call,
+                             "a network call rides a pipeline, whose status is "
+                             "its LAST stage — the first stage's failure would "
+                             "be masked")
+            self.assertNotIn("$(gh api", call,
+                             "a gh api result is consumed by an assignment, "
+                             "which -e turns into a step failure")
+
     def test_the_write_step_cannot_take_the_job_down(self):
         """A failed PUT must not fail `raise`, and therefore not a release.
 
@@ -919,6 +990,13 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         # And the write itself must remain a compare-and-swap, or the
         # tolerance would be covering a blind overwrite.
         self.assertIn("-f sha=", command)
+        # Over the WHOLE step, not the PUT's tail: the shared `handled()`
+        # path is where every guard routes, so a non-zero exit there turns
+        # each of them back into the release block this case exists to
+        # prevent — and a mutation that changed `handled()` alone looked fine
+        # to every assertion aimed at the PUT.
+        self.assertNotIn("exit 1", command,
+                         "the step must have no path that exits non-zero")
 
     def test_the_write_step_does_not_fail_the_job_for_any_put_error(self):
         """The guard covers the whole call, not one branch of it.
