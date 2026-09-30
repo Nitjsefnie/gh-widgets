@@ -24,6 +24,9 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().with_name("scripts") / "secrecy-check.sh"
 
 LITERAL = "glpat-abc123def456ghi789"
+# LITERAL as the history fixture spells it on disk. Derived from the needle,
+# so the two can never drift apart.
+MIXED_CASE = LITERAL.upper()
 AUTH_DB = "authdb123"
 ENV_LINE = ("DATABASE_URL_AUTH="
             "postgres://user:pass@db.example.com:5432/authdb123?sslmode=require\n")
@@ -35,10 +38,18 @@ def git(*args, cwd):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def run_script(cwd, script):
+def git_output(*args, cwd):
+    """Run git in *cwd* and return its stdout, leaving the status to the
+    caller -- for the queries whose answer IS the empty string."""
+    return subprocess.run(["git", *args], cwd=cwd, text=True,
+                          capture_output=True, check=False).stdout
+
+
+def run_script(cwd, script, *args):
     """Run *script* from *cwd* the way the pre-push hook would: direct exec,
-    like CreateProcess-free POSIX execution of the shebang script."""
-    return subprocess.run([str(script)], cwd=cwd, text=True,
+    like CreateProcess-free POSIX execution of the shebang script. *args* are
+    passed through for the modes the script takes (e.g. --tree)."""
+    return subprocess.run([str(script), *args], cwd=cwd, text=True,
                           capture_output=True, check=False)
 
 
@@ -190,6 +201,91 @@ class TestNoLiteralsFails(unittest.TestCase):
             proc = run_script(repo, SCRIPT)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("no literals available", proc.stderr)
+
+
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
+class TestHistoryScanIsCaseInsensitive(unittest.TestCase):
+    """The history pass must stay case-insensitive, and must be the arm
+    that catches a mixed-case literal (issue 42).
+
+    scripts/secrecy-check.sh's own comment calls --regexp-ignore-case
+    load-bearing, and deleting that flag from the git log invocation left
+    the whole suite green: nothing pinned the property, so the guard could
+    lose case-insensitivity silently.
+
+    The fixture is shaped so ONLY the history arm can fire, which is what
+    gives the catch its credit: MIXED_CASE is committed and then removed,
+    so the checked-out tree is clean and the tree pass's own -i has
+    nothing to find; and LITERAL -- the lowercase spelling, the actual
+    needle -- appears in no commit at all. A case-sensitive pickaxe finds
+    nothing and the script exits clean; a case-insensitive one finds the
+    two commits.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-secrecy-hist-"))
+        cls.main = cls.tmp / "main"
+        cls.main.mkdir()
+        git("init", "-q", "-b", "main", cwd=cls.main)
+        git("config", "user.name", "T", cwd=cls.main)
+        git("config", "user.email", "t@example.com", cwd=cls.main)
+        (cls.main / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        (cls.main / "scripts").mkdir()
+        shutil.copy2(SCRIPT, cls.main / "scripts" / "secrecy-check.sh")
+        commit_all(cls.main)
+        # The leak, then its removal: the value stays in the earlier commit
+        # and is gone from the tree the script scans.
+        (cls.main / "leak.txt").write_text(
+            f"token = {MIXED_CASE}\n", encoding="utf-8")
+        commit_all(cls.main)
+        git("rm", "-q", "leak.txt", cwd=cls.main)
+        commit_all(cls.main)
+        # Untracked, so it never enters a commit -- the needle itself must
+        # stay out of the history.
+        (cls.main / ".secrecy-literals").write_text(
+            LITERAL + "\n", encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_history_scan_finds_the_mixed_case_spelling(self):
+        """A mixed-case literal no longer in the tree must still fail, and
+        the message must name the HISTORY arm -- asserting the exit code
+        alone would let the tree pass satisfy it."""
+        proc = run_script(self.main,
+                          self.main / "scripts" / "secrecy-check.sh")
+        self.assertEqual(proc.returncode, 1,
+                         "a mixed-case literal in committed history must "
+                         f"fail the check; stdout={proc.stdout!r} "
+                         f"stderr={proc.stderr!r}")
+        self.assertIn("is in committed history:", proc.stderr)
+        self.assertNotIn("working tree", proc.stderr,
+                         "the catch must come from the history arm alone")
+
+    def test_fixture_tree_is_clean(self):
+        """The premise of the catch: at run time the tree arm has nothing
+        to find, so it cannot be what credits the test above."""
+        proc = run_script(self.main,
+                          self.main / "scripts" / "secrecy-check.sh", "--tree")
+        self.assertEqual(proc.returncode, 0,
+                         f"the fixture's tree must be clean: {proc.stderr}")
+
+    def test_lowercase_needle_appears_in_no_commit(self):
+        """The other premise: the needle's own spelling is nowhere in
+        history, so case-insensitivity is the only thing that finds it."""
+        found = git_output("log", "--all", "--oneline",
+                           f"-S{LITERAL}", "--format=%H", cwd=self.main)
+        self.assertEqual(found.strip(), "",
+                         "the lowercase needle must not appear in any "
+                         f"commit, or the case-sensitive pickaxe would "
+                         f"find it too: {found.strip()}")
 
 
 if __name__ == "__main__":
