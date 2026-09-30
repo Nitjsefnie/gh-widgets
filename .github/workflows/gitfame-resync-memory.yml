@@ -133,7 +133,7 @@ jobs:
           set -euo pipefail
           # One venv per arm, built only for the arms actually requested, so a
           # single-arm attribution run does not pay for the others.
-          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
           for build in $BUILDS; do
             case "$build" in
               fork) spec="git-fame @ $FORK_PIN" ;;

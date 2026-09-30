@@ -64,7 +64,7 @@ jobs:
           NEW_REF: ${{ inputs.new_ref }}
         run: |
           set -euo pipefail
-          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@a99855d3ab8323acd2c81cf40205d48ac8236537"
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
           for arm in $ARMS; do
             build="${arm%%:*}"
             # `[ -d x ] && continue` would be the natural spelling and is a

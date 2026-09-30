@@ -9,8 +9,13 @@ import unittest
 from pathlib import Path
 
 
-WORKFLOWS = Path(__file__).resolve().parent / ".github" / "workflows"
+REPO_ROOT = Path(__file__).resolve().parent
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CODEQL_USE = re.compile(r"uses:\s*github/codeql-action/([\w-]+)@(\S+)")
+FORK_PIN = re.compile(r'FORK_PIN="git\+https://github\.com/Nitjsefnie-OSC/'
+                      r'git-fame@([0-9a-f]{40})"')
+DOCUMENTED_PIN = re.compile(r"git\+https://github\.com/Nitjsefnie-OSC/"
+                            r"git-fame@([0-9a-f]{40})")
 
 
 class TestCodeqlPins(unittest.TestCase):
@@ -26,6 +31,23 @@ class TestCodeqlPins(unittest.TestCase):
                 for step, ref in CODEQL_USE.findall(path.read_text())]
         self.assertTrue(uses, "no github/codeql-action step found")
         self.assertEqual(len({ref for _, _, ref in uses}), 1, uses)
+
+
+class TestGitFameForkPin(unittest.TestCase):
+    """A measurement's `fork` arm must be the build production pins."""
+
+    def test_fork_arm_matches_the_documented_pin(self):
+        # The arm is the baseline every upstream comparison is read against.
+        # Left on an older fork build, a comparison measures a build nobody
+        # runs, and a "switch or not" answer rests on the wrong number.
+        documented = set(DOCUMENTED_PIN.findall(
+            (REPO_ROOT / "CLAUDE.md").read_text()))
+        self.assertEqual(len(documented), 1, documented)
+        arms = {(path.name, sha)
+                for path in sorted(WORKFLOWS.glob("*.yml"))
+                for sha in FORK_PIN.findall(path.read_text())}
+        self.assertTrue(arms, "no FORK_PIN found in any workflow")
+        self.assertEqual({sha for _, sha in arms}, documented, arms)
 
 
 if __name__ == "__main__":
