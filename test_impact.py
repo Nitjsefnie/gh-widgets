@@ -918,7 +918,7 @@ class TestCheckoutPin(unittest.TestCase):
         seen = {}
         with mock.patch.object(self.loc, "checkout_pin",
                                side_effect=lambda d, h: seen.update(head=h)):
-            with mock.patch.object(self.loc.subprocess, "run",
+            with mock.patch.object(self.loc, "_run_clone_command",
                                    return_value=subprocess.CompletedProcess(
                                        [], 0)):
                 self.loc.clone_repo("o/r", "main", self.tmp, head="pinned")
