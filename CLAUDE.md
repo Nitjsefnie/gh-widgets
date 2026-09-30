@@ -53,12 +53,32 @@ outcome). Every item must reference an included repository; duplicate IDs,
 unknown/missing fields, private flags, credentials, invalid states, and
 inconsistent closed/merged outcomes are rejected.
 
-The complete allowed issue state matrix is:
+The allowed issue state matrix is:
 
 | record | `state` | `closed_at` | `state_reason` |
 |---|---|---|---|
-| issue | `OPEN` | `null` | `null` or `REOPENED` |
-| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` |
+| issue | `OPEN` | `null` | `null`, `REOPENED`, or any other reason string |
+| issue | `CLOSED` | RFC 3339 | any reason string that is not `null` or `REOPENED` |
+
+**`state_reason` is deliberately not a closed enum.** `state` and `closed_at`
+are exact; the reason column is bounded, not enumerated. GitHub's
+`IssueStateReason` is upstream-controlled and already returns members this
+contract has never named — `DUPLICATE` appears 19 times in this account's own
+fetched issue history — so pinning the accepted set to the reasons known today
+would make `fetch_authored_snapshot` reject its own output. v1 instead
+enforces consistency only:
+
+- `state_reason` is `null` or a non-empty, non-blank string of at most
+  `MAX_STATE_REASON_LENGTH` (64) characters.
+- An `OPEN` issue may not carry `COMPLETED` or `NOT_PLANNED` — a closure reason
+  contradicts an open state.
+- A `CLOSED` issue requires `closed_at`, and a reason that is neither `null`
+  nor `REOPENED`.
+- **Any other reason string is accepted and preserved verbatim.** Unknown and
+  future reasons cross the boundary by design, bounded only by the length
+  limit, so a consumer can see the exact source spelling and reconcile it
+  against its own known set instead of losing the record to a parse failure.
+  A consumer that cares about specific reasons must match them itself.
 
 The complete allowed pull-request state matrix is:
 
@@ -68,10 +88,14 @@ The complete allowed pull-request state matrix is:
 | pull request | `CLOSED` | `false` | RFC 3339 | `null` |
 | pull request | `MERGED` | `true` | RFC 3339 | RFC 3339 |
 
-No other state/state-reason/null combination is valid. Open items cannot have
-`closed_at`; closed issues cannot have a null or `REOPENED` reason; PRs do not
-have a `state_reason` field; a `MERGED` PR must have both outcome timestamps;
-and `OPEN` or `CLOSED` PRs must be unmerged with `merged_at: null`.
+No other pull-request state/merge/null combination is valid. Open items
+cannot have `closed_at`; a closed issue requires a reason that is neither
+`null` nor `REOPENED` and, unlike the reason column above, accepts any other
+reason string; PRs do not have a `state_reason` field; a `MERGED` PR must have
+both outcome timestamps; and `OPEN` or `CLOSED` PRs must be unmerged with
+`merged_at: null`. `test_data.py` pins every one of these cells against the
+validator, so the prose above cannot drift away from the code without a test
+failing.
 
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and

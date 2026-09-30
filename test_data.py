@@ -660,6 +660,66 @@ class SnapshotValidation(unittest.TestCase):
                 data.load_snapshot(path)
 
 
+class DocumentedIssueStateMatrix(unittest.TestCase):
+    """Every cell CLAUDE.md and README.md publish, pinned to the validator.
+
+    The prose is the contract a pinned consumer reads; these cases fail the
+    moment it and `_validate_item` disagree, in either direction.
+    """
+
+    def accepted(self, **overrides):
+        value = snapshot(issues=[issue_record(**overrides)])
+        self.assertIs(data._validate_snapshot(value), value)
+
+    def rejected(self, **overrides):
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(snapshot(issues=[issue_record(**overrides)]))
+
+    def test_open_issue_accepts_null_reason(self):
+        self.accepted(state="OPEN", closed_at=None, state_reason=None)
+
+    def test_open_issue_accepts_reopened_reason(self):
+        self.accepted(state="OPEN", closed_at=None, state_reason="REOPENED")
+
+    def test_open_issue_rejects_closure_reason(self):
+        for reason in ("COMPLETED", "NOT_PLANNED"):
+            with self.subTest(reason=reason):
+                self.rejected(state="OPEN", closed_at=None, state_reason=reason)
+
+    def test_open_issue_accepts_unknown_reason(self):
+        value = snapshot(issues=[issue_record(
+            state="OPEN", closed_at=None, state_reason="DUPLICATE")])
+        self.assertIs(data._validate_snapshot(value), value)
+        self.assertEqual(value["issues"][0]["state_reason"], "DUPLICATE")
+
+    def test_closed_issue_accepts_known_reason(self):
+        for reason in ("COMPLETED", "NOT_PLANNED"):
+            with self.subTest(reason=reason):
+                self.accepted(state="CLOSED", state_reason=reason)
+
+    def test_closed_issue_accepts_duplicate_reason(self):
+        # GitHub returns this for real issues in this account's own history;
+        # an enum here would reject the producer's own output.
+        self.accepted(state="CLOSED", state_reason="DUPLICATE")
+
+    def test_closed_issue_accepts_future_reason(self):
+        self.accepted(state="CLOSED", state_reason="FUTURE_REASON_V2")
+
+    def test_closed_issue_rejects_reopened_reason(self):
+        self.rejected(state="CLOSED", state_reason="REOPENED")
+
+    def test_closed_issue_rejects_null_reason(self):
+        self.rejected(state="CLOSED", state_reason=None)
+
+    def test_closed_issue_requires_closed_at(self):
+        self.rejected(state="CLOSED", closed_at=None)
+
+    def test_state_reason_is_bounded_at_the_documented_length(self):
+        limit = data.MAX_STATE_REASON_LENGTH
+        self.accepted(state="CLOSED", state_reason="R" * limit)
+        self.rejected(state="CLOSED", state_reason="R" * (limit + 1))
+
+
 class SnapshotWriting(unittest.TestCase):
     def test_write_snapshot_round_trips_atomically(self):
         with tempfile.TemporaryDirectory() as td:

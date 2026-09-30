@@ -186,13 +186,21 @@ does not produce an issue `state_reason`, so adding that field to a PR is
 rejected. Strings are non-empty, numbers are positive integers, booleans are
 actual booleans, nullable outcome timestamps are RFC 3339 strings or `null`,
 and every item references a repository in the same snapshot. States and final
-outcomes must be internally consistent. The complete allowed issue state
-matrix is:
+outcomes must be internally consistent. The allowed issue state matrix is:
 
 | record | `state` | `closed_at` | `state_reason` |
 |---|---|---|---|
-| issue | `OPEN` | `null` | `null` or `REOPENED` |
-| issue | `CLOSED` | RFC 3339 | `COMPLETED` or `NOT_PLANNED` |
+| issue | `OPEN` | `null` | `null`, `REOPENED`, or any other reason string |
+| issue | `CLOSED` | RFC 3339 | any reason string that is not `null` or `REOPENED` |
+
+`state` and `closed_at` are exact; `state_reason` is bounded, not enumerated.
+It is `null` or a non-empty, non-blank string of at most 64 characters
+(`MAX_STATE_REASON_LENGTH`). An `OPEN` issue may not carry `COMPLETED` or
+`NOT_PLANNED`, and a `CLOSED` issue needs a `closed_at` plus a reason that is
+neither `null` nor `REOPENED`. Every other reason string is accepted and
+preserved verbatim — GitHub's `IssueStateReason` is upstream-controlled and
+returns values this contract never named (`DUPLICATE`, for one), so unknown
+reasons cross the boundary by design and a consumer can reconcile them.
 
 The complete allowed pull-request state matrix is:
 
@@ -202,11 +210,11 @@ The complete allowed pull-request state matrix is:
 | pull request | `CLOSED` | `false` | RFC 3339 | `null` |
 | pull request | `MERGED` | `true` | RFC 3339 | RFC 3339 |
 
-Those are all valid combinations. In particular, an open item cannot have a
-close timestamp, a closed issue cannot have a null or `REOPENED` reason, PRs do
-not have a `state_reason` field, a PR in `MERGED` state must have both outcome
-timestamps, and an `OPEN` or `CLOSED` PR must be unmerged with
-`merged_at: null`.
+Those are all valid pull-request combinations. In particular, an open item
+cannot have a close timestamp, a closed issue requires a reason that is neither
+`null` nor `REOPENED` (and accepts any other reason string), PRs do not have a
+`state_reason` field, a PR in `MERGED` state must have both outcome timestamps,
+and an `OPEN` or `CLOSED` PR must be unmerged with `merged_at: null`.
 
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
