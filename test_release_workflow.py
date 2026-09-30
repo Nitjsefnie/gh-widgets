@@ -65,7 +65,7 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     OTHER_SHA = "1111111111111111111111111111111111111111"
     TAG = "v9.9.9"
     MANIFEST = ["lint", "pyright", "speed", "pip-audit", "analyze",
-                "unittest"]
+                "unittest", "aggregate"]
 
     # The whole manifest, matrix legs and all, as the check-runs API
     # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
@@ -84,6 +84,7 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         ("completed", "success", "unittest (macos-latest, 3.13)"),
         ("completed", "success", "unittest (windows-latest, 3.10)"),
         ("completed", "success", "unittest (windows-latest, 3.13)"),
+        ("completed", "success", "aggregate"),
     ]
 
     # A stand-in for `gh` whose whole world is the files beside it in the
@@ -678,12 +679,14 @@ last four read the workflow as text, so they run on every OS.
                         f"{rendered!r}, which manifest entry {name!r} "
                         f"would never match")
                 push = self._push_block(text_wf)
-                self.assertTrue(push, f"{workflow_file} has no push trigger")
+                self.assertRegex(text_wf, r"(?m)^  push:\s*$",
+                                 f"{workflow_file} has no push trigger")
                 # A paths-ignore list that does not mention VERSION is what
                 # makes this workflow fire on a VERSION push. An allow-list
                 # would need VERSION named before it could be a manifest
-                # entry at all.
-                self.assertIn("paths-ignore:", "\n".join(push))
+                # entry at all. An unfiltered push always fires, even when
+                # its block is empty; either form must have no allow-list.
+                self.assertNotIn("paths:", "\n".join(push))
                 self.assertNotIn("VERSION", "\n".join(push))
 
         for workflow_file in excluded - {"actionlint.yml", "release.yml"}:
