@@ -5,9 +5,10 @@
 # second entry below:
 #
 #   coverage — `coverage run -m unittest discover`, plus the
-#   `--format=markdown` and `--fail-under` calls the workflow makes
-#   directly, so the gate is a step of its own and the summary still
-#   renders when it is red.
+#   `--format=markdown` and `json` calls the workflow makes directly.
+#   The gate itself no longer asks coverage anything: tests.yml hands the
+#   emitted coverage.json to scripts/ci/coverage_ratchet.py, which reads
+#   the committed floor out of coverage-floor.json.
 #
 #   pytest — the timing harness speed.yml runs, and imported by
 #   test_compare_durations.py, which tests that harness; the tests.yml
