@@ -14,6 +14,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -765,11 +766,13 @@ def register_scratch_dir(path):
         raise
 
 
-def _retry_readonly_scratch_removal(func, path, exc_info):
+def _retry_readonly_scratch_removal(func, path, error):
     """Make read-only Git files writable and retry their removal."""
-    error = exc_info[1]
-    if not isinstance(error, PermissionError) or func not in (os.unlink,
-                                                               os.rmdir):
+    if isinstance(error, tuple):
+        error = error[1]
+    is_permission_error = isinstance(error, PermissionError)
+    is_removal = func in (os.unlink, os.rmdir)
+    if not is_permission_error or not is_removal:
         raise error
     try:
         os.chmod(path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
@@ -783,7 +786,12 @@ def remove_scratch_dir(path):
     scratch = Path(path)
     _release_scratch_owner_lock(_SCRATCH_LOCKS.pop(scratch, None))
     try:
-        shutil.rmtree(scratch, onerror=_retry_readonly_scratch_removal)
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(scratch, onexc=_retry_readonly_scratch_removal)
+        else:
+            # Python 3.10 and 3.11 require the legacy callback argument.
+            shutil.rmtree(  # pylint: disable=deprecated-argument
+                scratch, onerror=_retry_readonly_scratch_removal)
     except FileNotFoundError:
         pass
     try:
