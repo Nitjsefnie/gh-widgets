@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 7
+REQUIRED_COMMON = 8
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
