@@ -189,8 +189,8 @@ class TestScratchLifecycle(unittest.TestCase):
         git("init", "-q", "-b", "main", ".", cwd=mirror)
         git("config", "user.name", "Us", cwd=mirror)
         git("config", "user.email", "us@example.com", cwd=mirror)
-        (mirror / "tracked.txt").write_text("offline clone\n",
-                                              encoding="utf-8")
+        (mirror / "tracked.txt").write_text(
+            "offline clone\n", encoding="utf-8")
         git("add", "--all", cwd=mirror)
         git("commit", "-qm", "fixture", cwd=mirror)
 
