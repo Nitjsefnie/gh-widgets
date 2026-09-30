@@ -151,12 +151,25 @@ file of an unlisted type is invisible to git and will NOT appear in
   special case elsewhere.
 - There is no linter or formatter config. Match the surrounding file.
 
+## Claiming an issue
+
+Comment `/claim` on an open, unassigned issue to be assigned to it — no write
+access needed. `/unclaim` (or `/release`) drops your own assignment. The
+comment must be exactly the command; anything else is declined with a reply.
+Check that your login actually appears among the assignees before starting.
+
 ## Pull requests
 
-Small and single-purpose beats large and comprehensive. In the description,
-include what changed and why, the output of the test run, and — for
-anything that changes rendering — the before and after SVG, or a screenshot
-of both.
+Small and single-purpose beats large and comprehensive. Fill in the pull
+request template: an automated gate checks the description against it and
+closes a pull request whose sections are missing, reordered or still carry
+the template's instruction comments. It reopens the pull request once the
+description is fixed; push once more after that reopen (an empty commit is
+enough) to get CI. The gate also requires the issue the pull request resolves
+to be assigned to you, so claim it first.
+
+In Testing, include the output of the test run and — for anything that
+changes rendering — the before and after SVG, or a screenshot of both.
 
 If you are unsure whether something is a bug or intended, open an issue and
 ask. A wrong premise caught early is cheaper than a correct fix to the
