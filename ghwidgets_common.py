@@ -42,8 +42,8 @@ from typing import Optional
 
 # The cache lock uses each platform's own exclusive-lock API: flock(2) on
 # POSIX, msvcrt.locking on Windows. Import conditionally so the module loads
-# on both, and degrade to an unlocked cache where neither exists — the same
-# stance the cache write itself takes: warn, and still render the card.
+# on both. Where neither exists, the lock is never acquired and cache writers
+# fail the run rather than bypassing it.
 try:
     import fcntl
 except ImportError:  # Windows
@@ -56,7 +56,7 @@ except ImportError:  # POSIX
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 7
+COMMON_VERSION = 8
 
 
 def _read_repo_version() -> str:
@@ -249,8 +249,8 @@ def _lock_once(fd):
     API: flock(2) on POSIX, a one-byte msvcrt.locking region on Windows (a
     byte-range lock needs no existing byte). Returns whether it is held.
 
-    With neither API available the lock is reported as never held, so the
-    callers fall back to their documented unlocked stances.
+    With neither API available the lock is reported as never held, so callers
+    see an unavailable lock and fail rather than bypassing it.
     """
     try:
         if fcntl is not None:
@@ -291,9 +291,8 @@ def cache_lock(path, timeout=CACHE_LOCK_TIMEOUT):
     `ourloc`, which is expensive to rebuild.
 
     Yields True when the lock is held, False when it is not (timeout, or a
-    lock file that could not be created). The caller decides what that means:
-    a whole-file writer loses nothing by proceeding anyway, a
-    read-modify-write writer must not proceed at all.
+    lock file that could not be created). False is a failure for every caller:
+    the cache writers raise rather than bypassing the lock.
     """
     fd = _open_lock_file(path)
     if fd is None:
@@ -337,59 +336,38 @@ def _write_cache(path, payload):
         tmp.unlink(missing_ok=True)  # a no-op once os.replace has moved it
 
 
-def save_cache(path, payload, timeout=CACHE_LOCK_TIMEOUT, *, strict=False):
-    """Replace the whole cache, atomically and under the writers' lock.
-    A failed save must not fail the run by default. With ``strict=True``,
-    lock or write failures are raised instead, and an unavailable lock is not
-    bypassed.
+def save_cache(path, payload, timeout=CACHE_LOCK_TIMEOUT):
+    """Replace the whole cache atomically under the writers' lock.
 
-    For the default best-effort caller, proceeding without the lock can at
-    worst drop the other writer's PR refresh — which its next hourly run
-    redoes.
+    Raises TimeoutError when the lock is unavailable and propagates write
+    failures, so a cache is never modified without the lock or silently left
+    stale after a failed save.
     """
-    try:
-        with cache_lock(path, timeout) as locked:
-            if not locked:
-                if strict:
-                    raise TimeoutError(f"cache lock unavailable for {path}")
-                print(f"warning: writing {path} without the cache lock",
-                      file=sys.stderr)
-            _write_cache(path, payload)
-        return True
-    except Exception as e:
-        print(f"warning: could not write cache {path}: {e}", file=sys.stderr)
-        if strict:
-            raise
-        return False
+    with cache_lock(path, timeout) as locked:
+        if not locked:
+            raise TimeoutError(f"cache lock unavailable for {path}")
+        _write_cache(path, payload)
 
 
 def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):
     """Replace `updates`' keys in the cache at `path`, preserving every other
-    key, atomically and under the lock. Returns the payload written, or None
-    if nothing was written.
+    key, atomically and under the lock. Returns the payload written.
 
     For a writer that owns only PART of a shared cache. The load and the write
     happen inside one lock hold, so the whole-file writer cannot slip in
     between and have its expensive sections (`ourloc`) silently reverted to
     what this writer happened to read.
 
-    Failing to update is the safe outcome and is reported, not raised: a cache
-    that missed one refresh is recovered by the next run; one that lost
-    `ourloc` must wait for the next `--resync` to rebuild it.
+    Raises TimeoutError when the lock is unavailable and propagates write
+    failures, so a failed update cannot silently leave the cache stale.
     """
-    try:
-        with cache_lock(path, timeout) as locked:
-            if not locked:
-                print(f"warning: cache {path} not updated: lock unavailable",
-                      file=sys.stderr)
-                return None
-            payload = {**load_cache(path, version), **updates,
-                       "version": version}
-            _write_cache(path, payload)
-            return payload
-    except Exception as e:
-        print(f"warning: could not update cache {path}: {e}", file=sys.stderr)
-        return None
+    with cache_lock(path, timeout) as locked:
+        if not locked:
+            raise TimeoutError(f"cache lock unavailable for {path}")
+        payload = {**load_cache(path, version), **updates,
+                   "version": version}
+        _write_cache(path, payload)
+        return payload
 
 
 # ------------------------------------------------------------------- GraphQL

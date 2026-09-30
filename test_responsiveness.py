@@ -525,7 +525,8 @@ class AtomicWrite(unittest.TestCase):
             out = Path(td) / "out"
             with mock.patch.object(resp.common, "_write_cache",
                                    side_effect=fail_cache_write):
-                run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
+                with self.assertRaisesRegex(OSError, "no space left"):
+                    run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
             self.assertGreaterEqual(
                 len(write_attempts), 1,
                 "partial-write injector did not attempt a write")
@@ -537,16 +538,19 @@ class AtomicWrite(unittest.TestCase):
             self.assertEqual(
                 [f for f in os.listdir(td) if f.endswith(".tmp")], [])
 
-    def test_a_failed_cache_write_still_renders_the_card(self):
-        # The SVG is the product; a cache that could not be updated is a
-        # warning, not a reason to leave the widget stale.
+    def test_a_failed_cache_write_keeps_the_previous_card(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "out"
+            out.mkdir()
+            card = out / "responsiveness.svg"
+            card.write_text("previous card", encoding="utf-8")
             with mock.patch.object(resp.common, "_write_cache",
                                    side_effect=OSError("read-only fs")):
-                run_main(Path(td) / "impact-cache.json", out,
-                         nodes=prs("a/x", [1.0] * 3))
-            self.assertIn("a/x", (out / "responsiveness.svg").read_text())
+                with self.assertRaisesRegex(OSError, "read-only fs"):
+                    run_main(Path(td) / "impact-cache.json", out,
+                             nodes=prs("a/x", [1.0] * 3))
+            self.assertEqual(card.read_text(encoding="utf-8"),
+                             "previous card")
 
 
 class DegradedPath(unittest.TestCase):

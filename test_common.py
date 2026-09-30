@@ -517,7 +517,8 @@ class CacheWriting(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
             self.assertEqual(
                 stat.S_IMODE(lock_path.parent.stat().st_mode), 0o700)
-            common.save_cache(self.path, {"version": 1})
+            saved = common.save_cache(self.path, {"version": 1})
+            self.assertIsNone(saved)
             self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
             self.path.chmod(0o644)
             common.save_cache(self.path, {"version": 1, "new": True})
@@ -588,19 +589,23 @@ class CacheWriting(unittest.TestCase):
         # whole-file save landing between its read and its write would be
         # silently reverted, ourloc included.
         self.write({"version": 1, "ourloc": {"a/b": {"ours": 7}}})
+        before = self.path.read_bytes()
         with common.cache_lock(self.path) as held:
             self.assertTrue(held)
-            self.assertIsNone(
-                common.merge_cache(self.path, 1, {"prs": {}}, timeout=0.1))
-        self.assertNotIn("prs", self.read())
+            with self.assertRaises(TimeoutError):
+                common.merge_cache(self.path, 1, {"prs": {}}, timeout=0.1)
+        self.assertEqual(self.path.read_bytes(), before)
 
-    def test_a_held_lock_does_not_stop_a_whole_file_save(self):
-        # Deliberate asymmetry: save_cache's caller owns every key it writes,
-        # so the worst it can drop is a PR refresh the next hourly run redoes.
-        with common.cache_lock(self.path):
-            common.save_cache(self.path, {"version": 1, "prs": {}},
-                              timeout=0.1)
-        self.assertEqual(self.read()["prs"], {})
+    def test_a_held_lock_stops_a_whole_file_save(self):
+        # A whole-file writer must leave old cache data alone.
+        self.write({"version": 1, "prs": {"old": 1}})
+        before = self.path.read_bytes()
+        with common.cache_lock(self.path) as held:
+            self.assertTrue(held)
+            with self.assertRaises(TimeoutError):
+                common.save_cache(self.path, {"version": 1, "prs": {}},
+                                  timeout=0.1)
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_the_lock_is_released_when_the_block_ends(self):
         with common.cache_lock(self.path) as held:
@@ -613,29 +618,27 @@ class CacheWriting(unittest.TestCase):
         before = self.path.read_bytes()
         with mock.patch.object(common.os, "replace",
                                side_effect=OSError("no space left")):
-            common.save_cache(self.path, {"version": 1, "prs": {"new": 2}})
+            with self.assertRaises(OSError):
+                common.save_cache(
+                    self.path, {"version": 1, "prs": {"new": 2}})
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(
             [p.name for p in Path(self.td.name).glob("*.tmp")], [])
 
-    def test_strict_save_raises_when_write_fails(self):
+    def test_a_failed_merge_raises_and_leaves_the_old_cache(self):
+        self.write({"version": 1, "prs": {"old": 1}})
+        before = self.path.read_bytes()
         with mock.patch.object(common.os, "replace",
                                side_effect=OSError("no space left")):
             with self.assertRaises(OSError):
-                common.save_cache(self.path, {"version": 1}, strict=True)
-
-    def test_strict_save_raises_when_lock_is_unavailable(self):
-        with common.cache_lock(self.path):
-            with self.assertRaises(TimeoutError):
-                common.save_cache(self.path, {"version": 1}, timeout=0.1,
-                                  strict=True)
+                common.merge_cache(self.path, 1, {"prs": {"new": 2}})
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(
+            [p.name for p in Path(self.td.name).glob("*.tmp")], [])
 
     def test_neither_locking_api_degrades_to_unlocked(self):
-        # Windows ships msvcrt and POSIX ships fcntl, so "neither" is the
-        # exotic case of a platform with no locking API at all. The contract
-        # there is the same as a lock that never arrives: cache_lock yields
-        # False and each caller falls back to its documented unlocked
-        # stance, instead of crashing the render.
+        # With neither API, cache_lock yields False and writers fail rather
+        # than bypassing the lock.
         with mock.patch.object(common, "fcntl", None), \
                 mock.patch.object(common, "msvcrt", None):
             with common.cache_lock(self.path, timeout=0.1) as held:
