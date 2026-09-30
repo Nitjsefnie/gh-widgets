@@ -243,11 +243,11 @@ class TestHarness(unittest.TestCase):
             (self.repo_root / script).write_text(body, encoding="utf-8")
 
     def invoke(self, work_root, round_number, junit_path, selfcheck=False,
-               repo_root=None):
+               repo_root=None, side="head"):
         command = [
             sys.executable,
             str(BENCH_DIR / "e2e_bench.py"),
-            "--side", "head",
+            "--side", side,
             "--repo-root", str(repo_root or self.repo_root),
             "--round", str(round_number),
             "--junit-file", str(junit_path),
@@ -348,7 +348,13 @@ class TestHarness(unittest.TestCase):
             self.fail("nonzero renderer did not emit a JUnit failure")
         self.assertIn("exited with code 7", impact_failure.text or "")
 
-    def test_missing_renderer_is_skipped(self):
+    def test_missing_renderer_fails_on_the_head_side(self):
+        """A shipped renderer that is not in the head checkout is a failure.
+
+        It used to be a skip, and a skip is dropped from the comparator's
+        intersection — so the speed gate went on measuring one fewer program
+        and reported the result as a pass (issue #36).
+        """
         self.write_stubs()
         old_checkout = self.root / "old-checkout"
         old_checkout.mkdir()
@@ -358,12 +364,60 @@ class TestHarness(unittest.TestCase):
         result = self.invoke(self.root / "missing-work", 1, report,
                              repo_root=old_checkout)
 
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        cases = {case.get("name"): case
+                 for case in ET.parse(report).getroot().findall("testcase")}
+        for name in ("bench.render-impact", "bench.render-responsiveness"):
+            case = cases[name]
+            self.assertIsNone(
+                case.find("skipped"),
+                f"{name} was skipped on the head side")
+            failure = case.find("failure")
+            if failure is None:
+                self.fail(f"{name} did not emit a JUnit failure")
+            self.assertIn("missing from the head checkout", failure.text or "")
+        # The one renderer that IS present still ran and passed.
+        self.assertIsNone(cases["bench.render"].find("failure"))
+
+    def test_missing_renderer_is_still_skipped_on_the_base_side(self):
+        """The asymmetry is deliberate, and this is what pins it.
+
+        speed.yml runs HEAD's harness against the baseline release too, so a
+        renderer added after that release has no base script — a
+        new-since-baseline workload, not a missing one. Failing here too
+        would redden the gate on every commit that adds a renderer.
+        """
+        self.write_stubs()
+        # The class root is shared, so the checkout name has to differ from
+        # the head-side test's.
+        old_checkout = self.root / "old-checkout-base-side"
+        old_checkout.mkdir()
+        (old_checkout / "render.py").write_bytes(
+            (self.repo_root / "render.py").read_bytes())
+        report = self.root / "base-side-missing.xml"
+        result = self.invoke(self.root / "base-side-missing-work", 1, report,
+                             repo_root=old_checkout, side="base")
+
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         cases = {case.get("name"): case
                  for case in ET.parse(report).getroot().findall("testcase")}
         self.assertIsNotNone(cases["bench.render-impact"].find("skipped"))
         self.assertIsNotNone(
             cases["bench.render-responsiveness"].find("skipped"))
+        self.assertIsNone(cases["bench.render"].find("failure"))
+
+    def test_list_workloads_needs_no_checkout_or_fixtures(self):
+        env = dict(os.environ)
+        env.pop("GH_BENCH_FIXTURE_ROOT", None)
+        result = subprocess.run(
+            [sys.executable, str(BENCH_DIR / "e2e_bench.py"),
+             "--list-workloads"],
+            env=env, capture_output=True, text=True, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.split(),
+                         ["e2e::bench.render", "e2e::bench.render-impact",
+                          "e2e::bench.render-responsiveness"])
 
     def test_selfcheck_compares_svg_bytes_across_head_rounds(self):
         self.write_stubs()
