@@ -337,8 +337,13 @@ one or two samples is not an estimate of anything. The excluded tail is
 along with the number of rows the top-N cut hides.
 
 It fetches its own PR data — one paginated GraphQL connection, the same one
-`render.py` uses — so it needs a token and runs on its own schedule (hourly,
-here) rather than trailing `render-impact.py`. It shares that script's cache,
+`render.py` uses — so it needs a token; it runs in sequence after
+`render-impact.py` in the same service rather than on a schedule of its own
+(`units/gh-widgets.service` runs all three renderers as sequential
+`ExecStart` lines on an hourly timer — the weekly resync unit the same, with
+`--resync` — and the order is load-bearing: `render-impact.py` refreshes the
+shared cache `render-responsiveness.py` then reads).
+It shares that script's cache,
 because that is where the account's authored PRs already live: it **merges**
 its half in and leaves every other section alone, above all `ourloc`, the
 git-blame result `render-impact.py` produces. Both writers take a lock
