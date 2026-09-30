@@ -205,9 +205,9 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(ag.changed_files(transport, 'owner/repo', event='workflow_dispatch', sha='a' * 40), ({'code.py'}, False))
 
 
-class VerdictTests(unittest.TestCase):
+class _VerdictFixture(unittest.TestCase):
     def evaluate(self, transport, changed=None, event='push', action=None, timeout=0, capped=False,
-                 policy_updated_at='2026-09-30T12:00:00Z'):
+                 policy_updated_at: str | None = '2026-09-30T12:00:00Z'):
         clock = Clock()
         return ag.evaluate_gates(transport, 'owner/repo', 'a' * 40,
                                  changed={'code.py'} if changed is None else changed,
@@ -219,6 +219,8 @@ class VerdictTests(unittest.TestCase):
     def code_runs(self, conclusion='success', event='push'):
         return [run(name, conclusion=conclusion, event=event) for name in ('tests', 'lint', 'types', 'audit', 'speed', 'codeql')]
 
+
+class VerdictTests(_VerdictFixture):
     def test_all_success_passes(self):
         result = self.evaluate(FakeTransport(runs=[self.code_runs()]))
         self.assertEqual(ag.exit_code(result), 0)
@@ -334,6 +336,35 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ag.exit_code(result), 0)
         self.assertIn('/10', result['pr gate'].detail)
 
+    def test_skipped_neutral_and_failure_conclusions(self):
+        for conclusion in ('skipped', 'neutral', 'startup_failure', 'timed_out'):
+            result = self.evaluate(FakeTransport(runs=[self.code_runs() + [run('tests', 2, conclusion)]]))
+            self.assertEqual(ag.exit_code(result), 0 if conclusion in ('skipped', 'neutral') else 1)
+
+    def test_unknown_run_state_and_transport_error_fail_closed(self):
+        for status, conclusion in [('mystery', None), ('completed', 'action_required'), ('completed', None)]:
+            with self.subTest(status=status, conclusion=conclusion):
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[self.code_runs() + [run('tests', 2, conclusion, status=status)]]))
+        path = 'repos/owner/repo/actions/runs?head_sha=' + 'a' * 40 + '&per_page=100'
+        with self.assertRaises(ag.AggregationError):
+            self.evaluate(FakeTransport(responses={path: ag.AggregationError('offline')}))
+
+    def test_malformed_run_metadata_fails_closed(self):
+        for field, value in [('id', True), ('head_sha', None), ('status', {}), ('conclusion', {})]:
+            with self.subTest(field=field):
+                malformed = run('tests', 2)
+                malformed[field] = value
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[self.code_runs() + [malformed]]))
+
+    def test_pr_cap_requires_code_gates_even_for_docs(self):
+        result = self.evaluate(FakeTransport(), changed={'README.md'}, event='pull_request', action='synchronize', capped=True)
+        self.assertEqual(result['tests'].verdict, 'never-reported')
+        self.assertEqual(result['codeql'].verdict, 'never-reported')
+
+
+class PolicyVerdictTests(_VerdictFixture):
     def test_policy_edit_waits_for_delayed_failing_run(self):
         old = run('pr gate', 9, event='pull_request_target', created_at='2026-09-30T11:59:59Z')
         fresh = run('pr gate', 10, 'failure', event='pull_request_target', created_at='2026-09-30T12:00:01Z')
@@ -379,33 +410,6 @@ class VerdictTests(unittest.TestCase):
                 result = self.evaluate(FakeTransport(), changed={'README.md'}, event=event,
                                        action=action, policy_updated_at=None)
                 self.assertEqual(ag.exit_code(result), 0)
-
-    def test_skipped_neutral_and_failure_conclusions(self):
-        for conclusion in ('skipped', 'neutral', 'startup_failure', 'timed_out'):
-            result = self.evaluate(FakeTransport(runs=[self.code_runs() + [run('tests', 2, conclusion)]]))
-            self.assertEqual(ag.exit_code(result), 0 if conclusion in ('skipped', 'neutral') else 1)
-
-    def test_unknown_run_state_and_transport_error_fail_closed(self):
-        for status, conclusion in [('mystery', None), ('completed', 'action_required'), ('completed', None)]:
-            with self.subTest(status=status, conclusion=conclusion):
-                with self.assertRaises(ag.AggregationError):
-                    self.evaluate(FakeTransport(runs=[self.code_runs() + [run('tests', 2, conclusion, status=status)]]))
-        path = 'repos/owner/repo/actions/runs?head_sha=' + 'a' * 40 + '&per_page=100'
-        with self.assertRaises(ag.AggregationError):
-            self.evaluate(FakeTransport(responses={path: ag.AggregationError('offline')}))
-
-    def test_malformed_run_metadata_fails_closed(self):
-        for field, value in [('id', True), ('head_sha', None), ('status', {}), ('conclusion', {})]:
-            with self.subTest(field=field):
-                malformed = run('tests', 2)
-                malformed[field] = value
-                with self.assertRaises(ag.AggregationError):
-                    self.evaluate(FakeTransport(runs=[self.code_runs() + [malformed]]))
-
-    def test_pr_cap_requires_code_gates_even_for_docs(self):
-        result = self.evaluate(FakeTransport(), changed={'README.md'}, event='pull_request', action='synchronize', capped=True)
-        self.assertEqual(result['tests'].verdict, 'never-reported')
-        self.assertEqual(result['codeql'].verdict, 'never-reported')
 
 
 class WorkflowDriftTests(unittest.TestCase):
