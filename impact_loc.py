@@ -216,9 +216,25 @@ def clone_repo(repo, branch, dest, head=None):
 
 def git_out(dest, *args):
     """Run git in ``dest`` and return stdout, tolerating undecodable bytes."""
-    return subprocess.run(["git", "-C", str(dest), *args], capture_output=True,
-                          text=True, errors="replace", timeout=600,
-                          check=False).stdout
+    cmd = ["git", "-C", str(dest), "-c", "core.quotePath=false", *args]
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            errors="replace", timeout=600, check=False)
+    if result.returncode and not (args[0] == "grep" and result.returncode == 1):
+        raise subprocess.CalledProcessError(result.returncode, cmd,
+                                            result.stdout, result.stderr)
+    return result.stdout
+
+
+def _countable_path(path):
+    """Whether line-based consumers can safely identify this Git path."""
+    # NUL-delimited Git output preserves control bytes until this shared check;
+    # exclude such paths from both the text and touched sets so counts agree.
+    return not any(ord(char) < 32 or ord(char) == 127 for char in path)
+
+
+def _without_head_prefix(path):
+    """Remove git-grep's tree prefix from a path, when present."""
+    return path[len("HEAD:"):] if path.startswith("HEAD:") else path
 
 
 def our_touched_files(dest, emails):
@@ -227,8 +243,9 @@ def our_touched_files(dest, emails):
     for email in emails:
         out = git_out(dest, "log", "HEAD", "--fixed-strings",
                       "--regexp-ignore-case", f"--author={email}",
-                      "--name-only", "--pretty=format:", "-M")
-        files.update(f for f in out.split("\n") if f)
+                      "--name-only", "-z", "--pretty=format:", "-M")
+        files.update(f for f in out.split("\0")
+                     if f and _countable_path(f))
     return files
 
 
@@ -251,16 +268,19 @@ def rename_closure(dest, paths, since=None):
     # merge commit by default, and a rename performed during a merge is
     # therefore invisible. One real chain needed exactly that hop.
     scan = ["log", "HEAD", "--diff-filter=R", "--name-status", "-M",
-            "--diff-merges=first-parent", "--format="]
+            "-z", "--diff-merges=first-parent", "--format="]
     if since:
         scan.append(f"--since={since}")
     out = git_out(dest, *scan)
     events = []
-    for line in out.split("\n"):
-        if line.startswith("R"):
-            parts = line.split("\t")
-            if len(parts) == 3:
-                events.append((parts[1], parts[2]))
+    fields = out.split("\0")
+    index = 0
+    while index + 2 < len(fields):
+        status, old, new = fields[index:index + 3]
+        if status.startswith("R") and _countable_path(old) \
+                and _countable_path(new):
+            events.append((old, new))
+        index += 3
     reachable = set(paths)
     # A chain can be discovered out of order, so iterate to a fixpoint rather
     # than assuming one pass down the log catches every hop.
@@ -280,16 +300,25 @@ def targeted_counts(dest, emails):
     # which files are text: a file containing only blank lines matches the
     # empty pattern but not `.`, so git-fame skips it entirely while a naive
     # count includes its lines.
-    texts = {f[len("HEAD:"):] if f.startswith("HEAD:") else f
-             for f in git_out(dest, "grep", "-I", "--name-only", ".",
-                              "HEAD").split("\n") if f}
+    texts = {_without_head_prefix(path)
+             for path in git_out(dest, "grep", "-I", "--name-only", "-z",
+                                 ".", "HEAD").split("\0")
+             if path and _countable_path(_without_head_prefix(path))}
     total = 0
-    for line in git_out(dest, "grep", "-I", "-c", "", "HEAD").split("\n"):
-        if line:
-            path, _, count = line.rpartition(":")
-            path = path[len("HEAD:"):] if path.startswith("HEAD:") else path
-            if path in texts:
-                total += int(count)
+    counts = git_out(dest, "grep", "-I", "-c", "-z", "", "HEAD")
+    cursor = 0
+    while cursor < len(counts):
+        path_end = counts.find("\0", cursor)
+        if path_end < 0:
+            break
+        count_end = counts.find("\n", path_end + 1)
+        if count_end < 0:
+            break
+        path = _without_head_prefix(counts[cursor:path_end])
+        count = counts[path_end + 1:count_end]
+        if path in texts and _countable_path(path) and count:
+            total += int(count)
+        cursor = count_end + 1
     touched = our_touched_files(dest, emails)
     # Only pay for recovery scans when a path we touched vanished from the
     # tree -- the only way a rename can have hidden our lines.
