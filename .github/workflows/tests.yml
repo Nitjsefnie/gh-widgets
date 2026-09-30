@@ -93,14 +93,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install the coverage toolchain
+      - name: Install the test toolchain
         id: install
-        if: ${{ matrix.measured }}
-        # The SUITE needs nothing — it is stdlib unittest against a pure
-        # stdlib runtime. This installs only what MEASURES it. (Every run
-        # block uses `python`, not `python3`: the hosted Windows runners
-        # have no python3 on PATH, and setup-python puts python on PATH
-        # on all three OSes.)
+        # The renderer is stdlib-only, but the SUITE is not quite: it needs
+        # pytest, which test_compare_durations.py imports to test the timing
+        # harness, and coverage on the measured cell. Installed on EVERY
+        # cell so every cell runs the whole suite. (Every run block uses
+        # `python`, not `python3`: the hosted Windows runners have no
+        # python3 on PATH, and setup-python puts python on PATH on all
+        # three OSes.)
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
