@@ -42,10 +42,12 @@ class Clock:
         self.now += seconds
 
 
-def run(name, identifier=1, conclusion: str | None = 'success', event='push', status='completed', branch='topic'):
+def run(name, identifier=1, conclusion: str | None = 'success', event='push', status='completed', branch='topic',
+        created_at='2026-09-30T12:00:00Z'):
     return {'name': name, 'id': identifier, 'event': event,
             'head_sha': 'a' * 40, 'head_branch': branch,
             'status': status, 'conclusion': conclusion,
+            'created_at': created_at,
             'html_url': f'https://github.com/owner/repo/actions/runs/{identifier}'}
 
 
@@ -167,11 +169,13 @@ class AcquisitionTests(unittest.TestCase):
 
 
 class VerdictTests(unittest.TestCase):
-    def evaluate(self, transport, changed=None, event='push', action=None, timeout=0, capped=False):
+    def evaluate(self, transport, changed=None, event='push', action=None, timeout=0, capped=False,
+                 policy_updated_at='2026-09-30T12:00:00Z'):
         clock = Clock()
         return ag.evaluate_gates(transport, 'owner/repo', 'a' * 40,
                                  changed={'code.py'} if changed is None else changed,
                                  event=event, pr_action=action, capped=capped,
+                                 policy_updated_at=policy_updated_at,
                                  timeout=timeout, poll_interval=1,
                                  clock=clock.time, sleep=clock.sleep)
 
@@ -293,6 +297,52 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ag.exit_code(result), 0)
         self.assertIn('/10', result['pr gate'].detail)
 
+    def test_policy_edit_waits_for_delayed_failing_run(self):
+        old = run('pr gate', 9, event='pull_request_target', created_at='2026-09-30T11:59:59Z')
+        fresh = run('pr gate', 10, 'failure', event='pull_request_target', created_at='2026-09-30T12:00:01Z')
+        transport = FakeTransport(runs=[[old], [old, fresh]])
+        result = self.evaluate(transport, changed={'README.md'}, event='pull_request', action='edited', timeout=2)
+        self.assertEqual(result['pr gate'].verdict, 'FAILED')
+        self.assertIn('/10', result['pr gate'].detail)
+        self.assertEqual(ag.exit_code(result), 1)
+        self.assertEqual(transport.polls, 2)
+
+    def test_stale_policy_success_never_reports_for_current_state(self):
+        old = run('pr gate', 9, event='pull_request_target', created_at='2026-09-30T11:59:59Z')
+        result = self.evaluate(FakeTransport(runs=[[old]]), changed={'README.md'},
+                               event='pull_request', action='edited', timeout=2)
+        self.assertEqual(result['pr gate'].verdict, 'never-reported')
+        self.assertEqual(ag.exit_code(result), 1)
+
+    def test_policy_timestamps_fail_closed_when_missing_or_malformed(self):
+        malformed = [None, '', {}, '2026-09-30T12:00:00+00:00', '2026-09-30T12:00:00.1Z',
+                     '2026-02-30T12:00:00Z', '0000-09-30T12:00:00Z']
+        for value in malformed:
+            with self.subTest(field='policy_updated_at', value=value):
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(), changed={'README.md'}, event='pull_request',
+                                  action='edited', policy_updated_at=value)
+            with self.subTest(field='created_at', value=value):
+                candidate = run('pr gate', 9, event='pull_request_target')
+                candidate['created_at'] = value
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[[candidate]]), changed={'README.md'},
+                                  event='pull_request', action='edited')
+
+    def test_policy_boundary_accepts_equal_timestamp_and_skipped_run(self):
+        candidate = run('pr gate', 9, 'skipped', event='pull_request_target')
+        result = self.evaluate(FakeTransport(runs=[[candidate]]), changed={'README.md'},
+                               event='pull_request', action='opened')
+        self.assertEqual(ag.exit_code(result), 0)
+        self.assertEqual(result['pr gate'].verdict, 'passed')
+
+    def test_non_required_policy_needs_no_timestamp(self):
+        for event, action in [('push', None), ('workflow_dispatch', None), ('pull_request', 'synchronize')]:
+            with self.subTest(event=event):
+                result = self.evaluate(FakeTransport(), changed={'README.md'}, event=event,
+                                       action=action, policy_updated_at=None)
+                self.assertEqual(ag.exit_code(result), 0)
+
     def test_skipped_neutral_and_failure_conclusions(self):
         for conclusion in ('skipped', 'neutral', 'startup_failure', 'timed_out'):
             result = self.evaluate(FakeTransport(runs=[self.code_runs() + [run('tests', 2, conclusion)]]))
@@ -400,6 +450,7 @@ class WorkflowDriftTests(unittest.TestCase):
         block = text.split('        run: |', 1)[1]
         self.assertNotIn('${{', block)
         self.assertIn('python3 scripts/ci/aggregate_gates.py', block)
+        self.assertIn('GATE_POLICY_UPDATED_AT: ${{ github.event.pull_request.updated_at }}', text)
 
     def test_contributing_count_matches_all_workflow_files(self):
         root = ag.Path(__file__).resolve().parent
@@ -417,6 +468,16 @@ class WorkflowDriftTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_uses_the_policy_timestamp_from_environment(self):
+        path = 'repos/owner/repo/pulls/37/files?per_page=100'
+        candidate = run('pr gate', 9, event='pull_request_target', created_at='2026-09-30T11:00:00Z')
+        transport = FakeTransport(runs=[[candidate]], responses={path: [{'filename': 'README.md'}]})
+        environment = {'GATE_REPO': 'owner/repo', 'GATE_EVENT': 'pull_request', 'GATE_SHA': 'a' * 40,
+                       'GATE_PR_NUMBER': '37', 'GATE_PR_ACTION': 'edited',
+                       'GATE_POLICY_UPDATED_AT': 'malformed'}
+        with mock.patch('builtins.print'):
+            self.assertEqual(ag.main([], transport=transport, environ=environment), 2)
+
     def test_cli_passes_and_writes_the_summary(self):
         path = 'repos/owner/repo/pulls/37/files?per_page=100'
         transport = FakeTransport(responses={path: [{'filename': 'README.md'}]})

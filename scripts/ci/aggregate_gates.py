@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import quote
@@ -257,13 +258,27 @@ def _compare_files(transport: Transport, repo: str, before: str, after: str,
     return _filenames(files), False
 
 
-def _latest(runs: list[dict], name: str, event: str, sha: str) -> dict | None:
+def _timestamp(value: Any) -> str:
+    if not isinstance(value, str) or re.fullmatch(r'[0-9]{4}(?:-[0-9]{2}){2}T[0-9]{2}(?::[0-9]{2}){2}Z', value) is None:
+        raise AggregationError(f'missing or malformed policy timestamp: {value!r}')
+    try:
+        datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ')
+    except ValueError as exc:
+        raise AggregationError(f'invalid policy timestamp: {value!r}') from exc
+    return value
+
+
+def _latest(runs: list[dict], name: str, event: str, sha: str, *, created_after: str | None = None) -> dict | None:
     matching = [run for run in runs if run.get('name') == name
                 and run.get('event') == event]
     for run in matching:
         _sha(run.get('head_sha'))
         _run_id(run, name)
     matching = [run for run in matching if run['head_sha'] == sha]
+    if created_after is not None:
+        # Policy input changes without a new SHA. Canonical Zulu timestamps
+        # compare chronologically as strings after both formats are validated.
+        matching = [run for run in matching if _timestamp(run.get('created_at')) >= created_after]
     return max(matching, key=lambda run: run['id']) if matching else None
 
 
@@ -315,7 +330,7 @@ def _not_applicable(gate: Gate, event: str, pr_action: str | None) -> Result:
 
 def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
                    pr_action: str | None, decisions: dict[str, str],
-                   runs: list[dict]) -> tuple[dict[str, Result], dict[str, Result]]:
+                   runs: list[dict], policy_updated_at: str | None) -> tuple[dict[str, Result], dict[str, Result]]:
     results, pending = {}, {}
     for name, gate in GATES.items():
         # Applicability wins over any stale run at this SHA. In particular,
@@ -323,7 +338,8 @@ def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
         if decisions[name] == 'not-applicable':
             results[name] = _not_applicable(gate, event, pr_action)
             continue
-        run = _latest(runs, name, gate.events.get(event, ''), sha)
+        run = _latest(runs, name, gate.events.get(event, ''), sha,
+                      created_after=policy_updated_at if gate.kind == 'pr' else None)
         if run is None:
             pending[name] = Result('never-reported', 'should have run but never reported')
         elif run.get('status') in ('queued', 'in_progress'):
@@ -336,8 +352,9 @@ def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
 
 
 # Separate clock/sleep hooks make deadline tests independent of real time.
-def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[str],  # pylint: disable=too-many-arguments
+def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[str],  # pylint: disable=too-many-arguments,too-many-locals
                    event: str, pr_action: str | None = None, capped: bool = False,
+                   policy_updated_at: str | None = None,
                    timeout: float = 40 * 60, poll_interval: float = 20,
                    clock: Callable[[], float] = time.monotonic,
                    sleep: Callable[[float], None] = time.sleep) -> dict[str, Result]:
@@ -345,6 +362,8 @@ def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[st
     if timeout < 0 or poll_interval <= 0:
         raise AggregationError('timeout must be nonnegative and poll interval positive')
     decisions = classify(changed, event=event, pr_action=pr_action)
+    if decisions['pr gate'] == 'run':
+        policy_updated_at = _timestamp(policy_updated_at)
     if capped:
         # At the PR diff cap the code deny-lists cannot justify a skip.
         decisions.update({name: 'run' for name, gate in GATES.items() if gate.kind == 'deny'})
@@ -352,7 +371,8 @@ def evaluate_gates(transport: Transport, repo: str, sha: str, *, changed: set[st
     while True:
         results, pending = _inspect_gates(
             transport, repo, sha, event, pr_action, decisions,
-            _list_items(_api(transport, f'repos/{repo}/actions/runs?head_sha={sha}&per_page=100', paginate=True)))
+            _list_items(_api(transport, f'repos/{repo}/actions/runs?head_sha={sha}&per_page=100', paginate=True)),
+            policy_updated_at)
         if not pending or clock() >= deadline:
             results.update(pending)
             return {name: results[name] for name in GATES}
@@ -393,7 +413,8 @@ def _context_results(transport: Transport, environment: dict[str, str]) -> dict[
         pr_number=environment.get('GATE_PR_NUMBER', ''),
         default_branch=environment.get('GATE_DEFAULT_BRANCH', ''), payload=payload)
     return evaluate_gates(transport, repo, sha, changed=changed, capped=capped,
-                          event=event, pr_action=environment.get('GATE_PR_ACTION'))
+                          event=event, pr_action=environment.get('GATE_PR_ACTION'),
+                          policy_updated_at=environment.get('GATE_POLICY_UPDATED_AT'))
 
 
 def main(argv: list[str] | None = None, *, transport: Transport | None = None,

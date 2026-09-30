@@ -13,7 +13,7 @@ name: aggregate
 # A job skipped for a draft or Bot author is a passing run-level skip.
 #
 # Supersession-cancelled gates gate nothing: a newer run on the same branch
-# proves the old revision was obsolete. A deliberate cancel is a failure.
+# and event proves the old revision was obsolete. A deliberate cancel fails.
 #
 # release.yml is deliberately NOT waited on. Release waits on this check
 # before tagging the commit, and the two must not deadlock.
@@ -63,6 +63,8 @@ jobs:
           GATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GATE_PR_NUMBER: ${{ github.event.pull_request.number }}
           GATE_PR_ACTION: ${{ github.event.action }}
+          # Policy reads the PR body: only runs created since this state count.
+          GATE_POLICY_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
           GATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           python3 scripts/ci/aggregate_gates.py
