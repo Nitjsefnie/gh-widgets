@@ -72,7 +72,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 3
+REQUIRED_COMMON = 6
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -84,6 +84,7 @@ gql = common.gql
 save_cache = common.save_cache
 fmt_short = common.fmt_short
 xml_escape = common.xml_escape
+xml_color = common.xml_color
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 
@@ -347,7 +348,7 @@ def render_stats(C, user, total_stars, total_forks, year_contribs):
     name = user.get("name") or user["login"]
     body = f"""
   <text x="20" y="34" fill="{C['blue']}" font-size="16" font-weight="600">{xml_escape(name)}</text>
-  <text x="20" y="52" fill="{C['dim']}" font-size="11">@{user['login']} · github stats</text>
+  <text x="20" y="52" fill="{C['dim']}" font-size="11">@{xml_escape(user['login'])} · github stats</text>
   <line x1="20" y1="64" x2="400" y2="64" stroke="{C['border']}"/>
   <g font-size="13">
     <text x="20"  y="92"  fill="{C['dim']}">followers</text>
@@ -431,7 +432,7 @@ def language_legend(C, top):
     ly = 124
     for name, _, pct, color in top:
         legend.append(
-            f'<rect x="20" y="{ly-9}" width="9" height="9" fill="{color}"/>'
+            f'<rect x="20" y="{ly-9}" width="9" height="9" fill="{xml_color(color)}"/>'
             f'<text x="34" y="{ly}" fill="{C["fg"]}" font-size="12">{xml_escape(name)}</text>'
             f'<text x="400" y="{ly}" text-anchor="end" fill="{C["dim"]}" font-size="11">{pct:.1f}%</text>'
         )
@@ -447,7 +448,7 @@ def render_languages(C, langs):
     rect_x = bar_x
     for _, _, pct, color in top:
         seg = (pct / pct_sum) * bar_w
-        rects.append(f'<rect x="{rect_x:.1f}" y="{y}" width="{seg:.1f}" height="10" fill="{color}"/>')
+        rects.append(f'<rect x="{rect_x:.1f}" y="{y}" width="{seg:.1f}" height="10" fill="{xml_color(color)}"/>')
         rect_x += seg
     body = f"""
   <text x="20" y="34" fill="{C['cyan']}" font-size="14" font-weight="600">top languages</text>

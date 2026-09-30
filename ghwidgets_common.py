@@ -56,7 +56,7 @@ except ImportError:  # POSIX
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 3
+COMMON_VERSION = 6
 
 
 def _read_repo_version() -> str:
@@ -860,10 +860,24 @@ def fmt_short(n):
     return f"{n/1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
 
 
+_XML_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def xml_escape(s):
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+    s = _XML_FORBIDDEN.sub("", str(s))
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;")
             .replace("'", "&apos;"))
+
+
+def xml_color(value, fallback="#888888"):
+    """Validate colors interpolated into fill= attributes.
+
+    GitHub language colors are hex, so anything else is hostile or corrupt;
+    use the fallback.
+    """
+    return (value if re.fullmatch(
+        r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", str(value)) else fallback)
 
 
 def base_card(C, w, h, body):

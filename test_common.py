@@ -880,6 +880,28 @@ class XmlEscape(unittest.TestCase):
     def test_non_string_input_is_stringified(self):
         self.assertEqual(common.xml_escape(42), "42")
 
+    def test_xml_forbidden_c0_controls_are_removed(self):
+        forbidden = "".join(chr(code) for code in
+                            list(range(0x00, 0x09)) + [0x0b, 0x0c] +
+                            list(range(0x0e, 0x20)))
+        self.assertEqual(common.xml_escape("a\x01b\x1bc"), "abc")
+        self.assertEqual(common.xml_escape(forbidden), "")
+
+    def test_xml_legal_whitespace_controls_survive(self):
+        self.assertEqual(common.xml_escape("a\tb\nc\rd"), "a\tb\nc\rd")
+
+
+class XmlColor(unittest.TestCase):
+    def test_six_and_eight_digit_hex_colors_are_preserved(self):
+        for value in ("#Ab12eF", "#Ab12eF80"):
+            with self.subTest(value=value):
+                self.assertEqual(common.xml_color(value), value)
+
+    def test_invalid_colors_use_the_fallback(self):
+        for value in ("red", "#zz1211", '\"><img src=x>', ""):
+            with self.subTest(value=value):
+                self.assertEqual(common.xml_color(value), "#888888")
+
 
 class FmtShort(unittest.TestCase):
     # Shown on every card; a wrong magnitude renders a plausible-looking

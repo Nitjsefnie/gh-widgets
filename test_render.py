@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -529,6 +530,50 @@ class CorruptCache(unittest.TestCase):
             # The successful run rewrites a clean, current-version cache.
             self.assertEqual(render.load_cache(cache_file)["version"],
                              render.CACHE_VERSION)
+
+
+class SvgInputEscaping(unittest.TestCase):
+    C = render.THEMES["tokyonight"]
+    SVG_NS = "http://www.w3.org/2000/svg"
+
+    def test_stats_login_markup_and_controls_are_text(self):
+        user = json.loads(json.dumps(CORE_USER))
+        user["login"] = "octo\x01<img src=x>"
+
+        svg = render.render_stats(self.C, user, 0, 0, 0)
+        root = ET.fromstring(svg)
+
+        self.assertIn("@octo&lt;img src=x&gt;", svg)
+        self.assertIsNone(root.find(f".//{{{self.SVG_NS}}}img"))
+
+    def test_hostile_legend_color_uses_fallback_and_parses(self):
+        legend = render.language_legend(
+            self.C, [("Python", 100, 100.0, '\"><img src=x>')])
+        root = ET.fromstring(render.base_card(self.C, 420, 230, legend))
+
+        rect = next(
+            rect for rect in root.findall(f".//{{{self.SVG_NS}}}rect")
+            if rect.attrib.get("x") == "20")
+        self.assertEqual(rect.attrib["fill"], "#888888")
+        self.assertIsNone(root.find(f".//{{{self.SVG_NS}}}img"))
+
+    def test_hostile_language_bar_color_uses_fallback_and_parses(self):
+        svg = render.render_languages(
+            self.C, [("Python", 100, 100.0, '\"><img src=x>')])
+        root = ET.fromstring(svg)
+        rects = root.findall(f".//{{{self.SVG_NS}}}rect")
+
+        self.assertIn("#888888", [rect.attrib.get("fill") for rect in rects])
+        self.assertIsNone(root.find(f".//{{{self.SVG_NS}}}img"))
+
+    def test_full_stats_card_strips_controls_from_name(self):
+        user = json.loads(json.dumps(CORE_USER))
+        user["name"] = "A\x01B\x1f"
+
+        root = ET.fromstring(render.render_stats(self.C, user, 0, 0, 0))
+        texts = root.findall(f".//{{{self.SVG_NS}}}text")
+
+        self.assertEqual(texts[0].text, "AB")
 
 
 if __name__ == "__main__":
