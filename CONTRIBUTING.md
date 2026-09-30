@@ -96,7 +96,7 @@ run for anyone using the documented command.
 
 ## CI
 
-Eleven workflows run, and a green suite is one of them. These you can run
+Fourteen workflows run, and a green suite is one of them. These you can run
 locally:
 
 ```sh
@@ -125,6 +125,10 @@ has both *reported* and passed; a gate that never reports stops the release
 rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
 measurement workflows that were already here.
+
+The fourteenth, `aggregate`, always reports on every push and pull request
+regardless of paths, so branch protection requires it instead of the
+path-filtered gates.
 
 **Release = edit `VERSION`.** One bare semver line at the repo root, no
 leading `v`. `REPO_VERSION` in `ghwidgets_common.py` reads it — and note

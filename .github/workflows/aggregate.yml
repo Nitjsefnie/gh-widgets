@@ -1,0 +1,68 @@
+name: aggregate
+
+# The required check that ALWAYS REPORTS (issue #37). Every sibling CI gate
+# filters paths, so a docs-only change creates no run for those gates. Making
+# any of them required would strand that change on a check that never exists.
+# This workflow has no path or branch filter: every push and pull request gets
+# a verdict, and a legitimate skip explains itself in the summary instead of
+# becoming a missing required check.
+#
+# It folds WORKFLOW RUNS for this commit, using each gate's own event name.
+# Push and pull_request answer their own questions; the PR policy gate uses
+# pull_request_target, without giving this aggregate that privileged trigger.
+# A job skipped for a draft or Bot author is a passing run-level skip.
+#
+# Supersession-cancelled gates gate nothing: a newer run on the same branch
+# proves the old revision was obsolete. A deliberate cancel is a failure.
+#
+# release.yml is deliberately NOT waited on. Release waits on this check
+# before tagging the commit, and the two must not deadlock.
+
+on:
+  push:
+  pull_request:
+    # Include the policy gate's edit/ready actions as well as the default
+    # opened/synchronize/reopened set. An edited PR body must refresh the
+    # aggregate even when its head SHA has not changed.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Workflow-runs API: observe the other gates, without changing them.
+  actions: read
+
+concurrency:
+  group: aggregate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    # The script polls for 40 minutes, leaving margin for checkout and errors.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes; later steps must not inherit git credentials.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Aggregate the workflow gates
+        # Context is data in env, never shell source. GITHUB_EVENT_PATH and
+        # GITHUB_STEP_SUMMARY are runner variables; the script reads the former
+        # and appends its per-gate markdown table to the latter even on failure.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_REPO: ${{ github.repository }}
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GATE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GATE_PR_ACTION: ${{ github.event.action }}
+          GATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 scripts/ci/aggregate_gates.py
