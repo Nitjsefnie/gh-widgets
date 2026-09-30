@@ -85,6 +85,9 @@
 !/scripts/*.py
 !/scripts/*.sh
 !/scripts/pre-push
+!/scripts/bench/
+/scripts/bench/*
+!/scripts/bench/*.py
 !/scripts/ci/
 /scripts/ci/*
 !/scripts/ci/*.py
