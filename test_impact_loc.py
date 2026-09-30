@@ -3,9 +3,11 @@
 import importlib.util
 import io
 import os
+import signal
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -137,6 +139,101 @@ class TestGitFameFailures(unittest.TestCase):
         self.assertIn("error", result["outside/failure"])
         self.assertEqual(result["outside/success"], {
             "ours": 2, "total": 2, "branch": "main", "head": "h2"})
+
+
+class TestScratchLifecycle(unittest.TestCase):
+    """Clone scratch is tracked, cleaned on signals, and aged out safely."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-scratch-lifecycle-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def moved():
+        return [("outside/project", {"branch": "main", "head": "h1"})]
+
+    def test_new_scratch_is_registered_until_removed(self):
+        with mock.patch.object(impact_loc, "clone_repo", return_value=0.0):
+            gen = impact_loc.prefetched_clones(self.moved(), depth=1)
+            try:
+                _repo, _totals, scratch, _clone, _wait, _error = next(gen)
+                registry = getattr(impact_loc, "_SCRATCH_DIRS", set())
+                self.assertIn(scratch, registry)
+                remover = getattr(impact_loc, "remove_scratch_dir", None)
+                if remover is None:
+                    shutil.rmtree(scratch, ignore_errors=True)
+                else:
+                    remover(scratch)
+                self.assertNotIn(scratch, registry)
+                self.assertFalse(scratch.exists())
+            finally:
+                gen.close()
+
+    def test_signal_handlers_are_idempotent_and_remove_inflight_dirs(self):
+        first = self.tmp / "first"
+        second = self.tmp / "second"
+        first.mkdir()
+        second.mkdir()
+        registry = {first, second}
+
+        def fake_exit(code):
+            raise SystemExit(code)
+
+        with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
+                              create=True), \
+                mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED",
+                                  False, create=True), \
+                mock.patch("signal.signal") as register, \
+                mock.patch.object(impact_loc.os, "_exit",
+                                  side_effect=fake_exit) as exit_process:
+            installer = getattr(
+                impact_loc, "install_scratch_signal_handlers", None)
+            self.assertIsNotNone(installer)
+            if installer is not None:
+                installer()
+                installer()
+                registered = {call.args[0]: call.args[1]
+                              for call in register.call_args_list}
+                self.assertEqual(set(registered),
+                                 {signal.SIGTERM, signal.SIGINT})
+                with self.assertRaises(SystemExit) as raised:
+                    registered[signal.SIGTERM](signal.SIGTERM, None)
+            else:
+                raised = None
+
+        if raised is None:
+            return
+        self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
+        self.assertFalse(first.exists())
+        self.assertFalse(second.exists())
+        self.assertEqual(registry, set())
+        exit_process.assert_called_once_with(128 + signal.SIGTERM)
+
+    def test_blame_start_scavenges_only_old_noninflight_scratch(self):
+        scratch_root = self.tmp / "tmp"
+        scratch_root.mkdir()
+        old = scratch_root / "impact-fame-old"
+        inflight = scratch_root / "impact-fame-inflight"
+        recent = scratch_root / "impact-fame-recent"
+        for path in (old, inflight, recent):
+            path.mkdir()
+        old_time = time.time() - 2 * 60 * 60
+        os.utime(old, (old_time, old_time))
+        os.utime(inflight, (old_time, old_time))
+        registry = {inflight}
+
+        with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
+                              create=True), \
+                mock.patch.object(impact_loc.tempfile, "gettempdir",
+                                  return_value=str(scratch_root)), \
+                mock.patch.dict(os.environ,
+                                {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
+            impact_loc.blame_moved([], {}, set(),
+                                   prefetch_fn=lambda _moved: iter(()))
+
+        self.assertFalse(old.exists())
+        self.assertTrue(inflight.exists())
+        self.assertTrue(recent.exists())
 
 
 if __name__ == "__main__":

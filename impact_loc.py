@@ -10,8 +10,10 @@ import contextlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent import futures
 from pathlib import Path
@@ -475,6 +477,52 @@ def clone_lookahead():
     return max(1, int(common.env_float("CLONE_LOOKAHEAD", 3)))
 
 
+_SCRATCH_DIRS = set()
+_SIGNAL_HANDLERS_INSTALLED = False
+
+
+def remove_scratch_dir(path):
+    """Remove one scratch directory and forget it from signal cleanup."""
+    scratch = Path(path)
+    shutil.rmtree(scratch, ignore_errors=True)
+    _SCRATCH_DIRS.discard(scratch)
+
+
+def _handle_scratch_signal(signum, _frame):
+    """Remove every in-flight clone before exiting with signal status."""
+    for scratch in tuple(_SCRATCH_DIRS):
+        remove_scratch_dir(scratch)
+    os._exit(128 + signum)
+
+
+def install_scratch_signal_handlers():
+    """Install clone cleanup handlers once, from the main thread only."""
+    global _SIGNAL_HANDLERS_INSTALLED
+    if _SIGNAL_HANDLERS_INSTALLED \
+            or threading.current_thread() is not threading.main_thread():
+        return
+    signal.signal(signal.SIGTERM, _handle_scratch_signal)
+    signal.signal(signal.SIGINT, _handle_scratch_signal)
+    _SIGNAL_HANDLERS_INSTALLED = True
+
+
+def scavenge_scratch_dirs():
+    """Remove abandoned impact clones older than the configured age."""
+    # The age-based sweep leaves a concurrent render's registered scratch
+    # alone, while bounding how long interrupted-run clones remain in TMPDIR.
+    max_age = max(0, common.env_float("IMPACT_SCRATCH_MAX_AGE_HOURS", 24))
+    cutoff = time.time() - max_age * 60 * 60
+    active = set(_SCRATCH_DIRS)
+    for scratch in Path(tempfile.gettempdir()).glob("impact-fame-*"):
+        if scratch in active or scratch.is_symlink() or not scratch.is_dir():
+            continue
+        try:
+            if scratch.stat().st_mtime < cutoff:
+                remove_scratch_dir(scratch)
+        except OSError:
+            continue
+
+
 def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  # pylint: disable=too-many-locals
     """Yield clone results in order while running the next clones ahead."""
     if clone_fn is None:
@@ -490,7 +538,9 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
     def start(idx):
         if idx < len(moved) and idx not in pending:
             repo, t = moved[idx]
-            dirs[idx] = Path(tempfile.mkdtemp(prefix="impact-fame-"))
+            scratch = Path(tempfile.mkdtemp(prefix="impact-fame-"))
+            _SCRATCH_DIRS.add(scratch)
+            dirs[idx] = scratch
             pending[idx] = pool.submit(clone_fn, repo, t["branch"], dirs[idx],
                                        t.get("head"))
 
@@ -512,8 +562,8 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
         for fut in pending.values():
             fut.cancel()
         pool.shutdown(wait=True)
-        for unused in dirs.values():
-            shutil.rmtree(unused, ignore_errors=True)
+        for scratch in dirs.values():
+            remove_scratch_dir(scratch)
 
 
 def blame_moved(moved, ourloc, emails, *, prefetch_fn=None, count_fn=None):  # pylint: disable=too-many-locals
@@ -522,6 +572,8 @@ def blame_moved(moved, ourloc, emails, *, prefetch_fn=None, count_fn=None):  # p
         prefetch_fn = prefetched_clones
     if count_fn is None:
         count_fn = counts_for
+    install_scratch_signal_handlers()
+    scavenge_scratch_dirs()
     n = len(moved)
     for i, (repo, t, tmp, clone_s, wait_s, err) in enumerate(
             prefetch_fn(moved), 1):
@@ -544,4 +596,4 @@ def blame_moved(moved, ourloc, emails, *, prefetch_fn=None, count_fn=None):  # p
                 ourloc[repo] = {"error": str(e)[:80], "head": t["head"]}
                 print(f"loc [{i}/{n}] FAIL {repo}: {str(e)[:60]}", flush=True)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            remove_scratch_dir(tmp)
