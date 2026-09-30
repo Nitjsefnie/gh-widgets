@@ -199,7 +199,7 @@ def _write_json(path, payload):
                     encoding="utf-8")
 
 
-def _write_payloads(payload_dir, repo_heads):
+def _write_identity_payload(payload_dir):
     org = {"id": 9001, "login": ORG, "isPublic": True,
            "url": f"https://github.com/{ORG}"}
     organizations = {
@@ -225,15 +225,10 @@ def _write_payloads(payload_dir, repo_heads):
         "login": ORG,
         "url": f"https://api.github.com/orgs/{ORG}",
     }])
+    return identity_user
 
-    repo_nodes = [_repository_for(index)
-                  for index in range(len(REPOSITORIES))]
-    profile_repositories = {
-        "totalCount": len(repo_nodes),
-        "nodes": repo_nodes,
-        "pageInfo": {"hasNextPage": False, "endCursor": None},
-    }
 
+def _write_pr_payload(payload_dir):
     merged_prs = [
         _pull_request(index, number, True)
         for index in range(len(REPOSITORIES))
@@ -244,7 +239,6 @@ def _write_payloads(payload_dir, repo_heads):
         for index in range(len(REPOSITORIES))
         for number in range(1, 3)
     ]
-    cached_prs = {node["id"]: node for node in merged_prs + closed_prs}
     live_pages = [
         _connection_page(closed_prs[:4], True, "pr-live-page-2",
                          len(closed_prs)),
@@ -263,7 +257,10 @@ def _write_payloads(payload_dir, repo_heads):
         "all_nodes": all_prs,
     }
     _write_json(payload_dir / "pull-requests.json", pr_payload)
+    return {node["id"]: node for node in all_prs}, all_prs
 
+
+def _write_issue_payload(payload_dir):
     issue_nodes = []
     for index in range(len(REPOSITORIES)):
         issue_nodes.extend([
@@ -281,21 +278,33 @@ def _write_payloads(payload_dir, repo_heads):
         "pages": issue_pages,
         "all_nodes": issue_nodes,
     })
+    return issue_nodes
 
+
+def _write_calendar_payload(payload_dir):
     calendar_days, contribution_calendar = _calendar()
     _write_json(payload_dir / "calendar.json", {
         "user": {"contributionsCollection": {
             "contributionCalendar": contribution_calendar}},
     })
+    return calendar_days, contribution_calendar
 
+
+def _write_profile_payload(payload_dir, identity_user, repo_nodes,
+                           contribution_calendar, all_prs, issue_nodes):
+    profile_repositories = {
+        "totalCount": len(repo_nodes),
+        "nodes": repo_nodes,
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+    }
     profile_user = {
         **identity_user,
         "followers": {"totalCount": 37},
         "repositories": profile_repositories,
         "contributionsCollection": {
             "contributionCalendar": contribution_calendar},
-        "pullRequests": _connection_page(all_prs, False, None,
-                                          len(all_prs)),
+        "pullRequests": _connection_page(
+            all_prs, False, None, len(all_prs)),
         "issues": _connection_page(issue_nodes, False, None,
                                    len(issue_nodes)),
     }
@@ -304,6 +313,8 @@ def _write_payloads(payload_dir, repo_heads):
         "viewer": profile_user,
     })
 
+
+def _write_totals_payload(payload_dir, repo_heads):
     totals = {}
     for index, (owner, name) in enumerate(REPOSITORIES):
         repo = f"{owner}/{name}"
@@ -314,7 +325,19 @@ def _write_payloads(payload_dir, repo_heads):
             "head": repo_heads[repo],
         }
     _write_json(payload_dir / "totals.json", totals)
+    return totals
 
+
+def _write_payloads(payload_dir, repo_heads):
+    identity_user = _write_identity_payload(payload_dir)
+    repo_nodes = [_repository_for(index)
+                  for index in range(len(REPOSITORIES))]
+    cached_prs, all_prs = _write_pr_payload(payload_dir)
+    issue_nodes = _write_issue_payload(payload_dir)
+    calendar_days, contribution_calendar = _write_calendar_payload(payload_dir)
+    _write_profile_payload(payload_dir, identity_user, repo_nodes,
+                           contribution_calendar, all_prs, issue_nodes)
+    totals = _write_totals_payload(payload_dir, repo_heads)
     _write_json(payload_dir / "manifest.json", {
         "login": USER,
         "organizations": [ORG],
@@ -360,8 +383,8 @@ def _write_caches(cache_dir, user, calendar_days, cached_prs, issue_nodes,
     })
 
 
-def build(root):
-    """Create a fresh fixture root and return its repository head map."""
+def _validate_fixture_root(root):
+    """Require an empty fixture directory outside this checkout."""
     root = Path(root)
     repo_root = Path(__file__).resolve().parents[2]
     root_resolved = root.resolve()
@@ -376,6 +399,11 @@ def build(root):
     if next(root.iterdir(), None) is not None:
         raise FileExistsError(f"fixture root is not empty: {root}")
 
+
+def build(root):
+    """Create a fresh fixture root and return its repository head map."""
+    root = Path(root)
+    _validate_fixture_root(root)
     mirror_dir = root / "mirror"
     payload_dir = root / "payloads"
     cache_dir = root / "caches"
