@@ -48,8 +48,18 @@ COMMITTED_FLOOR = REPO_ROOT / "coverage-floor.json"
 SHA = "ce49d0a267d6dc33db5da39cfafdf53848aadcff"
 
 
-def _report(percent=72.0, statements=2405, missing=671, files=11):
-    """A `coverage json` report shaped like the one coverage really writes."""
+def _report(percent=72.0, statements=2910, missing=705, files=13):
+    """A `coverage json` report shaped like the one coverage really writes.
+
+    SYNTHETIC. These defaults are not the repository's coverage and are never
+    compared against `coverage-floor.json` — the only document those numbers
+    could contradict is the real one, and it is read from disk by the cases in
+    TestTheCommittedFileIsTheOneTheGateReads. They match the current population
+    (13 files, 2910 statements, 705 missing) so that a reader skimming this file
+    for "what does the repository measure" finds the current figures rather
+    than figures from three generations ago, which is what a stale fixture
+    here looks like to anyone who has not been told otherwise.
+    """
     names = [f"module_{index}.py" for index in range(files)]
     return {
         "files": {name: {"summary": {}} for name in names},
@@ -77,9 +87,9 @@ def _document(floor=71.9, drop=(), **overrides):
         "floor": floor,
         "measured_commit": SHA,
         "measured_at": "2026-09-30T19:40:41Z",
-        "statements": 2405,
-        "missing": 671,
-        "files": 11,
+        "statements": 2910,
+        "missing": 705,
+        "files": 13,
     }
     document.update(overrides)
     for key in drop:
