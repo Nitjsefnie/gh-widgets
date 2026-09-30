@@ -392,6 +392,13 @@ def gql(token, query, variables=None, retries=3, timeout=20):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                raise
+            if attempt == retries:
+                raise
+            time.sleep(5 * (attempt + 1))
+            continue
         except urllib.error.URLError:
             if attempt == retries:
                 raise
