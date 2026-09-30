@@ -489,7 +489,7 @@ class AtomicWrite(unittest.TestCase):
 
     def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
         real_fdopen = os.fdopen
-        real_write_cache = resp.common._write_cache
+        real_write_cache = resp.common._write_cache  # pylint: disable=protected-access
         write_attempts = []
 
         class PartialWriter:
