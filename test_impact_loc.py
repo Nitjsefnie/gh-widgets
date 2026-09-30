@@ -166,6 +166,132 @@ class TestScratchLifecycle(unittest.TestCase):
     def moved():
         return [("outside/project", {"branch": "main", "head": "h1"})]
 
+    def make_paused_clone_renderer(self):
+        """Build an offline renderer whose clone spawn waits for a release."""
+        paths = {
+            "scratch_root": self.tmp / "scratch",
+            "mirror_root": self.tmp / "mirrors",
+            "bin_dir": self.tmp / "bin",
+            "signals": self.tmp / "signals",
+            "boundary": self.tmp / "spawn-boundary",
+            "release": self.tmp / "release-spawn",
+            "scratch_path": self.tmp / "scratch-path",
+            "wait_path": self.tmp / "handler-waiting-for-spawn",
+        }
+        paths["scratch_root"].mkdir()
+        paths["mirror_root"].mkdir()
+        paths["mirror"] = paths["mirror_root"] / "offline__repo"
+        paths["mirror"].mkdir()
+        paths["bin_dir"].mkdir()
+        paths["signals"].mkdir()
+        fake_git = paths["bin_dir"] / "git"
+        expected = [
+            "-c", "pack.threads=1", "-c", "pack.windowMemory=32m",
+            "clone", "--single-branch", str(paths["mirror"])]
+        fake_git.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys, time\n"
+            f"expected = {expected!r}\n"
+            "args = sys.argv[1:]\n"
+            "if (len(args) != len(expected) + 1 or args[:-1] != expected "
+            "or not args[-1].startswith(os.environ['TMPDIR'] + os.sep + "
+            "'impact-fame-')):\n"
+            "    sys.stderr.write('unexpected fake git argv: %r\\n' % args)\n"
+            "    sys.exit(97)\n"
+            "while True:\n"
+            "    time.sleep(1)\n",
+            encoding="utf-8")
+        fake_git.chmod(0o755)
+
+        driver = self.tmp / "renderer.py"
+        driver.write_text(
+            "import importlib.util\n"
+            "import os\n"
+            "import subprocess\n"
+            "import tempfile\n"
+            "import threading\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            f"render_path = Path({str(Path(__file__).with_name('render-impact.py'))!r})\n"
+            "spec = importlib.util.spec_from_file_location('signal_renderer', "
+            "render_path)\n"
+            "renderer = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(renderer)\n"
+            "loc = renderer._LOC_MODULE\n"
+            "real_handler = loc._handle_scratch_signal\n"
+            "def observed_handler(signum, frame):\n"
+            "    Path(os.environ['SIGNAL_DIR'], str(signum)).write_text('seen')\n"
+            "    real_handler(signum, frame)\n"
+            "    Path(os.environ['SIGNAL_DIR'], str(signum) + '-done').write_text('done')\n"
+            "loc._handle_scratch_signal = observed_handler\n"
+            "wait_for_launches = getattr(loc, '_wait_for_clone_launches', None)\n"
+            "if wait_for_launches is not None:\n"
+            "    def observed_wait():\n"
+            "        Path(os.environ['HANDLER_WAIT_FILE']).write_text('waiting')\n"
+            "        wait_for_launches()\n"
+            "    loc._wait_for_clone_launches = observed_wait\n"
+            "loc.install_scratch_signal_handlers()\n"
+            "real_popen = subprocess.Popen\n"
+            "def paused_popen(*args, **kwargs):\n"
+            "    proc = real_popen(*args, **kwargs)\n"
+            "    command = args[0]\n"
+            "    if command[0] == 'git' and 'clone' in command:\n"
+            "        Path(os.environ['SPAWN_BOUNDARY_FILE']).write_text(\n"
+            "            threading.current_thread().name + '\\n' + str(proc.pid))\n"
+            "        while not Path(os.environ['SPAWN_RELEASE_FILE']).exists():\n"
+            "            time.sleep(0.01)\n"
+            "    return proc\n"
+            "subprocess.Popen = paused_popen\n"
+            "scratch = Path(tempfile.mkdtemp(prefix='impact-fame-', "
+            "dir=os.environ['TMPDIR']))\n"
+            "Path(os.environ['SCRATCH_PATH_FILE']).write_text(str(scratch))\n"
+            "loc.register_scratch_dir(scratch)\n"
+            "loc.clone_repo('offline/repo', 'main', scratch)\n",
+            encoding="utf-8")
+
+        env = {
+            "PATH": str(paths["bin_dir"]),
+            "TMPDIR": str(paths["scratch_root"]),
+            "CLONE_SOURCE_DIR": str(paths["mirror_root"]),
+            "SIGNAL_DIR": str(paths["signals"]),
+            "SPAWN_BOUNDARY_FILE": str(paths["boundary"]),
+            "SPAWN_RELEASE_FILE": str(paths["release"]),
+            "SCRATCH_PATH_FILE": str(paths["scratch_path"]),
+            "HANDLER_WAIT_FILE": str(paths["wait_path"]),
+        }
+        return driver, env, paths
+
+    @staticmethod
+    def wait_for_file(path, timeout=5):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.exists():
+                return True
+            time.sleep(0.01)
+        return path.exists()
+
+    def assert_renderer_and_clone_stopped(self, renderer, child_pid,
+                                          paths, expected_status):
+        stdout, stderr = renderer.communicate(timeout=5)
+        self.assertEqual(renderer.returncode, expected_status,
+                         f"stdout={stdout!r} stderr={stderr!r}")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+        self.assertFalse(Path(paths["scratch_path"].read_text()).exists())
+        self.assertEqual(list(paths["scratch_root"].glob("impact-fame-*")), [])
+
+    @staticmethod
+    def stop_test_processes(renderer, child_pid, release):
+        release.touch()
+        if child_pid is not None:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if renderer.poll() is None:
+            renderer.kill()
+        renderer.communicate(timeout=5)
+
     def test_new_scratch_is_registered_until_removed(self):
         with mock.patch.object(impact_loc, "clone_repo", return_value=0.0):
             gen = impact_loc.prefetched_clones(self.moved(), depth=1)
@@ -223,8 +349,10 @@ class TestScratchLifecycle(unittest.TestCase):
 
         with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
                                create=True), \
-                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN",
-                                  threading.Event(), create=True), \
+                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN", False,
+                                  create=True), \
+                mock.patch.object(impact_loc, "_SIGNAL_CLEANUP_CLAIMS",
+                                  impact_loc.itertools.count(), create=True), \
                 mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED",
                                   False, create=True), \
                 mock.patch("signal.signal") as register, \
@@ -327,6 +455,55 @@ class TestScratchLifecycle(unittest.TestCase):
         destination = Path(dest_file.read_text(encoding="utf-8"))
         self.assertFalse(destination.exists())
         self.assertEqual(list(scratch_root.glob("impact-fame-*")), [])
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signal delivery")
+    def test_signal_at_main_thread_spawn_boundary_stops_clone_before_exit(self):
+        driver, env, paths = self.make_paused_clone_renderer()
+        with subprocess.Popen(
+                [sys.executable, str(driver)], env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+                start_new_session=True) as renderer:
+            child_pid = None
+            try:
+                self.assertTrue(self.wait_for_file(paths["boundary"]))
+                boundary = paths["boundary"].read_text().splitlines()
+                child_pid = int(boundary[1])
+                os.kill(renderer.pid, signal.SIGTERM)
+                self.assertTrue(self.wait_for_file(
+                    paths["signals"] / str(signal.SIGTERM)))
+                paths["release"].touch()
+                self.assert_renderer_and_clone_stopped(
+                    renderer, child_pid, paths, 128 + signal.SIGTERM)
+                self.assertNotEqual(boundary[0], "MainThread")
+            finally:
+                self.stop_test_processes(renderer, child_pid, paths["release"])
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signal delivery")
+    def test_second_signal_during_spawn_cleanup_does_not_deadlock(self):
+        driver, env, paths = self.make_paused_clone_renderer()
+        with subprocess.Popen(
+                [sys.executable, str(driver)], env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+                start_new_session=True) as renderer:
+            child_pid = None
+            try:
+                self.assertTrue(self.wait_for_file(paths["boundary"]))
+                child_pid = int(paths["boundary"].read_text().splitlines()[1])
+                os.kill(renderer.pid, signal.SIGTERM)
+                handler_waiting = self.wait_for_file(
+                    paths["wait_path"], timeout=2)
+                os.kill(renderer.pid, signal.SIGINT)
+                nested_returned = self.wait_for_file(
+                    paths["signals"] / f"{signal.SIGINT}-done", timeout=2)
+                paths["release"].touch()
+                self.assertTrue(handler_waiting,
+                                "handler did not wait for pending clone spawn")
+                self.assertTrue(nested_returned,
+                                "nested signal handler did not return")
+                self.assert_renderer_and_clone_stopped(
+                    renderer, child_pid, paths, 128 + signal.SIGTERM)
+            finally:
+                self.stop_test_processes(renderer, child_pid, paths["release"])
 
     def test_blame_start_scavenges_only_old_noninflight_scratch(self):
         scratch_root = self.tmp / "tmp"

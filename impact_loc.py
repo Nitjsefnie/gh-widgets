@@ -7,6 +7,7 @@ not create a second copy of the shared runtime module.
 """
 
 import contextlib
+import itertools
 import json
 import os
 import shutil
@@ -22,8 +23,12 @@ from typing import Any
 
 common: Any = None
 _CLONE_PROCESSES = set()
+_CLONE_STARTING = set()
 _CLONE_PROCESSES_LOCK = threading.Lock()
-_CLONE_SHUTDOWN = threading.Event()
+_CLONE_SHUTDOWN = False
+# next(count) elects one handler in a single GIL-held C operation. A nested
+# signal callback returns immediately instead of re-entering cleanup.
+_SIGNAL_CLEANUP_CLAIMS = itertools.count()
 
 
 def configure(common_module: Any) -> None:
@@ -69,18 +74,59 @@ def _stop_clone_processes(processes, grace_s=1.0):
         proc.wait()
 
 
+class _CloneLaunch:
+    """Represent a clone spawn that has not reached process registration."""
+
+    def __init__(self):
+        self.registered = threading.Event()
+
+
 def _run_clone_command(cmd, timeout=300):
     """Run and track a clone-path Git child until it has been reaped."""
+    # Python dispatches signals on the main thread. Keep Popen and its registry
+    # lock off that thread so a signal can wait for an atomic spawn/register
+    # operation without blocking the thread that must finish it.
+    if threading.current_thread() is threading.main_thread():
+        result = []
+        failure = []
+
+        def run_in_spawn_thread():
+            try:
+                result.append(_run_clone_command_worker(cmd, timeout))
+            except BaseException as exc:  # propagate the worker's exact error
+                failure.append(exc)
+
+        worker = threading.Thread(target=run_in_spawn_thread,
+                                  name="impact-clone-spawn")
+        worker.start()
+        worker.join()
+        if failure:
+            raise failure[0]
+        return result[0]
+    return _run_clone_command_worker(cmd, timeout)
+
+
+def _run_clone_command_worker(cmd, timeout):
+    """Run the Popen and registry transition away from the signal thread."""
+    launch = _CloneLaunch()
+    # Publish the pending launch before checking the shutdown gate. If a signal
+    # arrives after publication, its handler waits for this exact transition;
+    # if it arrives before publication, the worker sees the closed gate.
+    _CLONE_STARTING.add(launch)
     with _CLONE_PROCESSES_LOCK:
-        if _CLONE_SHUTDOWN.is_set():
-            raise RuntimeError("clone interrupted by renderer shutdown")
-        # CI covers Linux, macOS, and Windows. POSIX gets a private process
-        # group so signal cleanup also stops Git's helper descendants; on
-        # Windows, retain and terminate the direct Popen child portably.
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=os.name == "posix")
-        _CLONE_PROCESSES.add(proc)
+        try:
+            if _CLONE_SHUTDOWN:
+                raise RuntimeError("clone interrupted by renderer shutdown")
+            # CI covers Linux, macOS, and Windows. POSIX gets a private process
+            # group so signal cleanup also stops Git's helper descendants; on
+            # Windows, retain and terminate the direct Popen child portably.
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=os.name == "posix")
+            _CLONE_PROCESSES.add(proc)
+        finally:
+            launch.registered.set()
+            _CLONE_STARTING.discard(launch)
     try:
         with proc:
             try:
@@ -92,6 +138,12 @@ def _run_clone_command(cmd, timeout=300):
         with _CLONE_PROCESSES_LOCK:
             _CLONE_PROCESSES.discard(proc)
     return subprocess.CompletedProcess(cmd, returncode)
+
+
+def _wait_for_clone_launches():
+    """Wait for spawn attempts published before shutdown closed the gate."""
+    for launch in tuple(_CLONE_STARTING):
+        launch.registered.wait()
 
 
 def check_git_fame():
@@ -726,9 +778,16 @@ def remove_scratch_dir(path):
 
 def _handle_scratch_signal(signum, _frame):
     """Remove every in-flight clone before exiting with signal status."""
-    with _CLONE_PROCESSES_LOCK:
-        _CLONE_SHUTDOWN.set()
-        processes = tuple(_CLONE_PROCESSES)
+    global _CLONE_SHUTDOWN
+    if next(_SIGNAL_CLEANUP_CLAIMS):
+        return
+    # Do not acquire _CLONE_PROCESSES_LOCK here: the interrupted main thread
+    # may have been inside Popen while holding it. Closing the gate first and
+    # waiting on pre-published launch records preserves registration without
+    # taking that lock from the signal handler.
+    _CLONE_SHUTDOWN = True
+    _wait_for_clone_launches()
+    processes = tuple(_CLONE_PROCESSES)
     _stop_clone_processes(processes)
     for scratch in tuple(_SCRATCH_DIRS):
         remove_scratch_dir(scratch)
