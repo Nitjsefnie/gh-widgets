@@ -33,7 +33,7 @@ class FakeTransport:
 
 class Clock:
     def __init__(self):
-        self.now = 0
+        self.now = 1000.0
 
     def time(self):
         return self.now
@@ -75,6 +75,10 @@ class PathMatcherTests(unittest.TestCase):
             ('*.py', 'x/a.py', False),
             ('file[1].py', 'file[1].py', True),
             ('file[1].py', 'file1.py', False),
+            ('docs/**', 'docs/evil\nname.py', True),
+            ('**/*.md', 'dir\nname/README.md', True),
+            ('docs/*', 'docs/evil\nname.py', True),
+            ('docs/*', 'docs/evil\nname/a.py', False),
         ]
         for pattern, path, expected in cases:
             with self.subTest(pattern=pattern, path=path):
@@ -192,6 +196,18 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ag.exit_code(result), 1)
         self.assertEqual(result['tests'].verdict, 'FAILED')
 
+    def test_non_applicable_gates_ignore_existing_failed_pending_and_cancelled_runs(self):
+        for status, conclusion in [('completed', 'failure'), ('in_progress', None), ('completed', 'cancelled')]:
+            with self.subTest(status=status, conclusion=conclusion):
+                runs = [run(name, conclusion=conclusion, status=status) for name in ag.GATES]
+                transport = FakeTransport(runs=[runs])
+                result = self.evaluate(transport, changed={'README.md'}, timeout=2)
+                self.assertEqual(ag.exit_code(result), 0)
+                self.assertEqual({row.verdict for row in result.values()}, {'skipped-not-applicable'})
+                self.assertIn('paths-ignore', result['tests'].detail)
+                self.assertEqual(transport.polls, 1)
+                self.assertFalse(any('branch=' in path for path, _ in transport.calls))
+
     def test_missing_gate_at_deadline_fails_and_lists_all_missing(self):
         result = self.evaluate(FakeTransport(runs=[[run('tests')]]), timeout=2)
         self.assertEqual(ag.exit_code(result), 1)
@@ -214,6 +230,15 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ag.exit_code(result), 1)
         self.assertEqual(result['tests'].verdict, 'FAILED')
 
+    def test_other_event_does_not_supersede_a_cancelled_run(self):
+        for event, other_event in [('push', 'pull_request'), ('pull_request', 'push')]:
+            with self.subTest(event=event):
+                runs = self.code_runs(event=event) + [run('tests', 10, 'cancelled', event=event)]
+                transport = FakeTransport(runs=[runs], branches=[run('tests', 11, event=other_event)])
+                result = self.evaluate(transport, event=event)
+                self.assertEqual(ag.exit_code(result), 1)
+                self.assertEqual(result['tests'].verdict, 'FAILED')
+
     def test_newest_run_wins(self):
         runs = self.code_runs() + [run('tests', 5, 'failure'), run('tests', 6)]
         result = self.evaluate(FakeTransport(runs=[runs]))
@@ -230,9 +255,31 @@ class VerdictTests(unittest.TestCase):
 
     def test_pending_at_deadline_times_out(self):
         runs = self.code_runs() + [run('tests', 2, None, status='queued')]
-        result = self.evaluate(FakeTransport(runs=[runs]))
+        clock = Clock()
+        result = ag.evaluate_gates(FakeTransport(runs=[runs]), 'owner/repo', 'a' * 40,
+                                   changed={'code.py'}, event='push', timeout=2, poll_interval=0.75,
+                                   clock=clock.time, sleep=clock.sleep)
         self.assertEqual(result['tests'].verdict, 'timed-out')
         self.assertEqual(ag.exit_code(result), 1)
+        self.assertEqual(clock.now, 1002)
+
+    def test_pending_succeeds_in_latter_half_of_window_with_nonzero_clock_origin(self):
+        clock = Clock()
+        pending = self.code_runs() + [run('tests', 2, None, status='in_progress')]
+        completed = self.code_runs() + [run('tests', 2)]
+        transport = FakeTransport()
+        request = transport.api
+
+        def available_runs(path, **kw):
+            transport.runs = [completed if clock.time() >= 1001.5 else pending]
+            return request(path, **kw)
+
+        with mock.patch.object(transport, 'api', side_effect=available_runs):
+            result = ag.evaluate_gates(transport, 'owner/repo', 'a' * 40, changed={'code.py'}, event='push',
+                                       timeout=2, poll_interval=0.75, clock=clock.time, sleep=clock.sleep)
+        self.assertEqual(ag.exit_code(result), 0)
+        self.assertEqual(clock.now, 1001.5)
+        self.assertEqual(transport.polls, 3)
 
     def test_each_gate_matches_its_own_event(self):
         runs = self.code_runs(event='pull_request') + [
