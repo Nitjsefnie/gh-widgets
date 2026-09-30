@@ -35,8 +35,11 @@ on:
       - 'NOTICE'
       - '.gitignore'
 
-  # Read-only: findings land on the pull request as checks and
-  # annotations, never in the Security tab (issue #8).
+  # Findings land on the pull request as checks and annotations rather
+  # than as default-branch alerts in the Security tab (issue #8). The
+  # pull_request run is not literally read-only, though: analyze uploads
+  # the PR's SARIF, which needs the job's security-events: write — see
+  # the comment on that permission block.
   pull_request:
     paths-ignore:
       - '**/*.md'
@@ -65,7 +68,13 @@ jobs:
 
     permissions:
       # Writing the analysis results is the whole point; everything else
-      # stays read-only.
+      # stays read-only. The scope holds on pull_request runs too, where
+      # the upload is what files the PR's checks and annotations. GitHub
+      # downgrades it to read for FORK PRs — the untrusted case — so a
+      # fork head cannot write anything with it; a same-repository PR
+      # runs with the trust of its author, who already has write. The PR
+      # gate is therefore not literally read-only; what is guaranteed is
+      # that an untrusted head gets no write.
       security-events: write
       actions: read
       contents: read

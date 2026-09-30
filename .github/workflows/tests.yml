@@ -6,8 +6,10 @@ name: tests
 #   pull_request_review gate; overkill for a single-author repo.
 # - the suite runs across the OS × Python matrix below, not just one
 #   environment (issue #6).
-# - no services and no dependencies: the suite is stdlib unittest with no
-#   network (gql_fn is injected), so discovery is the whole job.
+# - no services and no network (gql_fn is injected): the suite is stdlib
+#   unittest with one test-only dependency — pytest, imported by
+#   test_compare_durations.py — which the install step below provides on
+#   every cell.
 
 on:
   push:
@@ -25,6 +27,14 @@ on:
   # Read-only by construction: the pull_request event's token is
   # read-only on a fork, and the checkout below already runs with
   # persist-credentials: false. Same deny-list as push.
+  #
+  # push stays unfiltered by branch ON PURPOSE: it is the CI for the
+  # default branch and for working branches worked without a PR, while
+  # pull_request is the pre-merge gate. A same-repository branch with an
+  # open PR therefore runs BOTH events — deliberate redundancy, not
+  # duplication to deduplicate: they answer different questions (does
+  # this branch tip pass / would this merge pass), and the concurrency
+  # key below is the ref, so neither run cancels the other.
   pull_request:
     paths-ignore:
       - '**/*.md'
