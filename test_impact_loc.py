@@ -378,6 +378,39 @@ class TestScratchLifecycle(unittest.TestCase):
         self.assertFalse(dest.exists())
         self.assertFalse(sidecar.exists())
 
+    def test_remove_scratch_dir_retries_readonly_entries(self):
+        dest = self.tmp / "impact-fame-readonly"
+        dest.mkdir()
+        readonly = dest / "git-object"
+        readonly.write_text("fixture", encoding="utf-8")
+        readonly.chmod(0o444)
+        impact_loc.register_scratch_dir(dest)
+
+        real_unlink = os.unlink
+        real_chmod = os.chmod
+        unlink_attempts = []
+        chmod_attempts = []
+
+        def fail_first_unlink(path, *args, **kwargs):
+            if os.path.basename(os.fsdecode(path)) == readonly.name:
+                unlink_attempts.append(path)
+                if len(unlink_attempts) == 1:
+                    raise PermissionError("fixture read-only file")
+            return real_unlink(path, *args, **kwargs)
+
+        def record_chmod(path, mode):
+            if os.path.basename(os.fsdecode(path)) == readonly.name:
+                chmod_attempts.append((path, mode))
+            return real_chmod(path, mode)
+
+        with mock.patch("os.unlink", side_effect=fail_first_unlink), \
+                mock.patch("os.chmod", side_effect=record_chmod):
+            impact_loc.remove_scratch_dir(dest)
+
+        self.assertEqual(len(unlink_attempts), 2)
+        self.assertEqual(len(chmod_attempts), 1)
+        self.assertFalse(dest.exists())
+
     def test_signal_handlers_are_idempotent_and_remove_inflight_dirs(self):
         first = self.tmp / "first"
         second = self.tmp / "second"
@@ -511,7 +544,7 @@ class TestScratchLifecycle(unittest.TestCase):
                 child_pid = int(boundary[1])
                 os.kill(renderer.pid, signal.SIGTERM)
                 self.assertTrue(self.wait_for_file(
-                    paths["signals"] / str(signal.SIGTERM)))
+                    paths["signals"] / str(int(signal.SIGTERM))))
                 paths["release"].touch()
                 self.assert_renderer_and_clone_stopped(
                     renderer, child_pid, paths, 128 + signal.SIGTERM)
