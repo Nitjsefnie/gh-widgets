@@ -235,8 +235,8 @@ def _open_lock_file(path):
     itself — it must not turn into a second failure mode here."""
     lock = Path(str(path) + ".lock")
     try:
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        return os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o644)
+        lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return os.open(str(lock), os.O_CREAT | os.O_RDWR, 0o600)
     except OSError as e:
         print(f"warning: could not open cache lock {lock}: {e}",
               file=sys.stderr)
@@ -313,10 +313,12 @@ def _write_cache(path, payload):
     cache_lock, which is also what makes the fixed temp name safe.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload))
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)  # a no-op once os.replace has moved it

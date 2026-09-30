@@ -488,22 +488,33 @@ class AtomicWrite(unittest.TestCase):
     """A cache write that fails midway must leave nothing observable."""
 
     def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
-        real_write_text = Path.write_text
+        real_fdopen = os.fdopen
 
-        def half_written(self, *a, **kw):
+        class PartialWriter:
+            def __init__(self, fd, mode, **kwargs):
+                self.stream = real_fdopen(fd, mode, **kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc_value, _traceback):
+                self.stream.close()
+
+            def write(self, _text):
+                self.stream.write('{"prs": {"partial')
+                raise OSError("no space left on device")
+
+        def half_written(fd, mode, **kwargs):
             # Simulate the disk filling up mid-write: the temp file exists and
             # holds partial JSON, then the write raises.
-            if self.name.endswith(".tmp"):
-                self.write_bytes(b'{"prs": {"partial')
-                raise OSError("no space left on device")
-            return real_write_text(self, *a, **kw)
+            return PartialWriter(fd, mode, **kwargs)
 
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "impact-cache.json"
             before = json.dumps(full_cache(prs("a/x", [1.0] * 3)))
             cache_file.write_text(before)
             out = Path(td) / "out"
-            with mock.patch.object(Path, "write_text", half_written):
+            with mock.patch.object(os, "fdopen", half_written):
                 run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
             # The cache is exactly what it was: no half-written state is ever
             # visible at the real path, because os.replace never ran.

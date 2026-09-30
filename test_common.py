@@ -8,6 +8,8 @@ No network: the identity test drives a fake gql.
 import importlib.util
 import json
 import os
+import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -502,6 +504,49 @@ class CacheWriting(unittest.TestCase):
 
     def read(self):
         return json.loads(self.path.read_text(encoding="utf-8"))
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_lock_file_and_new_parent_are_private_under_default_umask(self):
+        path = Path(self.td.name) / "lock-dir" / "cache.json"
+        lock = Path(str(path) + ".lock")
+        original_umask = os.umask(0o022)
+        try:
+            with common.cache_lock(path) as held:
+                self.assertTrue(held)
+            self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+        finally:
+            os.umask(original_umask)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_save_cache_creates_a_private_file_under_default_umask(self):
+        original_umask = os.umask(0o022)
+        try:
+            common.save_cache(self.path, {"version": 1})
+            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        finally:
+            os.umask(original_umask)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_save_cache_replaces_a_world_readable_file_with_a_private_file(self):
+        self.write({"version": 1, "old": True})
+        self.path.chmod(0o644)
+        original_umask = os.umask(0o022)
+        try:
+            common.save_cache(self.path, {"version": 1, "new": True})
+            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        finally:
+            os.umask(original_umask)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_write_cache_creates_a_private_parent_directory(self):
+        path = Path(self.td.name) / "cache-dir" / "cache.json"
+        original_umask = os.umask(0o022)
+        try:
+            common._write_cache(path, {"version": 1})  # pylint: disable=protected-access
+            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+        finally:
+            os.umask(original_umask)
 
     def test_merge_replaces_only_the_listed_keys(self):
         self.write({"version": 1, "prs": {"old": 1},
