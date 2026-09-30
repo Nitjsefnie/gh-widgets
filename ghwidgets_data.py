@@ -50,9 +50,10 @@ _PULL_REQUEST_FIELDS = tuple(
 _COLLECTION_FIELDS = ("repositories", "issues", "pull_requests")
 _ISSUE_STATES = frozenset(("OPEN", "CLOSED"))
 _PULL_REQUEST_STATES = frozenset(("OPEN", "CLOSED", "MERGED"))
-# GitHub may add a new enum member before this consumer is updated. Keep the
-# exact source spelling for reconciliation while bounding the value that can
-# cross the public snapshot boundary.
+# `IssueStateReason` is upstream-controlled and already returns members this
+# consumer never named (DUPLICATE), so v1 deliberately does not enforce the
+# enum: an unknown reason is accepted and kept as the exact source spelling for
+# reconciliation, bounded only by the length that may cross the boundary.
 MAX_STATE_REASON_LENGTH = 64
 _RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
