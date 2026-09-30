@@ -2,15 +2,16 @@
 
 The literals live in the main checkout (.secrecy-literals and .env are
 gitignored, so a linked worktree never checks them out); the script resolved
-them from `git rev-parse --show-toplevel`, which was the worktree itself, so
+them from `git rev-parse --show-toplevel`, which is the worktree itself, so
 every push from a worktree died with "no literals available".
 
-The fixture commits the repo's LIVE secrecy-check.sh into a throwaway main
-checkout, adds a linked worktree (which checks the script out into it), and
-the worktree cases run the copy belonging to the worktree -- the same file
-the pre-push hook would execute there; the no-literals case runs the live
-source script directly. All classes skip on Windows: the
-fixture drives the POSIX hook path, which that runner cannot execute (same
+The worktree fixture commits the repo's LIVE secrecy-check.sh into a throwaway
+main checkout, adds a linked worktree (which checks the script out into it),
+and the worktree cases run the copy belonging to the worktree -- the same file
+the pre-push hook would execute there; the case-insensitivity fixtures commit
+that same copy without a worktree, and the no-literals case commits no script
+at all and runs the live source script directly. All classes skip on Windows:
+the fixture drives the POSIX hook path, which that runner cannot execute (same
 policy as the git-fame shebang fixture).
 """
 
@@ -59,13 +60,14 @@ def commit_all(repo):
     git("commit", "-qm", "init", cwd=repo)
 
 
-def make_fixture(prefix):
+def make_fixture(prefix, with_script=True):
     """Build the throwaway main checkout every secrecy fixture starts from,
     and return the (tmp_root, main) pair. The caller rmtrees tmp_root.
 
-    The repo holds one clean tracked file and a committed copy of the live
-    script -- the file a pre-push hook would execute in that checkout, which
-    is why each case runs the copy rather than the source tree's.
+    The repo holds one clean tracked file and, unless with_script is False, a
+    committed copy of the live script -- the file a pre-push hook would
+    execute in that checkout, which is why those cases run the copy rather
+    than the source tree's.
 
     Everything a given case needs BEYOND this stays in its own setUpClass,
     so the differences between fixtures (the .env, the .secrecy-literals, the
@@ -79,8 +81,9 @@ def make_fixture(prefix):
     git("config", "user.name", "T", cwd=main)
     git("config", "user.email", "t@example.com", cwd=main)
     (main / "tracked.txt").write_text("clean\n", encoding="utf-8")
-    (main / "scripts").mkdir()
-    shutil.copy2(SCRIPT, main / "scripts" / "secrecy-check.sh")
+    if with_script:
+        (main / "scripts").mkdir()
+        shutil.copy2(SCRIPT, main / "scripts" / "secrecy-check.sh")
     commit_all(main)
     return tmp, main
 
@@ -198,7 +201,10 @@ class TestNoLiteralsFails(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp, cls.main = make_fixture("ghw-secrecy-nolit-")
+        # No script copy: this case executes the live source file directly,
+        # so a committed copy in the tree would be dead weight.
+        cls.tmp, cls.main = make_fixture("ghw-secrecy-nolit-",
+                                         with_script=False)
 
     @classmethod
     def tearDownClass(cls):
@@ -206,8 +212,7 @@ class TestNoLiteralsFails(unittest.TestCase):
 
     def test_no_literals_errors(self):
         """The live source script, run with no .secrecy-literals and no .env
-        beside it -- the committed copy in the tree is not what is executed
-        here."""
+        beside it."""
         proc = run_script(self.main, SCRIPT)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("no literals available", proc.stderr)
