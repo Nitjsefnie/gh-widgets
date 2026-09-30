@@ -340,9 +340,12 @@ It fetches its own PR data — one paginated GraphQL connection, the same one
 `render.py` uses — so it needs a token; it runs in sequence after
 `render-impact.py` in the same service rather than on a schedule of its own
 (`units/gh-widgets.service` runs all three renderers as sequential
-`ExecStart` lines on an hourly timer — the weekly resync unit the same, with
-`--resync` — and the order is load-bearing: `render-impact.py` refreshes the
-shared cache `render-responsiveness.py` then reads).
+`ExecStart` lines on an hourly timer; the weekly resync unit runs the same
+sequence, with `--resync` on `render-gh-widgets.py` and `render-impact.py`
+only — `render-responsiveness.py` takes none, since re-running it after the
+impact resync is its resync — and the order is load-bearing:
+`render-impact.py` refreshes the shared cache `render-responsiveness.py`
+then reads).
 It shares that script's cache,
 because that is where the account's authored PRs already live: it **merges**
 its half in and leaves every other section alone, above all `ourloc`, the
