@@ -505,6 +505,9 @@ class CacheWriting(unittest.TestCase):
     def read(self):
         return json.loads(self.path.read_text(encoding="utf-8"))
 
+    def test_save_cache_returns_none_on_success(self):
+        assert common.save_cache(self.path, {}) is None and self.read() == {}
+
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
     def test_lock_and_cache_files_and_directories_are_private(self):
         lock_path = Path(self.td.name) / "lock-dir" / "cache.json"
@@ -517,8 +520,7 @@ class CacheWriting(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
             self.assertEqual(
                 stat.S_IMODE(lock_path.parent.stat().st_mode), 0o700)
-            saved = common.save_cache(self.path, {"version": 1})
-            self.assertIsNone(saved)
+            common.save_cache(self.path, {"version": 1})
             self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
             self.path.chmod(0o644)
             common.save_cache(self.path, {"version": 1, "new": True})
