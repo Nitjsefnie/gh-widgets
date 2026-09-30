@@ -6,6 +6,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -20,7 +21,7 @@ if spec is None or spec.loader is None:
     raise SystemExit("error: cannot load render-impact.py")
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
-impact_loc = render_impact._LOC_MODULE
+impact_loc = getattr(render_impact, "_LOC_MODULE")
 
 
 def git(*args, cwd):
@@ -180,7 +181,7 @@ class TestScratchLifecycle(unittest.TestCase):
             raise SystemExit(code)
 
         with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
-                              create=True), \
+                               create=True), \
                 mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED",
                                   False, create=True), \
                 mock.patch("signal.signal") as register, \
@@ -223,7 +224,7 @@ class TestScratchLifecycle(unittest.TestCase):
         registry = {inflight}
 
         with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
-                              create=True), \
+                               create=True), \
                 mock.patch.object(impact_loc.tempfile, "gettempdir",
                                   return_value=str(scratch_root)), \
                 mock.patch.dict(os.environ,
@@ -234,6 +235,93 @@ class TestScratchLifecycle(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertTrue(inflight.exists())
         self.assertTrue(recent.exists())
+
+
+class TestBoundedGitOutput(unittest.TestCase):
+    """Git stdout capture and clone fan-out have explicit ceilings."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-bounded-git-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.dest = self.tmp / "repo"
+        self.dest.mkdir()
+
+    def install_git(self, source):
+        fake_git = self.bin / "git"
+        fake_git.write_text(f"#!{sys.executable}\n" + source,
+                            encoding="utf-8")
+        fake_git.chmod(0o755)
+
+    def cap_environment(self):
+        return {"PATH": str(self.bin), "GIT_OUTPUT_CAP_MB": "0.001"}
+
+    def assert_child_killed(self, pid_file, marker):
+        self.assertTrue(pid_file.is_file(), "fake git did not start")
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        self.assertFalse(marker.exists(), "overflow child completed normally")
+
+    def overflow_program(self, pid_file, marker):
+        return (
+            "import os, time\n"
+            "from pathlib import Path\n"
+            f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+            "os.write(1, b'x' * 4096)\n"
+            "time.sleep(2)\n"
+            f"Path({str(marker)!r}).write_text('survived')\n")
+
+    def test_git_out_rejects_overflow_and_kills_the_child(self):
+        pid_file = self.tmp / "git.pid"
+        marker = self.tmp / "git-survived"
+        self.install_git(self.overflow_program(pid_file, marker))
+
+        with mock.patch.dict(os.environ, {
+                **self.cap_environment(),
+                "GHW_CHILD_PID_FILE": str(pid_file)}):
+            with self.assertRaisesRegex(RuntimeError, "output exceeded"):
+                impact_loc.git_out(self.dest, "version")
+
+        self.assert_child_killed(pid_file, marker)
+
+    def test_git_fame_rejects_overflow_and_kills_the_child(self):
+        pid_file = self.tmp / "fame.pid"
+        marker = self.tmp / "fame-survived"
+        self.install_git(self.overflow_program(pid_file, marker))
+
+        with mock.patch.dict(os.environ, {
+                **self.cap_environment(),
+                "GHW_CHILD_PID_FILE": str(pid_file)}):
+            with self.assertRaisesRegex(RuntimeError, "output exceeded"):
+                impact_loc.blame_repo(
+                    "outside/project", self.dest, {"us@example.com"})
+
+        self.assert_child_killed(pid_file, marker)
+
+    def test_output_under_cap_is_preserved_for_git_and_git_fame(self):
+        self.install_git(
+            "import sys\n"
+            "sys.stdout.write('{\"total\":{\"loc\":2},"
+            "\"data\":[[\"us@example.com\",2]]}')\n")
+        with mock.patch.dict(os.environ, self.cap_environment()):
+            self.assertEqual(impact_loc.git_out(self.dest, "version"),
+                             '{"total":{"loc":2},"data":[["us@example.com",2]]}')
+            self.assertEqual(
+                impact_loc.blame_repo(
+                    "outside/project", self.dest, {"us@example.com"}),
+                (2, 2))
+
+    def test_clone_lookahead_is_clamped_above_eight(self):
+        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "100000"}):
+            self.assertEqual(impact_loc.clone_lookahead(), 16)
+
+    def test_clone_lookahead_keeps_normal_values_and_default(self):
+        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "8"}):
+            self.assertEqual(impact_loc.clone_lookahead(), 8)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(impact_loc.clone_lookahead(), 3)
 
 
 if __name__ == "__main__":
