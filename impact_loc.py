@@ -422,11 +422,13 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
             t = {**t, "head": pin["head"],
                  "branch": pin["branch"] or t["branch"]}
         entry = ourloc.get(repo) or {}
-        # Only a real count suppresses a re-clone. An error entry records a
-        # failure, not a result: skipping it would freeze the repo out of the
-        # card until its HEAD moved or the weekly --resync re-blamed
-        # everything. The retry is bounded by construction -- update_loc runs
-        # once per render, so a hard-down repo costs one clone attempt per run.
+        # Only a real count at an unchanged head suppresses a re-clone. An error
+        # entry records a failure, not a result: skipping it would freeze the
+        # repo out of the card until its HEAD moved or the weekly --resync
+        # re-blamed everything. The retry needs no cap of its own --
+        # update_loc runs once per render, so a hard-down repo costs one clone
+        # attempt per run, and that attempt is a subprocess carrying
+        # clone_repo's own 300s timeout, not an unbounded wait.
         if not resync and entry.get("head") == t["head"] and "ours" in entry:
             continue
         moved.append((repo, t))
