@@ -290,7 +290,8 @@ class TestHarness(unittest.TestCase):
         cases = {case.get("name"): case for case in
                  ET.parse(report).getroot().findall("testcase")}
         failure = cases["bench.render-impact"].find("failure")
-        self.assertIsNotNone(failure)
+        if failure is None:
+            self.fail("impact refresh validation did not emit a failure")
         self.assertIn("ourloc", failure.text or "")
 
     def test_harness_rejects_renderer_without_live_summary(self):
@@ -302,12 +303,13 @@ class TestHarness(unittest.TestCase):
         cases = {case.get("name"): case for case in
                  ET.parse(report).getroot().findall("testcase")}
         failure = cases["bench.render"].find("failure")
-        self.assertIsNotNone(failure)
+        if failure is None:
+            self.fail("missing live summary did not emit a failure")
         self.assertIn("wrote summary", failure.text or "")
 
     def test_renderer_environment_rewrites_clone_urls_to_local_mirrors(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            env = e2e_bench._renderer_environment(
+            env = e2e_bench._renderer_environment(  # pylint: disable=protected-access
                 self.fixture_root, BENCH_DIR, self.root / "cache.json",
                 self.root / "out")
         manifest = json.loads((self.fixture_root / "payloads" /
