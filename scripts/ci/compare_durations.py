@@ -119,7 +119,15 @@ def parse_junit(path: Path) -> dict:
 
 
 def fold_scans(scans: list) -> dict:
-    """The minimum duration per test across already-scanned rounds."""
+    """The minimum duration per test across already-scanned rounds.
+
+    The empty-list guard matches fold_rounds': an IndexError out of main is
+    exit 1, which this file reserves for "slower than budget", so a
+    programming error here would be reported to whoever reads the job
+    summary as a speed regression.
+    """
+    if not scans:
+        raise ComparisonError("no JUnit reports given")
     rounds = [scan[0] for scan in scans]
     common = set(rounds[0])
     for other in rounds[1:]:
@@ -155,16 +163,19 @@ def _diagnose_required(name, head_scans):
     if len(absent) == len(rounds):
         return (f"- `{name}`: absent from all {len(rounds)} head report(s) "
                 "entirely — no testcase with that node id exists at all")
-    failing = [n for n in rounds if n not in absent]
-    return (f"- `{name}`: absent from head round(s) {_rounds(absent)}, and "
-            f"did not pass in round(s) {_rounds(failing)}")
+    failing = [n for n in rounds
+               if n not in absent and name in head_scans[n - 1][2]]
+    clause = (f", and did not pass in round(s) {_rounds(failing)}"
+              if failing else "")
+    return f"- `{name}`: absent from head round(s) {_rounds(absent)}{clause}"
 
 
 def _rounds(numbers):
     return ", ".join(str(n) for n in numbers) if numbers else "none"
 
 
-def verify_population(head_scans, base_folded, require, allow_removal):
+def verify_population(head_scans, base_folded, head_folded, require,
+                      allow_removal):
     """Refuse to compare a population smaller than the one that was declared.
 
     Two distinct checks, because a gated set can be broken in two distinct
@@ -179,9 +190,10 @@ def verify_population(head_scans, base_folded, require, allow_removal):
       `allow_removal`. This catches the variant that leaves no trace at all
       in the report: a deleted testcase, rather than a skipped one.
 
-    Presence is decided on the folded head dict — what would actually be
-    compared — while the diagnosis reads the scans, which still know which
-    rounds the name was missing from.
+    Presence is decided on `head_folded` — what would actually be compared,
+    and folded by the caller so the value the verdict rests on is derived
+    once rather than twice — while the diagnosis reads the scans, which still
+    know which rounds the name was missing from.
     """
     require = list(require)
     allow_removal = list(allow_removal)
@@ -197,7 +209,6 @@ def verify_population(head_scans, base_folded, require, allow_removal):
         # suite's membership changes by design and must not trip the gate.
         return
 
-    head_folded = fold_scans(head_scans)
     problems = [
         _diagnose_required(name, head_scans)
         for name in sorted(require) if name not in head_folded
@@ -378,8 +389,8 @@ def main() -> int:
         base_folded = fold_rounds(args.base)
         head_scans = [scan_junit(Path(p)) for p in args.head]
         head_folded = fold_scans(head_scans)
-        verify_population(head_scans, base_folded, args.require_test,
-                          args.allow_removal)
+        verify_population(head_scans, base_folded, head_folded,
+                          args.require_test, args.allow_removal)
         result = compare(base_folded, head_folded)
     except ComparisonError as exc:
         print(f"cannot compare: {exc}", file=sys.stderr)

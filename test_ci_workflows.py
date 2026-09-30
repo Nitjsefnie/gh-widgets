@@ -120,19 +120,32 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                  if case[0] != omit_renderer])
 
     @staticmethod
-    def _execute_compare(root, allowed_removals=""):
+    def _install_harness(head, harness_edit=None):
+        """Copy the real harness into the fake head checkout, optionally edited.
+
+        The Compare block asks the harness for its workload list, so the fake
+        checkout needs it — otherwise the block fails for the wrong reason and
+        proves nothing. `harness_edit` receives the source and returns the
+        modified source, which is how the controls below construct the states
+        a retirement and a broken listing actually produce.
+        """
+        harness = head / "scripts" / "bench" / "e2e_bench.py"
+        harness.parent.mkdir(parents=True, exist_ok=True)
+        source = (REPO_ROOT / "scripts" / "bench" /
+                  "e2e_bench.py").read_text(encoding="utf-8")
+        if harness_edit is not None:
+            source = harness_edit(source)
+        harness.write_text(source, encoding="utf-8")
+        return harness
+
+    def _execute_compare(self, root, allowed_removals="",
+                         harness_edit=None):
         head = root / "head"
         comparator = head / "scripts" / "ci" / "compare_durations.py"
         comparator.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / "scripts" / "ci" /
                         "compare_durations.py", comparator)
-        # The Compare block now asks the harness for its workload list, so
-        # the fake head checkout needs the harness too — otherwise the block
-        # fails for the wrong reason and proves nothing.
-        harness = head / "scripts" / "bench" / "e2e_bench.py"
-        harness.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(REPO_ROOT / "scripts" / "bench" /
-                        "e2e_bench.py", harness)
+        self._install_harness(head, harness_edit)
         summary = root / "summary.md"
         env = {
             **os.environ,
@@ -221,7 +234,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         "on every OS",
     )
     def test_declared_workload_removal_passes_the_compare_step(self):
-        """The retirement path, so the gate above is not just red-by-default."""
+        """The exemption surface, for a workload the harness still lists.
+
+        This is the only state ALLOWED_WORKLOAD_REMOVALS can actually reach:
+        the harness keeps measuring the workload, so the report contains it,
+        and the gate is told not to require it. A genuine retirement — a
+        renderer actually deleted — does NOT come through here; see
+        test_retiring_a_workload_from_workloads_needs_no_exemption.
+        """
         with tempfile.TemporaryDirectory(
                 prefix="ghw-speed-compare-allowed-removal-") as td:
             root = Path(td)
@@ -234,6 +254,136 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                              completed.stdout + completed.stderr)
             self.assertIn("renderer workloads`",
                           summary.read_text(encoding="utf-8"))
+
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
+    def test_retiring_a_workload_from_workloads_needs_no_exemption(self):
+        """The real retirement path, which the variable's old comment got wrong.
+
+        A renderer retired properly is dropped from WORKLOADS, so the harness
+        measures neither side: it never appears in the baseline report either,
+        the closed-set check has nothing unexplained to complain about, and
+        ALLOWED_WORKLOAD_REMOVALS stays empty. That is what this asserts, so
+        the exemption surface is not mistaken for the retirement procedure.
+        """
+        def retire_impact(source):
+            return source.replace(
+                '    ("render-impact", "render-impact.py", ("impact.svg",),\n'
+                '     "impact-cache.json"),\n', "")
+
+        with tempfile.TemporaryDirectory(
+                prefix="ghw-speed-compare-retired-workload-") as td:
+            root = Path(td)
+            reports = root / "reports"
+            remaining = [("bench.render", 0.21),
+                         ("bench.render-responsiveness", 0.05)]
+            for round_number in (1, 2):
+                self._write_report(reports / f"base-{round_number}.xml",
+                                   "unit", [("test_unit", 0.10)])
+                self._write_report(reports / f"head-{round_number}.xml",
+                                   "unit", [("test_unit", 0.11)])
+                self._write_report(reports / f"bench-base-{round_number}.xml",
+                                   "e2e", remaining)
+                self._write_report(reports / f"bench-head-{round_number}.xml",
+                                   "e2e", remaining)
+            completed, summary = self._execute_compare(
+                root, allowed_removals="", harness_edit=retire_impact)
+
+            self.assertEqual(completed.returncode, 0,
+                             completed.stdout + completed.stderr)
+            self.assertIn("renderer workloads`",
+                          summary.read_text(encoding="utf-8"))
+
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
+    def test_workload_listing_that_fails_stops_the_compare_step(self):
+        """A producer that dies must not silently empty the required list.
+
+        bash -e cannot see a process substitution's exit status, so a broken
+        listing used to leave no --require-test at all — which is issue 36's
+        own false green, reached through a different door.
+        """
+        def break_flag(source):
+            return source.replace('if "--list-workloads" in argv:',
+                                  'if "--list-workloads-v2" in argv:')
+
+        with tempfile.TemporaryDirectory(
+                prefix="ghw-speed-compare-broken-listing-") as td:
+            root = Path(td)
+            self._write_comparison_reports(root, 0.11, 0.21)
+            completed, _ = self._execute_compare(root, harness_edit=break_flag)
+
+            self.assertNotEqual(completed.returncode, 0,
+                                completed.stdout + completed.stderr)
+            self.assertIn("workload listing", completed.stderr)
+
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
+    def test_empty_workload_listing_stops_the_compare_step(self):
+        """A producer that prints nothing is as disabling as one that dies."""
+        def print_nothing(source):
+            return source.replace("        print(workload_node_id(workload[0]))",
+                                  "        pass  # deliberately empty listing")
+
+        with tempfile.TemporaryDirectory(
+                prefix="ghw-speed-compare-empty-listing-") as td:
+            root = Path(td)
+            self._write_comparison_reports(root, 0.11, 0.21)
+            completed, _ = self._execute_compare(root, harness_edit=print_nothing)
+
+            self.assertNotEqual(completed.returncode, 0,
+                                completed.stdout + completed.stderr)
+            self.assertIn("workload listing is empty", completed.stderr)
+
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "runs bash, which resolves to WSL bash.exe without an installed "
+        "distribution on Windows; the block runs only on ubuntu runners in "
+        "production, and the block-text assertions in "
+        "test_baseline_renderer_rounds_share_head_outputs_and_selfcheck run "
+        "on every OS",
+    )
+    def test_exempting_every_workload_stops_the_compare_step(self):
+        """The other self-disable: naming all three empties the required list.
+
+        Same false green as a broken listing, by configuration instead of by
+        accident, and it used to be silent.
+        """
+        every = ",".join([
+            "e2e::bench.render",
+            "e2e::bench.render-impact",
+            "e2e::bench.render-responsiveness",
+        ])
+        with tempfile.TemporaryDirectory(
+                prefix="ghw-speed-compare-all-allowed-") as td:
+            root = Path(td)
+            self._write_comparison_reports(
+                root, 0.11, 0.21, omit_renderer="bench.render-impact")
+            completed, _ = self._execute_compare(
+                root, allowed_removals=every)
+
+            self.assertNotEqual(completed.returncode, 0,
+                                completed.stdout + completed.stderr)
+            self.assertIn("every workload is an allowed removal",
+                          completed.stderr)
 
     def test_baseline_renderer_rounds_share_head_outputs_and_selfcheck(self):
         block = self._run_block("Run renderer workloads, interleaved")
