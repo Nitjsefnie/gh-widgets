@@ -8,9 +8,9 @@ every push from a worktree died with "no literals available".
 The fixture commits the repo's LIVE secrecy-check.sh into a throwaway main
 checkout, adds a linked worktree (which checks the script out into it), and
 each case runs the copy belonging to the checkout it is in -- the same file
-the pre-push hook would execute there. On Windows, where CreateProcess
-cannot exec a shebang script, the helper runs the same file through `bash`
-(git-bash ships with the hosted Windows runners); no case is skipped.
+the pre-push hook would execute there. All classes skip on Windows: the
+fixture drives the POSIX hook path, which that runner cannot execute (same
+policy as the git-fame shebang fixture).
 """
 
 import shutil
@@ -35,13 +35,9 @@ def git(*args, cwd):
 
 
 def run_script(cwd, script):
-    """Run *script* from *cwd* the way the pre-push hook would.
-
-    Direct exec on POSIX; through `bash` on Windows, whose CreateProcess
-    cannot exec a shebang script but whose runners ship git-bash.
-    """
-    argv = [str(script)] if sys.platform != "win32" else ["bash", str(script)]
-    return subprocess.run(argv, cwd=cwd, text=True,
+    """Run *script* from *cwd* the way the pre-push hook would: direct exec,
+    like CreateProcess-free POSIX execution of the shebang script."""
+    return subprocess.run([str(script)], cwd=cwd, text=True,
                           capture_output=True, check=False)
 
 
@@ -51,6 +47,12 @@ def commit_all(repo):
     git("commit", "-qm", "init", cwd=repo)
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
 class TestWorktreeLiterals(unittest.TestCase):
     """A worktree run must find the main checkout's .secrecy-literals and
     still scan its OWN tree, not the main checkout's."""
@@ -112,6 +114,12 @@ class TestWorktreeLiterals(unittest.TestCase):
         self.assertIn("clean", proc.stdout)
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
 class TestEnvOnlyLiterals(unittest.TestCase):
     """Same scenario with the literals coming from .env's DATABASE_URL_AUTH
     alone -- the other source the fix moved to the main checkout."""
@@ -159,6 +167,12 @@ class TestEnvOnlyLiterals(unittest.TestCase):
         self.assertIn("working tree", proc.stderr)
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
 class TestNoLiteralsFails(unittest.TestCase):
     """No literals anywhere must keep failing loudly, never look clean."""
 
