@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from unittest import mock
 from pathlib import Path
 
@@ -29,6 +29,26 @@ def git(*args, cwd):
     """Run a fixture-repository Git command without network access."""
     subprocess.run(["git", "-C", str(cwd), *args], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+@contextmanager
+def run_python_git_fixture(script, processes=None):
+    """Launch fake Git commands as real, portable Python subprocesses."""
+    real_popen = subprocess.Popen
+
+    def launch(command, *args, **kwargs):
+        is_git = (isinstance(command, (list, tuple)) and command
+                  and command[0] == "git")
+        if is_git:
+            command = [sys.executable, str(script), *command[1:]]
+        # Production owns this real Popen's context and reap lifecycle.
+        proc = real_popen(command, *args, **kwargs)  # pylint: disable=consider-using-with
+        if is_git and processes is not None:
+            processes.append(proc)
+        return proc
+
+    with mock.patch.object(subprocess, "Popen", new=launch):
+        yield
 
 
 class TestCQuotedPaths(unittest.TestCase):
@@ -50,6 +70,8 @@ class TestCQuotedPaths(unittest.TestCase):
         self.assertEqual(
             impact_loc.targeted_counts(self.tmp, {"us@example.com"}), (2, 2))
 
+    @unittest.skipUnless(os.name == "posix",
+                         "Windows does not permit newline in file names")
     def test_control_byte_paths_are_excluded_from_both_counts(self):
         (self.tmp / "safe.py").write_text("one\ntwo\n", encoding="utf-8")
         (self.tmp / "line\nbreak.py").write_text(
@@ -61,6 +83,21 @@ class TestCQuotedPaths(unittest.TestCase):
         self.assertEqual(touched, {"safe.py"})
         self.assertEqual(
             impact_loc.targeted_counts(self.tmp, {"us@example.com"}), (2, 2))
+
+    def test_control_paths_are_filtered_by_nul_parsers_portably(self):
+        paths = "safe.py\0line\nbreak.py\0escape\x1b.py\0"
+        counts = ("HEAD:safe.py\0 2\n"
+                  "HEAD:line\nbreak.py\0 3\n"
+                  "HEAD:escape\x1b.py\0 4\n")
+        blame = ("a" * 40 + " 1 1 2\n"
+                 "author-mail <us@example.com>\nfilename safe.py\n")
+        with mock.patch.object(impact_loc, "git_out", side_effect=[
+                paths, counts, paths, blame]) as git_output:
+            self.assertEqual(
+                impact_loc.targeted_counts(self.tmp, {"us@example.com"}),
+                (2, 2))
+        self.assertEqual(git_output.call_count, 4)
+        self.assertEqual(git_output.call_args_list[-1].args[-1], "safe.py")
 
     def test_git_grep_no_matches_is_a_valid_empty_result(self):
         (self.tmp / "tracked.txt").write_text("present\n", encoding="utf-8")
@@ -87,10 +124,9 @@ class TestGitFameFailures(unittest.TestCase):
         self.dest.mkdir()
 
     def install_git(self, body):
-        fake_git = self.bin / "git"
+        fake_git = self.bin / "git-fixture.py"
         expected = ["fame", "-e", "-w", "--format", "json"]
         source = (
-            f"#!{sys.executable}\n"
             "import sys\n"
             f"expected = {expected!r}\n"
             "if sys.argv[1:] != expected:\n"
@@ -99,10 +135,10 @@ class TestGitFameFailures(unittest.TestCase):
             "    sys.exit(97)\n"
             + body)
         fake_git.write_text(source, encoding="utf-8")
-        fake_git.chmod(0o755)
 
     def blame_with_fake_git(self, dest=None):
-        with mock.patch.dict(os.environ, {"PATH": str(self.bin)}):
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin)}), \
+                run_python_git_fixture(self.bin / "git-fixture.py"):
             return impact_loc.blame_repo(
                 "outside/project", dest or self.dest, {"us@example.com"})
 
@@ -145,6 +181,7 @@ class TestGitFameFailures(unittest.TestCase):
         result = {}
         with mock.patch.object(impact_loc, "BLAME_METHOD", "fame"), \
                 mock.patch.dict(os.environ, {"PATH": str(self.bin)}), \
+                run_python_git_fixture(self.bin / "git-fixture.py"), \
                 redirect_stdout(io.StringIO()):
             impact_loc.blame_moved(
                 moved, result, {"us@example.com"}, prefetch_fn=prefetch,
@@ -620,9 +657,8 @@ class TestBoundedGitOutput(unittest.TestCase):
         self.dest.mkdir()
 
     def install_git(self, source, allowed_args):
-        fake_git = self.bin / "git"
+        fake_git = self.bin / "git-fixture.py"
         wrapper = (
-            f"#!{sys.executable}\n"
             "import sys\n"
             f"allowed_args = {allowed_args!r}\n"
             "if sys.argv[1:] not in allowed_args:\n"
@@ -631,7 +667,6 @@ class TestBoundedGitOutput(unittest.TestCase):
             "    sys.exit(97)\n"
             + source)
         fake_git.write_text(wrapper, encoding="utf-8")
-        fake_git.chmod(0o755)
 
     def git_out_args(self, command):
         return ["-C", str(self.dest), "-c", "core.quotePath=false", command]
@@ -643,11 +678,13 @@ class TestBoundedGitOutput(unittest.TestCase):
     def cap_environment(self):
         return {"PATH": str(self.bin), "GIT_OUTPUT_CAP_MB": "0.001"}
 
-    def assert_child_killed(self, pid_file, marker):
+    def assert_child_killed(self, processes, pid_file, marker):
         self.assertTrue(pid_file.is_file(), "fake git did not start")
         pid = int(pid_file.read_text(encoding="utf-8"))
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].pid, pid)
+        self.assertIsNotNone(processes[0].poll(),
+                             "overflow subprocess is still running")
         self.assertFalse(marker.exists(), "overflow child completed normally")
 
     def overflow_program(self, pid_file, marker):
@@ -664,29 +701,33 @@ class TestBoundedGitOutput(unittest.TestCase):
         marker = self.tmp / "git-survived"
         self.install_git(self.overflow_program(pid_file, marker),
                          [self.git_out_args("version")])
+        processes = []
 
         with mock.patch.dict(os.environ, {
                 **self.cap_environment(),
-                "GHW_CHILD_PID_FILE": str(pid_file)}):
+                "GHW_CHILD_PID_FILE": str(pid_file)}), \
+                run_python_git_fixture(self.bin / "git-fixture.py", processes):
             with self.assertRaisesRegex(RuntimeError, "output exceeded"):
                 impact_loc.git_out(self.dest, "version")
 
-        self.assert_child_killed(pid_file, marker)
+        self.assert_child_killed(processes, pid_file, marker)
 
     def test_git_fame_rejects_overflow_and_kills_the_child(self):
         pid_file = self.tmp / "fame.pid"
         marker = self.tmp / "fame-survived"
         self.install_git(self.overflow_program(pid_file, marker),
                          [self.fame_args()])
+        processes = []
 
         with mock.patch.dict(os.environ, {
                 **self.cap_environment(),
-                "GHW_CHILD_PID_FILE": str(pid_file)}):
+                "GHW_CHILD_PID_FILE": str(pid_file)}), \
+                run_python_git_fixture(self.bin / "git-fixture.py", processes):
             with self.assertRaisesRegex(RuntimeError, "output exceeded"):
                 impact_loc.blame_repo(
                     "outside/project", self.dest, {"us@example.com"})
 
-        self.assert_child_killed(pid_file, marker)
+        self.assert_child_killed(processes, pid_file, marker)
 
     def test_output_under_cap_is_preserved_for_git_and_git_fame(self):
         self.install_git(
@@ -694,7 +735,8 @@ class TestBoundedGitOutput(unittest.TestCase):
             "sys.stdout.write('{\"total\":{\"loc\":2},"
             "\"data\":[[\"us@example.com\",2]]}')\n",
             [self.git_out_args("version"), self.fame_args()])
-        with mock.patch.dict(os.environ, self.cap_environment()):
+        with mock.patch.dict(os.environ, self.cap_environment()), \
+                run_python_git_fixture(self.bin / "git-fixture.py"):
             self.assertEqual(impact_loc.git_out(self.dest, "version"),
                              '{"total":{"loc":2},"data":[["us@example.com",2]]}')
             self.assertEqual(
@@ -704,7 +746,8 @@ class TestBoundedGitOutput(unittest.TestCase):
 
     def test_fake_git_rejects_unmodeled_command_shapes(self):
         self.install_git("pass\n", [self.git_out_args("version")])
-        with mock.patch.dict(os.environ, self.cap_environment()):
+        with mock.patch.dict(os.environ, self.cap_environment()), \
+                run_python_git_fixture(self.bin / "git-fixture.py"):
             with self.assertRaises(subprocess.CalledProcessError) as raised:
                 impact_loc.git_out(self.dest, "status")
         self.assertEqual(raised.exception.returncode, 97)
