@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -764,11 +765,27 @@ def register_scratch_dir(path):
         raise
 
 
+def _retry_readonly_scratch_removal(func, path, exc_info):
+    """Make read-only Git files writable and retry their removal."""
+    error = exc_info[1]
+    if not isinstance(error, PermissionError) or func not in (os.unlink,
+                                                               os.rmdir):
+        raise error
+    try:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+        func(path)
+    except FileNotFoundError:
+        pass
+
+
 def remove_scratch_dir(path):
     """Remove one scratch directory and forget it from signal cleanup."""
     scratch = Path(path)
     _release_scratch_owner_lock(_SCRATCH_LOCKS.pop(scratch, None))
-    shutil.rmtree(scratch, ignore_errors=True)
+    try:
+        shutil.rmtree(scratch, onerror=_retry_readonly_scratch_removal)
+    except FileNotFoundError:
+        pass
     try:
         _scratch_owner_lock_path(scratch).unlink()
     except FileNotFoundError:
