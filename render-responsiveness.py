@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 6
+REQUIRED_COMMON = 7
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -116,6 +116,7 @@ FONT = common.FONT
 THEMES = common.THEMES
 gql = common.gql
 xml_escape = common.xml_escape
+atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 
@@ -549,7 +550,7 @@ def main():
         # all, and neither does one blip recovered from a cache written an
         # hour ago.
         svg = stamp_cache_notice(C, svg, stale)
-    (out / "responsiveness.svg").write_text(svg)
+    atomic_write_text(out / "responsiveness.svg", svg)
 
     if stale:
         print(f"fetch failed; rendered {out}/responsiveness.svg from cache "

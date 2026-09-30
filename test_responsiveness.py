@@ -489,6 +489,7 @@ class AtomicWrite(unittest.TestCase):
 
     def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
         real_fdopen = os.fdopen
+        real_write_cache = resp.common._write_cache
         write_attempts = []
 
         class PartialWriter:
@@ -511,12 +512,19 @@ class AtomicWrite(unittest.TestCase):
             # holds partial JSON, then the write raises.
             return PartialWriter(fd, mode, **kwargs)
 
+        def fail_cache_write(path, payload):
+            # Limit the injected fdopen failure to the cache writer. The SVG
+            # publication path also writes through fdopen now.
+            with mock.patch.object(os, "fdopen", half_written):
+                return real_write_cache(path, payload)
+
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "impact-cache.json"
             before = json.dumps(full_cache(prs("a/x", [1.0] * 3)))
             cache_file.write_text(before)
             out = Path(td) / "out"
-            with mock.patch.object(os, "fdopen", half_written):
+            with mock.patch.object(resp.common, "_write_cache",
+                                   side_effect=fail_cache_write):
                 run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
             self.assertGreaterEqual(
                 len(write_attempts), 1,

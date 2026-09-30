@@ -56,7 +56,7 @@ except ImportError:  # POSIX
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 6
+COMMON_VERSION = 7
 
 
 def _read_repo_version() -> str:
@@ -907,3 +907,32 @@ def stamp_cache_notice(C, svg, fetched_at):
     note = (f'<text x="10" y="{y}" fill="{C["dim"]}" font-size="10">'
             f'cached data from {xml_escape(fetched_at)}</text>')
     return svg.replace("</svg>", f"  {note}\n</svg>")
+
+
+def atomic_write_text(path, text):
+    """Atomically replace a UTF-8 text file through a unique sibling temp.
+
+    Preserve an existing target's mode. New files use the normal create mode
+    under the process umask because mkstemp's 0600 mode would make deployed,
+    publicly served SVGs unreadable by nginx.
+    """
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = None
+            stream.write(text)
+        os.replace(tmp, path)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        tmp.unlink(missing_ok=True)
