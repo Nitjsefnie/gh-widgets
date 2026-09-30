@@ -96,8 +96,25 @@ run for anyone using the documented command.
 
 ## CI
 
-Fourteen workflows run, and a green suite is one of them. These you can run
-locally:
+The workflow files in `.github/workflows/` are:
+
+- `tests.yml` — unit tests and coverage.
+- `lint.yml` — Python style and lint checks.
+- `types.yml` — Python type checks.
+- `audit.yml` — dependency vulnerability checks.
+- `codeql.yml` — security analysis.
+- `actionlint.yml` — workflow syntax and security checks.
+- `speed.yml` — performance regression checks.
+- `aggregate.yml` — always reports on every push and pull request regardless
+  of paths; branch protection requires it instead of the path-filtered gates.
+- `release.yml` — waits for gates, then tags and publishes releases.
+- `pr-gate.yml` — pull request policy checks.
+- `claim.yml` — issue assignment commands.
+- `targeted-blame-audit.yml` — contribution-counting correctness audit.
+- `gitfame-resync-memory.yml` — resync memory measurements.
+- `gitfame-pool-probe.yml` — worker-pool measurements.
+
+These checks can run locally:
 
 ```sh
 python3 -m unittest discover -v                                  # tests
@@ -120,15 +137,12 @@ has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (benchmarks
 this commit against the last release *on the same runner*, failing at
 >30%), `release` (tags `v<VERSION>` once every gate a `VERSION` push
-schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest` —
+schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
+`aggregate` —
 has both *reported* and passed; a gate that never reports stops the release
 rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
 measurement workflows that were already here.
-
-The fourteenth, `aggregate`, always reports on every push and pull request
-regardless of paths, so branch protection requires it instead of the
-path-filtered gates.
 
 **Release = edit `VERSION`.** One bare semver line at the repo root, no
 leading `v`. `REPO_VERSION` in `ghwidgets_common.py` reads it — and note
