@@ -10,6 +10,7 @@ import contextlib
 import itertools
 import json
 import os
+import selectors
 import shutil
 import signal
 import stat
@@ -382,6 +383,33 @@ def _read_bounded_stdout(proc, output, limit, overflow, read_errors):
         _kill_process_tree(proc)
 
 
+def _read_bounded_stdout_posix(proc, output, limit, deadline, cmd, timeout):
+    """Read a bounded pipe with readiness polling, without a helper thread."""
+    stream = proc.stdout
+    if stream is None:
+        return
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(stream, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                chunk = os.read(stream.fileno(),
+                                min(65536, limit + 1 - len(output)))
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > limit:
+                    raise RuntimeError(
+                        f"{cmd[0]} output exceeded {limit}-byte cap")
+        proc.wait(timeout=max(0, deadline - time.monotonic()))
+    except BaseException:
+        _kill_process_tree(proc)
+        proc.wait()
+        raise
+
+
 def _run_bounded(cmd, *, cwd=None, timeout=600):
     """Capture at most the configured stdout bytes before killing the child."""
     limit = _git_output_cap_bytes()
@@ -389,38 +417,42 @@ def _run_bounded(cmd, *, cwd=None, timeout=600):
                           stderr=subprocess.DEVNULL,
                           start_new_session=os.name == "posix") as proc:
         output = bytearray()
-        overflow = threading.Event()
-        read_errors = []
-        reader = threading.Thread(
-            target=_read_bounded_stdout,
-            args=(proc, output, limit, overflow, read_errors),
-            name="git-output-reader", daemon=True)
         deadline = time.monotonic() + timeout
-        reader.start()
-        timed_out = False
-        try:
+        if os.name == "posix":
+            _read_bounded_stdout_posix(
+                proc, output, limit, deadline, cmd, timeout)
+        else:
+            overflow = threading.Event()
+            read_errors = []
+            reader = threading.Thread(
+                target=_read_bounded_stdout,
+                args=(proc, output, limit, overflow, read_errors),
+                name="git-output-reader", daemon=True)
+            reader.start()
+            timed_out = False
             try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-            if not timed_out:
-                reader.join(max(0, deadline - time.monotonic()))
-                timed_out = reader.is_alive()
-            if timed_out:
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                if not timed_out:
+                    reader.join(max(0, deadline - time.monotonic()))
+                    timed_out = reader.is_alive()
+                if timed_out:
+                    _kill_process_tree(proc)
+                    proc.wait()
+                    reader.join()
+            except BaseException:
                 _kill_process_tree(proc)
                 proc.wait()
                 reader.join()
-        except BaseException:
-            _kill_process_tree(proc)
-            proc.wait()
-            reader.join()
-            raise
-        if timed_out:
-            raise subprocess.TimeoutExpired(cmd, timeout)
-        if read_errors:
-            raise read_errors[0]
-        if overflow.is_set():
-            raise RuntimeError(f"{cmd[0]} output exceeded {limit}-byte cap")
+                raise
+            if timed_out:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            if read_errors:
+                raise read_errors[0]
+            if overflow.is_set():
+                raise RuntimeError(f"{cmd[0]} output exceeded {limit}-byte cap")
         return subprocess.CompletedProcess(cmd, proc.returncode, bytes(output))
 
 
