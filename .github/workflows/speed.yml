@@ -207,12 +207,17 @@ jobs:
           for round in $(seq 1 "$ROUNDS"); do
             for side in base head; do
               echo "::group::$side renderer round $round"
+              selfcheck=()
+              if [ "$side" = "head" ] && [ "$round" -eq "$ROUNDS" ]; then
+                selfcheck=(--selfcheck)
+              fi
               python3 head/scripts/bench/e2e_bench.py \
                 --side "$side" \
                 --repo-root "$side" \
                 --round "$round" \
                 --junit-file "reports/bench-$side-$round.xml" \
-                --work-root "$RUNNER_TEMP/gh7-bench/$side-$round"
+                --work-root "$RUNNER_TEMP/gh7-bench/$side" \
+                "${selfcheck[@]}"
               echo "::endgroup::"
             done
           done
@@ -250,10 +255,19 @@ jobs:
         run: |
           # shellcheck disable=SC2046
           python3 head/scripts/ci/compare_durations.py \
-            --base $(ls reports/base-*.xml reports/bench-base-*.xml) \
-            --head $(ls reports/head-*.xml reports/bench-head-*.xml) \
+            --base $(ls reports/base-*.xml) \
+            --head $(ls reports/head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
             --base-label "$BASE_TAG" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+          # Keep renderer workloads in their own testcase intersection and gate.
+          # shellcheck disable=SC2046
+          python3 head/scripts/ci/compare_durations.py \
+            --base $(ls reports/bench-base-*.xml) \
+            --head $(ls reports/bench-head-*.xml) \
+            --max-regression "$MAX_REGRESSION" \
+            --base-label "$BASE_TAG renderer workloads" \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JUnit reports

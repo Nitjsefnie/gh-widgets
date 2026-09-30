@@ -61,6 +61,17 @@ class TestFixtureSetup(unittest.TestCase):
             self.assertEqual(file_bytes(first, "caches"),
                              file_bytes(second, "caches"))
 
+    def test_seeded_ourloc_count_differs_from_live_fixture_count(self):
+        with tempfile.TemporaryDirectory(prefix="ghw-bench-stale-count-") as td:
+            root = Path(td) / "fixture"
+            fixture_setup.build(root)
+            cache = json.loads((root / "caches" /
+                                "impact-cache.json").read_text(
+                                    encoding="utf-8"))
+            expected_lines = 120 * 60 + 80
+            for repo, entry in cache["ourloc"].items():
+                self.assertNotEqual(entry["ours"], expected_lines, repo)
+
 
 class TestPayloadDispatcher(unittest.TestCase):
     @classmethod
@@ -183,7 +194,8 @@ class TestHarness(unittest.TestCase):
         cls.repo_root = cls.root / "renderer-stubs"
         cls.repo_root.mkdir()
 
-    def write_stubs(self, degraded=()):
+    def write_stubs(self, degraded=(), refresh_impact=True,
+                    wrote_summary=True):
         scripts = {
             "render.py": ("stats.svg", "streak.svg", "languages.svg",
                           "external.svg"),
@@ -203,13 +215,31 @@ class TestHarness(unittest.TestCase):
                 "(out / 'last-updated.txt').write_text('fixed', "
                 "encoding='utf-8')\n"
             )
+            if script == "render-impact.py" and refresh_impact:
+                body += (
+                    "import json\n"
+                    "payloads = Path(os.environ['GH_BENCH_PAYLOADS'])\n"
+                    "manifest = json.loads((payloads / 'manifest.json')."
+                    "read_text(encoding='utf-8'))\n"
+                    "cache_path = Path(os.environ['CACHE_FILE'])\n"
+                    "cache = json.loads(cache_path.read_text("
+                    "encoding='utf-8'))\n"
+                    "for repo, head in manifest['repo_heads'].items():\n"
+                    "    entry = cache['ourloc'][repo]\n"
+                    "    entry['head'] = head\n"
+                    "    entry['ours'] = manifest['expected_ourloc_lines'][repo]\n"
+                    "    entry['total'] = manifest['expected_ourloc_lines'][repo]\n"
+                    "cache_path.write_text(json.dumps(cache), encoding='utf-8')\n"
+                )
             if script in degraded:
                 if script == "render-impact.py":
                     body += "print('stub failure')\nsys.exit(7)\n"
                 else:
                     body += "print('fetch failed; rendered from cache')\n"
-            else:
+            elif wrote_summary:
                 body += "print('wrote stub output')\n"
+            else:
+                body += "print('renderer finished without summary')\n"
             (self.repo_root / script).write_text(body, encoding="utf-8")
 
     def invoke(self, work_root, round_number, junit_path, selfcheck=False,
@@ -250,6 +280,51 @@ class TestHarness(unittest.TestCase):
                             for case in cases.values()))
         self.assertTrue((work / "outputs/head-1/render/stats.svg").is_file())
         self.assertTrue((work / "outputs/head-1/render/last-updated.txt").is_file())
+
+    def test_harness_rejects_impact_run_that_keeps_stale_ourloc(self):
+        self.write_stubs(refresh_impact=False)
+        report = self.root / "stale-impact.xml"
+        result = self.invoke(self.root / "stale-impact-work", 1, report)
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        cases = {case.get("name"): case for case in
+                 ET.parse(report).getroot().findall("testcase")}
+        failure = cases["bench.render-impact"].find("failure")
+        self.assertIsNotNone(failure)
+        self.assertIn("ourloc", failure.text or "")
+
+    def test_harness_rejects_renderer_without_live_summary(self):
+        self.write_stubs(wrote_summary=False)
+        report = self.root / "missing-summary.xml"
+        result = self.invoke(self.root / "missing-summary-work", 1, report)
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        cases = {case.get("name"): case for case in
+                 ET.parse(report).getroot().findall("testcase")}
+        failure = cases["bench.render"].find("failure")
+        self.assertIsNotNone(failure)
+        self.assertIn("wrote summary", failure.text or "")
+
+    def test_renderer_environment_rewrites_clone_urls_to_local_mirrors(self):
+        env = e2e_bench._renderer_environment(
+            self.fixture_root, BENCH_DIR, self.root / "cache.json",
+            self.root / "out")
+        manifest = json.loads((self.fixture_root / "payloads" /
+                               "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(env["GIT_CONFIG_COUNT"],
+                         str(len(manifest["repo_heads"])))
+        repo = next(iter(manifest["repo_heads"]))
+        mirror = self.fixture_root / "mirror" / repo.replace("/", "__")
+        self.assertIn("file://", env["GIT_CONFIG_KEY_0"])
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"],
+                         f"https://github.com/{repo}.git")
+        completed = subprocess.run(
+            ["git", "ls-remote", f"https://github.com/{repo}.git", "HEAD"],
+            env=env, capture_output=True, text=True, check=False, timeout=10)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout + completed.stderr)
+        self.assertIn(manifest["repo_heads"][repo], completed.stdout)
+        self.assertTrue(mirror.is_dir())
 
     def test_nonzero_and_degraded_renderers_are_junit_failures(self):
         self.write_stubs(degraded=("render.py", "render-impact.py"))
