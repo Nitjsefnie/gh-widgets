@@ -46,6 +46,7 @@ def _renderer_environment(fixture_root, bench_dir, cache_file, out_dir):
         "CLONE_SOURCE_DIR": str(mirror),
         "PYTHONPATH": str(bench_dir),
         "GH_BENCH_PAYLOADS": str(payloads),
+        "PYTHONDONTWRITEBYTECODE": "1",
         "HTTPS_PROXY": DEAD_PROXY,
         "https_proxy": DEAD_PROXY,
         "NO_PROXY": "",
