@@ -569,6 +569,39 @@ class CacheWriting(unittest.TestCase):
                 common.save_cache(self.path, {"version": 1}, timeout=0.1,
                                   strict=True)
 
+    def test_neither_locking_api_degrades_to_unlocked(self):
+        # Windows ships msvcrt and POSIX ships fcntl, so "neither" is the
+        # exotic case of a platform with no locking API at all. The contract
+        # there is the same as a lock that never arrives: cache_lock yields
+        # False and each caller falls back to its documented unlocked
+        # stance, instead of crashing the render.
+        with mock.patch.object(common, "fcntl", None), \
+                mock.patch.object(common, "msvcrt", None):
+            with common.cache_lock(self.path, timeout=0.1) as held:
+                self.assertFalse(held)
+        with common.cache_lock(self.path, timeout=0.1) as held:
+            self.assertTrue(held)
+
+    def test_the_windows_api_branch_dispatches_to_msvcrt(self):
+        # The dispatch, not the OS: a stub stands in for msvcrt so this
+        # runs on the POSIX cells too, where a real msvcrt cannot exist.
+        calls = []
+
+        class FakeMsvcrt:
+            LK_NBLCK = 2
+
+            @staticmethod
+            def locking(fd, mode, nbytes):
+                calls.append((fd, mode, nbytes))
+                return True
+
+        with mock.patch.object(common, "fcntl", None), \
+                mock.patch.object(common, "msvcrt", FakeMsvcrt):
+            with common.cache_lock(self.path, timeout=0.1) as held:
+                self.assertTrue(held)
+        self.assertEqual([(mode, size) for _, mode, size in calls],
+                         [(FakeMsvcrt.LK_NBLCK, 1)])
+
 
 class CacheShape(unittest.TestCase):
     """Impact cache maps reject structural field drift without rejecting

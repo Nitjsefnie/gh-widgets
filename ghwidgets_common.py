@@ -27,7 +27,6 @@ fails loudly at startup instead of rendering wrong numbers.
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import contextlib
-import fcntl
 import json
 import os
 import re
@@ -39,6 +38,20 @@ import urllib.request
 from collections import namedtuple
 from pathlib import Path
 from typing import Optional
+
+# The cache lock uses each platform's own exclusive-lock API: flock(2) on
+# POSIX, msvcrt.locking on Windows. Import conditionally so the module loads
+# on both, and degrade to an unlocked cache where neither exists — the same
+# stance the cache write itself takes: warn, and still render the card.
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
@@ -230,21 +243,40 @@ def _open_lock_file(path):
         return None
 
 
-def _flock_until(fd, timeout):
-    """Take an exclusive flock on `fd`, polling until `timeout` elapses.
+def _lock_once(fd):
+    """One non-blocking attempt at an exclusive lock, via the platform's own
+    API: flock(2) on POSIX, a one-byte msvcrt.locking region on Windows (a
+    byte-range lock needs no existing byte). Returns whether it is held.
 
-    Polled rather than blocking: a blocking flock has no timeout, and a render
+    With neither API available the lock is reported as never held, so the
+    callers fall back to their documented unlocked stances.
+    """
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        elif msvcrt is not None:
+            # msvcrt is real on Windows; the POSIX type stubs omit it.
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            return False
+        return True
+    except OSError:
+        return False
+
+
+def _lock_until(fd, timeout):
+    """Take an exclusive lock on `fd`, polling until `timeout` elapses.
+
+    Polled rather than blocking: a blocking lock has no timeout, and a render
     must never park forever behind another writer. Returns whether it is held.
     """
     deadline = time.monotonic() + timeout
     while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if _lock_once(fd):
             return True
-        except OSError:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.2)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
 
 
 @contextlib.contextmanager
@@ -267,7 +299,7 @@ def cache_lock(path, timeout=CACHE_LOCK_TIMEOUT):
         yield False
         return
     try:
-        yield _flock_until(fd, timeout)
+        yield _lock_until(fd, timeout)
     finally:
         os.close(fd)  # closing the fd releases the flock
 
