@@ -306,13 +306,15 @@ class TestHarness(unittest.TestCase):
         self.assertIn("wrote summary", failure.text or "")
 
     def test_renderer_environment_rewrites_clone_urls_to_local_mirrors(self):
-        env = e2e_bench._renderer_environment(
-            self.fixture_root, BENCH_DIR, self.root / "cache.json",
-            self.root / "out")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = e2e_bench._renderer_environment(
+                self.fixture_root, BENCH_DIR, self.root / "cache.json",
+                self.root / "out")
         manifest = json.loads((self.fixture_root / "payloads" /
                                "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(env["GIT_CONFIG_COUNT"],
                          str(len(manifest["repo_heads"])))
+        self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
         repo = next(iter(manifest["repo_heads"]))
         mirror = self.fixture_root / "mirror" / repo.replace("/", "__")
         self.assertIn("file://", env["GIT_CONFIG_KEY_0"])
