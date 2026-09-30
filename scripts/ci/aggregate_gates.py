@@ -28,6 +28,17 @@ Release is deliberately absent: it waits on this check, so waiting on release
 would deadlock. Network, classification and unknown-state errors fail closed.
 All HTTP goes through gh api; the transport and clock are injected in tests.
 
+WHICH GATES ARE DELIBERATELY ABSENT, AND WHY. `release` above waits on this
+check, so folding it in would deadlock. `coverage-ratchet` is absent for the
+opposite reason: it is main-only because it holds the repository's only
+`contents: write` token, and a `pull_request` trigger from a
+same-repository branch would retain that write scope. Folding it in would
+also buy nothing on a pull request — tests.yml's coverage-gate step already
+runs the same `scripts/ci/coverage_ratchet.py gate` there, so the aggregate
+would re-run the whole suite to reach a verdict the PR gate has already
+reached. Both are named in the drift control that keeps this table and the
+workflows directory in agreement, so an absence stays deliberate.
+
     python3 scripts/ci/aggregate_gates.py
 
 Context comes from GATE_* and GITHUB_EVENT_PATH. The markdown table is printed
