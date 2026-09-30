@@ -131,6 +131,19 @@ jobs:
           path: base
           persist-credentials: false
 
+      - name: Check out HEAD for renderer validation
+        if: steps.baseline.outputs.tag == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+
+      - name: Set up Python for renderer validation
+        if: steps.baseline.outputs.tag == ''
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: steps.baseline.outputs.tag != ''
         with:
@@ -141,6 +154,13 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r head/requirements-test.txt
+
+      - name: Build renderer fixtures
+        env:
+          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+        run: |
+          python3 head/scripts/bench/fixture_setup.py \
+            --root "$GH_BENCH_FIXTURE_ROOT"
 
       - name: Run both suites, interleaved
         if: steps.baseline.outputs.tag != ''
@@ -179,6 +199,47 @@ jobs:
           fi
           ls -la reports/
 
+      - name: Run renderer workloads, interleaved
+        if: steps.baseline.outputs.tag != ''
+        env:
+          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+        run: |
+          for round in $(seq 1 "$ROUNDS"); do
+            for side in base head; do
+              echo "::group::$side renderer round $round"
+              python3 head/scripts/bench/e2e_bench.py \
+                --side "$side" \
+                --repo-root "$side" \
+                --round "$round" \
+                --junit-file "reports/bench-$side-$round.xml" \
+                --work-root "$RUNNER_TEMP/gh7-bench/$side-$round"
+              echo "::endgroup::"
+            done
+          done
+          ls -la reports/
+
+      - name: Validate renderer workloads without a baseline
+        if: steps.baseline.outputs.tag == ''
+        env:
+          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+        run: |
+          mkdir -p reports
+          work_root="$RUNNER_TEMP/gh7-bench/head-only"
+          for round in $(seq 1 "$ROUNDS"); do
+            selfcheck=()
+            if [ "$round" -eq "$ROUNDS" ]; then
+              selfcheck=(--selfcheck)
+            fi
+            python3 head/scripts/bench/e2e_bench.py \
+              --side head \
+              --repo-root head \
+              --round "$round" \
+              --junit-file "reports/bench-head-$round.xml" \
+              --work-root "$work_root" \
+              "${selfcheck[@]}"
+          done
+          ls -la reports/
+
       - name: Compare
         if: steps.baseline.outputs.tag != ''
         env:
@@ -189,16 +250,18 @@ jobs:
         run: |
           # shellcheck disable=SC2046
           python3 head/scripts/ci/compare_durations.py \
-            --base $(ls reports/base-*.xml) \
-            --head $(ls reports/head-*.xml) \
+            --base $(ls reports/base-*.xml reports/bench-base-*.xml) \
+            --head $(ls reports/head-*.xml reports/bench-head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
             --base-label "$BASE_TAG" \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JUnit reports
-        if: ${{ !cancelled() && steps.baseline.outputs.tag != '' }}
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: speed-junit-reports
-          path: reports/
+          path: |
+            reports/
+            ${{ runner.temp }}/gh7-bench/**/outputs/**
           if-no-files-found: warn
