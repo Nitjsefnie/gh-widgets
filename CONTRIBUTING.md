@@ -71,10 +71,13 @@ No install step and no dependencies:
 GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
 ```
 
-A classic PAT with `read:user` + `public_repo` is enough. `THEME=` picks a
+A classic PAT with the documented `public_repo` scope is enough;
+`read:user` is not required. `THEME=` picks a
 palette; `CACHE_FILE=` points at the cache described in the README (GitHub
 rejects a full-year contribution query on large accounts, so the cache is
 load-bearing, not an optimisation).
+
+See [SECURITY.md](SECURITY.md#credentials) for the full credential and scope statement.
 
 ## Tests
 
