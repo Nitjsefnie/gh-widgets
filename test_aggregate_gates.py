@@ -144,6 +144,43 @@ class AcquisitionTests(unittest.TestCase):
                                   payload={'before': '0' * 40, 'after': 'a' * 40})
         self.assertEqual(result, ({'README.md'}, False))
 
+    def test_force_push_compares_new_tip_against_default_branch(self):
+        initial = 'repos/owner/repo/compare/' + 'b' * 40 + '...' + 'a' * 40
+        fallback = 'repos/owner/repo/compare/main...' + 'a' * 40
+        transport = FakeTransport(responses={
+            initial: {'status': 'diverged', 'files': [{'filename': 'obsolete.py'}]},
+            fallback: {'status': 'ahead', 'files': [{'filename': 'docs/current.md'}]},
+        })
+        result = ag.changed_files(transport, 'owner/repo', event='push', sha='a' * 40, default_branch='main',
+                                  payload={'before': 'b' * 40, 'after': 'a' * 40})
+        self.assertEqual(result, ({'docs/current.md'}, False))
+        self.assertEqual([path for path, _ in transport.calls], [initial, fallback])
+        self.assertTrue(all(kw['no_cache'] for _, kw in transport.calls))
+
+    def test_force_push_fallback_errors_and_cap_fail_closed(self):
+        initial = 'repos/owner/repo/compare/' + 'b' * 40 + '...' + 'a' * 40
+        fallback = 'repos/owner/repo/compare/main...' + 'a' * 40
+        for response in [ag.AggregationError('fallback unavailable'),
+                         {'status': 'ahead', 'files': [{'filename': 'a.py'}] * 300},
+                         {'status': 'diverged', 'files': []}, {'status': 'ahead'}]:
+            with self.subTest(response=str(response)[:50]):
+                transport = FakeTransport(responses={initial: {'status': 'diverged'}, fallback: response})
+                with self.assertRaises(ag.AggregationError):
+                    ag.changed_files(transport, 'owner/repo', event='push', sha='a' * 40, default_branch='main',
+                                     payload={'before': 'b' * 40, 'after': 'a' * 40})
+                self.assertEqual([path for path, _ in transport.calls], [initial, fallback])
+
+    def test_other_compare_failures_do_not_fall_back(self):
+        initial = 'repos/owner/repo/compare/' + 'b' * 40 + '...' + 'a' * 40
+        for response in [{'status': 'behind', 'files': []}, {'status': 'unknown', 'files': []},
+                         ag.AggregationError('initial unavailable')]:
+            with self.subTest(response=response):
+                transport = FakeTransport(responses={initial: response})
+                with self.assertRaises(ag.AggregationError):
+                    ag.changed_files(transport, 'owner/repo', event='push', sha='a' * 40, default_branch='main',
+                                     payload={'before': 'b' * 40, 'after': 'a' * 40})
+                self.assertEqual([path for path, _ in transport.calls], [initial])
+
     def test_push_cap_divergence_and_api_error_fail_closed(self):
         path = 'repos/owner/repo/compare/' + 'b' * 40 + '...' + 'a' * 40
         responses = [
