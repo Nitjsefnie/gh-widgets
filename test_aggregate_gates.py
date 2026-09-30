@@ -207,12 +207,13 @@ class AcquisitionTests(unittest.TestCase):
 
 class _VerdictFixture(unittest.TestCase):
     def evaluate(self, transport, changed=None, event='push', action=None, timeout=0, capped=False,
-                 policy_updated_at: str | None = '2026-09-30T12:00:00Z'):
+                 policy_updated_at: str | None = '2026-09-30T12:00:00Z', pr_number: str | None = '66'):
         clock = Clock()
         return ag.evaluate_gates(transport, 'owner/repo', 'a' * 40,
                                  changed={'code.py'} if changed is None else changed,
                                  event=event, pr_action=action, capped=capped,
                                  policy_updated_at=policy_updated_at,
+                                 pr_number=pr_number,
                                  timeout=timeout, poll_interval=1,
                                  clock=clock.time, sleep=clock.sleep)
 
@@ -412,6 +413,121 @@ class PolicyVerdictTests(_VerdictFixture):
                 self.assertEqual(ag.exit_code(result), 0)
 
 
+class PolicyAttributionTests(_VerdictFixture):
+    def policy_run(self, number=66, identifier=9, conclusion='success'):
+        candidate = run('pr gate', identifier, conclusion, event='pull_request_target',
+                        created_at='2026-09-30T12:00:01Z')
+        candidate['pull_requests'] = [{'number': number}]
+        return candidate
+
+    def test_foreign_policy_run_never_reports_for_this_pr(self):
+        transport = FakeTransport(runs=[[self.policy_run(number=64)]])
+        result = self.evaluate(transport, changed={'README.md'}, event='pull_request', action='edited', timeout=2)
+        self.assertEqual(result['pr gate'].verdict, 'never-reported')
+        self.assertEqual(ag.exit_code(result), 1)
+        self.assertEqual(transport.polls, 3)
+
+    def test_newest_eligible_own_run_wins_over_newer_foreign_run(self):
+        for own_conclusion, foreign_conclusion in [('success', 'failure'), ('failure', 'success')]:
+            with self.subTest(own_conclusion=own_conclusion):
+                own = self.policy_run(identifier=10, conclusion=own_conclusion)
+                foreign = self.policy_run(number=64, identifier=20, conclusion=foreign_conclusion)
+                result = self.evaluate(FakeTransport(runs=[[own, foreign]]), changed={'README.md'},
+                                       event='pull_request', action='edited')
+                self.assertEqual(ag.exit_code(result), 0 if own_conclusion == 'success' else 1)
+                self.assertIn('/10', result['pr gate'].detail)
+                self.assertNotIn('/20', result['pr gate'].detail)
+
+    def test_run_attributed_to_this_pr_is_eligible(self):
+        candidate = self.policy_run()
+        candidate['pull_requests'].append({'number': 64})
+        result = self.evaluate(FakeTransport(runs=[[candidate]]), changed={'README.md'},
+                               event='pull_request', action='edited')
+        self.assertEqual(ag.exit_code(result), 0)
+        self.assertEqual(result['pr gate'].verdict, 'passed')
+        self.assertNotIn('not attributable', result['pr gate'].detail)
+
+    def test_empty_or_absent_attribution_explains_fork_degradation(self):
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                candidate = self.policy_run()
+                if absent:
+                    del candidate['pull_requests']
+                else:
+                    candidate['pull_requests'] = []
+                result = self.evaluate(FakeTransport(runs=[[candidate]]), changed={'README.md'},
+                                       event='pull_request', action='edited')
+                self.assertEqual(ag.exit_code(result), 0)
+                self.assertIn('policy run not attributable to a PR (fork); accepted on timestamp',
+                              result['pr gate'].detail)
+                self.assertIn('not attributable', ag.render_summary(result))
+
+    def test_malformed_policy_attribution_fails_closed(self):
+        malformed = [{}, None, '66', [{'number': {}}], [{'number': True}], [{'number': '66'}],
+                     [{'number': 0}], [{'number': 66.0}], [{}], [None], [{'number': 66}, {'number': {}}]]
+        for value in malformed:
+            with self.subTest(pull_requests=value):
+                candidate = self.policy_run()
+                candidate['pull_requests'] = value
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[[candidate]]), changed={'README.md'},
+                                  event='pull_request', action='edited')
+
+    def test_foreign_pr_cannot_supersede_own_cancelled_policy_run(self):
+        own = self.policy_run(identifier=10, conclusion='cancelled')
+        foreign = self.policy_run(number=64, identifier=20)
+        result = self.evaluate(FakeTransport(runs=[[own]], branches=[foreign]), changed={'README.md'},
+                               event='pull_request', action='edited')
+        self.assertEqual(ag.exit_code(result), 1)
+        self.assertEqual(result['pr gate'].verdict, 'FAILED')
+
+    def test_same_pr_can_supersede_own_cancelled_policy_run(self):
+        own = self.policy_run(identifier=10, conclusion='cancelled')
+        newer = self.policy_run(identifier=20)
+        result = self.evaluate(FakeTransport(runs=[[own]], branches=[newer]), changed={'README.md'},
+                               event='pull_request', action='edited')
+        self.assertEqual(ag.exit_code(result), 0)
+        self.assertEqual(result['pr gate'].verdict, 'superseded')
+
+    def test_malformed_current_pr_number_fails_closed(self):
+        # Invalid boundary fixtures intentionally include non-string shapes.
+        malformed: tuple[ag.Any, ...] = (None, {}, 66, True, '', '0', '-66', '66.0')
+        for value in malformed:
+            with self.subTest(pr_number=value):
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[[self.policy_run()]]), changed={'README.md'},
+                                  event='pull_request', action='edited', pr_number=value)
+
+    def test_malformed_policy_supersession_attribution_fails_closed(self):
+        own = self.policy_run(identifier=10, conclusion='cancelled')
+        for value in ({}, [{'number': {}}]):
+            with self.subTest(pull_requests=value):
+                newer = self.policy_run(identifier=20)
+                newer['pull_requests'] = value
+                with self.assertRaises(ag.AggregationError):
+                    self.evaluate(FakeTransport(runs=[[own]], branches=[newer]), changed={'README.md'},
+                                  event='pull_request', action='edited')
+
+    def test_unattributed_policy_supersession_explains_degradation(self):
+        own = self.policy_run(identifier=10, conclusion='cancelled')
+        newer = self.policy_run(identifier=20)
+        newer['pull_requests'] = []
+        result = self.evaluate(FakeTransport(runs=[[own]], branches=[newer]), changed={'README.md'},
+                               event='pull_request', action='edited')
+        self.assertEqual(result['pr gate'].verdict, 'superseded')
+        self.assertIn('superseding policy run not attributable to a PR (fork)', result['pr gate'].detail)
+
+    def test_same_second_old_success_is_accepted_before_new_run_is_visible(self):
+        old = self.policy_run()
+        old['created_at'] = '2026-09-30T12:00:00Z'
+        fresh = self.policy_run(identifier=10, conclusion='failure')
+        transport = FakeTransport(runs=[[old], [old, fresh]])
+        result = self.evaluate(transport, changed={'README.md'}, event='pull_request', action='edited', timeout=2)
+        self.assertEqual(ag.exit_code(result), 0)
+        self.assertIn('/9', result['pr gate'].detail)
+        self.assertEqual(transport.polls, 1)
+
+
 class WorkflowDriftTests(unittest.TestCase):
     def trigger_block(self, text):
         lines = text.splitlines()
@@ -502,6 +618,23 @@ class WorkflowDriftTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_binds_policy_evidence_to_the_environment_pr_number(self):
+        path = 'repos/owner/repo/pulls/66/files?per_page=100'
+        foreign = run('pr gate', 99, event='pull_request_target', created_at='2026-09-30T12:00:01Z')
+        foreign['pull_requests'] = [{'number': 64}]
+        transport = FakeTransport(runs=[[foreign]], responses={path: [{'filename': 'README.md'}]})
+        environment = {'GATE_REPO': 'owner/repo', 'GATE_EVENT': 'pull_request', 'GATE_SHA': 'a' * 40,
+                       'GATE_PR_NUMBER': '66', 'GATE_PR_ACTION': 'edited',
+                       'GATE_POLICY_UPDATED_AT': '2026-09-30T12:00:00Z'}
+        engine = ag.evaluate_gates
+
+        def immediate_deadline(*args, **kw):
+            return engine(*args, **kw, timeout=0)
+
+        with mock.patch.object(ag, 'evaluate_gates', side_effect=immediate_deadline), mock.patch('builtins.print') as output:
+            self.assertEqual(ag.main([], transport=transport, environ=environment), 1)
+        self.assertIn('| pr gate | never-reported |', output.call_args.args[0])
+
     def test_cli_uses_the_policy_timestamp_from_environment(self):
         path = 'repos/owner/repo/pulls/37/files?per_page=100'
         candidate = run('pr gate', 9, event='pull_request_target', created_at='2026-09-30T11:00:00Z')
