@@ -192,9 +192,18 @@ def clone_repo(repo, branch, dest, head=None):
     cmd = ["git", "-c", f"pack.threads={common.env_float('CLONE_PACK_THREADS', 1):.0f}",
            "-c", f"pack.windowMemory={int(common.env_float('CLONE_WINDOW_MB', 32))}m",
            "clone", "--single-branch"]
-    if branch:
-        cmd += ["--branch", branch]
-    cmd += [f"https://github.com/{repo}.git", str(dest)]
+    # CLONE_SOURCE_DIR points at local <owner>__<name> mirrors for offline
+    # benchmark runs; without a matching mirror, the normal GitHub clone stays.
+    source_dir = os.environ.get("CLONE_SOURCE_DIR")
+    local_repo = (Path(source_dir) / repo.replace("/", "__")
+                  if source_dir else None)
+    if local_repo is not None and local_repo.is_dir():
+        # Use the mirror's default branch so its advertised HEAD is honored.
+        cmd += [str(local_repo), str(dest)]
+    else:
+        if branch:
+            cmd += ["--branch", branch]
+        cmd += [f"https://github.com/{repo}.git", str(dest)]
     t0 = time.monotonic()
     r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        timeout=300, check=False)
