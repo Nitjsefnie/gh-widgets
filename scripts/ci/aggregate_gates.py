@@ -12,7 +12,7 @@ so push results cannot stand in for pull-request results. The PR policy gate
 is the deliberate exception: its own event is pull_request_target.
 
 WHY CANCEL IS NOT ALWAYS RED. Concurrency cancels an obsolete branch revision.
-A newer run of the same workflow on the same branch proves supersession, which
+A newer run of the same workflow, branch and event proves supersession, which
 gates nothing. Without that evidence a cancellation is a failure.
 
 Release is deliberately absent: it waits on this check, so waiting on release
@@ -115,7 +115,7 @@ def github_path_matches(pattern: str, path: str) -> bool:
         else:
             pieces.append(re.escape(pattern[index]))
             index += 1
-    return re.fullmatch(''.join(pieces), path) is not None
+    return re.compile(''.join(pieces), re.DOTALL).fullmatch(path) is not None
 
 
 def classify(changed: set[str], *, event: str, pr_action: str | None = None) -> dict[str, str]:
@@ -295,7 +295,8 @@ def _completed(transport: Transport, repo: str, name: str, run: dict) -> Result:
     # and bypasses caches; older pages cannot establish a newer branch tip.
     newer = _list_items(_api(transport, f'repos/{repo}/actions/runs?branch={quote(branch, safe="")}&per_page=100'))
     for candidate in newer:
-        if candidate.get('name') == name and candidate.get('head_branch') == branch:
+        if (candidate.get('name') == name and candidate.get('head_branch') == branch
+                and candidate.get('event') == run['event']):
             identifier = _run_id(candidate, name)
             if identifier > run['id']:
                 return Result('superseded', f'{url}; superseded by run {identifier} on {branch}')
@@ -317,12 +318,14 @@ def _inspect_gates(transport: Transport, repo: str, sha: str, event: str,
                    runs: list[dict]) -> tuple[dict[str, Result], dict[str, Result]]:
     results, pending = {}, {}
     for name, gate in GATES.items():
+        # Applicability wins over any stale run at this SHA. In particular,
+        # ignored changes must not inherit an earlier failure or cancellation.
+        if decisions[name] == 'not-applicable':
+            results[name] = _not_applicable(gate, event, pr_action)
+            continue
         run = _latest(runs, name, gate.events.get(event, ''), sha)
         if run is None:
-            if decisions[name] == 'not-applicable':
-                results[name] = _not_applicable(gate, event, pr_action)
-            else:
-                pending[name] = Result('never-reported', 'should have run but never reported')
+            pending[name] = Result('never-reported', 'should have run but never reported')
         elif run.get('status') in ('queued', 'in_progress'):
             pending[name] = Result('timed-out', f'{run.get("html_url", "run URL unavailable")} ({run["status"]})')
         elif run.get('status') == 'completed':
