@@ -208,6 +208,7 @@ jobs:
             pip-audit   # audit.yml, job `pip-audit`
             analyze     # codeql.yml, job `analyze`
             unittest    # tests.yml, job `unittest` (six-leg matrix)
+            aggregate   # aggregate.yml, job `aggregate`
           )
           # The only way out of the manifest is to say so out loud. A
           # dispatch can waive; a push has no inputs, so a push-triggered
