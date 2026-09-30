@@ -249,16 +249,27 @@ jobs:
         if: steps.baseline.outputs.tag != ''
         env:
           BASE_TAG: ${{ steps.baseline.outputs.tag }}
-          # The deliberate-configuration surface for retiring a shipped
-          # renderer workload: a comma-separated list of workload node ids,
-          # each passed on as --allow-removal so the closed-set population
-          # check accepts its disappearance from the head reports. LEAVING
-          # THIS EMPTY IS THE CORRECT DEFAULT. Every name added here weakens
-          # the gate for every later commit, so a removal has to be written
-          # down at the moment it is deliberate — which is the moment
-          # someone is actually thinking about it — rather than discovered
-          # afterwards as a renderer that quietly stopped being measured.
-          # Retire the workload in the same commit that names it here.
+          # The exemption list for a workload the harness STILL lists but
+          # which must not be compared: a comma-separated set of workload
+          # node ids. Naming one drops it from the required list, so the
+          # closed-set check will not demand it.
+          #
+          # LEAVING THIS EMPTY IS THE CORRECT DEFAULT, and the ordinary way
+          # to retire a renderer workload is NOT to use this variable: drop
+          # the workload from WORKLOADS instead. Then the harness measures
+          # neither side, the closed-set check has nothing unexplained to
+          # complain about, and no exemption is needed at all.
+          #
+          # IT IS NOT A WAY TO PAPER OVER A DELETED RENDERER. Keeping the
+          # workload in WORKLOADS while deleting its renderer script reds at
+          # the "Run renderer workloads" step instead, because the harness
+          # now fails a missing renderer on the head side — long before this
+          # comparison runs. So a name here only exempts a workload that is
+          # still listed and still running; anything weaker than that has
+          # already failed elsewhere.
+          #
+          # Every name added weakens the gate for every later commit, so it
+          # belongs in the same commit as the change that motivates it.
           ALLOWED_WORKLOAD_REMOVALS: ""
         # The comparator comes from the HEAD checkout, so an improvement to
         # the comparison itself takes effect on the commit that makes it
@@ -309,6 +320,23 @@ jobs:
           # The required list is read from the harness rather than written
           # out here, so adding a workload to WORKLOADS cannot drift out of
           # the gate.
+          #
+          # It is read into a VARIABLE, not straight out of a process
+          # substitution, because bash -e cannot see a process substitution's
+          # exit status. An empty listing there leaves no --require-test at
+          # all, which is precisely issue 36's false green: the gate compares
+          # the survivors and reports a pass. So the status is checked, and
+          # then the emptiness is checked — a producer that dies and a
+          # producer that legitimately prints nothing look identical from
+          # stdout alone, and both must refuse rather than degrade.
+          if ! listing=$(python3 head/scripts/bench/e2e_bench.py --list-workloads); then
+            echo "::error::the workload listing failed; the renderer gate would measure an undeclared population" >&2
+            exit 1
+          fi
+          if [ -z "$listing" ]; then
+            echo "::error::the workload listing is empty; the renderer gate would measure an undeclared population" >&2
+            exit 1
+          fi
           while IFS= read -r name; do
             required=1
             for skip in "${allowed[@]}"; do
@@ -320,7 +348,17 @@ jobs:
             if [ "$required" -ne 0 ]; then
               workloads+=(--require-test "$name")
             fi
-          done < <(python3 head/scripts/bench/e2e_bench.py --list-workloads)
+          done <<< "$listing"
+
+          # The second way to switch this gate off is to exempt everything
+          # from it. Naming all three workloads as allowed removals would
+          # leave an empty required list and no diagnostic, which is the same
+          # false green by another route, so it is refused here rather than
+          # left to be discovered as a green job summary.
+          if [ "${#workloads[@]}" -eq 0 ]; then
+            echo "::error::every workload is an allowed removal, so the renderer gate compares nothing; if that is intended, retire the workloads from WORKLOADS instead" >&2
+            exit 1
+          fi
 
           # shellcheck disable=SC2046
           if python3 head/scripts/ci/compare_durations.py \

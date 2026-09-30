@@ -405,6 +405,12 @@ def main(argv=None):
             "failed" if result["failure"] else "passed")
         print(f"{result['name']} ({args.side} round {args.round}): "
               f"{result['time']:.3f}s {status}")
+        # The status line above is the shape the suite asserts, and it says
+        # only that something failed. The reason goes to stderr, because a red
+        # step whose only detail lives in an uploaded JUnit artifact is a step
+        # nobody can act on without going and downloading the artifact first.
+        if result["failure"]:
+            print(f"{result['name']}: {result['failure']}", file=sys.stderr)
 
     selfcheck_diffs = []
     if args.selfcheck:

@@ -244,13 +244,19 @@ def test_main_exits_2_when_it_cannot_compare(tmp_path):
 # a quiet, green, one-program-shorter comparison.
 
 
+def verify(scans, base_folded, require=(), allow=()):
+    """verify_population with the head fold done the way main() does it."""
+    return cd.verify_population(scans, base_folded, cd.fold_scans(scans),
+                                list(require), list(allow))
+
+
 def test_no_flags_leaves_removals_permissive(tmp_path):
     """The unit-suite comparison must keep behaving exactly as before."""
     scans = [cd.scan_junit(write_junit(
         tmp_path / "h.xml", {"m::a": 1.0, "m::gone": 9.0}))]
 
     # No exception: the base-only name is reported and excluded, not fatal.
-    cd.verify_population(scans, {"m::a": 1.0, "m::gone": 9.0}, [], [])
+    verify(scans, {"m::a": 1.0, "m::gone": 9.0})
 
 
 def test_required_name_absent_from_head_is_an_error(tmp_path):
@@ -259,7 +265,7 @@ def test_required_name_absent_from_head_is_an_error(tmp_path):
     scans = [cd.scan_junit(head)]
 
     with pytest.raises(cd.ComparisonError) as excinfo:
-        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::gone"], [])
+        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::gone"])
 
     message = str(excinfo.value)
     # Both the required-name and the closed-set view of the same fact, so
@@ -277,7 +283,7 @@ def test_required_name_skipped_in_one_round_is_an_error(tmp_path):
     scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
 
     with pytest.raises(cd.ComparisonError) as excinfo:
-        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"], [])
+        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
 
     message = str(excinfo.value)
     assert "e2e::b" in message
@@ -286,13 +292,51 @@ def test_required_name_skipped_in_one_round_is_an_error(tmp_path):
         in message
 
 
+def test_required_name_missing_from_one_round_only_names_that_round(tmp_path):
+    """The mixed branch: absent somewhere, not-passing somewhere else.
+
+    A required name present-and-passing in round 1 and absent from round 2 is
+    a real failure, and the sentence must not also claim round 1 failed —
+    that was a false observation about a passing round, which is exactly the
+    kind of thing a gate message must not say.
+    """
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
+    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+    with pytest.raises(cd.ComparisonError) as excinfo:
+        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+
+    message = str(excinfo.value)
+    assert "absent from head round(s) 2" in message
+    # Round 1 passed, so no clause may mention it failing.
+    assert "did not pass" not in message
+
+
+def test_required_name_absent_and_skipped_names_both_rounds(tmp_path):
+    """One round absent, one round skipped: each is reported as itself."""
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
+    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
+                     not_passed={"e2e::b": "skipped"})
+    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+    with pytest.raises(cd.ComparisonError) as excinfo:
+        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+
+    message = str(excinfo.value)
+    assert "absent from head round(s) 2" in message
+    assert "did not pass in round(s) 1" in message
+
+
 def test_required_name_present_and_passing_is_not_an_error(tmp_path):
     base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
     r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
     r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 3.0})
     scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
 
-    cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"], [])
+    verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
 
 
 def test_baseline_only_removal_is_an_error_in_closed_set_mode(tmp_path):
@@ -302,7 +346,7 @@ def test_baseline_only_removal_is_an_error_in_closed_set_mode(tmp_path):
     scans = [cd.scan_junit(head)]
 
     with pytest.raises(cd.ComparisonError) as excinfo:
-        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], [])
+        verify(scans, cd.fold_rounds([base]), ["e2e::a"])
 
     message = str(excinfo.value)
     assert "e2e::b" in message
@@ -314,7 +358,7 @@ def test_declared_removal_is_accepted(tmp_path):
     head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
     scans = [cd.scan_junit(head)]
 
-    cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::b"])
+    verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::b"])
 
 
 def test_allow_removal_alone_still_closes_the_set(tmp_path):
@@ -324,7 +368,7 @@ def test_allow_removal_alone_still_closes_the_set(tmp_path):
     scans = [cd.scan_junit(head)]
 
     with pytest.raises(cd.ComparisonError, match="e2e::b"):
-        cd.verify_population(scans, cd.fold_rounds([base]), [], ["e2e::a"])
+        verify(scans, cd.fold_rounds([base]), allow=["e2e::a"])
 
 
 def test_require_and_allow_the_same_name_is_a_contradiction(tmp_path):
@@ -332,7 +376,13 @@ def test_require_and_allow_the_same_name_is_a_contradiction(tmp_path):
     scans = [cd.scan_junit(write_junit(tmp_path / "h.xml", {"e2e::a": 1.0}))]
 
     with pytest.raises(cd.ComparisonError, match="both required and allowed"):
-        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::a"])
+        verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::a"])
+
+
+def test_fold_scans_rejects_an_empty_list():
+    """An IndexError here would exit 1, which this file reserves for slower."""
+    with pytest.raises(cd.ComparisonError, match="no JUnit reports given"):
+        cd.fold_scans([])
 
 
 def test_main_writes_a_comparison_error_to_the_summary_file(tmp_path):

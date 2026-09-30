@@ -378,6 +378,14 @@ class TestHarness(unittest.TestCase):
             self.assertIn("missing from the head checkout", failure.text or "")
         # The one renderer that IS present still ran and passed.
         self.assertIsNone(cases["bench.render"].find("failure"))
+        # ...and the reason reaches the step log, not only the uploaded XML:
+        # a red step whose detail lives in an artifact is a step nobody can
+        # act on without downloading the artifact first.
+        self.assertIn("render-impact.py is missing from the head checkout",
+                      result.stderr)
+        # The status line itself is unchanged in shape — the suite asserts it.
+        self.assertIn("bench.render-impact (head round 1): 0.000s failed",
+                      result.stdout)
 
     def test_missing_renderer_is_still_skipped_on_the_base_side(self):
         """The asymmetry is deliberate, and this is what pins it.
