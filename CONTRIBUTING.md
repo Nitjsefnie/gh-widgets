@@ -119,8 +119,11 @@ The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (benchmarks
 this commit against the last release *on the same runner*, failing at
->30%), `release` (tags `v<VERSION>` once every other check on the commit
-passes), and the three bespoke `gitfame-*` / `targeted-blame-audit`
+>30%), `release` (tags `v<VERSION>` once every gate a `VERSION` push
+schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest` —
+has both *reported* and passed; a gate that never reports stops the release
+rather than shrinking the bar, and a `workflow_dispatch` may waive one by
+name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
 measurement workflows that were already here.
 
 **Release = edit `VERSION`.** One bare semver line at the repo root, no

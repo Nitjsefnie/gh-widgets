@@ -7,8 +7,9 @@ name: release
 # WHY IT WAITS FOR THE OTHER GATES. A tag is the one artefact here that
 # outlives a mistake — you can force-push a branch, but a release people
 # have pulled is permanent, and cutting one from a red commit publishes
-# the breakage under a version number. So this job blocks on every other
-# check run for the same SHA before it creates anything. That wait is the
+# the breakage under a version number. So this job blocks on every gate
+# that a VERSION push is supposed to schedule, and refuses to proceed
+# while any of them is missing, still running, or red. That wait is the
 # job; the tagging is three lines.
 #
 # It deliberately does NOT bump VERSION itself. Deciding that a change is
@@ -27,6 +28,11 @@ on:
         description: 'Commit to release (default: the branch tip)'
         required: false
         type: string
+      waive:
+        description: 'Comma-separated gate names to release without (see the manifest in the wait step)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -74,9 +80,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.sha || github.sha }}
         # A bump to a version that already exists means either a mistaken
         # edit or a rerun after a partial failure. Both want a human, and
         # both are silent if this step is a no-op instead of an error.
+        #
+        # Two things can pre-exist, and checking only the release missed one
+        # (issue #35). `gh release create` REUSES a tag that is already
+        # there and ignores `--target` outright, so a tag left behind at an
+        # older commit by an earlier partial failure passes this guard and
+        # then publishes the release pointing at that older commit — a fully
+        # green run for commit B shipping commit A. Resolving the tag is what
+        # separates "no tag" from "a tag somewhere it must not be"; a tag
+        # already AT this SHA is the rerun case, and is correct.
+        #
+        # This step only ever refuses. It never deletes a tag, moves one, or
+        # touches a release, because the operator's ruleset on refs/tags/v*
+        # allows creation and blocks everything else anyway — an automatic
+        # repair would be a way to publish something nobody reviewed.
+        #
+        # "No such tag" and "could not ask" are two different answers and
+        # this step needs both to be true before it proceeds. Collapsing
+        # them — which `2>/dev/null || true` does — means an API hiccup
+        # reads as a free tag, and bug #35 is back the moment gh has a bad
+        # day. So the resolution is a refusal unless the API positively
+        # says the ref is not a commit.
+        #
+        # The "not a commit" answer is HTTP 422, not 404, and the text that
+        # distinguishes it was read off the live API rather than assumed:
+        #
+        #   $ gh api "repos/Nitjsefnie/gh-widgets/commits/v99.99.99"
+        #   {"message":"No commit found for SHA: v99.99.99",...,"status":"422"}
+        #   gh: No commit found for SHA: v99.99.99 (HTTP 422)
+        #
+        # A 404 on this endpoint means something else went wrong (a repo
+        # this token cannot see, say), so it lands in the refuse arm — which
+        # is the correct answer for it.
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists — VERSION was set to a" >&2
@@ -84,59 +124,229 @@ jobs:
             echo "delete that release if it was cut in error." >&2
             exit 1
           fi
-          echo "$TAG is free"
+          existing="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
+            case "$existing" in
+              *"No commit found for SHA"*) existing="" ;;
+              *)
+                echo "Could not resolve $TAG — refusing to guess." >&2
+                echo "$existing" >&2
+                exit 1
+                ;;
+            esac
+          }
+          if [ -n "$existing" ] && [ "$existing" != "$SHA" ]; then
+            echo "Tag $TAG already points at $existing, not at $SHA." >&2
+            echo "gh release create reuses a tag and ignores --target, so" >&2
+            echo "releasing now would publish $TAG for the OLD commit while" >&2
+            echo "this run's checks describe $SHA." >&2
+            echo "Move or delete that tag by hand if it is in the way — a" >&2
+            echo "tag-protection ruleset on refs/tags/v* is the likely" >&2
+            echo "reason it cannot be moved, and this workflow will not do" >&2
+            echo "it for you — or bump VERSION further." >&2
+            exit 1
+          fi
+          if [ -n "$existing" ]; then
+            echo "$TAG already points at $SHA — a rerun after a partial failure"
+          else
+            echo "$TAG is free"
+          fi
 
       - name: Wait for the other gates on this commit
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha || github.sha }}
           REPO: ${{ github.repository }}
-        # Polls this commit's check runs until they have all completed,
-        # then requires every one of them to have passed.
+          WAIVE: ${{ inputs.waive }}
+        # Polls this commit's check runs until every gate named in the
+        # manifest below has REPORTED and passed.
+        #
+        # The manifest is the point (issue #34). Polling whatever happened
+        # to have reported cannot tell "all six gates are green" from
+        # "lint.yml was renamed, or a path filter swallowed this commit,
+        # and five gates are green" — the bar quietly shrinks instead of
+        # the release being stopped. Since a tag is the artefact that
+        # cannot be taken back, a gate that went missing has to stop the
+        # release, which is the opposite of what the old poll did.
+        #
+        # Each entry is the check-run NAME PREFIX a required job reports
+        # under. Four of them report exactly the job name; `unittest` is a
+        # six-leg matrix, so GitHub appends " (os, python)"; and codeql
+        # renames its own job to "analyze (python)". All six of them
+        # trigger on a push that touches VERSION, because none of their
+        # paths-ignore lists mentions it. Deliberately absent, and each for
+        # a reason that a VERSION push would not change: actionlint.yml
+        # (allow-lists .github/workflows/**), claim.yml (issue_comment),
+        # pr-gate.yml (pull_request_target), and targeted-blame-audit.yml
+        # plus the two gitfame-* measurements (schedule or dispatch only).
+        # A workflow added to the manifest must be one a VERSION push
+        # schedules, or the release waits 45 minutes for a check that will
+        # never arrive.
         #
         # Three details that are each a way this can be wrong:
         #   - it excludes ITSELF, or it would wait on a job that is waiting
         #     on it;
-        #   - it requires at least one other check to exist, so it cannot
-        #     race ahead and tag before CI has even been scheduled;
+        #   - a prefix is matched only with the " (" delimiter behind it, so
+        #     a future `lint-docs` check cannot satisfy `lint`. That is the
+        #     same bug as a missing gate, one delimiter down;
         #   - `cancelled` counts as failure. A cancelled run means a newer
         #     push superseded this SHA, which is not a commit to release.
+        #     Only a COMPLETED run can be bad at all: an in-flight one has
+        #     no conclusion yet, and reading its empty conclusion as a
+        #     failure would turn every ordinary wait into a red release.
+        #
+        # A manifest entry has to reach `success` and nothing less. The
+        # wider success/skipped/neutral set is kept for checks that are
+        # NOT in the manifest, because those are incidental — but `skipped`
+        # on a required gate means the gate did not run, which is issue
+        # #34's own hole one level down. Every leg of a matrix counts, not
+        # just the first.
         run: |
-          deadline=$(( SECONDS + 45 * 60 ))
+          manifest=(
+            lint        # lint.yml, job `lint`
+            pyright     # types.yml, job `pyright`
+            speed       # speed.yml, job `speed`
+            pip-audit   # audit.yml, job `pip-audit`
+            analyze     # codeql.yml, job `analyze`
+            unittest    # tests.yml, job `unittest` (six-leg matrix)
+          )
+          # The only way out of the manifest is to say so out loud. A
+          # dispatch can waive; a push has no inputs, so a push-triggered
+          # release can never waive anything.
+          IFS=', ' read -r -a requested <<< "${WAIVE:-}"
+          required=()
+          waived=()
+          for entry in "${manifest[@]}"; do
+            match=no
+            for name in "${requested[@]}"; do
+              if [ -n "$name" ] && [ "$name" = "$entry" ]; then
+                match=yes
+              fi
+            done
+            if [ "$match" = yes ]; then
+              waived+=("$entry")
+            else
+              required+=("$entry")
+            fi
+          done
+          # Overridable so the tests can run THIS block rather than a copy
+          # of it. A release sets neither, and only the defaults are
+          # production values.
+          : "${POLL_INTERVAL_SECONDS:=20}"
+          : "${WAIT_DEADLINE_SECONDS:=$(( 45 * 60 ))}"
+          echo "expected gates: ${manifest[*]}"
+          echo "required gates: ${required[*]:-none}"
+          if [ "${#waived[@]}" -gt 0 ]; then
+            echo "WAIVED: ${waived[*]}" >&2
+            echo "This release will NOT wait on those gates." >&2
+            {
+              echo "### Waived gates"
+              echo
+              echo "Dispatched with \`waive\`, so this release did not wait"
+              echo "for: \`${waived[*]}\`. Everything else in the manifest"
+              echo "still had to report and pass."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          deadline=$(( SECONDS + WAIT_DEADLINE_SECONDS ))
+          missing=""
           while [ "$SECONDS" -lt "$deadline" ]; do
             runs="$(gh api --paginate \
               -H "Cache-Control: no-cache" \
               "repos/$REPO/commits/$SHA/check-runs" \
               --jq '.check_runs[] | select(.name | startswith("release") | not)
                     | "\(.status)\t\(.conclusion)\t\(.name)"')"
+            reported="$(printf '%s\n' "$runs" | awk -F'\t' 'NF')"
 
-            if [ -z "$runs" ]; then
-              echo "no other check runs reported yet, waiting..."
-              sleep 20
-              continue
+            # Incidental checks — anything that is not a manifest entry —
+            # keep the inherited wider acceptance set, so today's
+            # behaviour is unchanged for everything the manifest does not
+            # name. A waived gate lands here, which is what "removed from
+            # the required set" has to mean for the escape hatch to be
+            # worth having; that is why the waiver is this loud.
+            bad="$(printf '%s\n' "$reported" \
+              | awk -F'\t' -v gates="${manifest[*]}" '
+                    BEGIN { n = split(gates, g, " ") }
+                    function isgate(name,   i) {
+                      for (i = 1; i <= n; i++)
+                        if (name == g[i] || index(name, g[i] " (") == 1)
+                          return 1
+                      return 0
+                    }
+                    NF && !isgate($3) && $1 == "completed" \
+                      && $2 != "success" && $2 != "skipped" \
+                      && $2 != "neutral"')"
+            if [ -n "$bad" ]; then
+              echo "Refusing to release: these checks did not pass:" >&2
+              printf '%s\n' "$bad" | awk '{print "    " $0}' >&2
+              exit 1
             fi
 
-            pending="$(echo "$runs" | grep -cv '^completed' || true)"
-            if [ "$pending" -gt 0 ]; then
-              echo "$pending check(s) still running:"
-              echo "$runs" | grep -v '^completed' | awk '{print "    " $0}'
-              sleep 20
+            missing=""
+            gate_bad=no
+            for entry in "${required[@]}"; do
+              matched="$(printf '%s\n' "$reported" \
+                | awk -F'\t' -v entry="$entry" 'NF && ($3 == entry \
+                  || index($3, entry " (") == 1)')"
+              if [ -z "$matched" ]; then
+                missing="$missing $entry"
+                continue
+              fi
+              # Every leg of a matrix has to land, not just the first.
+              settled="$(printf '%s\n' "$matched" \
+                | awk -F'\t' '$1 == "completed" && $2 != "success"')"
+              if [ -n "$settled" ]; then
+                if [ "$gate_bad" = no ]; then
+                  echo "Refusing to release: these gates did not reach" >&2
+                  echo "success, which a manifest entry must:" >&2
+                  gate_bad=yes
+                fi
+                echo "  $entry:" >&2
+                printf '%s\n' "$settled" | awk '{print "    " $0}' >&2
+              fi
+            done
+            if [ "$gate_bad" = yes ]; then
+              exit 1
+            fi
+
+            # A waived gate cannot hold this release either. It is already
+            # out of `required` and out of the `bad` scan; leaving it in
+            # the pending count meant a slow or stuck waived gate stalled
+            # the release for the full deadline and then failed it, one
+            # screen under a log line saying the opposite.
+            pending="$(printf '%s\n' "$reported" \
+              | awk -F'\t' -v skip="${waived[*]:-}" '
+                    BEGIN { ns = split(skip, s, " ") }
+                    function iswaived(name,   i) {
+                      for (i = 1; i <= ns; i++)
+                        if (name == s[i] || index(name, s[i] " (") == 1)
+                          return 1
+                      return 0
+                    }
+                    NF && !iswaived($3) && $1 != "completed" { n++ }
+                    END { print n + 0 }')"
+            if [ -n "$missing" ] || [ "$pending" -gt 0 ]; then
+              if [ -n "$missing" ]; then
+                echo "no check run has reported yet for:$missing"
+              fi
+              if [ "$pending" -gt 0 ]; then
+                echo "$pending check(s) still running:"
+                printf '%s\n' "$reported" \
+                  | awk -F'\t' 'NF && $1 != "completed" { print "    " $0 }'
+              fi
+              sleep "$POLL_INTERVAL_SECONDS"
               continue
             fi
 
             echo "All checks completed:"
-            echo "$runs" | awk '{print "    " $0}'
-            bad="$(echo "$runs" \
-              | awk -F'\t' '$2 != "success" && $2 != "skipped" && $2 != "neutral"')"
-            if [ -n "$bad" ]; then
-              echo "Refusing to release: these checks did not pass:" >&2
-              echo "$bad" | awk '{print "    " $0}' >&2
-              exit 1
-            fi
-            echo "Every check passed — proceeding."
+            printf '%s\n' "$reported" | awk '{print "    " $0}'
+            echo "Every expected gate reported and passed — proceeding."
             exit 0
           done
-          echo "Timed out after 45 minutes waiting for checks on $SHA" >&2
+          echo "Timed out after ${WAIT_DEADLINE_SECONDS}s waiting for" >&2
+          echo "checks on $SHA." >&2
+          if [ -n "$missing" ]; then
+            echo "These gates never reported a check run:$missing" >&2
+          fi
           exit 1
 
       - name: Create the release
@@ -144,14 +354,65 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ inputs.sha || github.sha }}
+          REPO: ${{ github.repository }}
         # --generate-notes builds the changelog from the commits since the
         # previous release, so the release body stays honest without anyone
         # maintaining a CHANGELOG by hand.
+        #
+        # The tag check is repeated here rather than trusted from three steps
+        # earlier, because the window between them is exactly where a tag
+        # created by something else would slip in, and `--target` is not the
+        # defence: gh ignores it whenever the tag already exists. The check
+        # is kept byte-identical to the one in the refuse step — a test
+        # asserts that — because a second, drifted copy of a guard is worse
+        # than no second copy.
         run: |
+          existing="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
+            case "$existing" in
+              *"No commit found for SHA"*) existing="" ;;
+              *)
+                echo "Could not resolve $TAG — refusing to guess." >&2
+                echo "$existing" >&2
+                exit 1
+                ;;
+            esac
+          }
+          if [ -n "$existing" ] && [ "$existing" != "$SHA" ]; then
+            echo "Tag $TAG appeared at $existing while this run was" >&2
+            echo "waiting; refusing to publish $TAG for $SHA against it." >&2
+            echo "A tag-protection ruleset on refs/tags/v* is the likely" >&2
+            echo "reason it cannot be moved. This job will not move it." >&2
+            exit 1
+          fi
           gh release create "$TAG" \
             --target "$SHA" \
             --title "$TAG" \
             --generate-notes
+          # Three outcomes, not two, and they do not deserve the same
+          # advice. Publishing is already done and this step undoes nothing
+          # in any of them; what changes is what the operator is told.
+          #
+          #   the re-read failed  — this run learned NOTHING. The release
+          #     may be perfectly correct. Say so, and do not tell anyone
+          #     to delete it, because there is no evidence it is wrong.
+          #   it resolved elsewhere — the tag moved inside the create
+          #     call, or --target was ignored because the tag pre-existed.
+          #     That IS evidence of a bad release, and the only remedy is a
+          #     human, because this job will not delete anything.
+          #   it resolved here — the ordinary case.
+          resolved="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
+            echo "Could not re-resolve $TAG after publishing, so this" >&2
+            echo "run cannot tell you which commit the release points" >&2
+            echo "at. It may well be $SHA. Check the tag and the" >&2
+            echo "release yourself before trusting or deleting either." >&2
+            exit 1
+          }
+          if [ "$resolved" != "$SHA" ]; then
+            echo "$TAG now resolves to $resolved, not $SHA" >&2
+            echo "The release points at the wrong commit. Treat it as" >&2
+            echo "unreviewed and delete it by hand." >&2
+            exit 1
+          fi
           echo "Released $TAG at $SHA"
           {
             echo "### Released [\`$TAG\`](https://github.com/${{ github.repository }}/releases/tag/$TAG)"
