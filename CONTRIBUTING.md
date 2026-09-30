@@ -121,8 +121,10 @@ These checks can run locally:
 
 ```sh
 python3 -m unittest discover -v                                  # tests
-python3 -m coverage run --source=. --omit='test_*.py,scripts/*' \
-  -m unittest discover && python3 -m coverage report             # coverage
+python3 -m coverage run --source=. --omit='test_*.py' \
+  -m unittest discover && python3 -m coverage report \
+  && python3 -m coverage json -o coverage.json                  # coverage
+python3 scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
 git ls-files -co --exclude-standard '*.py' | xargs pylint        # lint
 git ls-files -co --exclude-standard '*.py' | xargs pycodestyle   # lint
 pyright                                                          # types
@@ -131,9 +133,15 @@ actionlint .github/workflows/*.yml && zizmor .github/workflows/  # actionlint
 ```
 
 `pip install -r requirements-dev.txt -r requirements-test.txt` gets the
-pinned toolchain. Coverage is gated at **81%** — a ratchet set under the
-current number, not a target. Raise it as coverage climbs; never lower it
-to turn a build green.
+pinned toolchain. The coverage population is **every shipped source family**,
+`scripts/` included — the CI scripts and the bench harness all run in
+workflows, so leaving them out reported coverage for a smaller program than
+the one that ships. The floor lives in `coverage-floor.json` at the repository
+root: committed data rather than a literal in a workflow, raised automatically
+on `main` by `coverage-ratchet.yml` whenever coverage climbs, and never
+lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a smaller
+number than it read. Raise coverage by writing tests; never by editing the
+floor.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise

@@ -33,6 +33,7 @@
 !/README.md
 !/SECURITY.md
 !/VERSION
+!/coverage-floor.json
 !/install.sh
 !/pyrightconfig.json
 !/requirements-dev.txt

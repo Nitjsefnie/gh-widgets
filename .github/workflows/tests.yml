@@ -126,7 +126,13 @@ jobs:
           MEASURED: ${{ matrix.measured }}
         run: |
           if [ "$MEASURED" = "true" ]; then
-            python -m coverage run --source=. --omit='test_*.py,scripts/*' \
+            # Every shipped source family is in the population, scripts/
+            # included: resolve-repo-pins.py, compare_durations.py and the
+            # three bench files all run in workflows below, so omitting them
+            # reported a coverage number for a smaller program than the one
+            # that ships. Only the tests themselves are left out — they are
+            # the instrument, not the subject.
+            python -m coverage run --source=. --omit='test_*.py' \
               -m unittest discover -v
           else
             python -m unittest discover -v
@@ -145,6 +151,9 @@ jobs:
             python -m coverage report --format=markdown --precision=1
           } >> "$GITHUB_STEP_SUMMARY"
           python -m coverage xml -o coverage.xml
+          # The gate step below reads this, not the human summary: it is the
+          # one surface that states the totals as data instead of as a table.
+          python -m coverage json -o coverage.json
 
       - name: Upload coverage.xml
         if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
@@ -157,8 +166,9 @@ jobs:
 
       - name: Coverage gate
         if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
-        # A RATCHET, not a target. 81 sits just under the 83.2% measured
-        # when this landed, so ordinary churn stays green and a real
-        # regression goes red. Raise the floor by hand as coverage climbs —
-        # never lower it to make a red build green.
-        run: python -m coverage report --fail-under=81 --precision=1
+        # A RATCHET, not a target — and the floor is committed data now, not a
+        # literal in this file: coverage-floor.json at the repository root
+        # carries it, coverage-ratchet.yml raises it automatically on main
+        # whenever coverage climbs, and there is no code path that lowers it.
+        # So this step only ever asks the question; it never answers it.
+        run: python scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
