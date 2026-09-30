@@ -19,6 +19,26 @@ name: coverage-ratchet
 # people install. The other manifest gates say the same thing about their own
 # subject: a release waits for lint and for types because it must not ship a
 # tree that does not lint or does not typecheck.
+#
+# WHICH OF ITS JOBS CAN BLOCK A RELEASE. Only `measure`, whose check run is
+# named `coverage-ratchet` and is the manifest entry. `raise` is a maintenance
+# action — it writes the floor file — and it must NEVER be able to fail a
+# release: it is designed to fail its own compare-and-swap when something
+# landed on main concurrently, and that outcome is correct. release.yml treats
+# any check run outside the manifest with a bad conclusion as grounds to
+# refuse, so a red `raise` would block a release for a reason this repository
+# has declared correct. It therefore tolerates its own failure loudly: stderr
+# and a dated line in the step summary, then exit 0. The write did not happen,
+# the next push to main measures again and retries, and nothing is corrupted.
+#
+# AND WHAT IT BLOCKS AFTER MERGE. Adding or removing a measured module leaves
+# tests.yml green on the pull request, because the gate deliberately judges
+# coverage without comparing file counts; the `files` tripwire fires only here,
+# on main, where `measure` exits 2. Because `coverage-ratchet` is a manifest
+# entry, that red blocks every release cut at that commit until someone
+# re-derives the floor in coverage-floor.json. That is the intended cost of a
+# floor that is committed data, not an oversight: the population moved and the
+# floor has to be told.
 
 on:
   # The ONLY trigger, and the narrowest one that can fire. The job below holds
@@ -195,16 +215,48 @@ jobs:
 
           # A compare-and-swap on the blob's current SHA: if anything landed
           # on main between the measure job's checkout and now, this PUT is
-          # rejected. That rejection is the correct outcome and it is left to
-          # fail the job loudly — a write that silently did not happen would
-          # leave the floor ratcheted in the workflow's imagination. `-f`, not
-          # `-F`, for the message and branch because they are strings.
+          # rejected. That rejection is the CORRECT outcome, and it must not
+          # fail this job — see the header. `-f`, not `-F`, for the message
+          # and branch because they are strings.
+          #
+          # WHY `continue-on-error: true` IS NOT THE SAME THING. release.yml
+          # classifies check RUNS, not run conclusions: any check run outside
+          # the manifest that is `completed` with a conclusion outside
+          # {success, skipped, neutral} refuses the release. A job-level
+          # `continue-on-error` still reports a `failure` conclusion on this
+          # job's check run, so it would block the release exactly as hard.
+          # The tolerance has to be in the exit status, and it is below.
           blob_sha="$(gh api \
             "repos/$REPO/contents/coverage-floor.json?ref=main" --jq .sha)"
-          gh api --method PUT "repos/$REPO/contents/coverage-floor.json" \
-            -f message='Raise the coverage floor' \
-            -f branch=main \
-            -f sha="$blob_sha" \
-            -F content="$(base64 -w0 < candidate/candidate-coverage-floor.json)" \
-            --jq '.commit.sha'
-          echo "Raised the floor on main."
+          if gh api --method PUT "repos/$REPO/contents/coverage-floor.json" \
+              -f message='Raise the coverage floor' \
+              -f branch=main \
+              -f sha="$blob_sha" \
+              -F content="$(base64 -w0 < candidate/candidate-coverage-floor.json)" \
+              --jq '.commit.sha'; then
+            echo "Raised the floor on main."
+            exit 0
+          fi
+
+          # The write did not happen. Nothing is corrupted and nothing is lost:
+          # the floor on main is still the last value the ratchet legitimately
+          # recorded, and the next push to main measures again and retries. The
+          # durable record of that is the step summary, not this log — a stderr
+          # line is scrolled away and read by nobody, which is the same reason
+          # this repository writes its numbers into files rather than into
+          # commit messages.
+          echo "Could not raise the floor; the next push to main retries." >&2
+          {
+            echo "### Coverage floor NOT raised"
+            echo
+            echo "The compare-and-swap PUT was rejected or \`gh api\` failed, so"
+            echo "\`coverage-floor.json\` on \`main\` still carries its previous"
+            echo "floor. Nothing is corrupted and the next push to \`main\`"
+            echo "measures again and retries."
+            echo
+            echo '```'
+            echo "when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run:  $GITHUB_RUN_ID ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0

@@ -419,6 +419,39 @@ last four read the workflow as text, so they run on every OS.
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
+    def test_the_write_job_failing_would_refuse_the_release(self):
+        """Why coverage-ratchet's write job must tolerate its own failure.
+
+        Its check run is NOT in the manifest — only `measure` is — so release.yml
+        classifies it as incidental, and an incidental check with a bad
+        conclusion refuses the release. That check run is
+        `coverage-ratchet.yml`'s SECOND job, and that job is designed to fail its
+        own compare-and-swap when something lands on main concurrently, which the
+        workflow itself calls the correct outcome. So a red write job blocks a
+        release for a reason the repository has declared correct.
+
+        This case is the reason, stated as a test instead of as prose: it reads
+        the real job key out of the real workflow, so it keeps following a rename
+        rather than testing a string nobody maintains.
+        """
+        text = (WORKFLOWS / "coverage-ratchet.yml").read_text(encoding="utf-8")
+        body = text.split("\njobs:\n", 1)[1]
+        jobs = re.findall(r"(?m)^  ([a-z][a-z-]*):$", body)
+        self.assertEqual(len(jobs), 2, jobs)
+        write_job = jobs[1]
+
+        self.setUp()
+        self._write_runs([("completed", "failure", write_job)]
+                         + self.ALL_GREEN)
+        done = self._execute("Wait for the other gates on this commit")
+        out = done.stdout + done.stderr
+
+        self.assertEqual(done.returncode, 1, out)
+        self.assertIn("did not pass", done.stderr)
+        self.assertIn(write_job, done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_required_gate_must_reach_success_and_an_incidental_check_may_not(self):
         # `skipped` on a required gate means the gate did not run, which is
         # issue #34's own hole one level down. The wider set is kept for
