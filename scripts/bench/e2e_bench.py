@@ -254,29 +254,32 @@ def _decode(value):
     return str(value)
 
 
-def _compare_workload_outputs(output_root, workload_name, head_rounds):
+def _compare_workload_outputs(output_root, workload, head_rounds):
+    # The parameter is `workload`, not `workload_name`: that name is a
+    # module-level helper now, and shadowing it here is the same defect as
+    # shadowing any other helper — pylint W0621, and a red lint job.
     round_files = []
     diffs = []
     for round_dir in head_rounds:
-        svg_dir = round_dir / workload_name
+        svg_dir = round_dir / workload
         svg_files = {path.name: path.read_bytes()
                      for path in sorted(svg_dir.glob("*.svg"))}
         if svg_files:
             round_files.append((round_dir.name, svg_files))
     if len(round_files) != len(head_rounds):
-        return [f"{workload_name}: SVG output missing in a head round"]
+        return [f"{workload}: SVG output missing in a head round"]
 
     reference_round, reference_files = round_files[0]
     for round_name, files in round_files[1:]:
         if set(files) != set(reference_files):
             diffs.append(
-                f"{workload_name}: SVG file set differs between "
+                f"{workload}: SVG file set differs between "
                 f"{reference_round} and {round_name}")
             continue
         for filename in sorted(reference_files):
             if files[filename] != reference_files[filename]:
                 diffs.append(
-                    f"{workload_name}/{filename}: bytes differ between "
+                    f"{workload}/{filename}: bytes differ between "
                     f"{reference_round} and {round_name}")
     return diffs
 
