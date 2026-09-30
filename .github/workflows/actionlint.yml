@@ -34,6 +34,14 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/dependabot.yml'
+
+  # A pull request that edits a workflow lints itself before merge
+  # (issue #8). Allow-list, same as push.
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/dependabot.yml'
+
   workflow_dispatch:
 
 permissions:

@@ -47,6 +47,18 @@ on:
       - 'examples/**'
       - 'LICENSE'
       - '.gitignore'
+
+  # Read-only measurement on a contributor head, forks included
+  # (issue #8): the same base-release-vs-head comparison, before merge.
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
+
   workflow_dispatch:
 
 permissions:

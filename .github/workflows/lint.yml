@@ -18,6 +18,19 @@ on:
       - 'LICENSE'
       - '.gitignore'
 
+  # Read-only gate for contributor heads, forks included (issue #8): the
+  # pull_request event's token is read-only on a fork, and the checkout
+  # below already runs with persist-credentials: false. Same deny-list
+  # as push.
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
+
 # Least privilege: this job only reads the tree. Without an explicit
 # block it inherits the repository default, which can be read/write
 # for the whole token.

@@ -1,17 +1,31 @@
 name: tests
 
 # CI from scratch (issue #4), modelled on claudit's tests.yml, adapted:
-# - push only — no pull_request_review gate; overkill for a single-author
-#   repo.
+# - push, plus a read-only pull_request gate (issue #8) so a contributor
+#   head — a fork's included — is tested before merge. No
+#   pull_request_review gate; overkill for a single-author repo.
+# - the suite runs across the OS × Python matrix below, not just one
+#   environment (issue #6).
 # - no services and no dependencies: the suite is stdlib unittest with no
-#   network (gql_fn is injected), so discover on ubuntu-latest is the
-#   whole job.
+#   network (gql_fn is injected), so discovery is the whole job.
 
 on:
   push:
     # Deny-list rather than an allow-list: a new top-level code directory
     # would silently stop being tested under an allow-list, whereas an
     # unlisted path here just runs CI needlessly.
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
+
+  # Read-only by construction: the pull_request event's token is
+  # read-only on a fork, and the checkout below already runs with
+  # persist-credentials: false. Same deny-list as push.
+  pull_request:
     paths-ignore:
       - '**/*.md'
       - 'PRESENTATION.txt'
@@ -27,14 +41,45 @@ permissions:
   contents: read
 
 concurrency:
-  # A push that supersedes an in-flight run for the same ref cancels it —
-  # nothing is learned from CI for a commit that is already history.
+  # A newer revision for the same ref — a push, or a new PR head — cancels
+  # the in-flight run: nothing is learned from CI for a commit that is
+  # already history.
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   unittest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        # Pin bash on every OS. Windows would otherwise run these blocks
+        # under pwsh, and nothing here is shell-agnostic: the line
+        # continuations and the $GITHUB_STEP_SUMMARY writes assume POSIX
+        # shell. Git-bash ships with the hosted Windows runner.
+        shell: bash
+
+    strategy:
+      # One red cell must not hide another — each OS × Python pair is its
+      # own diagnosis.
+      fail-fast: false
+      matrix:
+        # The span CI can actually vouch for. README claims the renderer
+        # runs on Python 3.9+, but the pinned measurement toolchain
+        # (coverage, pytest) requires >= 3.10, so 3.10 is the oldest
+        # version a green run here can prove. 3.13 is the version the
+        # other gates run.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.13"]
+        include:
+          # The one cell that MEASURES the suite; every other cell just
+          # runs it. Coverage is comparable only within a single Python
+          # build, so the ratchet below stays calibrated to the one cell
+          # it was measured on rather than becoming six gates with six
+          # unknown floors.
+          - os: ubuntu-latest
+            python-version: "3.13"
+            measured: true
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,51 +91,63 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install the coverage toolchain
         id: install
+        if: ${{ matrix.measured }}
         # The SUITE needs nothing — it is stdlib unittest against a pure
-        # stdlib runtime. This installs only what MEASURES it.
+        # stdlib runtime. This installs only what MEASURES it. (Every run
+        # block uses `python`, not `python3`: the hosted Windows runners
+        # have no python3 on PATH, and setup-python puts python on PATH
+        # on all three OSes.)
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements-test.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
 
       - name: Run tests
         id: unittest
-        # Still `unittest discover`, run under coverage. pytest is not the
-        # runner here and should not become one; it appears only in
-        # speed.yml, purely as a timing harness.
+        # Still `unittest discover`, under coverage on the measured cell.
+        # pytest is not the runner here and should not become one; it
+        # appears only in speed.yml, purely as a timing harness.
+        env:
+          # Undefined on the other five cells, so this reads as "" there.
+          MEASURED: ${{ matrix.measured }}
         run: |
-          python3 -m coverage run --source=. --omit='test_*.py,scripts/*' \
-            -m unittest discover -v
+          if [ "$MEASURED" = "true" ]; then
+            python -m coverage run --source=. --omit='test_*.py,scripts/*' \
+              -m unittest discover -v
+          else
+            python -m unittest discover -v
+          fi
 
       - name: Coverage summary
         # Renders whether or not the gate below passes — a coverage
         # regression is only actionable if you can see WHICH file lost
         # lines, and re-reading a scrolled CI log to find that is exactly
         # the friction that gets a gate disabled.
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
         run: |
           {
             echo '### Coverage'
             echo
-            python3 -m coverage report --format=markdown --precision=1
+            python -m coverage report --format=markdown --precision=1
           } >> "$GITHUB_STEP_SUMMARY"
-          python3 -m coverage xml -o coverage.xml
+          python -m coverage xml -o coverage.xml
 
       - name: Upload coverage.xml
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          # One measured cell, so one artifact — no per-matrix naming.
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: error
 
       - name: Coverage gate
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' }}
+        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
         # A RATCHET, not a target. 81 sits just under the 83.2% measured
         # when this landed, so ordinary churn stays green and a real
         # regression goes red. Raise the floor by hand as coverage climbs —
         # never lower it to make a red build green.
-        run: python3 -m coverage report --fail-under=81 --precision=1
+        run: python -m coverage report --fail-under=81 --precision=1
