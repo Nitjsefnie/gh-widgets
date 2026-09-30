@@ -248,6 +248,14 @@ def _compare_files(transport: Transport, repo: str, before: str, after: str,
             raise AggregationError('new-branch push has no default branch to compare')
         before = quote(default_branch, safe='')
     comparison = _api(transport, f'repos/{repo}/compare/{before}...{after}')
+    if isinstance(comparison, dict) and comparison.get('status') == 'diverged':
+        # A rebased branch has divergent old/new tips. Classify its whole
+        # replacement series against the default branch, as for a new branch.
+        if not default_branch:
+            raise AggregationError('divergent push has no default branch to compare')
+        baseline = quote(default_branch, safe='')
+        if before != baseline:
+            comparison = _api(transport, f'repos/{repo}/compare/{baseline}...{after}')
     if not isinstance(comparison, dict) or comparison.get('status') not in ('ahead', 'identical'):
         raise AggregationError('push comparison is divergent, behind, or has an unknown status')
     files = comparison.get('files')
