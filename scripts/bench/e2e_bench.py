@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run deterministic renderer workloads and write one JUnit suite."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -51,6 +52,16 @@ def _renderer_environment(fixture_root, bench_dir, cache_file, out_dir):
         "no_proxy": "",
         "BLAME_METHOD": "targeted",
     })
+    manifest = json.loads((payloads / "manifest.json").read_text(
+        encoding="utf-8"))
+    repositories = sorted(manifest["repo_heads"])
+    env["GIT_CONFIG_COUNT"] = str(len(repositories))
+    for index, repository in enumerate(repositories):
+        mirror_repo = mirror / repository.replace("/", "__")
+        env[f"GIT_CONFIG_KEY_{index}"] = (
+            f"url.{mirror_repo.as_uri()}.insteadOf")
+        env[f"GIT_CONFIG_VALUE_{index}"] = (
+            f"https://github.com/{repository}.git")
     return env
 
 
@@ -122,6 +133,47 @@ def _validate_live_result(result, out_dir, expected_svgs):
             f"stdout:\n{result['stdout']}")
 
 
+def _validate_impact_refresh(result, cache_file, fixture_root):
+    """Require every stale LOC entry to refresh from its local mirror."""
+    try:
+        manifest = json.loads((fixture_root / "payloads" /
+                              "manifest.json").read_text(encoding="utf-8"))
+        seeded = json.loads((fixture_root / "caches" /
+                             "impact-cache.json").read_text(
+                                 encoding="utf-8"))["ourloc"]
+        updated = json.loads(cache_file.read_text(encoding="utf-8"))["ourloc"]
+    except (KeyError, OSError, ValueError) as exc:
+        result["failure"] = f"could not verify impact ourloc refresh: {exc}"
+        return
+
+    problems = []
+    for repository, head in sorted(manifest["repo_heads"].items()):
+        expected_lines = manifest["expected_ourloc_lines"][repository]
+        old_entry = seeded[repository]
+        new_entry = updated.get(repository, {})
+        if old_entry.get("head") == head:
+            problems.append(f"{repository}: fixture head was not stale")
+        if old_entry.get("ours") == expected_lines:
+            problems.append(f"{repository}: fixture ours count was not stale")
+        if new_entry.get("head") != head:
+            problems.append(
+                f"{repository}: ourloc head did not refresh to mirror HEAD")
+        if (new_entry.get("ours") == old_entry.get("ours")
+                or new_entry.get("ours") != expected_lines):
+            problems.append(
+                f"{repository}: ourloc count did not refresh from "
+                f"{old_entry.get('ours')} to {expected_lines}")
+        if new_entry.get("total") != expected_lines:
+            problems.append(
+                f"{repository}: ourloc total is {new_entry.get('total')}, "
+                f"expected {expected_lines}")
+
+    if problems:
+        result["failure"] = (
+            "impact ourloc refresh validation failed:\n- "
+            + "\n- ".join(problems))
+
+
 def _run_workload(side, repo_root, round_number, work_root, fixture_root,
                   workload):
     name, script_name = workload[:2]
@@ -143,6 +195,8 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
     result.update(_run_renderer(renderer, repo_root, env))
     _capture_outputs(out_dir, output_dir)
     _validate_live_result(result, out_dir, workload[2])
+    if name == "render-impact" and result["failure"] is None:
+        _validate_impact_refresh(result, cache_file, fixture_root)
     return result
 
 

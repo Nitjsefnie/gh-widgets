@@ -13,7 +13,10 @@ from pathlib import Path
 USER = "bench-user"
 ORG = "bench-org"
 AUTHOR_EMAIL = "bench-user@users.noreply.github.com"
+# The renderers still call datetime.now(); these fixed future inputs make
+# current output stable without proving those wall-clock reads are absent.
 FUTURE = "9998-01-01T00:00:00Z"
+EXPECTED_OURLOC_LINES = 120 * 60 + 80
 REPOSITORIES = (
     ("outside-owner-a", "project-alpha"),
     ("outside-owner-b", "project-bravo"),
@@ -343,6 +346,8 @@ def _write_payloads(payload_dir, repo_heads):
         "organizations": [ORG],
         "emails": [AUTHOR_EMAIL],
         "repo_heads": repo_heads,
+        "expected_ourloc_lines": {
+            repo: EXPECTED_OURLOC_LINES for repo in repo_heads},
         "fixture_timestamp": FUTURE,
     })
     return calendar_days, cached_prs, issue_nodes, totals, [ORG, USER]
@@ -368,8 +373,8 @@ def _write_caches(cache_dir, user, calendar_days, cached_prs, issue_nodes,
             raise AssertionError("stale fixture head unexpectedly matches")
         ourloc[repo] = {
             "head": stale_head,
-            "ours": 7280,
-            "total": 7280,
+            "ours": 1,
+            "total": EXPECTED_OURLOC_LINES,
         }
     _write_json(cache_dir / "impact-cache.json", {
         "version": 1,
