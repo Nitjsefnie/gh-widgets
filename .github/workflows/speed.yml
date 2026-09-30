@@ -264,9 +264,10 @@ jobs:
           # workload in WORKLOADS while deleting its renderer script reds at
           # the "Run renderer workloads" step instead, because the harness
           # now fails a missing renderer on the head side — long before this
-          # comparison runs. So a name here only exempts a workload that is
-          # still listed and still running; anything weaker than that has
-          # already failed elsewhere.
+          # comparison runs. So a name here only has an effect on a workload
+          # the harness still lists but which is no longer present in the
+          # head reports; anything weaker than that has already failed at the
+          # bench step.
           #
           # Every name added weakens the gate for every later commit, so it
           # belongs in the same commit as the change that motivates it.
