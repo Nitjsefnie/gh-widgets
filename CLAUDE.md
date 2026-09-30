@@ -190,6 +190,22 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > largest single repo blamed (`Nitjsefnie-OSC/codex`, 1.65 M LOC), not with the
 > repo count, so it grows as that repo does.
 >
+> **Re-measured 2026-09-30 against the CURRENT pin (`65925d8`, perf-blame):
+> the fork now wins on time as well as memory.** Workflow run `36718311078`,
+> 58 repos, two runs per build, all valid with identical output:
+>
+> | build | cgroup peak | sampler tree peak | wall |
+> |---|---|---|---|
+> | fork `65925d8` | 642.4 / 636.7 MB | 350.9 / 357.4 MB | 241.9 / 247.4 s |
+> | upstream 4.0.0 | 1209.9 / 1215.1 MB | 2166.9 / 1683.3 MB | 365.8 / 374.6 s |
+>
+> The blame phase is 155 s against 282 s. An earlier run the same day
+> (`36714006796`) showed upstream about 6% faster, but its fork arm was still
+> the older `a99855d3`; the measurement workflows now install the documented
+> pin, and `test_ci_workflows.py` fails if they drift from it again. The
+> fork's `git fame` process never enters the sampler's top-12 list, so that
+> column reads 0 for it: it is below every listed process, not unmeasured.
+>
 > **There is deliberately no pin-expiry check in CI, and none should be
 > added.** `pin-still-needed.yml` was deleted and stays deleted. Its question —
 > has upstream shipped `--jobs` yet — is answered permanently and was never the
