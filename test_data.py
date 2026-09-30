@@ -733,6 +733,33 @@ class DocumentedIssueStateMatrix(unittest.TestCase):
         self.rejected(state="CLOSED", state_reason="   ")
 
 
+class DocumentedPullRequestMergeMatrix(unittest.TestCase):
+    """The PR matrix's `MERGED` row, whose conjuncts had no control of their own.
+
+    `test_snapshot_rejects_invalid_state_and_outcome_combinations` already
+    pins the OPEN and CLOSED rows, and reaches this row's `closed_at` limb
+    with every other field correct. Its only other fixture here sets
+    `merged=False` *and* `merged_at=None`, so whichever of the two remaining
+    conjuncts survived still rejected it — they masked each other, and a plant
+    over either one left the suite green. Each case below holds the other two
+    conjuncts correct so that only the one under test can fire.
+    """
+
+    def rejected(self, **overrides):
+        with self.assertRaises(data.SnapshotValidationError):
+            data._validate_snapshot(
+                snapshot(pull_requests=[pull_request_record(**overrides)]))
+
+    def test_merged_pull_request_requires_a_merge_timestamp(self):
+        self.rejected(state="MERGED", merged=True,
+                      closed_at="2026-01-04T00:00:00Z", merged_at=None)
+
+    def test_merged_pull_request_must_be_flagged_merged(self):
+        self.rejected(state="MERGED", merged=False,
+                      closed_at="2026-01-04T00:00:00Z",
+                      merged_at="2026-01-04T00:00:00Z")
+
+
 class SnapshotWriting(unittest.TestCase):
     def test_write_snapshot_round_trips_atomically(self):
         with tempfile.TemporaryDirectory() as td:
