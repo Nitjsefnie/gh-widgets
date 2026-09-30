@@ -63,8 +63,15 @@ patching a dependency the same way (`2bca15f` → `e29fc78` → `f30eed6`):
 Deliberately **not** changed: `blame_repo` still does not pass `-j`. The patched
 build parallelises by default, so leaving the flag off means a stock install
 degrades to "slow" rather than "every repo errors" — and an erroring repo caches
-an `{"error", head}` entry that `update_loc` then skips until HEAD moves,
-silently dropping the repo from the table.
+an `{"error", head}` entry, from which it contributes no table row until a
+retry succeeds.
+
+*(Amended 2026-09-30, issue #33: at the time of writing `update_loc` also SKIPPED
+such an entry until HEAD moved, so a single failure froze the repo out of the
+table until the weekly resync. The skip is now conditioned on a real count, so
+an `{"error", head}` entry is retried on the next ordinary render. The
+conclusion above stands — a stock build still fails every repo rather than
+degrading to slow.)*
 
 ## Concurrency semantics
 

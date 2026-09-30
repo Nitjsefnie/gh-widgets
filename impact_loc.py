@@ -422,8 +422,12 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
             t = {**t, "head": pin["head"],
                  "branch": pin["branch"] or t["branch"]}
         entry = ourloc.get(repo) or {}
-        if (not resync and entry.get("head") == t["head"]
-                and ("ours" in entry or "error" in entry)):
+        # Only a real count suppresses a re-clone. An error entry records a
+        # failure, not a result: skipping it would freeze the repo out of the
+        # card until its HEAD moved or the weekly --resync re-blamed
+        # everything. The retry is bounded by construction -- update_loc runs
+        # once per render, so a hard-down repo costs one clone attempt per run.
+        if not resync and entry.get("head") == t["head"] and "ours" in entry:
             continue
         moved.append((repo, t))
     blame_fn(moved, ourloc, emails)
