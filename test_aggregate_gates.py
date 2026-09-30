@@ -274,6 +274,101 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(result['codeql'].verdict, 'never-reported')
 
 
+class WorkflowDriftTests(unittest.TestCase):
+    def trigger_block(self, text):
+        lines = text.splitlines()
+        start = lines.index('on:') + 1
+        end = next(index for index in range(start, len(lines))
+                   if lines[index] in ('permissions:', 'concurrency:'))
+        return lines[start:end]
+
+    def triggers(self, text):
+        result = {}
+        event = None
+        key = None
+        for line in self.trigger_block(text):
+            match = ag.re.match(r'^  ([a-z_]+):', line)
+            if match:
+                event, key = match.group(1), None
+                result[event] = {}
+                continue
+            match = ag.re.match(r'^    (paths|paths-ignore):', line)
+            if match and event:
+                key = match.group(1)
+                result[event][key] = []
+                continue
+            match = ag.re.match(r"^      - '([^']+)'", line)
+            if match and event and key:
+                result[event][key].append(match.group(1))
+        return result
+
+    def test_every_commit_gate_is_in_table_and_filters_match(self):
+        root = ag.Path(__file__).resolve().parent
+        observed = set()
+        for path in sorted((root / '.github/workflows').glob('*.yml')):
+            text = path.read_text(encoding='utf-8')
+            name_match = ag.re.search(r'^name: (.+)$', text, ag.re.MULTILINE)
+            if name_match is None:
+                self.fail(f'{path}: workflow has no name')
+            name = name_match.group(1)
+            triggers = self.triggers(text)
+            if not set(triggers) & {'push', 'pull_request', 'pull_request_target'}:
+                continue
+            # release is push-only and waits on CI itself; including it here
+            # would deadlock. aggregate must never evaluate its own run.
+            if name in {'release', 'aggregate'}:
+                continue
+            with self.subTest(workflow=path.name):
+                self.assertIn(name, ag.GATES, 'new commit gate must join GATES')
+                observed.add(name)
+                gate = ag.GATES[name]
+                if gate.kind == 'pr':
+                    self.assertEqual(set(triggers), {'pull_request_target'})
+                    self.assertEqual(gate.events, {'pull_request': 'pull_request_target'})
+                    type_match = ag.re.search(r'types: \[([^]]+)\]', text)
+                    if type_match is None:
+                        self.fail(f'{path}: PR gate has no action types')
+                    types = type_match.group(1)
+                    self.assertEqual(set(item.strip() for item in types.split(',')), ag.PR_ACTIONS)
+                    continue
+                key = 'paths-ignore' if gate.kind == 'deny' else 'paths'
+                self.assertIn('push', triggers)
+                self.assertIn('pull_request', triggers)
+                self.assertEqual(triggers['push'][key], triggers['pull_request'][key])
+                self.assertEqual(tuple(triggers['push'][key]), gate.patterns)
+                self.assertEqual(gate.events['push'], 'push')
+                self.assertEqual(gate.events['pull_request'], 'pull_request')
+        self.assertEqual(observed, set(ag.GATES))
+
+    def test_aggregate_always_reports_and_actions_are_pinned(self):
+        path = ag.Path(__file__).resolve().parent / '.github/workflows/aggregate.yml'
+        text = path.read_text(encoding='utf-8')
+        triggers = self.triggers(text)
+        self.assertEqual(set(triggers), {'push', 'pull_request', 'workflow_dispatch'})
+        for event in ('push', 'pull_request'):
+            self.assertEqual(triggers[event], {})
+        self.assertNotIn('branches:', '\n'.join(self.trigger_block(text)))
+        self.assertIn('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1', text)
+        self.assertIn('actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0', text)
+        block = text.split('        run: |', 1)[1]
+        self.assertNotIn('${{', block)
+        self.assertIn('python3 scripts/ci/aggregate_gates.py', block)
+
+    def test_contributing_count_matches_all_workflow_files(self):
+        root = ag.Path(__file__).resolve().parent
+        numbers: dict[str, int] = dict(zip((
+            'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+            'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen',
+            'Eighteen', 'Nineteen', 'Twenty'), range(1, 21)))
+        text = (root / 'CONTRIBUTING.md').read_text(encoding='utf-8')
+        match = ag.re.search(r'(\w+) workflows run, and a green suite is one of them\.', text)
+        if match is None:
+            self.fail('CONTRIBUTING is missing the workflow count')
+        word = match.group(1)
+        self.assertEqual(numbers.get(word, int(word) if word.isdigit() else 0),
+                         len(list((root / '.github/workflows').glob('*.yml'))))
+
+
 class CliTests(unittest.TestCase):
     def test_cli_passes_and_writes_the_summary(self):
         path = 'repos/owner/repo/pulls/37/files?per_page=100'
