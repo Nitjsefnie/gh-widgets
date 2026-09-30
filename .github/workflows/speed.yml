@@ -249,6 +249,17 @@ jobs:
         if: steps.baseline.outputs.tag != ''
         env:
           BASE_TAG: ${{ steps.baseline.outputs.tag }}
+          # The deliberate-configuration surface for retiring a shipped
+          # renderer workload: a comma-separated list of workload node ids,
+          # each passed on as --allow-removal so the closed-set population
+          # check accepts its disappearance from the head reports. LEAVING
+          # THIS EMPTY IS THE CORRECT DEFAULT. Every name added here weakens
+          # the gate for every later commit, so a removal has to be written
+          # down at the moment it is deliberate — which is the moment
+          # someone is actually thinking about it — rather than discovered
+          # afterwards as a renderer that quietly stopped being measured.
+          # Retire the workload in the same commit that names it here.
+          ALLOWED_WORKLOAD_REMOVALS: ""
         # The comparator comes from the HEAD checkout, so an improvement to
         # the comparison itself takes effect on the commit that makes it
         # rather than one release later.
@@ -266,13 +277,59 @@ jobs:
           fi
 
           # Keep renderer workloads in their own testcase intersection and gate.
+          #
+          # Unlike the unit suite, this population is CLOSED. Unit tests come
+          # and go by design, so an added or removed test must not turn the
+          # gate red; but the renderer workload set IS what this half of the
+          # gate exists to measure, and a shipped renderer that vanished from
+          # the head reports would otherwise leave it comparing one fewer
+          # program and still reporting a pass.
+          #
+          # The allowed removals are parsed FIRST, because the harness
+          # still lists a retired workload and a name that is both required
+          # and allowed to disappear is a contradiction the comparator
+          # rejects. So a declared removal also drops out of the required
+          # list — which is what "deliberately no longer measured" means.
+          removals=()
+          allowed=()
+          if [ -n "${ALLOWED_WORKLOAD_REMOVALS:-}" ]; then
+            IFS=',' read -ra allowed <<< "$ALLOWED_WORKLOAD_REMOVALS"
+            for name in "${allowed[@]}"; do
+              # `if`, not `[ -n ... ] && append`: under bash -e a false test
+              # as the last command in the loop body becomes the loop's own
+              # status, so a trailing empty element would abort the step on
+              # an otherwise successful parse of the list.
+              if [ -n "$name" ]; then
+                removals+=(--allow-removal "$name")
+              fi
+            done
+          fi
+
+          workloads=()
+          # The required list is read from the harness rather than written
+          # out here, so adding a workload to WORKLOADS cannot drift out of
+          # the gate.
+          while IFS= read -r name; do
+            required=1
+            for skip in "${allowed[@]}"; do
+              if [ "$name" = "$skip" ]; then
+                required=0
+                break
+              fi
+            done
+            if [ "$required" -ne 0 ]; then
+              workloads+=(--require-test "$name")
+            fi
+          done < <(python3 head/scripts/bench/e2e_bench.py --list-workloads)
+
           # shellcheck disable=SC2046
           if python3 head/scripts/ci/compare_durations.py \
             --base $(ls reports/bench-base-*.xml) \
             --head $(ls reports/bench-head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
             --base-label "$BASE_TAG renderer workloads" \
-            --summary-file "$GITHUB_STEP_SUMMARY"; then
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            "${workloads[@]}" "${removals[@]}"; then
             renderer_status=0
           else
             renderer_status=$?

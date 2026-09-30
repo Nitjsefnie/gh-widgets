@@ -21,6 +21,28 @@ WORKLOADS = (
      ("responsiveness.svg",), "impact-cache.json"),
 )
 DEAD_PROXY = "http://127.0.0.1:9"
+# The JUnit classname, and therefore the first half of every node id this
+# harness emits. compare_durations.py reconstructs it from the classname and
+# the testcase name, so the two must agree; the speed workflow asks this
+# module for its workload list by --list-workloads rather than hard-coding
+# names, which is only safe because they come from here.
+JUNIT_CLASSNAME = "e2e"
+
+
+def workload_name(name):
+    """The JUnit testcase name for a workload — the `bench.` half of its id."""
+    return f"bench.{name}"
+
+
+def workload_node_id(name):
+    """The node id the comparator computes for a workload name.
+
+    Both halves of it come from this module: the classname is the constant
+    above and the testcase name is what _run_workload writes, so the gate
+    compares the names --list-workloads prints against the names the
+    reports actually carry.
+    """
+    return f"{JUNIT_CLASSNAME}::{workload_name(name)}"
 
 
 def _is_within(path, parent):
@@ -179,10 +201,33 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
                   workload):
     name, script_name = workload[:2]
     renderer = repo_root / script_name
-    result = {"name": f"bench.{name}", "time": 0.0, "skipped": False,
+    result = {"name": workload_name(name), "time": 0.0, "skipped": False,
               "failure": None, "stdout": "", "stderr": ""}
     if not renderer.is_file():
-        result["skipped"] = True
+        # The two sides disagree on purpose, and that asymmetry is the whole
+        # point of the check.
+        #
+        # HEAD: a shipped renderer that is not in this commit's checkout was
+        # renamed, retired, or the checkout is incomplete. Reporting a skip
+        # lets the comparator drop the workload from its intersection, so the
+        # speed gate goes on measuring one fewer program and still calls it a
+        # pass — a gate that measures fewer things than it claims is
+        # decorative. Fail loudly instead.
+        #
+        # BASE: speed.yml runs HEAD's e2e_bench.py against BOTH checkouts,
+        # so a workload added after the last release has no renderer in the
+        # baseline release at all. That is a new-since-baseline workload, not
+        # a missing one, and excluding it from the comparison is correct.
+        # Do not "fix" this asymmetry into a failure on both sides — that
+        # would make every commit that adds a renderer fail the speed gate
+        # until the next release.
+        if side == "head":
+            result["failure"] = (
+                f"{script_name} is missing from the head checkout "
+                f"({repo_root}); a shipped renderer must be present and "
+                "measured, not silently skipped")
+        else:
+            result["skipped"] = True
         return result
 
     run_dir = work_root / "runs" / f"{side}-{round_number}" / name
@@ -280,7 +325,7 @@ def _write_junit(path, results):
     })
     for result in results:
         case = ET.SubElement(suite, "testcase", {
-            "classname": "e2e",
+            "classname": JUNIT_CLASSNAME,
             "name": result["name"],
             "time": f"{result['time']:.6f}",
         })
@@ -296,16 +341,8 @@ def _write_junit(path, results):
     ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--side", choices=("base", "head"), required=True)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--round", required=True, type=int)
-    parser.add_argument("--junit-file", required=True, type=Path)
-    parser.add_argument("--work-root", required=True, type=Path)
-    parser.add_argument("--selfcheck", action="store_true")
-    args = parser.parse_args(argv)
-
+def _resolve_environment(parser: argparse.ArgumentParser, args):
+    """Validate the paths a run needs, and return them resolved."""
     repo_root = args.repo_root.resolve()
     fixture_value = os.environ.get("GH_BENCH_FIXTURE_ROOT")
     if not fixture_value:
@@ -323,6 +360,40 @@ def main(argv=None):
         parser.error("round must be a positive integer")
     if args.selfcheck and args.side != "head":
         parser.error("--selfcheck is only valid for the head side")
+    return repo_root, fixture_root, work_root
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+
+    # --list-workloads is answered from the module-level WORKLOADS tuple
+    # before the parser exists, because every other flag here is required
+    # and because the question it answers — what is the shipped renderer
+    # set? — must not itself need a checkout or a built fixture root. The
+    # speed workflow pipes it straight into the comparator's required-test
+    # list, and a harness list that can itself fail would drag the gate down
+    # with it. It is therefore not an ordinary flag: it is the one question
+    # about this module that needs no fixtures to answer.
+    if "--list-workloads" in argv:
+        for workload in WORKLOADS:
+            print(workload_node_id(workload[0]))
+        return 0
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    # Declared here too, purely so --help lists it; the branch above has
+    # already answered it by the time this parser ever sees an argument.
+    parser.add_argument("--list-workloads", action="store_true",
+                        help="print one JUnit node id per workload and exit; "
+                             "requires nothing else")
+    parser.add_argument("--side", choices=("base", "head"), required=True)
+    parser.add_argument("--repo-root", required=True, type=Path)
+    parser.add_argument("--round", required=True, type=int)
+    parser.add_argument("--junit-file", required=True, type=Path)
+    parser.add_argument("--work-root", required=True, type=Path)
+    parser.add_argument("--selfcheck", action="store_true")
+    args = parser.parse_args(argv)
+
+    repo_root, fixture_root, work_root = _resolve_environment(parser, args)
 
     work_root.mkdir(parents=True, exist_ok=True)
     results = []

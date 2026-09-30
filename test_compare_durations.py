@@ -234,3 +234,124 @@ def test_main_exits_2_when_it_cannot_compare(tmp_path):
         assert cd.main() == 2
     finally:
         sys.argv = argv
+
+
+# The closed-population gate (issue #36).
+#
+# Permissive mode is what this tool has always done and several of the tests
+# above pin it. These pin the other mode: the one where the population is
+# declared, so measuring fewer things than declared is a failure rather than
+# a quiet, green, one-program-shorter comparison.
+
+
+def test_no_flags_leaves_removals_permissive(tmp_path):
+    """The unit-suite comparison must keep behaving exactly as before."""
+    scans = [cd.scan_junit(write_junit(
+        tmp_path / "h.xml", {"m::a": 1.0, "m::gone": 9.0}))]
+
+    # No exception: the base-only name is reported and excluded, not fatal.
+    cd.verify_population(scans, {"m::a": 1.0, "m::gone": 9.0}, [], [])
+
+
+def test_required_name_absent_from_head_is_an_error(tmp_path):
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::gone": 2.0})
+    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(head)]
+
+    with pytest.raises(cd.ComparisonError) as excinfo:
+        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::gone"], [])
+
+    message = str(excinfo.value)
+    # Both the required-name and the closed-set view of the same fact, so
+    # the reader does not have to know which check caught it.
+    assert "e2e::gone" in message
+    assert "absent from all 1 head report(s)" in message
+
+
+def test_required_name_skipped_in_one_round_is_an_error(tmp_path):
+    """Skipping is a different fault from absence, and is reported so."""
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
+    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
+                     not_passed={"e2e::b": "skipped"})
+    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+    with pytest.raises(cd.ComparisonError) as excinfo:
+        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"], [])
+
+    message = str(excinfo.value)
+    assert "e2e::b" in message
+    # Present in both rounds, so the diagnosis must not say "absent".
+    assert "present in all 2 head report(s) but did not pass in round(s) 2" \
+        in message
+
+
+def test_required_name_present_and_passing_is_not_an_error(tmp_path):
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
+    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 3.0})
+    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+    cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"], [])
+
+
+def test_baseline_only_removal_is_an_error_in_closed_set_mode(tmp_path):
+    """The deleted-testcase variant: nothing in the head report says skip."""
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(head)]
+
+    with pytest.raises(cd.ComparisonError) as excinfo:
+        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], [])
+
+    message = str(excinfo.value)
+    assert "e2e::b" in message
+    assert "--allow-removal" in message
+
+
+def test_declared_removal_is_accepted(tmp_path):
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(head)]
+
+    cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::b"])
+
+
+def test_allow_removal_alone_still_closes_the_set(tmp_path):
+    """Either flag turns on closed-set mode; that is what the docs say."""
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(head)]
+
+    with pytest.raises(cd.ComparisonError, match="e2e::b"):
+        cd.verify_population(scans, cd.fold_rounds([base]), [], ["e2e::a"])
+
+
+def test_require_and_allow_the_same_name_is_a_contradiction(tmp_path):
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
+    scans = [cd.scan_junit(write_junit(tmp_path / "h.xml", {"e2e::a": 1.0}))]
+
+    with pytest.raises(cd.ComparisonError, match="both required and allowed"):
+        cd.verify_population(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::a"])
+
+
+def test_main_writes_a_comparison_error_to_the_summary_file(tmp_path):
+    """A red gate with an empty job summary is one nobody can act on."""
+    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
+    summary = tmp_path / "summary.md"
+
+    argv = sys.argv
+    try:
+        sys.argv = ["compare_durations.py", "--base", str(base),
+                    "--head", str(head), "--require-test", "e2e::a",
+                    "--base-label", "v1.2.3",
+                    "--summary-file", str(summary)]
+        assert cd.main() == 2
+    finally:
+        sys.argv = argv
+
+    text = summary.read_text(encoding="utf-8")
+    assert "COULD NOT COMPARE" in text
+    assert "v1.2.3" in text
+    assert "e2e::b" in text
