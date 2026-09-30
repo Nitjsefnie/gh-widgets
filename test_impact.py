@@ -167,6 +167,11 @@ class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
                 ok = render_impact.check_git_fame()
         return ok, buf.getvalue()
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "the fixture is a shebang script, which CreateProcess cannot exec; "
+        "Windows reaches the CHECK FAILED branch instead, and that branch "
+        "is covered by the next test on every OS")
     def test_stock_git_fame_warns_instead_of_lieing(self):
         """A git-fame without --jobs is detected and warned about."""
         with tempfile.TemporaryDirectory() as td:
