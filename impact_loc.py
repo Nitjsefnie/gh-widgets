@@ -187,6 +187,14 @@ def clone_repo(repo, branch, dest, head=None):
 
     ``head`` pins the checkout to one commit, so every arm of a comparison
     blames the same tree even when the branch moves between runs."""
+    # Clone-size policy: keep complete branch history and blobs because a
+    # partial clone would change blame results. A clone has a 300s deadline;
+    # pack.threads/pack.windowMemory cap index-pack working memory; lookahead
+    # is capped at 16 below (measurement jobs use up to 8). There is no byte
+    # quota on a single full clone, so the deadline bounds how long network
+    # and scratch-disk growth can continue without truncating repository data.
+    # Each later git path/blame command has a 600s deadline and a stdout cap
+    # (GIT_OUTPUT_CAP_MB, default 512 MiB), independent of clone size.
     # Peak memory of a --resync is dominated by concurrent clones, not blame,
     # so cap what each clone's index-pack allocates. Its thread count and delta
     # window buy throughput that CLONE_LOOKAHEAD concurrent clones already
@@ -216,15 +224,100 @@ def clone_repo(repo, branch, dest, head=None):
     return time.monotonic() - t0
 
 
+def _git_output_cap_bytes():
+    """Return the per-command stdout cap, defaulting to 512 MiB."""
+    # 512 MiB is over six times the linear extrapolation of the measured 5.1 MiB
+    # incremental blame output on a 107k-loc repo, with headroom for today's
+    # largest 1.65M-loc repo while putting a firm ceiling on pathological output.
+    cap_mb = common.env_float("GIT_OUTPUT_CAP_MB", 512)
+    return max(1, int(cap_mb * 1024 * 1024))
+
+
+def _kill_process_tree(proc):
+    """Kill a command and its children when the platform supports groups."""
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    elif proc.poll() is None:
+        proc.kill()
+
+
+def _read_bounded_stdout(proc, output, limit, overflow, read_errors):
+    """Read one command's stdout and kill its process group on overflow."""
+    stream = proc.stdout
+    if stream is None:
+        return
+    try:
+        fd = stream.fileno()
+        while True:
+            remaining = limit + 1 - len(output)
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                return
+            output.extend(chunk)
+            if len(output) > limit:
+                overflow.set()
+                _kill_process_tree(proc)
+                return
+    except OSError as exc:
+        read_errors.append(exc)
+        _kill_process_tree(proc)
+
+
+def _run_bounded(cmd, *, cwd=None, timeout=600):
+    """Capture at most the configured stdout bytes before killing the child."""
+    limit = _git_output_cap_bytes()
+    with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL,
+                          start_new_session=os.name == "posix") as proc:
+        output = bytearray()
+        overflow = threading.Event()
+        read_errors = []
+        reader = threading.Thread(
+            target=_read_bounded_stdout,
+            args=(proc, output, limit, overflow, read_errors),
+            name="git-output-reader", daemon=True)
+        deadline = time.monotonic() + timeout
+        reader.start()
+        timed_out = False
+        try:
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            if not timed_out:
+                reader.join(max(0, deadline - time.monotonic()))
+                timed_out = reader.is_alive()
+            if timed_out:
+                _kill_process_tree(proc)
+                proc.wait()
+                reader.join()
+        except BaseException:
+            _kill_process_tree(proc)
+            proc.wait()
+            reader.join()
+            raise
+        if timed_out:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        if read_errors:
+            raise read_errors[0]
+        if overflow.is_set():
+            raise RuntimeError(f"{cmd[0]} output exceeded {limit}-byte cap")
+        return subprocess.CompletedProcess(cmd, proc.returncode, bytes(output))
+
+
 def git_out(dest, *args):
     """Run git in ``dest`` and return stdout, tolerating undecodable bytes."""
     cmd = ["git", "-C", str(dest), "-c", "core.quotePath=false", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=600, check=False)
-    if result.returncode and not (args[0] == "grep" and result.returncode == 1):
-        raise subprocess.CalledProcessError(result.returncode, cmd,
-                                            result.stdout, result.stderr)
-    return result.stdout
+    result = _run_bounded(cmd, timeout=600)
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    result.stdout = b""
+    grep_no_matches = args and args[0] == "grep" and result.returncode == 1
+    if result.returncode and not grep_no_matches:
+        raise subprocess.CalledProcessError(result.returncode, cmd, stdout)
+    return stdout
 
 
 def _countable_path(path):
@@ -237,6 +330,26 @@ def _countable_path(path):
 def _without_head_prefix(path):
     """Remove git-grep's tree prefix from a path, when present."""
     return path[len("HEAD:"):] if path.startswith("HEAD:") else path
+
+
+def _text_line_total(dest, texts):
+    """Sum grep counts for the text paths retained by the shared path filter."""
+    counts = git_out(dest, "grep", "-I", "-c", "-z", "", "HEAD")
+    total = 0
+    cursor = 0
+    while cursor < len(counts):
+        path_end = counts.find("\0", cursor)
+        if path_end < 0:
+            break
+        count_end = counts.find("\n", path_end + 1)
+        if count_end < 0:
+            break
+        path = _without_head_prefix(counts[cursor:path_end])
+        count = counts[path_end + 1:count_end]
+        if path in texts and _countable_path(path) and count:
+            total += int(count)
+        cursor = count_end + 1
+    return total
 
 
 def our_touched_files(dest, emails):
@@ -306,21 +419,7 @@ def targeted_counts(dest, emails):
              for path in git_out(dest, "grep", "-I", "--name-only", "-z",
                                  ".", "HEAD").split("\0")
              if path and _countable_path(_without_head_prefix(path))}
-    total = 0
-    counts = git_out(dest, "grep", "-I", "-c", "-z", "", "HEAD")
-    cursor = 0
-    while cursor < len(counts):
-        path_end = counts.find("\0", cursor)
-        if path_end < 0:
-            break
-        count_end = counts.find("\n", path_end + 1)
-        if count_end < 0:
-            break
-        path = _without_head_prefix(counts[cursor:path_end])
-        count = counts[path_end + 1:count_end]
-        if path in texts and _countable_path(path) and count:
-            total += int(count)
-        cursor = count_end + 1
+    total = _text_line_total(dest, texts)
     touched = our_touched_files(dest, emails)
     # Only pay for recovery scans when a path we touched vanished from the
     # tree -- the only way a rename can have hidden our lines.
@@ -367,16 +466,18 @@ def blamed_lines_for(blame_out, emails):
 def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
     """Aggregate surviving LOC per author email with git-fame."""
     t1 = time.monotonic()
-    fm = subprocess.run(["git", "fame", "-e", "-w", "--format", "json"],
-                        cwd=str(dest), capture_output=True, text=True,
-                        timeout=600, check=False)
+    cmd = ["git", "fame", "-e", "-w", "--format", "json"]
+    fm = _run_bounded(cmd, cwd=str(dest), timeout=600)
     fame_s = time.monotonic() - t1
     if fm.returncode:
-        raise subprocess.CalledProcessError(
-            fm.returncode, fm.args, fm.stdout, fm.stderr)
-    if not fm.stdout.strip():
+        stdout = fm.stdout.decode("utf-8", errors="replace")
+        fm.stdout = b""
+        raise subprocess.CalledProcessError(fm.returncode, fm.args, stdout)
+    fame_stdout = fm.stdout.decode("utf-8", errors="replace")
+    fm.stdout = b""
+    if not fame_stdout.strip():
         raise ValueError("empty git-fame output")
-    data = json.loads(fm.stdout)
+    data = json.loads(fame_stdout)
     total = data.get("total", {}).get("loc", 0)
     ours = 0
     for row in data.get("data", []):
@@ -473,8 +574,10 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
 
 
 def clone_lookahead():
-    """Return the configured minimum number of clones to prefetch."""
-    return max(1, int(common.env_float("CLONE_LOOKAHEAD", 3)))
+    """Return clone prefetch depth, clamped to the resource policy ceiling."""
+    # Keep room above the measured depth-8 workflow while bounding transfers
+    # and scratch space when an environment value is accidentally huge.
+    return min(16, max(1, int(common.env_float("CLONE_LOOKAHEAD", 3))))
 
 
 _SCRATCH_DIRS = set()
