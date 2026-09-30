@@ -111,6 +111,8 @@ The workflow files in `.github/workflows/` are:
 - `aggregate.yml` — always reports on every push and pull request regardless
   of paths; branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
+- `coverage-ratchet.yml` — measures coverage on `main`, raises the committed
+  floor in `coverage-floor.json`, and never lowers it.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
 - `targeted-blame-audit.yml` — contribution-counting correctness audit.
