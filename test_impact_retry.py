@@ -70,6 +70,18 @@ class TestFailedRepoIsRetried(unittest.TestCase):
             resync=True)
         self.assertEqual([repo for repo, _t in seen], ["o/r"])
 
+    def test_a_count_at_a_moved_head_is_blamed_again(self):
+        """The head comparison, not just the ours test, decides this skip.
+
+        Without it a repo whose default branch advanced would sit on the
+        old commit's numbers until the weekly --resync, silently.
+        """
+        totals = {"o/r": {"branch": "main", "head": "h2"}}
+        seen = self.moved_with(
+            totals,
+            {"o/r": {"ours": 3, "total": 9, "branch": "main", "head": "h1"}})
+        self.assertEqual([repo for repo, _t in seen], ["o/r"])
+
     def test_a_retried_repo_replaces_its_error_with_a_count(self):
         """End to end through blame_moved: the row comes back to the card."""
         totals = {"o/r": {"branch": "main", "head": "h1"}}
