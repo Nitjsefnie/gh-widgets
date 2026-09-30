@@ -1,16 +1,16 @@
 {
   "schema": 1,
-  "basis": "The population is every shipped source family: the six root modules plus scripts/resolve-repo-pins.py, scripts/ci/compare_durations.py, scripts/ci/coverage_ratchet.py and the three scripts/bench/ files, because all six scripts run in these workflows, so measuring only the renderers reported coverage for a smaller program than the one that ships. The floor sits one tenth of a point under this box's 73.5% because the ubuntu-latest/3.13 cell has measured three lines differently on impact_loc.py (70 missed there against 67 here), which moves this 2556-statement ratio by 0.117 points to 73.4 — so the runner passes on the first push and the first automatic raise then pins the floor to that cell's own reading. `raise` refuses outright when the measured file count differs from the `files` recorded here, because a percentage cannot announce that its own denominator changed; a same-population coverage change still moves the number without moving that count, and only a person re-deriving it catches that.",
+  "basis": "The population is every shipped source family: the six root modules plus scripts/resolve-repo-pins.py, scripts/ci/compare_durations.py, scripts/ci/coverage_ratchet.py, scripts/ci/aggregate_gates.py and the three scripts/bench/ files, because all seven scripts run in these workflows, so measuring only the renderers reported coverage for a smaller program than the one that ships. The floor is the LOWER of the two cells that will read this tree, not this box's number: the ubuntu-latest/3.13 cell has measured three lines differently on impact_loc.py (70 missed there against 67 here), which moves this 2910-statement ratio by 0.103 points, so this box reads 75.7 and the runner reads 75.6. Pinning the floor to 75.6 rather than 75.7 is what lets the first push to main pass — a floor above the runner's own reading is a red nothing in this repository can lower — and that first raise then re-pins the floor to whatever the runner actually measures, which is the only figure here that was ever a real measurement of the cell the ratchet is calibrated to. The 75.6 is therefore derived from one observed 3-line difference, not measured; if the runner's difference is larger on a given run the first push is red, loudly, and a human re-derives it. Re-derive the floor, never carry it: the denominator moves whenever a renderer does, and a floor carried across a rebase measures a tree that no longer exists — this file has been re-derived five times now, and re-measured between them, for exactly that reason. The thirteenth file, scripts/ci/aggregate_gates.py, arrived with a rebase and the record moved 12 to 13 here rather than silently comparing a thirteen-file measurement against a twelve-file floor; `raise` refuses outright when the measured file count differs from the `files` recorded here, because a percentage cannot announce that its own denominator changed. The same rebases also changed shipped renderers WITHOUT changing that count — ghwidgets_common.py went from 376 statements and 51 missed to 369 and 40 — which is the case the file count cannot see, and it is why the numbers above are re-derived rather than carried: a same-population coverage change moves the number silently, and only a person re-deriving it catches that.",
   "population": [
     "--source=.",
     "--omit=test_*.py"
   ],
   "cell": "ubuntu-latest / 3.13",
-  "measured": 73.5,
-  "floor": 73.4,
-  "measured_commit": "3eb50125339e89f6f1ae7be442bce6e7d30c7dca",
-  "measured_at": "2026-09-30T20:54:11Z",
-  "statements": 2556,
-  "missing": 675,
-  "files": 12
+  "measured": 75.7,
+  "floor": 75.6,
+  "measured_commit": "f514e51fe2823624ef691cf29b5adc8995dba8bf",
+  "measured_at": "2026-09-30T22:21:04Z",
+  "statements": 2910,
+  "missing": 705,
+  "files": 13
 }
