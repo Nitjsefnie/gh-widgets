@@ -506,7 +506,8 @@ class CacheWriting(unittest.TestCase):
         return json.loads(self.path.read_text(encoding="utf-8"))
 
     def test_save_cache_returns_none_on_success(self):
-        assert common.save_cache(self.path, {}) is None and self.read() == {}
+        self.assertIsNone(common.save_cache(self.path, {}))
+        self.assertEqual(self.read(), {})
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
     def test_lock_and_cache_files_and_directories_are_private(self):
