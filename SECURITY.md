@@ -34,9 +34,11 @@ Concretely, it means:
   basis. There is no published response-time commitment, because a commitment
   only one person can keep is not one.
 - Nothing about this repository's operation depends on emergency access,
-  because no such arrangement exists to depend on. The renderers hold a
-  read-only GitHub credential and produce static files; losing the maintainer
-  stops the renders, it does not put anyone's data at risk.
+  because no such arrangement exists to depend on. The renderers hold one
+  GitHub credential and produce static files; losing the maintainer stops the
+  renders rather than exposing anything further. Note that the credential is
+  an account credential and is only as narrow as whoever minted it — scope it
+  down rather than assuming it is read-only.
 
 Advisories are still worth reporting. A report that arrives while the
 maintainer is reachable is worth a great deal more than one that does not.
@@ -50,21 +52,36 @@ token (classic)**, belonging to the account whose profile the cards render.
 The renderers read it from `--token` / `GH_TOKEN`, or from a file named by
 `--token-file` / `GH_TOKEN_FILE`.
 
-Required scope: **`public_repo`**. `read:user` is *not* required — nothing
-here reads the account's email address. A token with broader scopes will work,
-and the renderers will not complain, but it is not needed and it widens what a
-leak of the token would mean.
+Documented scope: **`public_repo`**. `read:user` is *not* required — nothing
+here reads the account's email address.
+
+`public_repo` is the documented, conventional choice rather than the strict
+minimum: nothing the renderers request is private data, so the queries do not
+need a scope that reaches private repositories. A narrower token works where
+your setup permits it. A token with *broader* scopes will also work and the
+renderers will not complain, which is precisely why the scope should be
+checked rather than assumed.
 
 Scope discipline, so the token's blast radius is not overstated:
 
-- Every repository query is filtered to public data (`privacy: PUBLIC`), and
-  private repositories and private pull requests are skipped before
-  serialization. The rendered SVGs therefore cannot contain private
-  repository content.
-- That constrains *what the renderers publish*. It does not constrain the
-  token: it is an account credential, and anyone holding it acts as its owner
-  for as long as it is valid, regardless of what the renderers do with it.
-  Treat a leaked token as a leaked account credential.
+- **No rendered card carries private repository content.** Every render site
+  applies a public/external predicate that rejects a private repository
+  outright, so a private repo cannot appear on a published SVG.
+- **The API is not asked for "public only".** Only the owned-repository
+  listing passes `privacy: PUBLIC` to GitHub. The pull-request and issue
+  queries carry no such argument — there is no server-side filter for it — so
+  private entries are returned to the renderers and filtered out locally, at
+  render time.
+- **The on-disk caches are not free of private data.** Because that filtering
+  happens at render time, the cached pull-request and issue mappings are
+  written before it, and they retain a private repository's name, URL, and
+  private flag. Titles and bodies are never requested, so no private *content*
+  is stored — but private repository *identity* is. Treat the cache files as
+  sensitive: they should be readable only by the account the renderers run as.
+- None of that constrains the token. It is an account credential, and anyone
+  holding it acts as its owner for as long as it is valid, regardless of what
+  the renderers do with it. Treat a leaked token as a leaked account
+  credential, not as a leaked read-only key.
 
 ### Who owns it
 
@@ -102,7 +119,9 @@ The maintainer responds to a suspected or confirmed exposure in this order:
    unfamiliar there is a separate incident from the renderers themselves.
 4. **Re-render**, and check the output. After a credential is replaced, the
    cards must reflect current data; a stale render is the symptom that the
-   new credential is not actually in use.
+   new credential is not actually in use. A `--resync` discards the cached
+   history, which is worth doing after an exposure so no residue of the old
+   fetch survives in the cache files.
 5. **Review and revoke authorizations** the token granted that are no longer
    needed, including any OAuth grants made while it was exposed.
 
