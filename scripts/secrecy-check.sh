@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
 # Fails if a forbidden literal appears in the tree or in committed history.
-# Literals come from .secrecy-literals (gitignored, one per line) and from
-# .env's DATABASE_URL_AUTH. Findings name commits and files, never the value.
+# Literals come from the MAIN checkout's .secrecy-literals (gitignored, one
+# per line) and from its .env's DATABASE_URL_AUTH — a linked worktree never
+# has either, so they are resolved through --git-common-dir below. Findings
+# name commits and files, never the value.
 #
 #   scripts/secrecy-check.sh          tree + history
 #   scripts/secrecy-check.sh --tree   tree only
 
 set -uo pipefail
 
-cd "$(git rev-parse --show-toplevel)" || exit 1
+# Scan the calling checkout's tree (a linked worktree's, not the main one's),
+# but read the literals from the main checkout: --git-common-dir is
+# <main>/.git from a worktree and ./.git from the main checkout, so its
+# dirname is the main checkout in both.
+TREE_ROOT="$(git rev-parse --show-toplevel)" || exit 1
+MAIN_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)" || exit 1
+cd "$TREE_ROOT" || exit 1
 
 MODE="${1:-full}"
 FAIL=0
 declare -a NEEDLES=()
 declare -a LABELS=()
 
-if [ -f .secrecy-literals ]; then
+if [ -f "$MAIN_ROOT/.secrecy-literals" ]; then
   while IFS= read -r line; do
     line="${line%%#*}"
     line="$(printf '%s' "$line" | tr -d '[:space:]')"
     [ -n "$line" ] || continue
     NEEDLES+=("$line")
     LABELS+=("a listed literal (${#line} chars)")
-  done < .secrecy-literals
+  done < "$MAIN_ROOT/.secrecy-literals"
 fi
 
-if [ -f .env ]; then
-  AUTH_DB="$(sed -n 's/^[[:space:]]*\(export[[:space:]]\+\)\?DATABASE_URL_AUTH[[:space:]]*=[[:space:]]*//p' .env \
+if [ -f "$MAIN_ROOT/.env" ]; then
+  AUTH_DB="$(sed -n 's/^[[:space:]]*\(export[[:space:]]\+\)\?DATABASE_URL_AUTH[[:space:]]*=[[:space:]]*//p' "$MAIN_ROOT/.env" \
     | head -n1 | tr -d '"'"'"'' | sed 's/?.*$//' | sed 's#.*/##' | tr -d '[:space:]')"
   if [ -n "${AUTH_DB:-}" ] && [ "${#AUTH_DB}" -ge 4 ]; then
     NEEDLES+=("$AUTH_DB")
