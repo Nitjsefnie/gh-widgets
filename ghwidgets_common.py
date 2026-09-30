@@ -328,6 +328,11 @@ def _write_cache(path, payload):
         with stream:
             stream.write(json.dumps(payload))
         os.replace(tmp, path)
+        # One-time migration cleanup of the pre-mkstemp temp name.
+        try:
+            path.with_name(path.name + ".tmp").unlink(missing_ok=True)
+        except OSError:
+            pass
     finally:
         tmp.unlink(missing_ok=True)  # a no-op once os.replace has moved it
 

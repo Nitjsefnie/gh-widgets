@@ -538,10 +538,10 @@ class CacheWriting(unittest.TestCase):
         try:
             common.save_cache(self.path, {"version": 1})
             self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+            self.assertFalse(stale_temp.exists())
         finally:
             os.umask(original_umask)
 
-    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
     def test_write_cache_closes_descriptor_when_fdopen_fails(self):
         path = Path(self.td.name) / "fdopen-dir" / "cache.json"
         opened_descriptors = []
