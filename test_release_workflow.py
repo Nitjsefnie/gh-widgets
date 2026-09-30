@@ -65,7 +65,7 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     OTHER_SHA = "1111111111111111111111111111111111111111"
     TAG = "v9.9.9"
     MANIFEST = ["lint", "pyright", "speed", "pip-audit", "analyze",
-                "unittest", "aggregate"]
+                "unittest", "coverage-ratchet", "aggregate"]
 
     # The whole manifest, matrix legs and all, as the check-runs API
     # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
@@ -84,6 +84,9 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         ("completed", "success", "unittest (macos-latest, 3.13)"),
         ("completed", "success", "unittest (windows-latest, 3.10)"),
         ("completed", "success", "unittest (windows-latest, 3.13)"),
+        # One leg, because the job renames ITSELF to `coverage-ratchet`; the
+        # manifest entry is written against that string, not the job key.
+        ("completed", "success", "coverage-ratchet"),
         ("completed", "success", "aggregate"),
     ]
 

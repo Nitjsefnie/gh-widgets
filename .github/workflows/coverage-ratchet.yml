@@ -11,6 +11,14 @@ name: coverage-ratchet
 # the repository that holds a `contents: write` token for a routine push, and
 # keeping it alone here means the entire write surface is one short file a
 # reviewer can read in full.
+#
+# WHY IT IS A RELEASE GATE. release.yml's manifest lists this workflow, so a
+# release waits for it. The floor is committed DATA now, and a release must
+# not ship a tree that is below its own committed floor — a coverage floor
+# that only guards the branch between pushes guards nothing about the artefact
+# people install. The other manifest gates say the same thing about their own
+# subject: a release waits for lint and for types because it must not ship a
+# tree that does not lint or does not typecheck.
 
 on:
   # The ONLY trigger, and the narrowest one that can fire. The job below holds
@@ -20,8 +28,32 @@ on:
   # inherits the job's permissions, it does not shrink them), no
   # workflow_dispatch, no schedule, no workflow_run. main is the branch
   # whose every commit has been through every other gate.
+  #
+  # WHY THE PUSH BLOCK CARRIES A DENY-LIST AT ALL. This workflow is a release
+  # gate (see the header), and the manifest admits a push-triggered workflow
+  # only if its push block has no allow-list — an allow-list would have to
+  # name the version file before this could gate a release at all. So the
+  # list below is tests.yml's deny-list verbatim, for tests.yml's reason: a
+  # new top-level directory would silently stop being measured under an
+  # allow-list. Every entry is something a docs-or-sample change cannot
+  # change the coverage of, so the run is skipped rather than run needlessly.
+  #
+  # The version file is deliberately NOT in that list, and that is
+  # load-bearing rather than an omission: it is the file a release is cut
+  # for, and a push that changes it must still measure and gate. Listing it
+  # would silently drop this gate out of every release — the one failure the
+  # manifest exists to prevent. (Stated here, above `push:`, because the
+  # block below is read by the manifest's own completeness check, which
+  # refuses a push block that names the version file at all, comment or not.)
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'PRESENTATION.txt'
+      - 'docs/**'
+      - 'examples/**'
+      - 'LICENSE'
+      - '.gitignore'
 
 permissions:
   contents: read
@@ -36,6 +68,12 @@ concurrency:
 
 jobs:
   measure:
+    # Without this the check run is reported as `measure` and release.yml's
+    # manifest entry — `coverage-ratchet` — would never match it, so every
+    # release would sit out the whole deadline waiting for a gate whose name
+    # does not exist. The job key stays `measure`; only the check-run name
+    # changes, and the manifest entry is written against THIS string.
+    name: coverage-ratchet
     runs-on: ubuntu-latest
 
     # No `permissions:` block: it inherits this workflow's `contents: read`.

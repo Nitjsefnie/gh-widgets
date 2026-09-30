@@ -28,6 +28,15 @@ PINNED_USE = re.compile(r"^\s*-?\s*uses:\s*[\w.-]+/[\w.-]+@[0-9a-f]{40}"
                         r"\s+#\s+v[0-9][0-9A-Za-z.\-]*$")
 USES_LINE = re.compile(r"^\s*-?\s*uses:")
 
+# release.yml's manifest, parsed with the same shape its own
+# test_release_workflow.py uses: twelve spaces, the gate name, a `#` comment
+# naming the workflow file and the job the entry is written against. The
+# comment is load-bearing, not decoration — this is the only reader of it
+# here, and a manifest entry that loses it is invisible.
+MANIFEST_ENTRY = re.compile(
+    r"^ {12}([a-z][a-z-]*)\s+# (\S+\.yml), job `([a-z][a-z-]*)`"
+    r"(?: \([^)]*\))?$", re.MULTILINE)
+
 # What the job holding the repository's only write token may never do. Not a
 # list of the tools that were planted in it — a deny-list of three is defeated
 # by a fourth interpreter or a renamed script, and the point of the case using
@@ -819,6 +828,42 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                         _child_value(step["with"], "persist-credentials"),
                         "false")
         self.assertEqual(seen, 1)
+
+    def test_the_check_run_name_is_the_release_manifest_entry(self):
+        """The manifest entry is written against a check-run name.
+
+        A job with no `name:` key reports under its JOB KEY, so dropping the
+        key does not fail any assertion anywhere — the entry simply stops
+        matching and every release waits out its deadline for a gate that
+        does not exist. Presence is therefore asserted here, because the
+        control that already exists only polices a job that renames itself
+        to the WRONG name, and is silent about one that renames itself to
+        nothing. Both halves are read from the two real files.
+        """
+        jobs = _jobs(RATCHET_WORKFLOW.read_text(encoding="utf-8"))
+        check_run = _value(jobs["measure"], 4, "name")
+        self.assertIsNotNone(
+            check_run, "the measure job renames no check run, so it reports "
+                       "as `measure` and the manifest entry matches nothing")
+
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        entries = dict(
+            (gate, (workflow_file, job)) for gate, workflow_file, job
+            in MANIFEST_ENTRY.findall(release))
+        self.assertIn("coverage-ratchet", entries,
+                      "the ratchet is a release gate and must be in the "
+                      "manifest, not in a workflow's exclusion list")
+        workflow_file, job = entries["coverage-ratchet"]
+        self.assertEqual(workflow_file, RATCHET_WORKFLOW.name)
+        self.assertEqual(job, "measure",
+                         "the manifest names a job that does not exist")
+        # The entry is keyed on the CHECK RUN, and a job that renames itself
+        # to the wrong string is as invisible to the release as one that
+        # renames itself to nothing.
+        self.assertEqual(
+            check_run, "coverage-ratchet",
+            f"the manifest entry 'coverage-ratchet' would never match the "
+            f"check run {check_run!r}")
 
     def test_a_newer_main_supersedes_an_in_flight_raise(self):
         records = _records(self.text)
