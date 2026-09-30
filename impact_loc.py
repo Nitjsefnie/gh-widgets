@@ -21,12 +21,71 @@ from typing import Any
 
 
 common: Any = None
+_CLONE_PROCESSES = set()
+_CLONE_PROCESSES_LOCK = threading.Lock()
+_CLONE_SHUTDOWN = threading.Event()
 
 
 def configure(common_module: Any) -> None:
     """Bind the shared module used by the renderer's live-code pass."""
     global common
     common = common_module
+
+
+def _signal_clone_process(proc, signum):
+    """Signal one tracked clone process, including its POSIX descendants."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signum)
+        elif signum == signal.SIGTERM:
+            if proc.poll() is None:
+                proc.terminate()
+        elif proc.poll() is None:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _stop_clone_processes(processes, grace_s=1.0):
+    """Terminate clone writers, escalate, and reap each tracked child."""
+    processes = tuple(processes)
+    for proc in processes:
+        _signal_clone_process(proc, signal.SIGTERM)
+    deadline = time.monotonic() + grace_s
+    for proc in processes:
+        try:
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+    for proc in processes:
+        _signal_clone_process(proc, signal.SIGKILL)
+    for proc in processes:
+        proc.wait()
+
+
+def _run_clone_command(cmd, timeout=300):
+    """Run and track a clone-path Git child until it has been reaped."""
+    with _CLONE_PROCESSES_LOCK:
+        if _CLONE_SHUTDOWN.is_set():
+            raise RuntimeError("clone interrupted by renderer shutdown")
+        # CI covers Linux, macOS, and Windows. POSIX gets a private process
+        # group so signal cleanup also stops Git's helper descendants; on
+        # Windows, retain and terminate the direct Popen child portably.
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=os.name == "posix")
+        _CLONE_PROCESSES.add(proc)
+    try:
+        with proc:
+            try:
+                returncode = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _stop_clone_processes((proc,))
+                raise
+    finally:
+        with _CLONE_PROCESSES_LOCK:
+            _CLONE_PROCESSES.discard(proc)
+    return subprocess.CompletedProcess(cmd, returncode)
 
 
 def check_git_fame():
@@ -169,14 +228,12 @@ def checkout_pin(dest, head):
     """
     for fetch_first in (False, True):
         if fetch_first:
-            subprocess.run(["git", "-C", str(dest), "fetch", "--quiet",
-                            "origin", head],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=300, check=False)
-        r = subprocess.run(["git", "-C", str(dest), "checkout", "--quiet",
-                            "--detach", head],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=300, check=False)
+            _run_clone_command(
+                ["git", "-C", str(dest), "fetch", "--quiet", "origin", head],
+                timeout=300)
+        r = _run_clone_command(
+            ["git", "-C", str(dest), "checkout", "--quiet", "--detach",
+             head], timeout=300)
         if r.returncode == 0:
             return
     raise SystemExit(f"error: pinned commit {head} is unreachable in {dest}")
@@ -215,8 +272,7 @@ def clone_repo(repo, branch, dest, head=None):
             cmd += ["--branch", branch]
         cmd += [f"https://github.com/{repo}.git", str(dest)]
     t0 = time.monotonic()
-    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=300, check=False)
+    r = _run_clone_command(cmd, timeout=300)
     if r.returncode != 0 or not dest.exists():
         raise RuntimeError("clone_failed")
     if head:
@@ -581,18 +637,91 @@ def clone_lookahead():
 
 
 _SCRATCH_DIRS = set()
+_SCRATCH_LOCKS = {}
 _SIGNAL_HANDLERS_INSTALLED = False
+_SCRATCH_OWNER_LOCK_SUFFIX = ".owner.lock"
+
+
+def _scratch_owner_lock_path(scratch):
+    """Return the adjacent lock path, keeping the Git destination empty."""
+    path = Path(scratch)
+    return path.with_name(path.name + _SCRATCH_OWNER_LOCK_SUFFIX)
+
+
+def _acquire_scratch_owner_lock(scratch, create):
+    """Acquire an exclusive owner lock, or return None when it is absent."""
+    lock_path = _scratch_owner_lock_path(scratch)
+    try:
+        stream = lock_path.open("a+b" if create else "r+b")
+    except FileNotFoundError:
+        if create:
+            raise
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt  # pylint: disable=import-outside-toplevel
+            if lock_path.stat().st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl  # pylint: disable=import-outside-toplevel
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BaseException:
+        stream.close()
+        raise
+    return stream
+
+
+def _release_scratch_owner_lock(stream):
+    """Release a scratch ownership lock and close its descriptor."""
+    if stream is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt  # pylint: disable=import-outside-toplevel
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl  # pylint: disable=import-outside-toplevel
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        stream.close()
+
+
+def register_scratch_dir(path):
+    """Register a new scratch path and hold its cross-process owner lock."""
+    scratch = Path(path)
+    _SCRATCH_DIRS.add(scratch)
+    try:
+        _SCRATCH_LOCKS[scratch] = _acquire_scratch_owner_lock(
+            scratch, create=True)
+    except OSError:
+        _SCRATCH_DIRS.discard(scratch)
+        raise
 
 
 def remove_scratch_dir(path):
     """Remove one scratch directory and forget it from signal cleanup."""
     scratch = Path(path)
+    _release_scratch_owner_lock(_SCRATCH_LOCKS.pop(scratch, None))
     shutil.rmtree(scratch, ignore_errors=True)
+    try:
+        _scratch_owner_lock_path(scratch).unlink()
+    except FileNotFoundError:
+        pass
     _SCRATCH_DIRS.discard(scratch)
 
 
 def _handle_scratch_signal(signum, _frame):
     """Remove every in-flight clone before exiting with signal status."""
+    with _CLONE_PROCESSES_LOCK:
+        _CLONE_SHUTDOWN.set()
+        processes = tuple(_CLONE_PROCESSES)
+    _stop_clone_processes(processes)
     for scratch in tuple(_SCRATCH_DIRS):
         remove_scratch_dir(scratch)
     os._exit(128 + signum)
@@ -611,8 +740,8 @@ def install_scratch_signal_handlers():
 
 def scavenge_scratch_dirs():
     """Remove abandoned impact clones older than the configured age."""
-    # The age-based sweep leaves a concurrent render's registered scratch
-    # alone, while bounding how long interrupted-run clones remain in TMPDIR.
+    # Age is the cheap stale-candidate gate. A cross-process owner lock is
+    # required before deletion so a live sibling render remains untouched.
     max_age = max(0, common.env_float("IMPACT_SCRATCH_MAX_AGE_HOURS", 24))
     cutoff = time.time() - max_age * 60 * 60
     active = set(_SCRATCH_DIRS)
@@ -620,10 +749,13 @@ def scavenge_scratch_dirs():
         if scratch in active or scratch.is_symlink() or not scratch.is_dir():
             continue
         try:
-            if scratch.stat().st_mtime < cutoff:
-                remove_scratch_dir(scratch)
+            if scratch.stat().st_mtime >= cutoff:
+                continue
+            owner_lock = _acquire_scratch_owner_lock(scratch, create=False)
         except OSError:
             continue
+        _release_scratch_owner_lock(owner_lock)
+        remove_scratch_dir(scratch)
 
 
 def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  # pylint: disable=too-many-locals
@@ -642,7 +774,11 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
         if idx < len(moved) and idx not in pending:
             repo, t = moved[idx]
             scratch = Path(tempfile.mkdtemp(prefix="impact-fame-"))
-            _SCRATCH_DIRS.add(scratch)
+            try:
+                register_scratch_dir(scratch)
+            except OSError:
+                shutil.rmtree(scratch, ignore_errors=True)
+                raise
             dirs[idx] = scratch
             pending[idx] = pool.submit(clone_fn, repo, t["branch"], dirs[idx],
                                        t.get("head"))
