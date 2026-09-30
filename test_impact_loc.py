@@ -777,6 +777,27 @@ class TestBoundedGitOutput(unittest.TestCase):
                     "outside/project", self.dest, {"us@example.com"}),
                 (2, 2))
 
+    def test_posix_bounded_reader_does_not_start_a_reader_thread(self):
+        child = "import os; os.write(1, b'bounded output\\n')"
+        started = []
+        original_start = threading.Thread.start
+
+        def record_start(thread, *args, **kwargs):
+            started.append(thread.name)
+            return original_start(thread, *args, **kwargs)
+
+        with mock.patch.object(threading.Thread, "start", record_start):
+            result = impact_loc._run_bounded(  # pylint: disable=protected-access
+                [sys.executable, "-c", child], timeout=5)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"bounded output\n")
+        expected_reader_threads = [] if os.name == "posix" else [
+            "git-output-reader"]
+        self.assertEqual(
+            [name for name in started if name == "git-output-reader"],
+            expected_reader_threads)
+
     def test_fake_git_rejects_unmodeled_command_shapes(self):
         self.install_git("pass\n", [self.git_out_args("version")])
         with mock.patch.dict(os.environ, self.cap_environment()), \
