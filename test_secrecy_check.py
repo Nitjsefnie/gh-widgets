@@ -288,5 +288,87 @@ class TestHistoryScanIsCaseInsensitive(unittest.TestCase):
                          f"find it too: {found.strip()}")
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
+class TestTreeScanIsCaseInsensitive(unittest.TestCase):
+    """The tree pass's own -i must stay, and must be the arm that catches
+    a mixed-case literal.
+
+    The counterpart to the history pass's --regexp-ignore-case, and the same
+    gap: no fixture put a mixed-case literal in the TREE, so deleting the -i
+    at scripts/secrecy-check.sh:55 left the suite green. Every tree test
+    here stages the needle's own lowercase spelling, which a case-sensitive
+    git grep finds anyway -- so none of them exercised the flag.
+
+    The fixture is shaped so ONLY the tree arm can fire: MIXED_CASE sits in
+    a staged-but-uncommitted leak.txt, and no commit in this repository
+    contains either spelling, so the history pass has nothing to report and
+    the catch cannot be credited to it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-secrecy-tree-"))
+        cls.main = cls.tmp / "main"
+        cls.main.mkdir()
+        git("init", "-q", "-b", "main", cwd=cls.main)
+        git("config", "user.name", "T", cwd=cls.main)
+        git("config", "user.email", "t@example.com", cwd=cls.main)
+        (cls.main / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        (cls.main / "scripts").mkdir()
+        shutil.copy2(SCRIPT, cls.main / "scripts" / "secrecy-check.sh")
+        # Nothing but the clean file and the script: no commit here holds
+        # either spelling of the needle.
+        commit_all(cls.main)
+        (cls.main / ".secrecy-literals").write_text(
+            LITERAL + "\n", encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_tree_scan_finds_the_mixed_case_spelling(self):
+        """A mixed-case literal in the tree must fail, and the message must
+        name the TREE arm -- asserting the exit code alone would let the
+        history pass satisfy it."""
+        (self.main / "leak.txt").write_text(
+            f"token = {MIXED_CASE}\n", encoding="utf-8")
+        git("add", "leak.txt", cwd=self.main)
+        try:
+            proc = run_script(self.main,
+                              self.main / "scripts" / "secrecy-check.sh")
+        finally:
+            git("rm", "-q", "--cached", "leak.txt", cwd=self.main)
+            (self.main / "leak.txt").unlink()
+        self.assertEqual(proc.returncode, 1,
+                         "a mixed-case literal in the tree must fail the "
+                         f"check; stdout={proc.stdout!r} "
+                         f"stderr={proc.stderr!r}")
+        self.assertIn("is in the working tree:", proc.stderr)
+        self.assertNotIn("committed history", proc.stderr,
+                         "the catch must come from the tree arm alone")
+
+    def test_fixture_history_is_clean(self):
+        """The premise of the catch: the history pass has nothing to find,
+        so it cannot be what credits the test above.
+
+        Asked of git directly, on the same pickaxe shape the script runs,
+        because --tree mode skips the history pass by design and a full-mode
+        run can only be judged by the very stderr the catch already reads.
+        """
+        found = git_output("log", "--branches", "--tags", "--oneline",
+                           "--regexp-ignore-case", f"-S{LITERAL}",
+                           "--format=%H", cwd=self.main)
+        self.assertEqual(found.strip(), "",
+                         "no commit in this fixture may hold the needle, or "
+                         "a case-sensitive history pickaxe would find it too "
+                         f"and the catch would not be attributable: "
+                         f"{found.strip()}")
+
+
 if __name__ == "__main__":
     unittest.main()
