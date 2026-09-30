@@ -406,6 +406,13 @@ manifest does not mention ends the run rather than falling back to a live
 branch tip. Unset, clones follow the default branch as before — which is what
 production does.
 
+## Security
+
+Report vulnerabilities through GitHub's private reporting route on this
+repository's Security tab — not as a public issue. `SECURITY.md` covers the
+reporting path, the single-maintainer situation, and the renderer's API
+credential (scope, rotation, and what to do on suspected exposure).
+
 ## License
 
 MIT. See `LICENSE`.
