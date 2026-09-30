@@ -186,21 +186,23 @@ does not produce an issue `state_reason`, so adding that field to a PR is
 rejected. Strings are non-empty, numbers are positive integers, booleans are
 actual booleans, nullable outcome timestamps are RFC 3339 strings or `null`,
 and every item references a repository in the same snapshot. States and final
-outcomes must be internally consistent. The allowed issue state matrix is:
+outcomes must be internally consistent. The allowed issue state matrix is —
+every `state_reason` is `null` or a non-empty, non-blank string of at most
+`MAX_STATE_REASON_LENGTH` characters, and each row adds the rules its state
+imposes:
 
 | record | `state` | `closed_at` | `state_reason` |
 |---|---|---|---|
-| issue | `OPEN` | `null` | `null`, `REOPENED`, or any other reason string |
+| issue | `OPEN` | `null` | `null`, `REOPENED`, or any reason string other than `COMPLETED` or `NOT_PLANNED` |
 | issue | `CLOSED` | RFC 3339 | any reason string that is not `null` or `REOPENED` |
 
 `state` and `closed_at` are exact; `state_reason` is bounded, not enumerated.
-It is `null` or a non-empty, non-blank string of at most 64 characters
-(`MAX_STATE_REASON_LENGTH`). An `OPEN` issue may not carry `COMPLETED` or
-`NOT_PLANNED`, and a `CLOSED` issue needs a `closed_at` plus a reason that is
-neither `null` nor `REOPENED`. Every other reason string is accepted and
-preserved verbatim — GitHub's `IssueStateReason` is upstream-controlled and
-returns values this contract never named (`DUPLICATE`, for one), so unknown
-reasons cross the boundary by design and a consumer can reconcile them.
+An `OPEN` issue may not carry `COMPLETED` or `NOT_PLANNED`, and a `CLOSED`
+issue needs a `closed_at` plus a reason that is neither `null` nor `REOPENED`.
+Every other reason string is accepted and preserved verbatim — GitHub's
+`IssueStateReason` is upstream-controlled and returns values this contract
+never named (`DUPLICATE`, for one), so unknown reasons cross the boundary by
+design and a consumer can reconcile them.
 
 The complete allowed pull-request state matrix is:
 

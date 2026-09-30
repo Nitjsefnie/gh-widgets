@@ -686,6 +686,14 @@ class DocumentedIssueStateMatrix(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.rejected(state="OPEN", closed_at=None, state_reason=reason)
 
+    def test_open_issue_rejects_a_close_timestamp(self):
+        # The reason is null so that nothing but the closed_at rule can fire:
+        # an OPEN record carrying a close timestamp has to be rejected on its
+        # own, not alongside a rejection the OPEN/COMPLETED rule already
+        # supplies.
+        self.rejected(state="OPEN", closed_at="2026-01-03T00:00:00Z",
+                      state_reason=None)
+
     def test_open_issue_accepts_unknown_reason(self):
         value = snapshot(issues=[issue_record(
             state="OPEN", closed_at=None, state_reason="DUPLICATE")])
@@ -718,6 +726,11 @@ class DocumentedIssueStateMatrix(unittest.TestCase):
         limit = data.MAX_STATE_REASON_LENGTH
         self.accepted(state="CLOSED", state_reason="R" * limit)
         self.rejected(state="CLOSED", state_reason="R" * (limit + 1))
+
+    def test_state_reason_is_not_blank(self):
+        # The documents publish "non-empty, non-blank"; the blank half of that
+        # claim has its own limb in _nullable_string and needs its own control.
+        self.rejected(state="CLOSED", state_reason="   ")
 
 
 class SnapshotWriting(unittest.TestCase):

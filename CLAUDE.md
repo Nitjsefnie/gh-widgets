@@ -53,11 +53,13 @@ outcome). Every item must reference an included repository; duplicate IDs,
 unknown/missing fields, private flags, credentials, invalid states, and
 inconsistent closed/merged outcomes are rejected.
 
-The allowed issue state matrix is:
+The allowed issue state matrix is — every `state_reason` is `null` or a
+non-empty, non-blank string of at most `MAX_STATE_REASON_LENGTH` characters,
+and each row adds the rules its state imposes:
 
 | record | `state` | `closed_at` | `state_reason` |
 |---|---|---|---|
-| issue | `OPEN` | `null` | `null`, `REOPENED`, or any other reason string |
+| issue | `OPEN` | `null` | `null`, `REOPENED`, or any reason string other than `COMPLETED` or `NOT_PLANNED` |
 | issue | `CLOSED` | RFC 3339 | any reason string that is not `null` or `REOPENED` |
 
 **`state_reason` is deliberately not a closed enum.** `state` and `closed_at`
@@ -68,8 +70,6 @@ fetched issue history — so pinning the accepted set to the reasons known today
 would make `fetch_authored_snapshot` reject its own output. v1 instead
 enforces consistency only:
 
-- `state_reason` is `null` or a non-empty, non-blank string of at most
-  `MAX_STATE_REASON_LENGTH` (64) characters.
 - An `OPEN` issue may not carry `COMPLETED` or `NOT_PLANNED` — a closure reason
   contradicts an open state.
 - A `CLOSED` issue requires `closed_at`, and a reason that is neither `null`
@@ -90,12 +90,11 @@ The complete allowed pull-request state matrix is:
 
 No other pull-request state/merge/null combination is valid. Open items
 cannot have `closed_at`; a closed issue requires a reason that is neither
-`null` nor `REOPENED` and, unlike the reason column above, accepts any other
-reason string; PRs do not have a `state_reason` field; a `MERGED` PR must have
-both outcome timestamps; and `OPEN` or `CLOSED` PRs must be unmerged with
-`merged_at: null`. `test_data.py` pins every one of these cells against the
-validator, so the prose above cannot drift away from the code without a test
-failing.
+`null` nor `REOPENED` (and accepts any other reason string); PRs do not have a
+`state_reason` field; a `MERGED` PR must have both outcome timestamps; and
+`OPEN` or `CLOSED` PRs must be unmerged with `merged_at: null`.
+`test_data.py` pins every one of these cells against the validator, so the prose
+above cannot drift away from the code without a test failing.
 
 The supported public functions are `normalise_issue`,
 `normalise_pull_request`, `fetch_authored_snapshot`, `load_snapshot`, and
