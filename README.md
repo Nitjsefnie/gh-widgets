@@ -37,8 +37,8 @@ sudo ./install.sh              # -> /usr/local/bin, or pass a directory
 
 # token: a classic PAT with public_repo is enough; read:user is NOT required
 # (nothing here reads your email). Save it to a file with mode 600.
-echo "ghp_xxx..." | sudo tee /etc/gh-widgets.token
-sudo chmod 600 /etc/gh-widgets.token
+echo "ghp_xxx..." | sudo tee /etc/gh-widget.token
+sudo chmod 600 /etc/gh-widget.token
 
 # customise the service unit (username, output dir, theme)
 sudo cp examples/gh-widgets.service /etc/systemd/system/
@@ -148,7 +148,7 @@ Same contract as the impact knobs: an unparseable value aborts the run.
 
 ```sh
 GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
-GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widgets.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
+GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
 ```
 
 ## Public snapshots
