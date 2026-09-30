@@ -506,20 +506,34 @@ class CacheWriting(unittest.TestCase):
         return json.loads(self.path.read_text(encoding="utf-8"))
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
-    def test_lock_file_and_new_parent_are_private_under_default_umask(self):
-        path = Path(self.td.name) / "lock-dir" / "cache.json"
-        lock = Path(str(path) + ".lock")
+    def test_lock_and_cache_files_and_directories_are_private(self):
+        lock_path = Path(self.td.name) / "lock-dir" / "cache.json"
+        lock = Path(str(lock_path) + ".lock")
+        cache_path = Path(self.td.name) / "cache-dir" / "cache.json"
         original_umask = os.umask(0o022)
         try:
-            with common.cache_lock(path) as held:
+            with common.cache_lock(lock_path) as held:
                 self.assertTrue(held)
             self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
-            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+            self.assertEqual(
+                stat.S_IMODE(lock_path.parent.stat().st_mode), 0o700)
+            common.save_cache(self.path, {"version": 1})
+            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+            self.path.chmod(0o644)
+            common.save_cache(self.path, {"version": 1, "new": True})
+            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+            common._write_cache(  # pylint: disable=protected-access
+                cache_path, {"version": 1})
+            self.assertEqual(
+                stat.S_IMODE(cache_path.parent.stat().st_mode), 0o700)
         finally:
             os.umask(original_umask)
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
-    def test_save_cache_creates_a_private_file_under_default_umask(self):
+    def test_save_cache_does_not_publish_a_world_readable_stale_temp(self):
+        stale_temp = Path(str(self.path) + ".tmp")
+        stale_temp.write_text("stale cache", encoding="utf-8")
+        stale_temp.chmod(0o644)
         original_umask = os.umask(0o022)
         try:
             common.save_cache(self.path, {"version": 1})
@@ -528,23 +542,25 @@ class CacheWriting(unittest.TestCase):
             os.umask(original_umask)
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
-    def test_save_cache_replaces_a_world_readable_file_with_a_private_file(self):
-        self.write({"version": 1, "old": True})
-        self.path.chmod(0o644)
-        original_umask = os.umask(0o022)
-        try:
-            common.save_cache(self.path, {"version": 1, "new": True})
-            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
-        finally:
-            os.umask(original_umask)
+    def test_write_cache_closes_descriptor_when_fdopen_fails(self):
+        path = Path(self.td.name) / "fdopen-dir" / "cache.json"
+        opened_descriptors = []
 
-    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
-    def test_write_cache_creates_a_private_parent_directory(self):
-        path = Path(self.td.name) / "cache-dir" / "cache.json"
+        def fail_fdopen(fd, *args, **kwargs):
+            opened_descriptors.append(fd)
+            raise OSError("fdopen failed")
+
         original_umask = os.umask(0o022)
         try:
-            common._write_cache(path, {"version": 1})  # pylint: disable=protected-access
-            self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+            with mock.patch.object(common.os, "fdopen",
+                                   side_effect=fail_fdopen):
+                with self.assertRaises(OSError):
+                    common._write_cache(  # pylint: disable=protected-access
+                        path, {"version": 1})
+            self.assertEqual(len(opened_descriptors), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened_descriptors[0])
+            self.assertEqual(list(path.parent.glob("*.tmp")), [])
         finally:
             os.umask(original_umask)
 
