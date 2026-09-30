@@ -369,7 +369,12 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
                         cwd=str(dest), capture_output=True, text=True,
                         timeout=600, check=False)
     fame_s = time.monotonic() - t1
-    data = json.loads(fm.stdout) if fm.stdout.strip() else {}
+    if fm.returncode:
+        raise subprocess.CalledProcessError(
+            fm.returncode, fm.args, fm.stdout, fm.stderr)
+    if not fm.stdout.strip():
+        raise ValueError("empty git-fame output")
+    data = json.loads(fm.stdout)
     total = data.get("total", {}).get("loc", 0)
     ours = 0
     for row in data.get("data", []):

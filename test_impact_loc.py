@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Focused tests for impact_loc's clone, blame, and line-count paths."""
 import importlib.util
+import io
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 from pathlib import Path
 
 
@@ -65,6 +69,74 @@ class TestCQuotedPaths(unittest.TestCase):
     def test_other_nonzero_git_status_raises(self):
         with self.assertRaises(subprocess.CalledProcessError):
             impact_loc.git_out(self.tmp, "not-a-git-command")
+
+
+class TestGitFameFailures(unittest.TestCase):
+    """A failed or empty git-fame result is a failed count, not zero."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-fame-failures-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.dest = self.tmp / "repo"
+        self.dest.mkdir()
+
+    def install_git(self, script):
+        fake_git = self.bin / "git"
+        fake_git.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+        fake_git.chmod(0o755)
+
+    def blame_with_fake_git(self, dest=None):
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin)}):
+            return impact_loc.blame_repo(
+                "outside/project", dest or self.dest, {"us@example.com"})
+
+    def test_nonzero_exit_with_empty_stdout_raises(self):
+        self.install_git("exit 1\n")
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.blame_with_fake_git()
+
+    def test_empty_stdout_at_zero_exit_is_rejected(self):
+        self.install_git("exit 0\n")
+
+        with self.assertRaisesRegex(ValueError, "empty git-fame output"):
+            self.blame_with_fake_git()
+
+    def test_missing_git_binary_error_propagates(self):
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp)}):
+            with self.assertRaises(FileNotFoundError):
+                impact_loc.blame_repo(
+                    "outside/project", self.dest, {"us@example.com"})
+
+    def test_blame_moved_records_fame_error_and_continues(self):
+        self.install_git(
+            'case "$PWD" in */failure) exit 1 ;; *) '
+            'printf \'%s\' \'{"total":{"loc":2},'
+            '"data":[["us@example.com",2]]}\' ;; esac\n')
+        failure = self.tmp / "failure"
+        success = self.tmp / "success"
+        failure.mkdir()
+        success.mkdir()
+        moved = [("outside/failure", {"branch": "main", "head": "h1"}),
+                 ("outside/success", {"branch": "main", "head": "h2"})]
+
+        def prefetch(_moved):
+            yield moved[0][0], moved[0][1], failure, 0.0, 0.0, None
+            yield moved[1][0], moved[1][1], success, 0.0, 0.0, None
+
+        result = {}
+        with mock.patch.object(impact_loc, "BLAME_METHOD", "fame"), \
+                mock.patch.dict(os.environ, {"PATH": str(self.bin)}), \
+                redirect_stdout(io.StringIO()):
+            impact_loc.blame_moved(
+                moved, result, {"us@example.com"}, prefetch_fn=prefetch,
+                count_fn=impact_loc.counts_for)
+
+        self.assertIn("error", result["outside/failure"])
+        self.assertEqual(result["outside/success"], {
+            "ours": 2, "total": 2, "branch": "main", "head": "h2"})
 
 
 if __name__ == "__main__":
