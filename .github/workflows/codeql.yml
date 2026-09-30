@@ -6,14 +6,16 @@ name: codeql
 # Security tab rather than turning the build red, so a new query shipping
 # upstream cannot block an unrelated push.
 #
-# TRIGGER DIFFERS FROM THE OTHER WORKFLOWS ON PURPOSE. The rest of the
-# suite builds on `pull_request_review` once an approving review lands.
-# CodeQL does not, because `analyze` uploads its SARIF against the ref and
-# SHA of the *event*, while our checkout step deliberately takes
-# `pull_request.head.sha`. On a review event those two are different
-# commits, so the alerts would be filed against a tree that was never the
-# one analysed. `push` fires on every branch in this repo, which already
-# covers the head of any same-repo PR, so nothing is actually lost.
+# TRIGGERS. push scans every branch; the default-branch push is what files
+# the alerts that persist in the Security tab. The weekly cron re-applies
+# new query packs to code that has not changed since it shipped. The
+# pull_request trigger (issue #8) gives a contributor head read-only
+# pre-merge results: on that event `analyze` reports its findings as
+# checks and annotations on the pull request itself, against exactly the
+# tree it analysed — the checkout takes the event's own SHA, so what is
+# analysed and what is reported on are the same commit under every
+# trigger. (An earlier draft of this comment described a
+# pull_request_review design the suite never shipped.)
 #
 # The weekly cron is not redundant with push: CodeQL's query packs are
 # updated continuously, and a new query only ever runs against code that
@@ -32,6 +34,19 @@ on:
       - 'LICENSE'
       - 'NOTICE'
       - '.gitignore'
+
+  # Read-only: findings land on the pull request as checks and
+  # annotations, never in the Security tab (issue #8).
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'examples/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+
   schedule:
     # Wednesday 03:47 UTC. Off the hour and off Monday deliberately: the
     # top of the hour is when every cron on GitHub fires at once and jobs
