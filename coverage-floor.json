@@ -8,8 +8,8 @@
   "cell": "ubuntu-latest / 3.13",
   "measured": 75.7,
   "floor": 75.6,
-  "measured_commit": "5b636f8040ec9af450819e1eccca04fc6410ef9c",
-  "measured_at": "2026-09-30T22:52:54Z",
+  "measured_commit": "ff6db9730daf8ea71df287a65a5b27705aecc6b9",
+  "measured_at": "2026-09-30T23:08:43Z",
   "statements": 2910,
   "missing": 705,
   "files": 13
