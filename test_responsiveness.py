@@ -489,6 +489,7 @@ class AtomicWrite(unittest.TestCase):
 
     def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
         real_fdopen = os.fdopen
+        write_attempts = []
 
         class PartialWriter:
             def __init__(self, fd, mode, **kwargs):
@@ -501,6 +502,7 @@ class AtomicWrite(unittest.TestCase):
                 self.stream.close()
 
             def write(self, _text):
+                write_attempts.append(_text)
                 self.stream.write('{"prs": {"partial')
                 raise OSError("no space left on device")
 
@@ -516,6 +518,9 @@ class AtomicWrite(unittest.TestCase):
             out = Path(td) / "out"
             with mock.patch.object(os, "fdopen", half_written):
                 run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
+            self.assertGreaterEqual(
+                len(write_attempts), 1,
+                "partial-write injector did not attempt a write")
             # The cache is exactly what it was: no half-written state is ever
             # visible at the real path, because os.replace never ran.
             self.assertEqual(cache_file.read_text(), before)

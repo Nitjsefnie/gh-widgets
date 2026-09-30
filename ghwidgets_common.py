@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -310,14 +311,21 @@ def _write_cache(path, payload):
     os.replace within one filesystem is atomic, so no reader ever observes a
     half-written cache. The temp file is removed if the write fails, so a
     failed save leaves neither a partial cache nor litter behind. Callers hold
-    cache_lock, which is also what makes the fixed temp name safe.
+    cache_lock to serialize competing cache updates. The unique mkstemp name
+    needs no lock for temp-file safety.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_name(path.name + ".tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        try:
+            stream = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+        with stream:
             stream.write(json.dumps(payload))
         os.replace(tmp, path)
     finally:
