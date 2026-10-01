@@ -11,17 +11,18 @@ to run with read-only access, how its candidate floor is announced, what its
 check run is called, and what measured population in tests.yml has to be.
 It also owns the small structural reader those cases are written against.
 
-These checks are regression tripwires over reviewed source, not a sandbox. The
-permission reader decodes simple YAML keys, with optional single or double
-quotes, and fails closed outside that subset. The shell reader removes a
-backslash-newline splice without inserting whitespace, decodes words with POSIX
-`shlex.split`, then splits each decoded token on command-terminating operators
-`;|&()`. A word after one of those operators (or at line start) is a command
-word. Operators inside quoted words are split too; this fail-noisy behavior is
-accepted. `<` and `>` are deliberately not split: their following words are
-redirection targets, not commands (`echo hi>gh api` runs `echo`, not `gh`).
-Bash ANSI-C quoting (`$'gh'`), backticks, `$(...)`, and other substitution
-spellings are OUT OF SCOPE.
+These checks are regression tripwires, not a sandbox. The permission reader
+decodes simple YAML keys with optional quotes and fails closed outside that
+subset. The shell reader removes backslash-plus-whitespace splices without
+inserting spaces, then uses POSIX `shlex.split`. At the first `<` or `>` in
+each token, it keeps the left fragment unless empty, all digits, or `&`, then
+drops the redirect and target. A standalone redirect operator (`2>`, `>>`,
+`<<<`, etc.) also drops its next target token. Redirects are not command
+terminators, and targets are not command words (`echo done>gh api` runs
+`echo`, not `gh`). Remaining tokens split on `;|&()` and adjacent `gh`, `api`
+words are matched. Quoted operator characters may split prose or drop
+fragments; this fail-noisy behavior is accepted. Bash ANSI-C quoting
+(`$'gh'`), backticks, `$(...)`, and other substitutions are OUT OF SCOPE.
 
 
 WHY IT IS A SEPARATE MODULE, and why not to merge it back. `test_ci_workflows.py`
@@ -49,6 +50,8 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 RATCHET_WORKFLOW = WORKFLOWS / "coverage-ratchet.yml"
 PINNED_USE = re.compile(r"^\s*-?\s*uses:\s*[\w.-]+/[\w.-]+@[0-9a-f]{40}"
                         r"\s+#\s+v[0-9][0-9A-Za-z.\-]*$")
+REDIRECTION_OPERATOR = re.compile(
+    r"(?:<<<|<<-?|>>|<>|>&|<&|>\||>|<)")
 
 
 USES_LINE = re.compile(r"^\s*-?\s*uses:")
@@ -463,12 +466,16 @@ def _assert_no_job_write_scopes(text):
 def _step_github_api_calls(text):
     """Return commands with adjacent decoded `gh api` shell words.
 
-    `_command()` removes shell line splices; `shlex.split()` decodes POSIX
-    words, then `;|&()` delimit command words even when adjoining them.
-    Redirection `<` and `>` stay attached because their following words are
-    targets, not commands. Operators inside quotes are also split, which is
-    fail-noisy and accepted. This is not a sandbox: Bash ANSI-C quoting,
-    backticks, `$(...)`, and other substitution spellings are OUT OF SCOPE.
+    `_command()` removes line splices without inserting whitespace, then
+    `shlex.split()` decodes POSIX words. A word containing `<` or `>` is split
+    at its first such character; keep the left fragment unless it is empty,
+    all digits, or `&`, and drop the redirect and target. A standalone redirect
+    operator also drops the next target token. Remaining words split on
+    `;|&()` before adjacent `gh`, `api` matching. Redirections are not command
+    terminators and targets are not command words. Quoted operator characters
+    may split prose or drop fragments; this fail-noisy behavior is accepted.
+    This is not a sandbox: Bash ANSI-C quoting, backticks, `$(...)`, and other
+    substitutions are OUT OF SCOPE.
     """
     calls = []
     for job, records in _jobs(text).items():
@@ -480,7 +487,27 @@ def _step_github_api_calls(text):
                 raise AssertionError(
                     f"uninterpretable shell command in {job}/{step['name']}: "
                     f"{error}") from error
-            words = [fragment for word in shell_words
+            words = []
+            word_index = 0
+            while word_index < len(shell_words):
+                word = shell_words[word_index]
+                redirection_at = min(
+                    (position for position in
+                     (word.find("<"), word.find(">")) if position >= 0),
+                    default=-1)
+                if redirection_at >= 0:
+                    left = word[:redirection_at]
+                    operator = word[redirection_at:]
+                    if left and not left.isdigit() and left != "&":
+                        words.append(left)
+                    if REDIRECTION_OPERATOR.fullmatch(operator):
+                        word_index += 2
+                    else:
+                        word_index += 1
+                    continue
+                words.append(word)
+                word_index += 1
+            words = [fragment for word in words
                      for fragment in re.split(r"[;|&()]", word) if fragment]
             if any(left == "gh" and right == "api"
                    for left, right in zip(words, words[1:])):
@@ -784,7 +811,7 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, "invoke gh api"):
                     _assert_no_step_github_api(planted)
 
-    def test_each_shell_control_operator_boundary_is_caught(self):
+    def test_shell_operators_and_redirections_are_caught(self):
         marker = "          cp coverage-floor.json"
         plants = {
             "subshell grouping": self.text.replace(
@@ -805,8 +832,36 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 self.assertNotEqual(planted, self.text)
                 with self.assertRaisesRegex(AssertionError, "invoke gh api"):
                     _assert_no_step_github_api(planted)
+        redirection_plants = {
+            "stderr between command and operation":
+                "          gh 2>/dev/null api repos/example/example\n",
+            "stdin between command and operation":
+                "          gh </dev/null api repos/example/example\n",
+            "stdout attached to operation":
+                "          gh api>/dev/null repos/example/example\n",
+            "redirection before command":
+                "          2>/dev/null gh api repos/example/example\n",
+            "separate redirect before command":
+                "          2> /dev/null gh api repos/example/example\n",
+            "separate redirect between words":
+                "          gh 2> /dev/null api repos/example/example\n",
+            "here-string before command":
+                "          <<< /dev/null gh api repos/example/example\n",
+            "append redirect before command":
+                "          >> /dev/null gh api repos/example/example\n",
+            "stdout attached to operation with trailing word":
+                "          gh api>/dev/null x\n",
+        }
+        for spelling, command in redirection_plants.items():
+            with self.subTest(spelling=spelling):
+                planted = self.text.replace(marker, command + marker, 1)
+                self.assertNotEqual(planted, self.text)
+                with self.assertRaisesRegex(
+                        AssertionError, "invoke gh api"):
+                    _assert_no_step_github_api(planted)
+
         # Bash runs `echo`; `gh` is the redirection target and `api` an
-        # argument. Splitting `>` would invent a command Bash never runs.
+        # argument. Removing the target must not fabricate a command.
         redirected = self.text.replace(
             marker, "          echo done>gh api\n" + marker, 1)
         self.assertNotEqual(redirected, self.text)
