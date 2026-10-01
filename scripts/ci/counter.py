@@ -92,6 +92,13 @@ writes a .pyc and the second reads them, so two rounds of identical code
 legitimately count different syscalls. None of this makes wall time
 deterministic and nothing below pretends that it does.
 
+IT ALSO OWNS THE POPULATION. `population_digest` and `collect_node_ids` are
+here rather than in the comparator because a digest computed two different
+ways by two tools compares unequal forever, and the resulting refusal would
+be indistinguishable from a real population change. The collector is a
+COLLECTION pass, not a test run: discovery imports the test modules and
+builds the suite, and executes nothing.
+
 CLI:
 
     counter.py --probe
@@ -109,6 +116,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import NamedTuple, Optional, Sequence
@@ -405,6 +413,37 @@ def population_digest(node_ids) -> str:
     """
     joined = "\n".join(sorted(node_ids)) + "\n"
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def collect_node_ids(directory: Path) -> list:
+    """The test node ids a discovery pass collects under `directory`.
+
+    A COLLECTION pass, not a test run: `unittest.TestLoader().discover`
+    imports every test module and builds the suite but executes nothing. The
+    expensive half — running the tests — is what the caller already did.
+    """
+    loader = unittest.TestLoader()
+    try:
+        discovered = loader.discover(str(directory),
+                                     top_level_dir=str(directory))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise CounterError(
+            f"{directory} could not be collected, so the population digest "
+            f"cannot be computed: {exc}") from exc
+    found = []
+
+    def walk(item):
+        for thing in item:
+            if isinstance(thing, unittest.TestSuite):
+                walk(thing)
+            else:
+                found.append(thing.id())
+
+    walk(discovered)
+    if not found:
+        raise CounterError(
+            f"{directory} collected no tests, which is not a population")
+    return sorted(set(found))
 
 
 def _node_parts(node_id: str):
