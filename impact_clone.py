@@ -1,8 +1,9 @@
 """Git clone prefetch and scratch ownership for the impact live-code pass.
 
-Plain sibling imports are safe: the repo root is sys.path[0] in dev/tests,
-and /usr/local/bin is sys.path[0] of each deployed renderer. ``configure``
-receives the renderer's already-loaded shared module at runtime.
+``impact_loc`` loads this sibling by path and registers it in ``sys.modules``
+so path-loaded consumers share the same state as normal imports. Normal
+imports work when this directory is on the import path. ``configure`` receives
+the renderer's already-loaded shared module at runtime.
 """
 
 import itertools
