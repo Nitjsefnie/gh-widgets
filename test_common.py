@@ -14,6 +14,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+import ghwidgets_cache
+import ghwidgets_journal
+
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", Path(__file__).with_name("ghwidgets_common.py"))
 if spec is None or spec.loader is None:
@@ -53,6 +56,23 @@ class InsiderSet(unittest.TestCase):
 
     def test_empty_names_are_dropped(self):
         self.assertEqual(common.insider_set("Me", ["", None], extra=[]), {"me"})
+
+
+class CommonModuleExports(unittest.TestCase):
+    def test_cache_names_are_reexports_of_ghwidgets_cache(self):
+        for name in (
+                "load_cache", "CacheShapeError", "validate_cache_shape",
+                "CACHE_LOCK_TIMEOUT", "cache_lock", "save_cache",
+                "merge_cache"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(common, name),
+                              getattr(ghwidgets_cache, name))
+
+    def test_journal_names_are_reexports_of_ghwidgets_journal(self):
+        for name in ("CacheFallback", "acquisition", "take_last_acquisition"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(common, name),
+                              getattr(ghwidgets_journal, name))
 
 
 class IsExternal(unittest.TestCase):

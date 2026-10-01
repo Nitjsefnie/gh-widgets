@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import ghwidgets_cache
 import ghwidgets_data as data
 
 # These tests intentionally exercise the private snapshot boundary helpers.
@@ -853,7 +854,7 @@ class SnapshotWriting(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "snapshot.json"
             with mock.patch.object(
-                    data.ghwidgets_common, "_write_cache",
+                    ghwidgets_cache, "_write_cache",
                     side_effect=OSError("no space left")):
                 with self.assertRaises(OSError):
                     data.write_snapshot(path, snapshot())

@@ -15,6 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import ghwidgets_cache
+
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", Path(__file__).with_name("ghwidgets_common.py"))
 if spec is None or spec.loader is None:
@@ -176,8 +178,8 @@ class CacheWriting(unittest.TestCase):
     def test_neither_locking_api_degrades_to_unlocked(self):
         # With neither API, cache_lock yields False and writers fail rather
         # than bypassing the lock.
-        with mock.patch.object(common, "fcntl", None), \
-                mock.patch.object(common, "msvcrt", None):
+        with mock.patch.object(ghwidgets_cache, "fcntl", None), \
+                mock.patch.object(ghwidgets_cache, "msvcrt", None):
             with common.cache_lock(self.path, timeout=0.1) as held:
                 self.assertFalse(held)
         with common.cache_lock(self.path, timeout=0.1) as held:
@@ -196,8 +198,8 @@ class CacheWriting(unittest.TestCase):
                 calls.append((fd, mode, nbytes))
                 return True
 
-        with mock.patch.object(common, "fcntl", None), \
-                mock.patch.object(common, "msvcrt", FakeMsvcrt):
+        with mock.patch.object(ghwidgets_cache, "fcntl", None), \
+                mock.patch.object(ghwidgets_cache, "msvcrt", FakeMsvcrt):
             with common.cache_lock(self.path, timeout=0.1) as held:
                 self.assertTrue(held)
         self.assertEqual([(mode, size) for _, mode, size in calls],

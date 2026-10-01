@@ -21,6 +21,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import ghwidgets_cache
+
 spec = importlib.util.spec_from_file_location(
     "responsiveness", Path(__file__).with_name("render-responsiveness.py"))
 if spec is None or spec.loader is None:
@@ -492,7 +494,7 @@ class AtomicWrite(unittest.TestCase):
 
     def test_a_failed_write_leaves_the_cache_intact_and_no_temp_file(self):
         real_fdopen = os.fdopen
-        real_write_cache = resp.common._write_cache  # pylint: disable=protected-access
+        real_write_cache = ghwidgets_cache._write_cache  # pylint: disable=protected-access
         write_attempts = []
 
         class PartialWriter:
@@ -526,7 +528,7 @@ class AtomicWrite(unittest.TestCase):
             before = json.dumps(full_cache(prs("a/x", [1.0] * 3)))
             cache_file.write_text(before)
             out = Path(td) / "out"
-            with mock.patch.object(resp.common, "_write_cache",
+            with mock.patch.object(ghwidgets_cache, "_write_cache",
                                    side_effect=fail_cache_write):
                 with self.assertRaisesRegex(OSError, "no space left"):
                     run_main(cache_file, out, nodes=prs("b/y", [2.0] * 3))
@@ -547,7 +549,7 @@ class AtomicWrite(unittest.TestCase):
             out.mkdir()
             card = out / "responsiveness.svg"
             card.write_text("previous card", encoding="utf-8")
-            with mock.patch.object(resp.common, "_write_cache",
+            with mock.patch.object(ghwidgets_cache, "_write_cache",
                                    side_effect=OSError("read-only fs")):
                 with self.assertRaisesRegex(OSError, "read-only fs"):
                     run_main(Path(td) / "impact-cache.json", out,
