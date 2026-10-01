@@ -18,6 +18,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import impact_clone
+
 
 spec = importlib.util.spec_from_file_location(
     "render_impact_loc_coverage_tests",
@@ -39,12 +41,12 @@ class TestCloneLaunchCoverage(unittest.TestCase):
     def test_shutdown_gate_rejects_and_unpublishes_a_launch(self):
         starting = set()
         command = ["git", "clone", "outside/project"]
-        with mock.patch.object(impact_loc, "_CLONE_STARTING", starting), \
-                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN", True), \
+        with mock.patch.object(impact_clone, "_CLONE_STARTING", starting), \
+                mock.patch.object(impact_clone, "_CLONE_SHUTDOWN", True), \
                 mock.patch.object(impact_loc.subprocess, "Popen") as popen:
             with self.assertRaisesRegex(
                     RuntimeError, "clone interrupted by renderer shutdown"):
-                impact_loc._run_clone_command_worker(command, timeout=1)
+                impact_clone._run_clone_command_worker(command, timeout=1)
 
         self.assertEqual(starting, set())
         popen.assert_not_called()
@@ -60,8 +62,8 @@ class TestCloneLaunchCoverage(unittest.TestCase):
                 self.release.wait()
 
         launch = mock.Mock(registered=Registration())
-        worker = threading.Thread(target=impact_loc._wait_for_clone_launches)
-        with mock.patch.object(impact_loc, "_CLONE_STARTING", {launch}):
+        worker = threading.Thread(target=impact_clone._wait_for_clone_launches)
+        with mock.patch.object(impact_clone, "_CLONE_STARTING", {launch}):
             worker.start()
             try:
                 self.assertTrue(launch.registered.waiting.wait(timeout=3))
@@ -75,10 +77,10 @@ class TestCloneLaunchCoverage(unittest.TestCase):
     def test_main_thread_reraises_clone_spawn_failure(self):
         failure = RuntimeError("spawn failed")
         with mock.patch.object(
-                impact_loc, "_run_clone_command_worker",
+                impact_clone, "_run_clone_command_worker",
                 side_effect=failure):
             with self.assertRaises(RuntimeError) as raised:
-                impact_loc._run_clone_command(["git", "clone"], timeout=1)
+                impact_clone._run_clone_command(["git", "clone"], timeout=1)
 
         self.assertIs(raised.exception, failure)
 
@@ -88,10 +90,10 @@ class TestCloneLaunchCoverage(unittest.TestCase):
         results = []
 
         def run_from_worker():
-            results.append(impact_loc._run_clone_command(command, timeout=7))
+            results.append(impact_clone._run_clone_command(command, timeout=7))
 
         with mock.patch.object(
-                impact_loc, "_run_clone_command_worker",
+                impact_clone, "_run_clone_command_worker",
                 return_value=completed) as clone_worker:
             worker = threading.Thread(target=run_from_worker)
             worker.start()
@@ -128,14 +130,16 @@ class TestCloneLaunchCoverage(unittest.TestCase):
 
         processes = set()
         starting = set()
-        with mock.patch.object(impact_loc, "_CLONE_PROCESSES", processes), \
-                mock.patch.object(impact_loc, "_CLONE_STARTING", starting), \
-                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN", False), \
+        with mock.patch.object(impact_clone, "_CLONE_PROCESSES", processes), \
+                mock.patch.object(impact_clone, "_CLONE_STARTING", starting), \
+                mock.patch.object(impact_clone, "_CLONE_SHUTDOWN", False), \
                 mock.patch.object(impact_loc.subprocess, "Popen",
                                   new=start_child):
             with self.assertRaises(subprocess.TimeoutExpired):
-                impact_loc._run_clone_command(
-                    [sys.executable, "-c", script, str(ready)], timeout=0.1)
+                # Preserve the fractional timeout with the original int default.
+                impact_clone._run_clone_command(
+                    [sys.executable, "-c", script, str(ready)],
+                    timeout=0.1)  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(len(children), 1)
         self.assertIsNotNone(children[0].poll())
@@ -143,13 +147,13 @@ class TestCloneLaunchCoverage(unittest.TestCase):
         self.assertEqual(starting, set())
 
     def test_nested_signal_callback_defers_to_active_cleanup(self):
-        with mock.patch.object(impact_loc, "_SIGNAL_CLEANUP_CLAIMS",
-                               impact_loc.itertools.count(1)), \
-                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN", False), \
-                mock.patch.object(impact_loc, "_stop_clone_processes") as stop, \
+        with mock.patch.object(impact_clone, "_SIGNAL_CLEANUP_CLAIMS",
+                               impact_clone.itertools.count(1)), \
+                mock.patch.object(impact_clone, "_CLONE_SHUTDOWN", False), \
+                mock.patch.object(impact_clone, "_stop_clone_processes") as stop, \
                 mock.patch.object(impact_loc.os, "_exit") as exit_process:
-            impact_loc._handle_scratch_signal(signal.SIGINT, None)
-            self.assertFalse(impact_loc._CLONE_SHUTDOWN)
+            impact_clone._handle_scratch_signal(signal.SIGINT, None)
+            self.assertFalse(impact_clone._CLONE_SHUTDOWN)
 
         stop.assert_not_called()
         exit_process.assert_not_called()
@@ -167,8 +171,8 @@ class TestScratchCoverage(unittest.TestCase):
         registry = set()
         locks = {}
 
-        with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry), \
-                mock.patch.object(impact_loc, "_SCRATCH_LOCKS", locks):
+        with mock.patch.object(impact_clone, "_SCRATCH_DIRS", registry), \
+                mock.patch.object(impact_clone, "_SCRATCH_LOCKS", locks):
             with self.assertRaises(FileNotFoundError):
                 impact_loc.register_scratch_dir(scratch)
 
@@ -186,10 +190,10 @@ class TestScratchCoverage(unittest.TestCase):
 
         clone = mock.Mock()
         moved = [("outside/project", {"branch": "main", "head": "h1"})]
-        with mock.patch.object(impact_loc.tempfile, "mkdtemp",
+        with mock.patch.object(impact_clone.tempfile, "mkdtemp",
                                side_effect=make_scratch), \
                 mock.patch.object(
-                    impact_loc, "register_scratch_dir",
+                    impact_clone, "register_scratch_dir",
                     side_effect=OSError("owner lock unavailable")):
             with self.assertRaisesRegex(OSError, "owner lock unavailable"):
                 next(impact_loc.prefetched_clones(
@@ -208,7 +212,7 @@ class TestScratchCoverage(unittest.TestCase):
         entry = (repo, {"branch": "main", "head": "new"}, scratch,
                  0.0, 0.0, RuntimeError("clone failed"))
 
-        with mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED", True), \
+        with mock.patch.object(impact_clone, "_SIGNAL_HANDLERS_INSTALLED", True), \
                 mock.patch.object(impact_loc, "scavenge_scratch_dirs"), \
                 redirect_stdout(output):
             impact_loc.blame_moved(
@@ -239,7 +243,7 @@ class TestScratchCoverage(unittest.TestCase):
                                side_effect=remove_before_retry) as chmod, \
                 mock.patch.object(impact_loc.os, "unlink",
                                   side_effect=retry_missing_path) as retry_unlink:
-            impact_loc._retry_readonly_scratch_removal(
+            impact_clone._retry_readonly_scratch_removal(
                 retry_unlink, path,
                 (PermissionError, permission_error, None))
             chmod.assert_called_once_with(
@@ -254,7 +258,7 @@ class TestScratchCoverage(unittest.TestCase):
         failure = OSError("filesystem failure")
 
         with self.assertRaises(OSError) as raised:
-            impact_loc._retry_readonly_scratch_removal(
+            impact_clone._retry_readonly_scratch_removal(
                 os.unlink, path, failure)
 
         self.assertIs(raised.exception, failure)
@@ -283,7 +287,7 @@ class TestImpactPathCoverage(unittest.TestCase):
         result = subprocess.CompletedProcess(["git", "clone"], 1)
         with mock.patch.dict(os.environ,
                              {"CLONE_SOURCE_DIR": str(self.tmp / "mirrors")}), \
-                mock.patch.object(impact_loc, "_run_clone_command",
+                mock.patch.object(impact_clone, "_run_clone_command",
                                   return_value=result) as run_clone:
             with self.assertRaisesRegex(RuntimeError, "clone_failed"):
                 impact_loc.clone_repo("outside/project", "main", dest)
