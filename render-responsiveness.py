@@ -495,6 +495,10 @@ def cache_is_stale(fetched_at, now=None):
     cached fetch. The PR data refreshes hourly now, so a cache past a day
     means roughly a day of consecutive failed runs — a real outage rather than
     the single blip a stamp would only add noise to.
+
+    A stamp ahead of now — a backward clock correction — is stale at once:
+    negative age is not freshness, and the overshoot would otherwise hold the
+    badge off for exactly as long as the clock was wrong.
     """
     if not fetched_at:
         return False
@@ -503,7 +507,7 @@ def cache_is_stale(fetched_at, now=None):
     except ValueError:
         return True
     now = now or datetime.now(stamped.tzinfo)
-    return (now - stamped) > timedelta(hours=STALE_AFTER_H)
+    return stamped > now or (now - stamped) > timedelta(hours=STALE_AFTER_H)
 
 
 def build_card(C, prs, insiders, knobs):

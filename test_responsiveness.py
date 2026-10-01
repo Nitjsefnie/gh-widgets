@@ -652,6 +652,10 @@ class CacheStaleness(unittest.TestCase):
     def test_the_boundary_is_not_stale(self):
         self.assertFalse(resp.cache_is_stale(self.FRESH, now=self.at(24)))
 
+    def test_a_future_stamp_is_stale(self):
+        """A stamp ahead of now — a backward clock jump — reads as fresh."""
+        self.assertTrue(resp.cache_is_stale(self.FRESH, now=self.at(-3 * 24)))
+
     def test_a_missing_stamp_is_not_stale(self):
         self.assertFalse(resp.cache_is_stale(None))
 
