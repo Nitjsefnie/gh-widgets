@@ -636,6 +636,8 @@ def main():
         # cache and exits 0 — but only with a complete cache. Without one,
         # exiting non-zero is still correct.
         if not cache_complete(cache):
+            # Nothing here will carry the name, so drop the label.
+            common.take_last_acquisition()
             raise
         # fetch_all is five acquisitions; the label the failing one left
         # behind names it. `fetch_all` itself is the honest name when the
