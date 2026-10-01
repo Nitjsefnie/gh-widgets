@@ -157,24 +157,27 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > a wall figure moves for reasons unrelated to the code — and paired wall A/B
 > is not a magnitude EVEN WITHIN ONE JOB, which is the case people reach for
 > when they doubt the general claim. Quote a load-invariant quantity
-> instead: CPU time, statement and file counts, output bytes. (Instruction and
-> syscall counts are the obvious first choice and are NOT available here —
-> `perf_event_paranoid: 4` refuses the first, and counting the second costs
-> 12.8× the work it measures. `CONTRIBUTING.md` records that.) **A wall
-> figure that survives in this file is an indicative observation**, labelled
-> as one, and must never be the load-bearing evidence for a decision. The
-> memory tables below need no hedge: cgroup and RSS peaks are sizing, not
-> wall.
+> instead: CPU time, statement and file counts, output bytes. The obvious
+> first choice is an instruction count, and it is what a CI RUNNER here
+> refuses: image `20260927.320.1` runs `perf_event_paranoid: 4` and `perf
+> stat -e instructions` exits 255 on it (run `36811152307`; `counter.py`
+> scopes the figure). This box is not that — its own `perf_event_paranoid` is
+> 3 and the counter works. Syscall counting works on the runner and costs
+> 12.8× the work it measures, which is why the speed gate uses CPU seconds
+> (`CONTRIBUTING.md` carries the full account of that gate).
+> **A wall figure that survives in this file is an indicative observation**,
+> labelled as one, and must never be the load-bearing evidence for a
+> decision. The memory tables below need no hedge: cgroup and RSS peaks are
+> sizing, not wall.
 >
 > **This file does not have a distribution for the cell's wall noise, and
-> that is a fact rather than a gap.** The run history groups by date rather
-> than by the commit each run measured, and 42 commits across those runs touch
-> the measured modules, so a same-content spread cannot be read off it; the
-> only same-commit groups left are n=3 and n=4, and a range built from
-> samples of three and four is an observation, not a distribution. What IS
-> measured, per entry per window, is 5.1%-50.0% of CPU seconds, and
-> 45.8%-55.4% across the unioned envelopes. Read that as the size of the
-> effect, not as its shape.
+> that is a fact rather than a gap.** The run history groups by date, not by
+> the commit each run measured, and the measured modules changed repeatedly
+> across the dates it covers, so a same-content spread cannot be read off
+> it at all. What IS measured, per entry per measurement window — and a window
+> is a single sha, so these are same-content by construction — is 5.1%-50.0%
+> of CPU seconds, and 45.8%-55.4% across the unioned envelopes. Read that as
+> the size of the effect, not as its shape.
 >
 > `perf-blame` is `parallel-blame` plus `--incremental` blame parsing: the
 > parse only ever consumed chunk headers, while `--line-porcelain` re-emits
@@ -269,9 +272,9 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > older `a99855d3`, so it compared a different build against the current one.
 > That is why the pin is decided on memory, where both arms are the same
 > build and the comparison is like-for-like. The measurement workflows now
-> install the documented pin, and `test_ci_workflows.py` fails if they
-> drift from it again. The
-> fork's `git fame` process never enters the sampler's top-12 list, so that
+> install the documented pin, and `test_ci_workflows.py` fails if they drift
+> from it again. The fork's `git fame` process never enters the sampler's
+> top-12 list, so that
 > column reads 0 for it: it is below every listed process, not unmeasured.
 >
 > **There is deliberately no pin-expiry check in CI, and none should be
