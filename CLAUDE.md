@@ -139,7 +139,8 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > blame pass runs `git fame` per repo, and stock git-fame before 4.0.0 spawned
 > one serial `git blame` subprocess per file. Both our fork and PyPI 4.0.0 have
 > `--jobs`; we run the fork because upstream's version costs ~2.2× peak memory
-> for no time saving (measured — see below).
+> for byte-identical output (measured — see below; the memory columns carry
+> that argument, the wall columns in those tables do not).
 >
 > ```
 > pip install --force-reinstall \
