@@ -229,7 +229,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         digest = counter.population_digest(self.POPULATION)
         workloads = {f"e2e::{name}": envelope(value)
                      for name, value, _ in self.WORKLOADS}
-        unit_walls = {self.UNIT_NODE: 5.0} if unit_wall is None else unit_wall
+        unit_walls = ({self.UNIT_NODE: envelope(5.0)}
+                      if unit_wall is None else unit_wall)
         document = {
             "schema": 3,
             "basis": "fixture baseline for the workflow tests",
@@ -253,7 +254,9 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     "population": counter.population_digest(
                         [f"e2e::{name}" for name, _, _ in self.WORKLOADS]),
                     "entries": workloads,
-                    "wall": wall or {},
+                    "wall": ({name: envelope(seconds, samples=3)
+                              for name, seconds in wall.items()}
+                             if wall else {}),
                 },
             },
         }
@@ -526,6 +529,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertNotIn("down-only tolerance", summary)
 
     def test_the_smoke_gate_fires_on_a_gross_outlier_without_a_number(self):
+        # Armed, and armed on an ENVELOPE: the head has to exceed the
+        # recorded wall MAXIMUM times the factor, so the bound is a multiple
+        # of the worst wall actually observed rather than of an arbitrary
+        # pick from inside the range.
         # A wall figure at all is the thing being removed; the smoke verdict
         # is the one wall-derived output that survives, and it survives as a
         # verdict.
@@ -533,9 +540,9 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         # smoke gate is a cliff detector, not a measurement.
         root = self._run_with_tree("ghw-speed-smoke-", baseline=False,
                                    wall={"unit-suite": 600.0})
-        # Keyed by node id, like every other map in the baseline, and in the
-        # population that actually measured it.
-        self._write_baseline(root, unit_wall={self.UNIT_NODE: 5.0})
+        # Keyed by node id and shaped as an envelope, like every other map
+        # in the baseline, in the population that actually measured it.
+        self._write_baseline(root, unit_wall={self.UNIT_NODE: envelope(5.0)})
         completed, summary = self._execute_compare(root)
 
         self.assertEqual(completed.returncode, 1,

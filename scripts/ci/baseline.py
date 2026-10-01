@@ -159,7 +159,18 @@ def _check_population(path: Path, name: str, population) -> None:
 
 def _check_entry_map(path: Path, name: str, mapping, key: str,
                      required: bool) -> None:
-    """`entries` holds envelopes; `wall` holds single indicative seconds."""
+    """Both maps hold envelopes: node id -> {min, max, n}.
+
+    `wall` is a second envelope rather than one indicative number because of
+    the same spread that made `entries` one. Wall time on this cell spreads
+    52-63% min-to-max across dispatches, so a single stored wall figure
+    would be an arbitrary pick among min, max and median: store the min and
+    the smoke gate fires on noise, store the median and it fires on half the
+    pool. Storing the maximum makes the choice explicit and makes
+    SMOKE_FACTOR mean what it says — a multiple of the worst wall actually
+    observed — which is the right base for a cliff detector. It is also one
+    shape rather than two, so the validator has one rule and not two.
+    """
     where = f"{path} populations[{name!r}]"
     if not isinstance(mapping, dict):
         raise ComparisonError(f"{where} {key}={mapping!r} is not an object")
@@ -170,47 +181,38 @@ def _check_entry_map(path: Path, name: str, mapping, key: str,
     for node, value in mapping.items():
         if not isinstance(node, str) or not node:
             raise ComparisonError(f"{where} {key} has a non-string node id")
-        if key == "entries":
-            _check_envelope(where, node, value)
-            continue
-        if not _is_number(value) or value < 0:
-            raise ComparisonError(
-                f"{where} {key}[{node!r}]={value!r} is not a non-negative "
-                "number")
+        _check_envelope(where, node, value, key=key)
 
 
-def _check_envelope(where: str, node: str, envelope) -> None:
+def _check_envelope(where: str, node: str, envelope, key: str = "entries") -> None:
     """{min, max, n}, with min <= max and n at least MIN_ENVELOPE_SAMPLES."""
+    slot = f"{where} {key}[{node!r}]"
     if not isinstance(envelope, dict):
         raise ComparisonError(
-            f"{where} entries[{node!r}]={envelope!r} is not an envelope; "
-            "this schema records the observed RANGE of an entry "
-            f"({', '.join(ENVELOPE_KEYS)}), not a single value")
-    absent = [key for key in ENVELOPE_KEYS if key not in envelope]
+            f"{slot}={envelope!r} is not an envelope; this schema records "
+            "the observed RANGE of an entry ("
+            f"{', '.join(ENVELOPE_KEYS)}), not a single value")
+    absent = [name for name in ENVELOPE_KEYS if name not in envelope]
     if absent:
-        raise ComparisonError(
-            f"{where} entries[{node!r}] is missing "
-            + ", ".join(absent))
-    for key in ("min", "max"):
-        if not _is_number(envelope[key]) or envelope[key] < 0:
+        raise ComparisonError(f"{slot} is missing " + ", ".join(absent))
+    for bound in ("min", "max"):
+        if not _is_number(envelope[bound]) or envelope[bound] < 0:
             raise ComparisonError(
-                f"{where} entries[{node!r}].{key}={envelope[key]!r} is not a "
-                "non-negative number")
+                f"{slot}.{bound}={envelope[bound]!r} is not a non-negative "
+                "number")
     count = envelope["n"]
     if not isinstance(count, int) or isinstance(count, bool):
-        raise ComparisonError(
-            f"{where} entries[{node!r}].n={count!r} is not an integer")
+        raise ComparisonError(f"{slot}.n={count!r} is not an integer")
     if envelope["min"] > envelope["max"]:
         raise ComparisonError(
-            f"{where} entries[{node!r}] has min {envelope['min']} above max "
+            f"{slot} has min {envelope['min']} above max "
             f"{envelope['max']}, which is not a range")
     if count < MIN_ENVELOPE_SAMPLES:
         raise ComparisonError(
-            f"{where} entries[{node!r}] was recorded from {count} "
-            f"observation(s); an envelope needs at least "
-            f"{MIN_ENVELOPE_SAMPLES}, because one sample's maximum is a "
-            "measurement rather than a worst case. Re-measure, do not "
-            "widen the number by hand")
+            f"{slot} was recorded from {count} observation(s); an envelope "
+            f"needs at least {MIN_ENVELOPE_SAMPLES}, because one sample's "
+            "maximum is a measurement rather than a worst case. Re-measure, "
+            "do not widen the number by hand")
 
 
 def envelope_maxima(entries: dict) -> dict:

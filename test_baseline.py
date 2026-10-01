@@ -233,6 +233,48 @@ class TestRatchet(unittest.TestCase):
                          ["renderer-workloads:e2e::bench.render"])
 
 
+class TestTheSmokeGate(unittest.TestCase):
+    """`wall` is an envelope, and it is armed for the renderer workloads."""
+
+    def test_a_wall_value_that_is_not_an_envelope_is_refused(self):
+        # The same refusal as `entries`: with wall spreading 52-63% on this
+        # cell, a single stored figure would be an arbitrary pick among min,
+        # median and max, and the wrong pick either trips the gate on noise
+        # or leaves it deaf.
+        payload = document()
+        payload["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": 5.0}
+        with tempfile.TemporaryDirectory(prefix="ghw-wall-") as td:
+            path = Path(td) / "b.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(baseline.ComparisonError) as caught:
+                baseline.read_baseline(path)
+        self.assertIn("wall['counter::unit-suite']", str(caught.exception))
+        self.assertIn("observed RANGE", str(caught.exception))
+
+    def test_the_committed_gate_is_armed_for_the_renderer_workloads(self):
+        loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
+        wall = loaded["populations"]["renderer-workloads"]["wall"]
+        self.assertEqual(
+            sorted(wall),
+            ["e2e::bench.render", "e2e::bench.render-impact",
+             "e2e::bench.render-responsiveness"])
+        for node, envelope in wall.items():
+            with self.subTest(entry=node):
+                self.assertGreaterEqual(envelope["n"],
+                                        baseline.MIN_ENVELOPE_SAMPLES)
+
+    def test_the_unit_suite_smoke_bound_is_unarmed_and_says_so(self):
+        # No wall observations were supplied for it, so the map is empty
+        # rather than guessed. If that ever changes, this test is what
+        # should be looked at first: a gate that claims coverage it does not
+        # have is the failure this file is for.
+        loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
+        self.assertEqual(loaded["populations"]["unit-suite"]["wall"], {})
+        self.assertIn("unit-suite population's `wall` map is empty",
+                      loaded["basis"])
+
+
 class TestTheCommittedBaseline(unittest.TestCase):
     """The file in the repository is itself valid and says what it is."""
 

@@ -808,8 +808,12 @@ def _compare(args) -> int:
     result["envelopes"] = (recorded["entries"] if recorded is not None
                            else {})
     if recorded is not None and recorded.get("wall"):
+        # Against the recorded wall MAXIMUM, for the same reason the counter
+        # side is: the observed spread is inside it, so SMOKE_FACTOR is a
+        # multiple of the worst wall actually seen rather than of an
+        # arbitrary pick from inside the range.
         result["smoke"] = smoke_failures(_fold_wall(args.head),
-                                         recorded["wall"])
+                                         envelope_maxima(recorded["wall"]))
     return _verdict(args, result)
 
 

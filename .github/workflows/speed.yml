@@ -107,6 +107,26 @@ name: speed
 # envelope they produced, so the next person sees the shape of the cell
 # instead of spending a morning deriving it.
 #
+# THE GROSS WALL SMOKE GATE IS ARMED, AND IT IS NOT A WALL BUDGET. Wall time
+# spread 52-63% min-to-max across the same dispatches (bench.render
+# 0.056-0.091, bench.render-impact 1.011-1.541, bench.render-responsiveness
+# 0.055-0.088): the machine dominates wall and CPU alike on this cell, which
+# is exactly why wall appears here only as a CLIFF BOUND and never as a
+# budget. Its ceiling is an envelope too, for the same reason the counter's
+# is: with a spread that wide, a single stored figure would be an arbitrary
+# pick among min, median and max, and the wrong pick either trips the gate on
+# noise or leaves it deaf. The gate compares against the recorded wall
+# MAXIMUM, so SMOKE_FACTOR is a multiple of the worst wall actually observed.
+# What it catches is the class CPU cannot see at all — a workload that gets
+# slower in wall while its CPU cost holds flat, which is what blocking on
+# I/O, a network call or a lock wait looks like. The report still prints no
+# elapsed time at all: a verdict and no number.
+#
+# The unit suite's smoke bound is NOT armed. No wall observations were
+# supplied for counter::unit-suite in those dispatches, so its `wall` map is
+# empty rather than guessed, and the gross bound covers the renderer
+# workloads only.
+#
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and
 # this commit side by side in one job; the ruling above says that bought
