@@ -477,11 +477,19 @@ jobs:
             exit 1
           fi
 
+          # The renderer population's digest has to be CHECKED, not merely
+          # stored: the baseline records the digest of the workload node ids
+          # it was measured over, and this is the id list that digest is
+          # about. Written from the same $listing the required names come
+          # from, so the two cannot disagree.
+          printf '%s\n' "$listing" > reports/renderer-population.txt
+
           # shellcheck disable=SC2046
           if python3 head/scripts/ci/compare_durations.py \
             --baseline "$BASELINE" \
             --population renderer-workloads \
             --head $(ls reports/bench-head-*.xml) \
+            --population-file reports/renderer-population.txt \
             --max-regression "$TOTAL_BUDGET" \
             --base-label 'the committed baseline, renderer workloads' \
             --summary-file "$GITHUB_STEP_SUMMARY" \
@@ -498,25 +506,66 @@ jobs:
       - name: The committed baseline only ratchets down
         # The comparator refuses a head counter above its baseline, but
         # nothing there stops a commit from EDITING the baseline upwards in
-        # the same push. This step judges the baseline against the MERGE
-        # BASE's copy of it, so raising the ceiling you are measured against
-        # is itself a red.
+        # the same push. This step judges the baseline against the BASE
+        # BRANCH TIP's copy of it, so raising the ceiling you are measured
+        # against is itself a red.
         #
-        # Skipped on a push to main: there is no base commit for that event,
+        # working-directory: head IS LOAD-BEARING. actions/checkout put the
+        # repository at head/, so a step with no working-directory runs one
+        # level above the only repository on the box and every git command
+        # here dies with "not a git repository" — reproduced, rc 128. This
+        # step is gated to pull_request and every dispatch used as evidence
+        # was a workflow_dispatch, so nothing had ever executed it, and a
+        # text assertion over a wrong working directory cannot fail. The
+        # test suite now EXECUTES this block against a real checkout at
+        # head/ instead.
+        #
+        # NOT base.sha. That field is the base commit at PR open or last
+        # sync, and a synchronize does not refresh it, so it trails the base
+        # tip — which is exactly the direction that is wrong here, because a
+        # trailing commit carries an OLDER and therefore LOOSER baseline for
+        # the comparison to be lenient about. The base REF is fetched instead
+        # and its tip resolved from FETCH_HEAD at the moment the step runs.
+        #
+        # Skipped on a push to main: there is no base branch for that event,
         # and a ratchet step that silently judged the wrong base would be
         # worse than one that does not run.
         if: ${{ github.event_name == 'pull_request' }}
+        # The repository is at head/, so every git command in this step has
+        # to run there. See the comment above.
+        working-directory: head
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          if ! git cat-file -e "$BASE_SHA:$BASELINE" 2>/dev/null; then
-            echo "No $BASELINE at the merge base, so there is nothing to" \
+          # A setup failure and a legitimate "there is nothing to ratchet
+          # against" must not look alike. The first guard below was written
+          # for the second and, written first, swallowed the first: with the
+          # working directory wrong, `git fetch` fails, the message printed,
+          # and the step exited ZERO. A control that cannot find the
+          # repository must go red, not green — a step that reports success
+          # without having run anything is the shape this whole job exists to
+          # avoid, and it is exactly what the first version of this step did.
+          if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            echo "::error::no git repository in $(pwd); actions/checkout put" \
+                 "the checkout in head/, so this step must declare" \
+                 "working-directory: head" >&2
+            exit 1
+          fi
+          if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
+            echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
+                 "deleted?). There is nothing to ratchet against."
+            exit 0
+          fi
+          base_tip="$(git rev-parse FETCH_HEAD)"
+          echo "Base branch tip: $base_tip"
+          if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
+            echo "No $BASELINE at the base tip, so there is nothing to" \
                  "ratchet against."
             exit 0
           fi
-          git show "$BASE_SHA:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
-          python3 head/scripts/ci/compare_durations.py \
+          git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+          python3 scripts/ci/compare_durations.py \
             --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE"
 
       - name: Upload JUnit reports

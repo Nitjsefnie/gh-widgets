@@ -13,6 +13,7 @@ import contextlib
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -232,6 +233,32 @@ class TestRatchet(unittest.TestCase):
         self.assertEqual(list(moved),
                          ["renderer-workloads:e2e::bench.render"])
 
+    def test_a_DELETED_entry_is_a_raise(self):
+        # Iterating only the new document never visits a removed entry, so
+        # dropping one passed this check silently while --require-test went
+        # on demanding the workload ran: it stopped being compared, which is
+        # a second and much quieter route to the same outcome as retiring it
+        # properly through WORKLOADS.
+        old = self.population(0.09)
+        new = self.population(0.09)
+        for document in (old, new):
+            document["populations"]["renderer-workloads"]["entries"][
+                "e2e::bench.render-responsiveness"] = {
+                    "min": 0.05, "max": 0.08, "n": 6}
+        del new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render-responsiveness"]
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(
+            moved,
+            {"renderer-workloads:e2e::bench.render-responsiveness": (0.08, None)})
+
+    def test_a_deleted_whole_population_is_a_raise(self):
+        old = self.population(0.09)
+        new = self.population(0.09)
+        del new["populations"]["renderer-workloads"]
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(len(moved), 1)
+
 
 class TestTheSmokeGate(unittest.TestCase):
     """`wall` is an envelope, and it is armed for the renderer workloads."""
@@ -314,6 +341,42 @@ class TestTheCommittedBaseline(unittest.TestCase):
         for name, population in loaded["populations"].items():
             with self.subTest(population=name):
                 self.assertLess(population["tolerance"], 1.0)
+
+    def test_the_committed_digest_matches_this_tree(self):
+        """The control that would have caught the stale digest.
+
+        Nine commits after the dispatches were taken added
+        `test_baseline.py` and more cases to `test_ci_workflows.py`, so the
+        committed digest described a population this tree no longer has and
+        the unit-suite comparison refused on the branch's own head. That was
+        the guard working correctly on a stale document — which is exactly
+        why the staleness has to be caught HERE, on the box, in under a
+        second, rather than on a runner minutes later.
+
+        This assertion is deliberately the last thing that changes when a
+        test is added, because adding a test is what invalidates it. That
+        ordering is the design: the drift is loud immediately and local,
+        not deferred to a dispatch.
+        """
+        loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
+        collected = baseline.counter.collect_node_ids(REPO_ROOT)
+        self.assertEqual(
+            baseline.counter.population_digest(collected),
+            loaded["populations"]["unit-suite"]["population"],
+            "speed-baseline.json's unit-suite digest describes a population "
+            "this tree no longer collects — re-derive it with "
+            "`compare_durations.py --print-population .` and "
+            "`counter.population_digest(...)`")
+
+    def test_the_committed_workload_digest_matches_the_harness(self):
+        loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
+        listing = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "bench" /
+                                 "e2e_bench.py"), "--list-workloads"],
+            capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(
+            baseline.counter.population_digest(listing),
+            loaded["populations"]["renderer-workloads"]["population"])
 
     def test_the_recorded_maxima_clear_the_observed_spread(self):
         # A ceiling below the population's own minimum would mean the

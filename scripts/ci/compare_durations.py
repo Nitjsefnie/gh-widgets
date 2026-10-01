@@ -439,6 +439,21 @@ def smoke_failures(head_wall: dict, baseline_wall: dict,
                   and head_wall[nid] > was * factor)
 
 
+def _over_table(over: dict, envelopes: dict) -> list:
+    """The per-entry table for entries past the down-only tolerance."""
+    rows = [
+        "",
+        f"**🔴 {len(over)} entry/entries past the down-only tolerance**",
+        "",
+        "| Entry | Observed range (n) | Ceiling | This commit |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    for nid, (ceiling, now) in over.items():
+        rows.append(f"| `{nid}` | {_range_text(envelopes.get(nid))} "
+                    f"| {_format_counter(ceiling)} | {_format_counter(now)} |")
+    return rows
+
+
 def _range_text(envelope) -> str:
     """One entry's observed range and its sample count, for the table."""
     if not envelope:
@@ -456,18 +471,19 @@ def _format_counter(value) -> str:
 
 def render(result: dict, threshold: float, base_label: str) -> str:
     delta = result["ratio"] - 1.0
+    envelopes = result.get("envelopes") or {}
     metric = result.get("metric") or "counter"
-    verdict = "🔴 REGRESSION" if delta > threshold else "🟢 within budget"
     lines = [
         f"### Counter cost vs `{base_label}`",
         "",
-        f"**{verdict}** — {delta:+.1%} "
-        f"(budget {threshold:+.0%})",
+        f"**{'🔴 REGRESSION' if delta > threshold else '🟢 within budget'}**"
+        f" — {delta:+.1%} (budget {threshold:+.0%})",
         "",
         f"- Metric: **{metric}** — {METRIC_NOTES.get(metric, 'unrecognised')}",
         f"- Compared on **{result['shared']}** entries passing in both",
         f"- Baseline `{base_label}`: **{_format_counter(result['base_total'])}** "
-        "(the recorded MAXIMUM of each entry's observed range, summed)",
+        "(the recorded MAXIMUM of each entry's observed range, summed — the "
+        "ranges are in the table below)",
         f"- This commit: **{_format_counter(result['head_total'])}**",
         "",
         "**The gate this is: a step-change detector, not a regression "
@@ -513,12 +529,15 @@ def render(result: dict, threshold: float, base_label: str) -> str:
             "",
             "<details><summary>Largest per-entry movements</summary>",
             "",
-            "| Entry | Was | Now | Change |",
-            "| --- | ---: | ---: | ---: |",
+            "| Entry | Observed range (n) | Was | Now | Change |",
+            "| --- | --- | ---: | ---: | ---: |",
         ]
         for _abs_delta, rel, nid, was, now in movers:
+            # The range is what makes "Was" trustworthy: a maximum nobody
+            # can see the sample behind is a number with no weight on it.
             lines.append(
-                f"| `{nid}` | {_format_counter(was)} | {_format_counter(now)} "
+                f"| `{nid}` | {_range_text(envelopes.get(nid))} "
+                f"| {_format_counter(was)} | {_format_counter(now)} "
                 f"| {rel:+.0%} |"
             )
         lines += [
@@ -748,27 +767,40 @@ def main(argv: list | None = None) -> int:
         print("\n".join(collected))
         return 0
 
+    # The ratchet arm runs INSIDE the handler below, because a base document
+    # that is not there is a condition with an exit code rather than an
+    # exception: it used to escape as a traceback and land on rc 1 by
+    # accident, the right number for the wrong reason. The workflow's own
+    # `git cat-file` guard keeps it unreachable in practice, and
+    # reachability that rests on a shell guard rests on nothing.
+    ratchet = ()
     if args.ratchet_baselines:
-        return ratchet_check(Path(args.ratchet_baselines[0]),
-                             Path(args.ratchet_baselines[1]))
-
-    if args.base and args.baseline:
+        ratchet = (Path(args.ratchet_baselines[0]),
+                   Path(args.ratchet_baselines[1]))
+    elif args.base and args.baseline:
         parser.error("--base and --baseline are two sources for the same "
                      "side; pick one")
-    if not args.base and not args.baseline:
+    elif not args.base and not args.baseline:
         parser.error("either --base or --baseline is required; without a "
                      "baseline there is nothing to compare against")
-    if not args.head:
+    elif not args.head:
         parser.error("--head is required")
-    if args.baseline and not args.population:
+    elif args.baseline and not args.population:
         parser.error("--baseline needs --population: the document carries "
                      "one metric and one tolerance per population, and "
                      "guessing which contract this run is held to is the "
                      "accommodation this gate refuses to make")
 
     try:
-        return _compare(args)
-    except MissingBaseline:
+        return ratchet_check(*ratchet) if ratchet else _compare(args)
+    except MissingBaseline as exc:
+        # A missing baseline is an expected first push when a comparison was
+        # asked for, and an error when the RATCHET was: there is no
+        # comparison in that mode to shrug off, only a control that could not
+        # run. `MissingBaseline` is a `ComparisonError`, so this clause has to
+        # come first and check which mode it is in.
+        if ratchet:
+            return _cannot_compare(args, str(exc))
         return _no_baseline(args)
     except ComparisonError as exc:
         return _cannot_compare(args, str(exc))
