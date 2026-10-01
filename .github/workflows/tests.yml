@@ -7,8 +7,9 @@ name: tests
 # - the suite runs across the OS × Python matrix below, not just one
 #   environment (issue #6).
 # - no services and no network (gql_fn is injected): the suite is stdlib
-#   unittest. pytest is used by speed.yml's timing harness, not imported by
-#   the suite; the pinned requirement remains available to local pytest runs.
+#   unittest. pytest is neither a suite dependency nor a CI tool any more: it
+#   was speed.yml's timing harness, and that job counts CPU seconds now. The
+#   pinned requirement remains available to local pytest runs.
 
 on:
   push:
@@ -105,8 +106,9 @@ jobs:
       - name: Install the test toolchain
         id: install
         # The renderer and suite are stdlib-only; coverage is needed on the
-        # measured cell. pytest is pinned for speed.yml's timing harness, not
-        # as a suite dependency. Install requirements-test.txt on EVERY cell
+        # measured cell. pytest is pinned only so a local run of the same
+        # files works; nothing in this workflow asks it for anything.
+        # Install requirements-test.txt on EVERY cell
         # so every cell runs the whole suite with the same toolchain. Every
         # run block uses `python`, not `python3`: hosted Windows runners have
         # no python3 on PATH, and setup-python puts python on PATH on all
@@ -124,9 +126,9 @@ jobs:
       - name: Run tests
         id: unittest
         # Still `unittest discover`, under coverage on the measured cell.
-        # pytest is not the runner here and should not become one; it is
-        # installed above only because test_compare_durations.py imports it,
-        # and `unittest discover` imports every test module it collects.
+        # pytest is not the runner here and should not become one; every
+        # test module in this suite is stdlib unittest and none of them
+        # imports it.
         env:
           # Undefined on the other five cells, so these read as "" there.
           MEASURED: ${{ matrix.measured }}
