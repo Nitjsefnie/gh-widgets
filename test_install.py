@@ -21,6 +21,9 @@ RENDERER_SOURCES = {
     "impact_loc.py": "impact_loc.py",
     "render-responsiveness.py": "render-responsiveness.py",
     "ghwidgets_common.py": "ghwidgets_common.py",
+    "ghwidgets_cache.py": "ghwidgets_cache.py",
+    "ghwidgets_journal.py": "ghwidgets_journal.py",
+    "impact_clone.py": "impact_clone.py",
     "ghwidgets_data.py": "ghwidgets_data.py",
 }
 UNIT_NAMES = (
@@ -95,7 +98,7 @@ def source_renderer_bytes(source_dir):
     "install.sh uses POSIX shell syntax and this class executes it directly",
 )
 class TestRendererInstall(unittest.TestCase):
-    """The six renderer files install or roll back as one verified set."""
+    """The nine deployment files install or roll back as one verified set."""
 
     def setUp(self):
         # pylint: disable=consider-using-with
@@ -121,7 +124,7 @@ class TestRendererInstall(unittest.TestCase):
             sorted(RENDERER_SOURCES.values()),
         )
         self.assertIn(
-            "verified: all renderers start and the public data module imports",
+            "verified: all renderers start and all shipped modules import",
             proc.stdout,
         )
         assert_no_transaction_files(self, self.destination)
@@ -135,12 +138,12 @@ class TestRendererInstall(unittest.TestCase):
             source_renderer_bytes(ROOT),
         )
         self.assertIn(
-            "verified: all renderers start and the public data module imports",
+            "verified: all renderers start and all shipped modules import",
             proc.stdout,
         )
         assert_no_transaction_files(self, self.destination)
 
-    def test_failed_renderer_verification_restores_old_six_file_set(self):
+    def test_failed_renderer_verification_restores_old_nine_file_set(self):
         source_dir = self.root / "src"
         script = copy_installation(source_dir)
         broken_renderer = source_dir / "render-responsiveness.py"
