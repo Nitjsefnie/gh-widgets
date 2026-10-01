@@ -72,6 +72,33 @@ class IsExternal(unittest.TestCase):
             common.is_external(repo("stranger", private=True), self.insiders))
 
 
+class ThemeContrast(unittest.TestCase):
+    @staticmethod
+    def relative_luminance(color):
+        channels = [int(color[i:i + 2], 16) / 255
+                    for i in (1, 3, 5)]
+        linear = [channel / 12.92 if channel <= 0.04045 else
+                  ((channel + 0.055) / 1.055) ** 2.4
+                  for channel in channels]
+        return (0.2126 * linear[0] + 0.7152 * linear[1]
+                + 0.0722 * linear[2])
+
+    @classmethod
+    def contrast_ratio(cls, first, second):
+        luminances = sorted((cls.relative_luminance(first),
+                             cls.relative_luminance(second)), reverse=True)
+        return (luminances[0] + 0.05) / (luminances[1] + 0.05)
+
+    def test_dim_text_meets_wcag_normal_text_contrast(self):
+        for name, colors in common.THEMES.items():
+            for background in ("bg", "bg2"):
+                with self.subTest(theme=name, background=background):
+                    self.assertGreaterEqual(
+                        self.contrast_ratio(colors["dim"],
+                                            colors[background]),
+                        4.5)
+
+
 class OurEmails(unittest.TestCase):
     def test_both_noreply_forms_are_derived(self):
         e = common.our_emails("Octocat", 12345, extra=[])

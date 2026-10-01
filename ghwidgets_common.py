@@ -103,19 +103,19 @@ FONT = ('font-family="JetBrains Mono, ui-monospace, '
 THEMES = {
     "tokyonight": {
         "bg":     "#1a1b26", "bg2":   "#16161e", "border": "#2a2e42",
-        "fg":     "#c0caf5", "dim":   "#565f89",
+        "fg":     "#c0caf5", "dim":   "#7a82a2",
         "blue":   "#7aa2f7", "cyan":  "#7dcfff", "purple": "#bb9af7",
         "pink":   "#f7768e", "green": "#9ece6a", "gold":   "#e0af68",
     },
     "catppuccin": {
         "bg":     "#1e1e2e", "bg2":   "#181825", "border": "#313244",
-        "fg":     "#cdd6f4", "dim":   "#7f849c",
+        "fg":     "#cdd6f4", "dim":   "#81859d",
         "blue":   "#89b4fa", "cyan":  "#94e2d5", "purple": "#cba6f7",
         "pink":   "#f5c2e7", "green": "#a6e3a1", "gold":   "#f9e2af",
     },
     "gruvbox": {
         "bg":     "#282828", "bg2":   "#1d2021", "border": "#3c3836",
-        "fg":     "#ebdbb2", "dim":   "#928374",
+        "fg":     "#ebdbb2", "dim":   "#9a8c7e",
         "blue":   "#83a598", "cyan":  "#8ec07c", "purple": "#d3869b",
         "pink":   "#fb4934", "green": "#b8bb26", "gold":   "#fabd2f",
     },
