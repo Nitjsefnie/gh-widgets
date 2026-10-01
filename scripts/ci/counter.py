@@ -97,7 +97,11 @@ startup. The step immediately before it had collected 724 node ids from the
 checkout, so one job collected a 724-test population and measured none of it.
 The instrument did its job; the question it was asked was the wrong one.
 Naming the directory the command runs in makes that question explicit
-rather than implicit in a shell's cwd, and a test now covers it.
+rather than implicit in a shell's cwd. Two tests cover it — one on
+`measure()` directly, one through this CLI — because a re-review once
+mutated the flag into a no-op and the whole suite stayed green: every
+step-level test points its `working-directory` and its `--cwd` at the same
+directory, so from there an ignored flag is invisible.
 
 CLI:
 
