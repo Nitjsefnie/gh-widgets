@@ -7,9 +7,8 @@ name: tests
 # - the suite runs across the OS × Python matrix below, not just one
 #   environment (issue #6).
 # - no services and no network (gql_fn is injected): the suite is stdlib
-#   unittest with one test-only dependency — pytest, imported by
-#   test_compare_durations.py — which the install step below provides on
-#   every cell.
+#   unittest. pytest is used by speed.yml's timing harness, not imported by
+#   the suite; the pinned requirement remains available to local pytest runs.
 
 on:
   push:
@@ -105,13 +104,13 @@ jobs:
 
       - name: Install the test toolchain
         id: install
-        # The renderer is stdlib-only, but the SUITE is not quite: it needs
-        # pytest, which test_compare_durations.py imports to test the timing
-        # harness, and coverage on the measured cell. Installed on EVERY
-        # cell so every cell runs the whole suite. (Every run block uses
-        # `python`, not `python3`: the hosted Windows runners have no
-        # python3 on PATH, and setup-python puts python on PATH on all
-        # three OSes.)
+        # The renderer and suite are stdlib-only; coverage is needed on the
+        # measured cell. pytest is pinned for speed.yml's timing harness, not
+        # as a suite dependency. Install requirements-test.txt on EVERY cell
+        # so every cell runs the whole suite with the same toolchain. Every
+        # run block uses `python`, not `python3`: hosted Windows runners have
+        # no python3 on PATH, and setup-python puts python on PATH on all
+        # three OSes.
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
