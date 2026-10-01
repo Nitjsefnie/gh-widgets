@@ -441,11 +441,17 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
         """The gate's stated power, computed from the committed numbers.
 
-        The basis claims a doubled workload is caught on every entry except
-        `bench.render`, whose 49.0% spread makes any tolerance tight enough
-        to catch its doubling a false-red generator on ordinary pool
-        variation. This pins both halves across BOTH populations, so the prose
-        cannot claim more or less than the document delivers.
+        This pins the honest answer, which is uncomfortable and which a
+        tolerance chosen to look better would have hidden: the envelopes span
+        BOTH windows the cell has shown, so a doubled workload is caught on
+        the unit suite and on none of the three renderer workloads.
+        Tightening a renderer tolerance to catch its doubling would mean
+        going below that entry's own observed spread, which is a gate firing
+        on ordinary pool variation. bench.render is not tuned, and neither
+        are its siblings.
+
+        It also pins the ANSWER, not just the property, so that changing an
+        envelope or a tolerance has to be a deliberate act here.
         """
         loaded = self._load()
         ceilings = self.ceilings(loaded)
@@ -453,13 +459,45 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         for name, population in loaded["populations"].items():
             for node, envelope in population["entries"].items():
                 doubled = envelope["min"] * 2
-                target = caught if doubled > ceilings[name][node] else missed
-                target.add(node)
-        self.assertEqual(
-            caught,
-            {"counter::unit-suite", "e2e::bench.render-impact",
-             "e2e::bench.render-responsiveness"})
-        self.assertEqual(missed, {"e2e::bench.render"})
+                (caught if doubled > ceilings[name][node] else missed).add(
+                    node)
+        self.assertEqual(caught, {"counter::unit-suite"})
+        self.assertEqual(missed,
+                         {"e2e::bench.render", "e2e::bench.render-impact",
+                          "e2e::bench.render-responsiveness"})
+
+    def test_no_tolerance_is_tighter_than_the_cell_has_shown(self):
+        """The rule, as a control.
+
+        An envelope and its tolerance must span what the cell has actually
+        shown, INCLUDING its fastest and slowest machine. A tolerance
+        narrowed because the latest four runs were quiet is the failure the
+        file's `basis` is written against, and here it is arithmetic rather
+        than a sentence somebody can re-read and agree with.
+        """
+        loaded = self._load()
+        for name, population in loaded["populations"].items():
+            for node, envelope in population["entries"].items():
+                with self.subTest(population=name, entry=node):
+                    span = ((envelope["max"] - envelope["min"])
+                            / envelope["min"])
+                    self.assertGreaterEqual(
+                        population["tolerance"], round(span, 2),
+                        f"{node}: tolerance {population['tolerance']} is "
+                        f"tighter than the {span:.1%} this cell has shown")
+
+    def test_no_tolerance_is_so_loose_that_the_gate_cannot_fire(self):
+        """The other side of the same rule.
+
+        Spanning everything is right until the allowance passes 1.0, at which
+        point a doubled workload clears the ceiling and the gate is
+        decorative — the shape this whole change exists to remove. A
+        tolerance at or above 1.0 would be that.
+        """
+        loaded = self._load()
+        for name, population in loaded["populations"].items():
+            with self.subTest(population=name):
+                self.assertLess(population["tolerance"], 1.0)
 
     def test_the_stated_ceilings_are_not_transcribed_anywhere(self):
         """No hard-coded ceiling figures in the prose.
