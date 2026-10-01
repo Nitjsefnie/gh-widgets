@@ -108,8 +108,8 @@ The workflow files in `.github/workflows/` are:
 - `codeql.yml` — security analysis.
 - `actionlint.yml` — workflow syntax and security checks.
 - `speed.yml` — performance regression checks.
-- `aggregate.yml` — always reports on every push and pull request regardless
-  of paths; branch protection requires it instead of the path-filtered gates.
+- `aggregate.yml` — reports on every pull request and push to `main`, regardless
+  of paths (issue #89); branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `coverage-ratchet.yml` — measures coverage on `main`, raises the committed
   floor in `coverage-floor.json`, and never lowers it.
