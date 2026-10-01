@@ -22,23 +22,14 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+# counter_platform loads scripts/ci/counter.py ONCE and by path, the way
+# every module here loads a sibling. Importing the predicate through it,
+# rather than reloading the module in this file, is what makes every guard
+# in the suite read the SAME module object.
+from bench_platform import REQUIRES_BENCH, counter
+
 
 REPO_ROOT = Path(__file__).resolve().parent
-
-
-def load_counter():
-    """Import scripts/ci/counter.py by path — scripts/ci is not a package."""
-    path = REPO_ROOT / "scripts" / "ci" / "counter.py"
-    spec = importlib.util.spec_from_file_location("ghw_counter_under_test",
-                                                  path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-counter = load_counter()
 
 
 def number(element, attribute):
@@ -149,7 +140,7 @@ def rusage_available():
     return True
 
 
-REQUIRES_POSIX = unittest.skipUnless(
+REQUIRES_BENCH = unittest.skipUnless(
     rusage_available(),
     "this exercises counter.measure(), which is POSIX-only by decision: "
     "cpu_time comes from resource.getrusage(RUSAGE_CHILDREN) and the "
@@ -235,6 +226,35 @@ class TestTheRemovedInstrument(unittest.TestCase):
         self.assertIn("36812466498", doc)
 
 
+class TestTheBenchPredicate(unittest.TestCase):
+    """The one predicate every bench-driving test consults, checked here.
+
+    If `bench_is_runnable()` ever returned False where the harness CAN run,
+    every guarded test would skip and CI would go green with nothing
+    checked. That is the failure this control exists to prevent, and it is
+    why the predicate lives beside the instrument's refusal rather than in
+    a test file where a tired reader might widen it.
+    """
+
+    def test_the_predicate_is_true_where_the_harness_can_run(self):
+        self.assertTrue(
+            counter.bench_is_runnable(),
+            "this platform CAN run the harness, so bench_is_runnable() must "
+            "say so; a false here would skip every guarded control and turn "
+            "CI green with nothing checked")
+
+    def test_the_predicate_tracks_the_facility_the_instrument_needs(self):
+        # Same answer as the instrument's own guard, not a parallel one that
+        # can drift from it.
+        with mock.patch.object(counter, "resource", None):
+            self.assertFalse(counter.bench_is_runnable())
+
+    def test_the_shared_decorator_reads_the_same_predicate(self):
+        import bench_platform  # pylint: disable=import-outside-toplevel
+        self.assertEqual(bench_platform.counter.BENCH_RUNNABLE,
+                         counter.BENCH_RUNNABLE)
+
+
 class TestMetricChoice(unittest.TestCase):
     def test_the_jobs_export_is_honoured_verbatim(self):
         # The workflow pins GH_COUNTER_METRIC explicitly in both measurement
@@ -280,7 +300,7 @@ class TestProbe(unittest.TestCase):
 
 
 class TestMeasure(unittest.TestCase):
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_cpu_time_is_measured_not_guessed(self):
         measured = counter.measure(
             [sys.executable, "-c", "sum(range(200000))"],
@@ -291,7 +311,7 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(measured.returncode, 0)
         self.assertGreater(measured.wall, 0.0)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_instrument_travels_with_the_number(self):
         # A caller that can record a value without recording what measured
         # it can write a baseline that looks comparable and is not.
@@ -301,7 +321,7 @@ class TestMeasure(unittest.TestCase):
         self.assertIsInstance(value, float)
         self.assertEqual(metric, counter.CPU_METRIC)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_stdout_and_stderr_come_back_intact(self):
         measured = counter.measure(
             [sys.executable, "-c",
@@ -310,13 +330,13 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(measured.stdout.strip(), "out")
         self.assertEqual(measured.stderr.strip(), "err")
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_pyhashseed_is_pinned_in_the_child(self):
         # One source of counter drift removed. It does NOT make wall time
         # deterministic, and nothing below claims that it does.
         self.assertEqual(counter.child_environment()["PYTHONHASHSEED"], "0")
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_environment_caller_supplied_is_honoured(self):
         env = counter.child_environment({"MARKER": "kept"})
         self.assertEqual(env["MARKER"], "kept")
@@ -325,7 +345,7 @@ class TestMeasure(unittest.TestCase):
     @unittest.skipIf(sys.platform == "win32",
                      "process groups are a POSIX mechanism; the timeout "
                      "path runs only on ubuntu runners in production")
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_timeout_kills_the_whole_process_group(self):
         # The direct child here is `python`, which spawns a grandchild that
         # inherits the output pipes. Killing only the direct child would
@@ -412,7 +432,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("metric_reason", keys)
         self.assertIn("ptrace_scope", keys)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_measured_command_exits_with_the_childs_code(self):
         with tempfile.TemporaryDirectory(prefix="ghw-counter-cli-") as td:
             report = Path(td) / "r.xml"

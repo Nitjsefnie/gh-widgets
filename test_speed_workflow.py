@@ -32,23 +32,7 @@ from speed_workflow_steps import WORKFLOWS, StepRunner  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-def rusage_available():
-    """Whether this platform has the facility `counter.py` measures with."""
-    try:
-        # pylint: disable=import-outside-toplevel,unused-import
-        import resource
-    except ImportError:
-        return False
-    return True
-
-
-REQUIRES_POSIX = unittest.skipUnless(
-    rusage_available(),
-    "speed.yml runs only on a Linux runner and these drive its own step "
-    "fragments, which invoke counter.py: it measures CPU seconds with "
-    "resource.getrusage(RUSAGE_CHILDREN) and refuses — correctly — where "
-    "that does not exist. A stand-in counter would let these pass against a "
-    "fiction, so they skip with the reason attached.")
+from bench_platform import REQUIRES_BENCH  # noqa: E402
 
 
 def envelope(value, samples=6):
@@ -337,7 +321,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     # -- the probe -----------------------------------------------------------
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_probe_records_the_instrument_and_the_kernel_settings(self):
         # There is one instrument, so the step chooses nothing. What it
         # exists for is the RECORD of why, and a reader who sees CPU seconds
@@ -370,7 +354,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     # -- refusals ------------------------------------------------------------
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_population_measured_under_another_instrument_refuses(self):
         # The instrument is one now, so this cannot happen by accident today.
         # It is here for the next instrument, and it is why every baseline
@@ -394,7 +378,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("cpu_time", summary)
         self.assertIn("syscalls", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_different_collected_population_refuses(self):
         root = self._run_with_tree("ghw-speed-population-mismatch-")
         (root / "reports" / "unit-population.txt").write_text(
@@ -406,7 +390,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("different unit suite", summary)
         self.assertIn("Re-derive the baseline", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_missing_baseline_exits_zero_with_the_measured_values(self):
         root = self._run_with_tree("ghw-speed-no-baseline-", baseline=False)
         completed, summary = self._execute_compare(root)
@@ -421,7 +405,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     # -- verdicts ------------------------------------------------------------
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_counter_above_tolerance_is_red_and_one_below_is_green(self):
         # 12.6 against a 10.0 baseline is +26%: inside the 30% total budget,
         # outside the unit population's own 25% tolerance. That separation is
@@ -443,7 +427,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("within budget", summary)
         self.assertNotIn("down-only tolerance", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_smoke_gate_fires_on_a_gross_outlier_without_a_number(self):
         # Armed, and armed on an ENVELOPE: the head has to exceed the
         # recorded wall MAXIMUM times the factor, so the bound is a multiple
@@ -505,7 +489,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(lowered.returncode, 0,
                          lowered.stdout + lowered.stderr)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_an_envelope_from_one_observation_is_refused(self):
         """A single sample's maximum is a measurement, not a worst case.
 
@@ -526,7 +510,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("at least 2", summary)
         self.assertIn("COULD NOT COMPARE", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_an_entry_with_min_above_max_is_refused(self):
         root = self._run_with_tree("ghw-speed-envelope-inverted-")
         document = json.loads((root / "head" / "speed-baseline.json").read_text(
@@ -568,7 +552,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     # -- the closed-set renderer gate, unchanged by any of the above ---------
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_compare_runs_once_for_each_report_family(self):
         root = self._run_with_tree("ghw-speed-compare-shape-")
         completed, summary = self._execute_compare(root)
@@ -578,7 +562,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("committed baseline, unit suite", summary)
         self.assertIn("committed baseline, renderer workloads", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_each_population_is_judged_by_its_own_metric(self):
         """The collision a single document-wide `metric` could not express.
 
@@ -689,7 +673,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     "working-directory: head, so its paths resolve against "
                     "the workspace one level above the checkout")
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
         """The step executed, and its output proved to land where it must.
 
@@ -716,7 +700,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          "the step must write its JUnit into $REPORTS, where "
                          "the Compare step looks for it")
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_unit_suite_step_would_write_nothing_without_its_directory(self):
         """The mutation, proven.
 
@@ -736,7 +720,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         written = sorted(p.name for p in Path(env["REPORTS"]).glob("unit-*.xml"))
         self.assertEqual(written, [])
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_compare_step_FINDS_the_baseline_in_the_checkout(self):
         """The defect that made four dispatch runs green for the wrong reason.
 
@@ -772,7 +756,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("committed baseline, unit suite", summary)
         self.assertIn("committed baseline, renderer workloads", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_the_compare_step_would_miss_a_baseline_it_cannot_reach(self):
         """The mutation, proven: run the same step from the workspace.
 
@@ -795,7 +779,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          broken.stdout + broken.stderr)
         self.assertIn("No baseline to compare against", broken.stdout)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_missing_baseline_with_a_failed_suite_is_still_clean(self):
         """The combination that produced the original traceback.
 
@@ -828,7 +812,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertNotIn("Traceback", completed.stderr)
         self.assertIn("COULD NOT COMPARE", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_a_missing_baseline_prints_no_traceback(self):
         """The green first-push path, asserted on OUTPUT not just its code.
 
@@ -854,8 +838,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn('TOTAL_BUDGET: "0.30"', text)
         self.assertIn("NOT THE THRESHOLD", text)
 
-    @REQUIRES_POSIX
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
+    @REQUIRES_BENCH
     def test_workload_listing_that_fails_stops_the_compare_step(self):
         """A producer that dies must not silently empty the required list.
 
@@ -872,7 +856,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                             completed.stdout + completed.stderr)
         self.assertIn("workload listing", completed.stderr)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_empty_workload_listing_stops_the_compare_step(self):
         """A producer that prints nothing is as disabling as one that dies."""
         root = self._run_with_tree("ghw-speed-compare-empty-listing-")
@@ -884,7 +868,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                             completed.stdout + completed.stderr)
         self.assertIn("workload listing is empty", completed.stderr)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_exempting_every_workload_stops_the_compare_step(self):
         """The other self-disable: naming all three empties the required list.
 
@@ -919,7 +903,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                             completed.stdout + completed.stderr)
         self.assertIn("needs --population", completed.stderr)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_unit_regression_still_runs_renderer_comparison(self):
         root = self._run_with_tree("ghw-speed-compare-failure-shape-",
                                    unit_counter=20.0)
@@ -929,7 +913,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("committed baseline, unit suite", summary)
         self.assertIn("committed baseline, renderer workloads", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_missing_renderer_workload_fails_the_compare_step(self):
         """Issue #36: a shipped renderer that stops being measured is red."""
         root = self._run_with_tree("ghw-speed-compare-missing-renderer-",
@@ -940,7 +924,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                             completed.stdout + completed.stderr)
         self.assertIn("e2e::bench.render-impact", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_declared_workload_removal_passes_the_compare_step(self):
         """The exemption surface, for a workload the harness still lists.
 
@@ -959,7 +943,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          completed.stdout + completed.stderr)
         self.assertIn("renderer workloads", summary)
 
-    @REQUIRES_POSIX
+    @REQUIRES_BENCH
     def test_retiring_a_workload_from_workloads_needs_no_exemption(self):
         """The real retirement path: dropped from WORKLOADS, no exemption.
 
