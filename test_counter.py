@@ -139,6 +139,24 @@ class TestPlatformLimits(unittest.TestCase):
                 self.assertRegex(line, r"^[A-Za-z_][A-Za-z0-9_]*=.+")
 
 
+def rusage_available():
+    """Whether this platform has the facility `counter.py` measures with."""
+    try:
+        # pylint: disable=import-outside-toplevel,unused-import
+        import resource
+    except ImportError:
+        return False
+    return True
+
+
+REQUIRES_POSIX = unittest.skipUnless(
+    rusage_available(),
+    "this exercises counter.measure(), which is POSIX-only by decision: "
+    "cpu_time comes from resource.getrusage(RUSAGE_CHILDREN) and the "
+    "instrument refuses rather than falling back to wall time where that "
+    "does not exist")
+
+
 class TestCwdIsHonoured(unittest.TestCase):
     """`--cwd` must reach `measure()`, not just parse.
 
@@ -262,6 +280,7 @@ class TestProbe(unittest.TestCase):
 
 
 class TestMeasure(unittest.TestCase):
+    @REQUIRES_POSIX
     def test_cpu_time_is_measured_not_guessed(self):
         measured = counter.measure(
             [sys.executable, "-c", "sum(range(200000))"],
@@ -272,6 +291,7 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(measured.returncode, 0)
         self.assertGreater(measured.wall, 0.0)
 
+    @REQUIRES_POSIX
     def test_the_instrument_travels_with_the_number(self):
         # A caller that can record a value without recording what measured
         # it can write a baseline that looks comparable and is not.
@@ -281,6 +301,7 @@ class TestMeasure(unittest.TestCase):
         self.assertIsInstance(value, float)
         self.assertEqual(metric, counter.CPU_METRIC)
 
+    @REQUIRES_POSIX
     def test_stdout_and_stderr_come_back_intact(self):
         measured = counter.measure(
             [sys.executable, "-c",
@@ -289,11 +310,13 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(measured.stdout.strip(), "out")
         self.assertEqual(measured.stderr.strip(), "err")
 
+    @REQUIRES_POSIX
     def test_pyhashseed_is_pinned_in_the_child(self):
         # One source of counter drift removed. It does NOT make wall time
         # deterministic, and nothing below claims that it does.
         self.assertEqual(counter.child_environment()["PYTHONHASHSEED"], "0")
 
+    @REQUIRES_POSIX
     def test_the_environment_caller_supplied_is_honoured(self):
         env = counter.child_environment({"MARKER": "kept"})
         self.assertEqual(env["MARKER"], "kept")
@@ -302,6 +325,7 @@ class TestMeasure(unittest.TestCase):
     @unittest.skipIf(sys.platform == "win32",
                      "process groups are a POSIX mechanism; the timeout "
                      "path runs only on ubuntu runners in production")
+    @REQUIRES_POSIX
     def test_a_timeout_kills_the_whole_process_group(self):
         # The direct child here is `python`, which spawns a grandchild that
         # inherits the output pipes. Killing only the direct child would
@@ -388,6 +412,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("metric_reason", keys)
         self.assertIn("ptrace_scope", keys)
 
+    @REQUIRES_POSIX
     def test_a_measured_command_exits_with_the_childs_code(self):
         with tempfile.TemporaryDirectory(prefix="ghw-counter-cli-") as td:
             report = Path(td) / "r.xml"
