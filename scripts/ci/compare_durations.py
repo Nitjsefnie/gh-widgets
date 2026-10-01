@@ -2,10 +2,11 @@
 """Compare a counter against the committed baseline, per test and per workload.
 
 THE NAME IS HISTORICAL. `compare_durations` compared wall-clock durations; it
-now compares load-invariant COUNTERS — syscalls for the renderer workloads,
-CPU seconds for the unit suite. The filename is kept because it is on every
-command line and in another test module's import, and renaming it would break
-that seat's work mid-flight. A rename to `compare_counters.py` is owed.
+now compares COUNTERS — CPU seconds, which exclude steal time and are
+therefore the first quantity runner load cannot move. The filename is kept
+because it is on every command line and in another test module's import, and
+renaming it would break that seat's work mid-flight. A rename to
+`compare_counters.py` is owed.
 
 WHY NOT WALL TIME. A GitHub-hosted runner is a multi-tenant VM: steal time, a
 neighbour, a different core and a different CPU model all move an elapsed
@@ -18,21 +19,23 @@ time survives only as a gross smoke check reported as a verdict with no
 number attached. That ruling is also why there is no base checkout any more:
 the committed baseline IS the comparison point.
 
-WHY ONE METRIC AND TOLERANCE PER POPULATION, NOT PER DOCUMENT. The renderer
-workloads are counted with `strace -f -c`: they are the shipped product,
-they are cheap to trace, and a syscall count over them is stable. The unit
-suite is measured with CPU seconds instead, because tracing it measured at
-about 3.2x its untraced wall time (this box; the runner is faster but the
-ratio is the point). One global `metric` can therefore only ever be right
-for one of the two, so the baseline carries a sub-document per population,
-each with the tolerance that belongs to its own instrument, and --population
-says which contract this run is being held to.
+WHY ONE METRIC AND TOLERANCE PER POPULATION, NOT PER DOCUMENT. Both
+populations are measured in CPU seconds, but their budgets are derived from
+their own measured spreads and those spreads differ by an order of
+magnitude: on this box the unit suite spread 22.2% over six runs while the
+three renderer workloads spread 19.5-72.9% over eight each — the short ones
+WORST, because fixed overhead and co-tenant load dominate a brief
+measurement. A single global `tolerance` could only ever be right for one of
+them, and being right for one is how a gate ends up quietly holding the
+wrong contract, so the baseline carries a sub-document per population and
+--population says which contract this run is being held to.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of
-the same quantity. Under the syscall count that costs nothing extra. Under
-CPU seconds — which are not deterministic, 15.9% min-to-max here — it is what
-separates a real change from one unlucky run.
+the same quantity. CPU seconds are not deterministic — 22.2% min-to-max on
+the unit suite here, 19.5-72.9% across the renderer workloads — so this is
+what separates a real change from one unlucky run, and it is why ROUNDS is
+still 2.
 
 WHY THE CLOSED POPULATION IS OPTIONAL, AND WHY IT EXISTS HERE. The
 intersection is deliberately permissive: adding or removing a test cannot move
@@ -42,10 +45,12 @@ would leave the gate comparing one fewer program and still calling it healthy,
 and a gate that measures fewer programs than it advertises is decorative.
 --require-test and --allow-removal turn that off for a named population.
 
-A METRIC MISMATCH IS EXIT 2, NEVER A COMPARISON. A syscall count and a
-CPU-second count are different quantities; dividing one by the other produces
-either a catastrophic regression or a spectacular speedup, and neither reading
-would be true.
+A METRIC MISMATCH IS EXIT 2, NEVER A COMPARISON. Counts and seconds are
+different quantities; dividing one by the other produces either a
+catastrophic regression or a spectacular speedup, and neither reading would
+be true. With one instrument in use this cannot fire today — it is here for
+the next one, and it is the reason a metric name is recorded on every entry
+rather than left to a reader's memory.
 
 EXIT CODES. 0 within budget, 1 over budget, 2 could not compare at all. Those
 are deliberately different: a workflow that reports a restructured suite as a
@@ -77,14 +82,10 @@ SMOKE_FACTOR = 3.0
 
 # The instrument names, and what may be said about each one in a report.
 METRIC_NOTES = {
-    "syscalls": (
-        "syscalls retired by the kernel across the whole traced tree, "
-        "including the git subprocesses the renderers spawn; the count is "
-        "deterministic"),
     "cpu_time": (
-        "CPU seconds, so steal time is excluded — but NOT deterministic: "
-        "5.7% min-to-max on a quiet runner, which is why its tolerance is "
-        "the loose one"),
+        "CPU seconds, so steal time is excluded — but NOT deterministic, "
+        "which is why its tolerance is the loose one and why this is a "
+        "gross-regression net rather than a sensitive gate"),
 }
 
 # A testcase carrying any of these children did not pass, and its value is not
