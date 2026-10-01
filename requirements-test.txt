@@ -21,5 +21,5 @@
 #   only so a local `pytest` run of the same file still works. Nothing in
 #   the suite is WRITTEN against pytest and nothing should be:
 #   `python3 -m unittest discover` stays the way these tests are run.
-coverage==7.16.1
+coverage==7.16.2
 pytest==9.1.1
