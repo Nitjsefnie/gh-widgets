@@ -74,77 +74,66 @@ name: speed
 # recorded maximum, so an improvement lowers the ceiling and a regression has
 # to clear the worst machine actually seen.
 #
-# WHY AN ENVELOPE. CPU seconds exclude steal, so a co-tenant does not reach
-# them — that is what makes them a magnitude where elapsed time is not. They
-# are still hardware-dependent: a faster or narrower core runs the same
-# instructions in fewer CPU seconds, and the ubuntu-latest pool spans instance
-# types. Four dispatches of 3c30eca on this cell, at the image and runner
-# version in the baseline's `cell`:
+# WHY AN ENVELOPE, AND WHAT ITS TOLERANCE SPANS. CPU seconds exclude steal,
+# so a co-tenant does not reach them — that is what makes them a magnitude
+# where elapsed time is not. They are still hardware-dependent: a faster or
+# narrower core runs the same instructions in fewer CPU seconds, and the pool
+# spans instance types. Two windows on this cell, same image, and the RENDERER
+# WORKLOADS SHIP IDENTICAL CODE AT BOTH COMMITS:
 #
-#   entry                          min        max      spread
-#   counter::unit-suite            16.593450  23.203122   39.8%
-#   e2e::bench.render               0.056494   0.084195   49.0%
-#   e2e::bench.render-impact        1.018783   1.351400   32.6%
-#   e2e::bench.render-responsiveness 0.060249   0.080077   32.9%
+#   entry                         07:46-07:56     10:15-10:24
+#   counter::unit-suite            16.593-23.203    22.852-24.544   58.8% vs 7.4%
+#   e2e::bench.render               0.056- 0.084      0.080- 0.087   49.0% vs 8.4%
+#   e2e::bench.render-impact        1.019- 1.351      1.332- 1.404   32.6% vs 5.4%
+#   e2e::bench.render-responsiveness 0.060- 0.080      0.078- 0.086   32.9% vs 10.3%
 #
-# The two rounds WITHIN a dispatch agree to about 2%. Across dispatches they
-# do not, and the whole vector moves together — which is a property of the
-# machine and not of the code. A single stored value plus a budget wide
-# enough to cover that would need a tolerance above 1.0 on some entries: not
-# a loose gate, a gate that cannot fire.
+# THE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the
+# state of the pool during the window: the first contains one clearly fast
+# machine and several slow ones, the second looks like a quiet pool. So the
+# renderer envelopes are the UNION of all eight observations, because the busy
+# window is the only evidence that a fast machine exists, and an envelope
+# built from a quiet one false-reds the first time the pool is busy. DO NOT
+# SHRINK A TOLERANCE BECAUSE THE LAST FOUR RUNS WERE QUIET.
 #
-# WHY THE TOLERANCE IS THE OBSERVED SPREAD, AND WHY THAT IS NOT 0.25. The
-# gate compares a per-run MINIMUM against a recorded MAXIMUM, so the machine's
-# whole observed range is given away for free and the tolerance does not have
-# to be large to absorb it — but it does have to be at least one more
-# spread-width, to cover the head landing on a machine worse than any yet
-# seen. Twice the spread was the rule before the module split, when the
-# spreads were 7-15%; applied to these it gives 0.80 and 0.98, and the
-# schema's validator refuses a tolerance at or above 1.0 precisely because a
-# gate that cannot fail is not a gate. So: TOLERANCE = THE OBSERVED SPREAD of
-# that population, taking the widest entry where several share one. That
-# gives 0.40 for the unit suite and 0.50 for the renderer workloads. The RULE
-# travels; the number is derived from whichever cell reads it.
+# THE UNIT SUITE IS THE EXCEPTION AND THE HARDER CASE. Only the head runs
+# describe this tree's suite, and its observed spread is 7.4% — which is NOT
+# its tolerance. The same cell measured a suite of this scale at 39.8% in the
+# busier window, so 7.4% is what this workload looks like when the pool is
+# quiet, not what it always looks like. The tolerance stays 0.40.
 #
-# WHAT 0.40 AND 0.50 BUY, STATED RATHER THAN ASSUMED. The ceilings are NOT
-# written out here: they are `max x (1 + tolerance)` per entry, computed from
-# the document, and transcribed copies of them were wrong twice — two of
-# three understated a ceiling by enough to turn a verdict surviving on 0.5%
-# into one that read as comfortable. `test_baseline.py` computes them and
-# pins which entries catch a doubled workload on the FASTEST machine observed
-# and which do not. The shape of that answer is stable enough to state: a
-# doubling is caught on every entry EXCEPT bench.render, whose 49.0% spread
-# makes any tolerance tight enough to catch it a false-red generator on
-# ordinary pool variation. So this is a STEP-CHANGE DETECTOR, NOT A
-# REGRESSION DETECTOR, and it will not catch a 20% regression anywhere. Do
-# not read "load-invariant counter" as "sharp budget", and do not tune
-# bench.render to close the gap: that would be a gate crying wolf.
+# WHY THE TOLERANCE IS THE OBSERVED SPREAD. The gate compares a per-run
+# MINIMUM against a recorded MAXIMUM, so the machine's whole observed range
+# is conceded for free and the tolerance only has to cover a head landing on
+# a machine worse than any yet seen — one more spread-width. A population
+# takes its widest entry, so the renderer workloads carry 0.60.
 #
-# THE GROSS WALL SMOKE GATE IS ARMED, AND IT IS NOT A WALL BUDGET. Wall time
-# spread 15.1-49.3% across the four dispatches (the unit suite 48.211-55.471,
-# bench.render 0.057-0.085, bench.render-impact 1.226-1.485,
-# bench.render-responsiveness 0.060-0.080): the machine dominates wall and CPU
-# alike on this cell, which is exactly why wall appears here only as a CLIFF
-# BOUND and never as a budget. Its ceiling is an envelope too, for the same
-# reason the counter's is: with a spread that wide, a single stored figure
-# would be an arbitrary pick among min, median and max, and the wrong pick
-# either trips the gate on noise or leaves it deaf. The gate compares against
-# the recorded maximum, so SMOKE_FACTOR is a multiple of the worst wall
-# actually observed — at 3.0 the ceilings are 166s, 0.26, 4.5 and 0.24, all
-# far above every spread above. What it catches is the class CPU cannot see
-# at all — a workload that gets slower in wall while its CPU cost holds flat,
-# which is what blocking on I/O, a network call or a lock wait looks like.
-# The report still prints no elapsed time at all: a verdict and no number.
+# WHAT THAT COSTS, STATED RATHER THAN ASSUMED. At these tolerances a DOUBLED
+# workload is caught on the unit suite and on NONE of the three renderer
+# workloads: doubling the fastest machine observed lands under all three
+# ceilings. That is what spanning the cell's real spread costs, and the
+# alternative is a tolerance below each entry's own observed spread, which
+# fires on ordinary pool variation. A gate that cries wolf is deader than one
+# with a documented blind spot, so bench.render is NOT tuned and neither are
+# its siblings. The gate catches a gross step change and the gross wall smoke
+# bound; it will not catch a 20% regression anywhere. Read "load-invariant
+# counter" as "a quantity the machine's load does not reach", not as "a sharp
+# budget". No ceiling is written down here: test_baseline.py computes every
+# one from the document, because a transcribed copy was wrong twice.
 #
-# THE THREE SCALES ARE WHY THE TWO POPULATIONS ARE SEPARATE RECORDS. The same
-# machine effect, measured at three of them: bench.render spends 0.06-0.08 CPU
-# seconds and spreads 49.0% — the fixed per-VM overhead IS the measurement;
-# bench.render-impact spends 1.02-1.35 and spreads 32.6%; the suite spends
-# 16.6-23.2 and spreads 39.8% in CPU but only 15.1% in WALL, because a long
-# run amortises the overhead further and the wall figure says so before the
-# CPU one does. One figure for all of them would be either too tight for the
-# brief workloads, firing on ordinary pool variation, or too loose for the
-# suite to catch a suite that started waiting on something.
+# ROUNDS stays 2, and for two reasons that are not the same reason.
+# --selfcheck compares SVG bytes across head rounds and needs at least two,
+# and that control is byte-identity, not timing, so nothing about the
+# instrument could have weakened it. Separately, the minimum across rounds is
+# the least-noisy observation of the same work.
+#
+# THE COMMITTED BASELINE IS A MEASUREMENT OF A COMMIT, NOT OF THIS FILE. It
+# records measured_commit 4c003c6, the remote head four dispatches ran
+# against, and its `population` digest is that tree's 777 collected node ids
+# computed by collecting them. Commits after it added controls, so a run of
+# this head collects more and the digest guard refuses until a dispatch of
+# THAT head re-derives entries, wall and population together. The refusal is
+# the guard working; the alternative is a document claiming to describe a
+# population it never saw.
 #
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and
