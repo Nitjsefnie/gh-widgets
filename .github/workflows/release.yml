@@ -157,6 +157,7 @@ jobs:
           SHA: ${{ inputs.sha || github.sha }}
           REPO: ${{ github.repository }}
           WAIVE: ${{ inputs.waive }}
+          SELF: ${{ github.job }}
         # Polls this commit's check runs until every gate named in the
         # manifest below has REPORTED and passed.
         #
@@ -184,7 +185,13 @@ jobs:
         #
         # Three details that are each a way this can be wrong:
         #   - it excludes ITSELF, or it would wait on a job that is waiting
-        #     on it;
+        #     on it. Matched EXACTLY, against `${{ github.job }}` — the
+        #     name GitHub reports this job's check runs under, so there is
+        #     no second literal to drift. The exclusion used to be
+        #     `startswith("release")` (issue #79), which also dropped any
+        #     gate named `release<anything>` from the evidence entirely:
+        #     the release waited on nothing, saw nothing wrong, and
+        #     shipped. Only this job's own check run may go;
         #   - a prefix is matched only with the " (" delimiter behind it, so
         #     a future `lint-docs` check cannot satisfy `lint`. That is the
         #     same bug as a missing gate, one delimiter down;
@@ -255,9 +262,12 @@ jobs:
             runs="$(gh api --paginate \
               -H "Cache-Control: no-cache" \
               "repos/$REPO/commits/$SHA/check-runs" \
-              --jq '.check_runs[] | select(.name | startswith("release") | not)
+              --jq '.check_runs[]
                     | "\(.status)\t\(.conclusion)\t\(.name)"')"
-            reported="$(printf '%s\n' "$runs" | awk -F'\t' 'NF')"
+            # This job's own check run, and nothing else. A check whose
+            # name merely starts with this one is left in.
+            reported="$(printf '%s\n' "$runs" \
+              | awk -F'\t' -v self="$SELF" 'NF && $3 != self')"
 
             # Incidental checks — anything that is not a manifest entry —
             # keep the inherited wider acceptance set, so today's
