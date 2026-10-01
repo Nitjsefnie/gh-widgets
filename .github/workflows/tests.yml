@@ -124,8 +124,9 @@ jobs:
       - name: Run tests
         id: unittest
         # Still `unittest discover`, under coverage on the measured cell.
-        # pytest is not the runner here and should not become one; it
-        # appears only in speed.yml, purely as a timing harness.
+        # pytest is not the runner here and should not become one; it is
+        # installed above only because test_compare_durations.py imports it,
+        # and `unittest discover` imports every test module it collects.
         env:
           # Undefined on the other five cells, so these read as "" there.
           MEASURED: ${{ matrix.measured }}

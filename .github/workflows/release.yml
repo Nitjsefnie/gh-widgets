@@ -1,8 +1,11 @@
 name: release
 
 # Cuts a GitHub release when, and only when, the root VERSION file changes
-# on the default branch. The version is the input to two things: the tag
-# people install by, and the baseline speed.yml benchmarks HEAD against.
+# on the default branch. The version is the input to one thing: the tag
+# people install by. It used to be two — speed.yml used to benchmark HEAD
+# against the latest release, and now measures HEAD alone against the
+# committed counter baseline in speed-baseline.json, which no release
+# feeds.
 #
 # WHY IT WAITS FOR THE OTHER GATES. A tag is the one artefact here that
 # outlives a mistake — you can force-push a branch, but a release people

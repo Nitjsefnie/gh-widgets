@@ -1,0 +1,552 @@
+#!/usr/bin/env python3
+"""What did that command cost, in a quantity runner load cannot move?
+
+THE QUESTION THIS FILE ANSWERS. speed.yml used to decide pass or fail from
+wall-clock durations taken on a GitHub-hosted runner, which is a multi-tenant
+VM: steal time, a neighbour, a different CPU model all move a duration, and
+none of that is the code being measured. A duration measured there is not a
+magnitude. So the quantity gated here is a COUNTER.
+
+TWO INSTRUMENTS, IN A FIXED PREFERENCE ORDER.
+
+    syscalls    `strace -f -c -o <report> -- <cmd>`, total row
+    cpu_time    resource.getrusage(RUSAGE_CHILDREN), across one child
+
+WHY NOT INSTRUCTION COUNTS. `perf stat -e instructions` is the obvious
+first choice and it does not work on this cell. Measured on ubuntu24 image
+20260927.320.1, kernel 6.17.0-1022-azure (run 36811152307):
+perf_event_paranoid is 4, `perf` IS installed, and the probe still exits 255
+with "Access to performance monitoring and observability operations is
+limited." An unreachable branch in a gate is worse than no branch — it is a
+code path that never runs and never gets tested by production — so perf is
+not here at all. The lesson it leaves is the one below: the probe MEASURES,
+it does not look for a binary.
+
+WHY strace IS ALLOWED TO ATTACH. The runner has yama ptrace_scope=1, which
+restricts tracing to your own descendants — and strace here IS the parent of
+the thing it traces, so it is inside the restriction rather than outside it.
+The scope value is printed by the probe anyway, because a reader who is told
+the fallback fired deserves to know what forbade it.
+
+WHY SYSCALL COUNTS. They are exactly deterministic. Three runs of an
+identical workload under `strace -f -c` on that same cell (run 36812466498)
+reported the same total — 870 calls, 89 errors — every time, while the
+`% time` and `seconds` columns strace also prints swung between 17.34% and
+48.84% on the same row. The COUNT is the stable quantity in that report and
+the timing columns are noise, which is exactly the distinction this whole
+change is about.
+
+`-f` is not optional. The renderers shell out to `git`; the quantity that
+matters is the work the workload actually does, including in its children,
+and a count that stopped at execve would measure the wrong program.
+
+Tracing is not free: 0.24-0.25s against 0.19s untraced on that workload
+(~1.26x, run 36812466498). That overhead scales with syscall count, so 1.26x
+is not a prediction for the unit suite. It is an argument that the counter
+is not wall time and must not be read as such — the traced process really
+does do more work than the untraced one, which is why the count is compared
+against a baseline traced the same way and never against an untraced one.
+
+WHY CPU SECONDS IS THE FALLBACK AND NOT THE PRIMARY. It is on-CPU time, so
+steal time is excluded, which is what makes it valid under the ruling at
+all. It is also not tight: five runs of one workload on a quiet runner
+spread 7.6% min to max (run 36812285024). A gate whose budget has to be
+looser than the noise it is measuring is a weaker gate, and it must never
+become the primary silently — the baseline records which instrument it was
+measured with, and a change of instrument is a refusal, not a conversion.
+
+ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in its
+own step, and exports the answer as GH_COUNTER_METRIC; this file honours that
+variable and probes for itself only when it is not set. Two call sites in one
+job that picked different instruments would produce two incomparable numbers,
+which is the entire class of bug this file exists to prevent.
+
+THE PROBE MEASURES; IT DOES NOT JUST LOOK FOR A BINARY. An instrument on
+PATH that cannot be used — a `strace` denied by ptrace_scope, a `perf`
+refused by perf_event_paranoid — is a FAILING probe, not a passing one. So
+the probe runs the instrument against a trivial command and requires a
+parseable, positive total. Existence of a binary proves nothing: `perf` IS
+installed on the runner and still cannot count.
+
+A METRIC MISMATCH IS A REFUSAL, NOT A COMPARISON. Comparing a syscall count
+against a CPU-seconds baseline is a category error, and it is one that reads
+as either a catastrophic regression or a spectacular speedup depending on
+which way the numbers fall. The comparator raises ComparisonError on a
+mismatch, which is exit 2 and names both metrics; nothing here silently
+converts one into the other. The baseline also carries the tolerance that
+belongs to its instrument — tight for a deterministic count, loose for CPU
+seconds — and both are re-derived together, never carried across.
+
+THE TIME ATTRIBUTE IN THE JUNIT THIS WRITES IS NOT SECONDS. It is the counter
+value. That is the whole point, and it is the first thing the next reader
+questions, so: a `time="870"` written by this file means eight hundred and
+seventy syscalls (or CPU seconds, per the suite's gh-metric) and never eight
+hundred and seventy seconds of elapsed time. The wall seconds are recorded
+separately, as gh-wall, and exist only for the gross smoke gate — never as a
+magnitude.
+
+DETERMINISM LEVERS, ALL OF THEM NAMED IN `child_environment`. The headline
+one is PYTHONHASHSEED=0, but the one that actually moved the numbers here
+was PYTHONDONTWRITEBYTECODE=1: without it the first round compiles and
+writes a .pyc and the second reads them, so two rounds of identical code
+legitimately count different syscalls. None of this makes wall time
+deterministic and nothing below pretends that it does.
+
+CLI:
+
+    counter.py --probe
+    counter.py --junit-file <path> --name <node-id> -- <cmd> [args...]
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import resource
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import NamedTuple, Optional, Sequence
+
+
+STRACE_METRIC = "syscalls"
+CPU_METRIC = "cpu_time"
+# The metric names this file is willing to record. Anything else arriving in
+# GH_COUNTER_METRIC is a typo or a stale export, and is refused rather than
+# measured — an unrecognised instrument silently falling back would produce a
+# number under the wrong name.
+METRICS = (STRACE_METRIC, CPU_METRIC)
+METRIC_ENV = "GH_COUNTER_METRIC"
+# Read by the probe and printed next to the instrument, because a reader
+# deciding whether to trust a fallback needs to know whether it was the kernel
+# that forbade the primary, not whether the binary was missing.
+PARANOID_PATH = Path("/proc/sys/kernel/perf_event_paranoid")
+PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
+# The file strace is told to write its -c summary into.
+REPORT_NAME = "strace.txt"
+# A trivial command for the probe to count. `/bin/true` is not guaranteed to
+# exist everywhere and is not a Python program; `-c pass` starts the
+# interpreter, which is the closest available stand-in for "some real work"
+# without depending on anything.
+PROBE_COMMAND = (sys.executable, "-c", "pass")
+PROBE_TIMEOUT = 60
+
+
+class CounterError(RuntimeError):
+    """A cost could not be counted, or not in the instrument asked for."""
+
+
+class Measurement(NamedTuple):
+    """One measured command: the counter, what kind it is, and the wall time.
+
+    The counter and its metric travel together on purpose. A caller that can
+    record a number without recording what it measured can produce a baseline
+    that looks comparable and is not, which is the mistake this issue exists
+    to make impossible.
+    """
+    value: float
+    metric: str
+    wall: float
+    stdout: str
+    stderr: str
+    returncode: int
+
+
+def parse_strace_total(report: str) -> Optional[float]:
+    """The total CALL count out of one `strace -f -c` summary, or None.
+
+    The report's columns are `% time`, `seconds`, `usecs/call`, `calls`,
+    `errors`, `syscall`, and the last row is the aggregate, whose last field
+    is the literal `total`. This reads the CALLS from that row and nothing
+    else: the timing columns in the same report are not reproducible — the
+    same row read 17.34% and 48.84% on consecutive runs of identical code
+    (run 36812466498) while the call count was identical every time. Reading
+    `seconds` here would reintroduce exactly the wall-clock measurement this
+    file exists to replace.
+
+    None rather than zero for an unparseable report: a strace that ran and
+    could not trace is a failed probe, and reading it as 0 would make every
+    later comparison look like an infinite speedup.
+    """
+    for line in report.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[-1] == "total":
+            try:
+                count = float(fields[-3])
+            except ValueError:
+                return None
+            return count if count > 0 else None
+    return None
+
+
+def _tracer_command(tracer, command, report_path):
+    """`strace -f -c -o <report> -- <command>`.
+
+    `-f` follows every fork and thread, which is the whole point: the
+    renderers shell out to git, and a count that stopped at execve would
+    measure the wrapper instead of the work. The summary goes to a file
+    rather than to stderr because stderr here belongs to the child, and
+    strace's own table is not the child's diagnostics.
+    """
+    return [tracer, "-f", "-c", "-o", str(report_path), "--", *command]
+
+
+def _run_child(command, cwd, env, timeout):
+    """Run one child, returning (returncode, stdout, stderr, wall, cpu).
+
+    A hand-rolled Popen rather than `subprocess.run` for exactly one reason:
+    with the strace instrument the direct child is `strace`, so a timeout
+    that killed only the direct child would orphan the real command and
+    leave it running with its output pipes held open — the timeout would then
+    never return at all, and the gate would hang rather than fail. The child
+    is therefore started in its own session and the whole process group is
+    killed, which is why this is not `subprocess.run`.
+    """
+    started = time.perf_counter()
+    before = _child_cpu_seconds()
+    with subprocess.Popen(
+            list(command), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process)
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                command, timeout, output=stdout, stderr=stderr) from None
+        returncode = process.returncode
+    return (returncode, stdout or "", stderr or "",
+            time.perf_counter() - started, _child_cpu_seconds() - before)
+
+
+def _kill_process_group(process) -> None:
+    """SIGKILL the child's whole process group, not just the direct child."""
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        process.kill()
+    except OSError:
+        pass
+
+
+def _child_cpu_seconds() -> float:
+    """CPU seconds this process has spent in children it has already reaped.
+
+    `resource.getrusage(RUSAGE_CHILDREN)` is a running total, so a DELTA
+    across one child is the child's cost. That is only true because this
+    module runs its children one at a time and reaps nothing else in
+    between — two concurrent callers would each be charged for both
+    children. The alternative, `time.process_time()`, measures THIS
+    interpreter's CPU and would report close to nothing for a subprocess,
+    which is exactly the number that would then be compared against the
+    baseline.
+    """
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
+def child_environment(env=None) -> dict:
+    """The child environment, with every variance source found pinned.
+
+    Each of these was pinned for a stated reason, and none of them makes wall
+    time deterministic — they remove sources of drift from the COUNTER, which
+    is a different and much smaller claim:
+
+      PYTHONHASHSEED=0       hash-order drift, which reaches counted work
+                             wherever a set or dict is iterated.
+      PYTHONDONTWRITEBYTECODE=1
+                             the big one. Without it, round 1 of a run
+                             compiles every module and writes a .pyc while
+                             round 2 reads them — so round 2 legitimately
+                             counts FEWER syscalls than round 1, on identical
+                             code. The minimum across rounds is taken, so it
+                             would be defensible; but a baseline re-derived
+                             on a cold tree and one measured on a warm one
+                             would not be the same number at all.
+      LC_ALL=C, LANG=C      locale-dependent sorting and formatting. Not a
+                             run-to-run source on one cell, but it is a
+                             cell-to-cell one, and this baseline is meant to
+                             travel between them.
+      TZ=UTC                the renderers stamp their output; a runner whose
+                             clock zone differs would produce different work
+                             and different bytes for the same commit.
+    """
+    child = dict(os.environ if env is None else env)
+    child["PYTHONHASHSEED"] = "0"
+    child["PYTHONDONTWRITEBYTECODE"] = "1"
+    child["LC_ALL"] = "C"
+    child["LANG"] = "C"
+    child["TZ"] = "UTC"
+    return child
+
+
+def _read_traced_count(tracer, command) -> Optional[float]:
+    """Run one command under strace and return its total call count, or None.
+
+    The report lives in a private directory that is removed whatever happens,
+    because a leftover -o file is a syscall-count-shaped piece of scratch
+    that the next run would happily read instead of writing.
+    """
+    with tempfile.TemporaryDirectory(prefix="ghw-counter-strace-") as work:
+        report = Path(work) / REPORT_NAME
+        try:
+            _run_child(_tracer_command(tracer, command, report), None,
+                       child_environment(), PROBE_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        try:
+            text = report.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+    return parse_strace_total(text)
+
+
+def probe_strace() -> Optional[float]:
+    """Count a trivial command's syscalls, or None if strace cannot.
+
+    Returns None — never zero, never a guess — when strace is missing, cannot
+    be executed, times out, or produces a report with no usable total.
+    """
+    tracer = shutil.which("strace")
+    if not tracer:
+        return None
+    return _read_traced_count(tracer, PROBE_COMMAND)
+
+
+def choose_metric(forced: Optional[str] = None) -> str:
+    """The instrument for this job, from the env var or from a real probe.
+
+    `forced` is the workflow's one-probe-per-job answer; it is honoured
+    verbatim, so every call site in a job measures the same quantity. Without
+    it the preference order applies, and the probe is a real measurement
+    rather than a check that a binary exists.
+    """
+    if forced is None:
+        forced = os.environ.get(METRIC_ENV) or None
+    if forced:
+        if forced not in METRICS:
+            raise CounterError(
+                f"{METRIC_ENV}={forced!r} is not one of "
+                + ", ".join(METRICS) + "; refusing to measure under a name "
+                "this file does not define")
+        return forced
+    return STRACE_METRIC if probe_strace() is not None else CPU_METRIC
+
+
+def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
+            metric: Optional[str] = None) -> Measurement:
+    """Run one command and return its counter, metric and wall together.
+
+    Raises CounterError when the instrument cannot produce a number at all,
+    subprocess.TimeoutExpired on a timeout, and OSError when the command
+    cannot be started — the same trio the caller already handles for a plain
+    `subprocess.run`, so nothing downstream grows a new failure path.
+    """
+    chosen = choose_metric(metric)
+    if chosen == STRACE_METRIC:
+        return _measure_traced(command, cwd, env, timeout)
+    code, out, err, wall, cpu = _run_child(
+        list(command), cwd, child_environment(env), timeout)
+    return Measurement(cpu, chosen, wall, out, err, code)
+
+
+def _measure_traced(command, cwd, env, timeout) -> Measurement:
+    """The syscall instrument: strace in front, its summary behind us."""
+    tracer = shutil.which("strace")
+    if not tracer:  # pragma: no cover - the probe already ran it
+        raise CounterError("strace disappeared between the probe and the run")
+    with tempfile.TemporaryDirectory(prefix="ghw-counter-strace-") as work:
+        wrapped = _tracer_command(tracer, list(command),
+                                  Path(work) / REPORT_NAME)
+        code, out, err, wall, _cpu = _run_child(
+            wrapped, cwd, child_environment(env), timeout)
+        value = _parse_traced(work)
+    return Measurement(value, STRACE_METRIC, wall, out, err, code)
+
+
+def _parse_traced(directory: str) -> float:
+    """The total call count out of a run's strace report, or raise.
+
+    Raising here is deliberate. The instrument was chosen, the child ran, and
+    the report is unreadable or has no total: recording anything else would
+    put a number in the baseline that no later run can reproduce. That is a
+    failure to measure, and it is reported as one.
+    """
+    path = Path(directory) / REPORT_NAME
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise CounterError(f"the strace report is unreadable: {exc}") from exc
+    value = parse_strace_total(text)
+    if value is None:
+        raise CounterError(
+            "strace ran but reported no usable total syscall count, so "
+            f"nothing was measured:\n{text.strip()}")
+    return value
+
+
+def population_digest(node_ids) -> str:
+    """A stable digest of a test population: sha256 over the sorted ids.
+
+    Sorted first, so the digest describes the SET of node ids and not the
+    order a collector happened to walk them in. Newline-joined and
+    newline-terminated, so an id containing a newline cannot be made to
+    collide with a different pair of ids.
+    """
+    joined = "\n".join(sorted(node_ids)) + "\n"
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _node_parts(node_id: str):
+    """Split `class::name` the way the comparator reconstructs it."""
+    classname, separator, name = node_id.partition("::")
+    if not separator or not classname or not name:
+        raise CounterError(
+            f"--name {node_id!r} is not a `class::name` node id; the "
+            "comparator rebuilds it from those two halves")
+    return classname, name
+
+
+def write_junit(path: Path, node_id: str, measurement: Measurement,
+                command=None) -> None:
+    """One testcase whose `time` is the COUNTER, not seconds. Read the module
+    docstring before believing the attribute.
+
+    A non-zero exit is recorded as a JUnit failure, which is what makes a
+    failed run fall out of the comparator's intersection instead of being
+    compared as though it had succeeded.
+    """
+    classname, name = _node_parts(node_id)
+    suite = ET.Element("testsuite", {
+        "name": "counter",
+        "tests": "1",
+        "failures": "1" if measurement.returncode else "0",
+        "errors": "0",
+        "skipped": "0",
+        # NOT SECONDS. See the module docstring.
+        "time": f"{measurement.value:.6f}",
+        "gh-metric": measurement.metric,
+    })
+    case = ET.SubElement(suite, "testcase", {
+        "classname": classname,
+        "name": name,
+        "time": f"{measurement.value:.6f}",
+        "gh-wall": f"{measurement.wall:.6f}",
+    })
+    if measurement.returncode:
+        failure = ET.SubElement(case, "failure", {
+            "message": f"command exited with code {measurement.returncode}",
+            "type": "CommandFailure",
+        })
+        failure.text = (f"command: {' '.join(command) if command else '?'}\n"
+                        f"stdout:\n{measurement.stdout}\n"
+                        f"stderr:\n{measurement.stderr}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _probe_lines() -> list:
+    """The `key=value` lines the workflow's probe step writes to $GITHUB_OUTPUT."""
+    tracer = shutil.which("strace")
+    counted = probe_strace()
+    metric = STRACE_METRIC if counted is not None else CPU_METRIC
+    if counted is not None:
+        why = (f"strace counted {int(counted)} syscalls for a trivial command "
+               "(the call count is the deterministic part of its report; its "
+               "own timing columns are not)")
+    else:
+        why = (f"strace could not produce a positive syscall total for a "
+               f"trivial command (strace on PATH: "
+               f"{'yes' if tracer else 'no'}, ptrace_scope: "
+               f"{_setting(PTRACE_SCOPE_PATH)})")
+    return [
+        f"metric={metric}",
+        f"metric_reason={why}",
+        f"perf_event_paranoid={_setting(PARANOID_PATH)}",
+        f"ptrace_scope={_setting(PTRACE_SCOPE_PATH)}",
+    ]
+
+
+def _setting(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip() or "unreadable"
+
+
+def main(argv: Optional[list] = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--probe", action="store_true",
+                        help="print `metric=` / `metric_reason=` lines for "
+                             "$GITHUB_OUTPUT and exit, without measuring "
+                             "anything")
+    parser.add_argument("--junit-file", type=Path,
+                        help="write a one-testcase JUnit suite here whose "
+                             "time attribute is the COUNTER, not seconds")
+    parser.add_argument("--name", metavar="NODE-ID",
+                        help="node id for the testcase, e.g. "
+                             "counter::unit-suite")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="seconds before the child's process group is "
+                             "killed (default: none)")
+    parser.add_argument("command", nargs=argparse.REMAINDER,
+                        help="-- <command> [args...]")
+    args = parser.parse_args(argv)
+
+    if args.probe:
+        for line in _probe_lines():
+            print(line)
+        return 0
+
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        parser.error("no command given; put it after `--`")
+    if not args.junit_file or not args.name:
+        parser.error("--junit-file and --name are both required")
+
+    try:
+        measurement = measure(command, timeout=args.timeout)
+    except CounterError as exc:
+        print(f"counter: {exc}", file=sys.stderr)
+        return 2
+    except subprocess.TimeoutExpired as exc:
+        print(f"counter: {command[0]} exceeded its timeout", file=sys.stderr)
+        if exc.stdout:
+            sys.stdout.write(_decode(exc.stdout))
+        if exc.stderr:
+            sys.stderr.write(_decode(exc.stderr))
+        return 124
+    except OSError as exc:
+        print(f"counter: could not run {command[0]}: {exc}", file=sys.stderr)
+        return 127
+
+    write_junit(args.junit_file, args.name, measurement, command)
+    if measurement.stdout:
+        sys.stdout.write(measurement.stdout)
+    if measurement.stderr:
+        sys.stderr.write(measurement.stderr)
+    print(f"counter: {args.name} = {measurement.value:.6f} "
+          f"{measurement.metric}")
+    return measurement.returncode
+
+
+def _decode(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -36,6 +36,7 @@
 !/SECURITY.md
 !/VERSION
 !/coverage-floor.json
+!/speed-baseline.json
 !/install.sh
 !/pyrightconfig.json
 !/requirements-dev.txt

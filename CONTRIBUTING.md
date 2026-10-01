@@ -92,11 +92,14 @@ branch, add a case that pins its output; SVG regressions are invisible
 until someone looks at a broken README.
 
 **`unittest discover` is the runner and stays the runner.** pytest appears
-in `requirements-test.txt`, but only as the timing harness `speed.yml`
-uses: it collects these same TestCases unchanged and can emit
-`--junitxml`, which stdlib unittest cannot. Do not write a test against
-pytest fixtures or `assert`-rewriting — it would run in CI and then not
-run for anyone using the documented command.
+in `requirements-test.txt` for one reason: `test_compare_durations.py`
+imports it, and `unittest discover` imports every `test_*.py` module it
+collects, so the suite cannot be collected at all without it. It measures
+nothing and emits no report — `speed.yml` once ran the suite through it as a
+timing harness and no longer does, because the gate now counts syscalls (or
+CPU seconds) instead of elapsed time. Do not write a test against pytest
+fixtures or `assert`-rewriting — it would run in CI and then not run for
+anyone using the documented command.
 
 ## CI
 
@@ -108,7 +111,9 @@ The workflow files in `.github/workflows/` are:
 - `audit.yml` — dependency vulnerability checks.
 - `codeql.yml` — security analysis.
 - `actionlint.yml` — workflow syntax and security checks.
-- `speed.yml` — performance regression checks.
+- `speed.yml` — counts syscalls (or CPU seconds) for the unit suite and for
+  each renderer workload, and compares them against the committed baseline
+  in `speed-baseline.json`, which only ever ratchets down.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
@@ -155,9 +160,11 @@ green on your pull request, and the file-count check fires only after merge, on
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
-only ever run against files touched after it shipped), `speed` (benchmarks
-this commit against the last release *on the same runner*, failing at
->30%), `release` (tags `v<VERSION>` once every gate a `VERSION` push
+only ever run against files touched after it shipped), `speed` (counts the
+work this commit does — syscalls per renderer workload and for the unit
+suite, on pinned offline fixtures — and fails when a committed, down-only
+baseline is exceeded; elapsed time survives only as a gross smoke check
+that reports no number), `release` (tags `v<VERSION>` once every gate a `VERSION` push
 schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
 `aggregate` —
 has both *reported* and passed; a gate that never reports stops the release
