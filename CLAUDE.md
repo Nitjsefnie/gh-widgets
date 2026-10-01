@@ -153,20 +153,28 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > pin** — 4.0.0 is the higher version number and installs cleanly.
 >
 > **Wall time is not a magnitude on this box or on a CI runner.** Both are
-> multi-tenant, with steal time, CPU model and thermal state that are nobody's
-> to fix, so a wall figure moves for reasons that have nothing to do with the
-> code — and paired wall A/B is therefore not a magnitude EVEN WITHIN ONE
-> JOB, which is the case people reach for when they doubt the general claim.
-> How much it moves is measurable and smaller than folklore suggests: across
-> 15 same-day `speed` runs on `main`, same job content, this repo's own cell
-> gave IQR/p50 = 8.4% (p50 107 s, p25 102, p75 111) — routine noise is
-> single-digit. The same workload still spread 5.4%-60% across four
-> measurement windows, so a quiet afternoon is not a characterisation of the
-> cell. Quote instruction counts, syscall counts, CPU time, or statement and
-> file counts instead. **A wall figure that survives in this file is an
-> indicative observation**, labelled as one, and must never be the
-> load-bearing evidence for a decision. The memory tables below need no such
-> hedge: cgroup and RSS peaks are load-invariant sizing, not wall.
+> multi-tenant, with steal time, CPU model and thermal state nobody owns, so
+> a wall figure moves for reasons unrelated to the code — and paired wall A/B
+> is not a magnitude EVEN WITHIN ONE JOB, which is the case people reach for
+> when they doubt the general claim. Quote a load-invariant quantity
+> instead: CPU time, statement and file counts, output bytes. (Instruction and
+> syscall counts are the obvious first choice and are NOT available here —
+> `perf_event_paranoid: 4` refuses the first, and counting the second costs
+> 12.8× the work it measures. `CONTRIBUTING.md` records that.) **A wall
+> figure that survives in this file is an indicative observation**, labelled
+> as one, and must never be the load-bearing evidence for a decision. The
+> memory tables below need no hedge: cgroup and RSS peaks are sizing, not
+> wall.
+>
+> **This file does not have a distribution for the cell's wall noise, and
+> that is a fact rather than a gap.** The run history groups by date rather
+> than by the commit each run measured, and 42 commits across those runs touch
+> the measured modules, so a same-content spread cannot be read off it; the
+> only same-commit groups left are n=3 and n=4, and a range built from
+> samples of three and four is an observation, not a distribution. What IS
+> measured, per entry per window, is 5.1%-50.0% of CPU seconds, and
+> 45.8%-55.4% across the unioned envelopes. Read that as the size of the
+> effect, not as its shape.
 >
 > `perf-blame` is `parallel-blame` plus `--incremental` blame parsing: the
 > parse only ever consumed chunk headers, while `--line-porcelain` re-emits
@@ -241,7 +249,8 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > repo count, so it grows as that repo does.
 >
 > **Re-measured 2026-09-30 against the CURRENT pin (`65925d8`, perf-blame):
-> the fork now wins on peak memory by roughly 2×, and on wall time too.**
+> the fork now wins on cgroup peak memory by roughly 2×, and on wall time
+> too.**
 > The memory half is the load-bearing one and is what the pin rests on; the
 > wall half is an indicative observation, and the 2026-08-10 wall result
 > above is the reminder that a wall reading on this cell is not a magnitude
@@ -254,13 +263,14 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > | upstream 4.0.0 | 1209.9 / 1215.1 MB | 2166.9 / 1683.3 MB | 365.8 / 374.6 s |
 >
 > The blame-phase figures in those runs — 155 s against 282 s — are wall
-> observations like every other here, and an earlier run the same day
-> (`36714006796`) had upstream about 6% faster still, in the same direction
-> reversed: on a cell this variable, two runs of the same build can order
-> either way, which is exactly why the pin is decided on memory. That run's
-> fork arm was still
-> the older `a99855d3`; the measurement workflows now install the documented
-> pin, and `test_ci_workflows.py` fails if they drift from it again. The
+> observations like every other here. The run that would settle the direction
+> is not evidence and must not be read as one: `36714006796`, earlier the
+> same day, had upstream about 6% FASTER, and its fork arm was still the
+> older `a99855d3`, so it compared a different build against the current one.
+> That is why the pin is decided on memory, where both arms are the same
+> build and the comparison is like-for-like. The measurement workflows now
+> install the documented pin, and `test_ci_workflows.py` fails if they
+> drift from it again. The
 > fork's `git fame` process never enters the sampler's top-12 list, so that
 > column reads 0 for it: it is below every listed process, not unmeasured.
 >
@@ -373,10 +383,10 @@ everything, so it takes far longer than an incremental run.
 >
 > **Depth 8 read as a memory regression, but read the two instruments before
 > believing that.** Its cgroup peak went 554.6MB -> 769.3MB against the
-> 624.6MB baseline, while the sampler's RSS sum only moves 221MB -> 327MB,
-> far under the 894MB
-> baseline on that same instrument. (Depth 8's wall, 101.6s -> 79.3s, is an
-> indicative observation and is not part of this argument either way.)
+> 624.6MB baseline, while the sampler's RSS sum only moves 221MB -> 327MB —
+> far under the 894MB baseline on that same instrument. (Depth 8's wall,
+> 101.6s -> 79.3s, is an indicative observation and is not part of this
+> argument either way.)
 > cgroup `memory.peak` **counts page cache**,
 > and eight concurrent clones write much more file data, so most of that
 > "regression" is reclaimable cache rather than process memory. Capping
