@@ -31,6 +31,7 @@ def load_module(name, path):
 
 fixture_setup = load_module("bench_fixture_setup", BENCH_DIR / "fixture_setup.py")
 e2e_bench = load_module("bench_e2e_bench", BENCH_DIR / "e2e_bench.py")
+from bench_platform import REQUIRES_BENCH  # noqa: E402
 render_impact = load_module("bench_render_impact",
                             REPO_ROOT / "render-impact.py")
 
@@ -256,6 +257,10 @@ class TestCloneSourceMirror(unittest.TestCase):
 
 
 class TestHarness(unittest.TestCase):
+    # Every case below drives e2e_bench.py, which measures through
+    # scripts/ci/counter.py; see bench_platform for why that is one
+    # decision in one place rather than a guard per file.
+    @REQUIRES_BENCH
     @classmethod
     def setUpClass(cls):
         cls.root = class_temp_path(cls, "ghw-bench-harness-")

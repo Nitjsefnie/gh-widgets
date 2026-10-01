@@ -235,6 +235,27 @@ def _kill_process_group(process) -> None:
         pass
 
 
+def bench_is_runnable() -> bool:
+    """Whether this platform can run the bench harness AT ALL.
+
+    The single answer, kept next to the refusal rather than restated per test
+    file. Three Windows rounds failed on the same cause — the harness
+    refusing to measure and every assertion downstream reporting the refusal
+    wearing a costume — because each round guarded the files that happened to
+    be in the log. A test written tomorrow must INHERIT this answer, not
+    rediscover it on a runner.
+
+    It is deliberately narrow. It says nothing about whether the gate is
+    armed, whether a baseline is present, or whether anything is correct: it
+    answers one question, and a test asserting it is TRUE wherever the
+    harness can run is what stops it becoming a way to make CI green.
+    """
+    return resource is not None
+
+
+BENCH_RUNNABLE = bench_is_runnable()
+
+
 def _child_cpu_seconds() -> float:
     """CPU seconds this process has spent in children it has already reaped.
 
