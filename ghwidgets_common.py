@@ -471,9 +471,8 @@ class CacheFallback(namedtuple("CacheFallback", "fetched_at phase error")):
     def message(self):
         """The exception rendered as a single line: a GraphQL error carries a
         JSON body and can span several, and this is a journal summary."""
-        # Collapsed to one line, and stripped of the control characters a
-        # terminal would act on: this is the first place these renderers put
-        # server-supplied text into a journal line.
+        # One line, and without the control characters a terminal acts on:
+        # this is the first server-supplied text to reach a journal line.
         text = " ".join(_XML_FORBIDDEN.sub("", str(self.error)).split())
         return text or type(self.error).__name__
 
@@ -489,31 +488,27 @@ _LAST_ACQUISITION = {"phase": None}
 def acquisition(phase):
     """Label whatever is raised inside with the acquisition it failed in.
 
-    On success the previous label is restored; on failure the label STAYS, so
+    On success the previous label is restored. On failure the label STAYS, so
     the caller reading it once the exception has propagated names the right
-    acquisition. The exception itself is deliberately not wrapped or
-    annotated: its type is what each main()'s handlers dispatch on (an
-    HTTPError from gql must still reach the HTTP branch), and the line the
-    operator reads gets the cause text unchanged.
-
-    ``phase`` is the name the renderer calls that acquisition by, so it is
-    greppable.
+    acquisition: an exception raised at the `yield` leaves the generator
+    without running the line below. The exception itself is neither wrapped
+    nor annotated — its type is what each main()'s handlers dispatch on (an
+    HTTPError from gql must still reach the HTTP branch).
     """
     previous = _LAST_ACQUISITION["phase"]
     _LAST_ACQUISITION["phase"] = phase
-    try:
-        yield
-    except BaseException:
-        raise  # label kept: this acquisition is the one that failed
+    yield
+    # Reached only when the body completed; a failure leaves the label set.
     _LAST_ACQUISITION["phase"] = previous
 
 
 def take_last_acquisition():
     """The acquisition that failed, or None — and clear the label.
 
-    Consumed rather than read: a run that falls back is about to render and
-    exit, and a label left set would name the wrong acquisition to whatever
-    else runs later in the same process.
+    Consumed rather than read, and on BOTH exits of a failed acquisition: a
+    run that falls back is about to exit, and one that propagates has no line
+    to put the name in. Either way a leftover would name this run's
+    acquisition to the next one in the same process.
     """
     phase = _LAST_ACQUISITION["phase"]
     _LAST_ACQUISITION["phase"] = None

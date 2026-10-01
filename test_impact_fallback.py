@@ -60,6 +60,21 @@ def fake_gql(token, query, variables=None, **kwargs):
     return {"user": {"issues": {**EMPTY_PAGE, "nodes": []}}}
 
 
+# A PR node missing the fields `is_external` indexes, so fetch_all raises on
+# `repos = sorted(...)` — a statement that sits OUTSIDE all five acquisition
+# blocks, and therefore has no label of its own.
+MALFORMED_PR = {"id": "P1", "merged": True,
+                "repository": {"nameWithOwner": "someone/theirs"}}
+
+
+def malformed_gql(token, query, variables=None, **kwargs):
+    """fake_gql, but the PR page carries a node is_external() cannot read."""
+    if "pullRequests" in query:
+        return {"user": {"pullRequests": {**EMPTY_PAGE,
+                                          "nodes": [MALFORMED_PR]}}}
+    return fake_gql(token, query, variables, **kwargs)
+
+
 class TestDurabilityFallback(unittest.TestCase):
     """A failed acquisition renders from the cache and says which one failed."""
 
@@ -71,19 +86,21 @@ class TestDurabilityFallback(unittest.TestCase):
                 "insiders": ["me"],
                 "prs": {}, "issues": [], "totals": {}, "ourloc": {}}
 
-    def run_main(self, *patchers):
-        """main() with `patchers` in place against a complete cache. Returns
-        (everything main printed, the output directory, the cache file)."""
+    def run_main(self, *patchers, gql=None, cache=True):
+        """main() with `patchers` in place. `cache` False means no cache file
+        at all, which is the incomplete-cache path. Returns (everything main
+        printed, the output directory, the cache file)."""
         td = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, td)
         cache_file = Path(td) / "impact-cache.json"
-        cache_file.write_text(json.dumps(self.snapshot()))
+        if cache:
+            cache_file.write_text(json.dumps(self.snapshot()))
         out = Path(td) / "out"
         argv = ["render-impact.py", "--user", "me", "--token", "t",
                 "--out-dir", str(out), "--cache-file", str(cache_file)]
         buf = io.StringIO()
         with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(render_impact, "gql", fake_gql), \
+                mock.patch.object(render_impact, "gql", gql or fake_gql), \
                 redirect_stdout(buf), \
                 contextlib.ExitStack() as stack:
             for patcher in patchers:
@@ -140,6 +157,20 @@ class TestDurabilityFallback(unittest.TestCase):
                 phase, RuntimeError("GraphQL errors: SERVICE_UNAVAILABLE")))
             lines.add(self.fallback_line(text).split("; rendered")[0])
         self.assertEqual(len(lines), len(INNER_ACQUISITIONS))
+
+    def test_a_leftover_label_does_not_name_the_next_run(self):
+        # Two runs in one process, which no single-run control can see. Run 1
+        # fails inside an acquisition with NO cache, so it re-raises and
+        # nothing consumes the label. Run 2's acquisitions all succeed and the
+        # failure lands on a statement outside every one of them — the honest
+        # name is the entry point, and a leftover from run 1 would suppress
+        # exactly that.
+        with self.assertRaises(RuntimeError):
+            self.run_main(self.broken("fetch_issues", self.BOOM), cache=False)
+        text, _out, _cache = self.run_main(gql=malformed_gql)
+        line = self.fallback_line(text)
+        self.assertIn("fetch_all", line)
+        self.assertNotIn("fetch_issues", line)
 
     def test_the_fallback_run_does_not_write_the_cache(self):
         # The cache is the only data left on this path; writing a

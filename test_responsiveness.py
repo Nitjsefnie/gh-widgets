@@ -640,13 +640,15 @@ class DegradedPath(unittest.TestCase):
         self.assertEqual(len(matched), 1)
         return matched[0]
 
-    def degraded_run(self, *patchers, error=None):
+    def degraded_run(self, *patchers, error=None, cache=True):
         """A complete cache, then main() with `patchers` (and an optional
-        error for the whole fetch) in place. Returns all of stdout."""
+        error for the whole fetch) in place. `cache` False means no cache file
+        at all, which is the path that propagates. Returns all of stdout."""
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "impact-cache.json"
-            cache_file.write_text(json.dumps(
-                full_cache(prs("someone/theirs", [1.0] * 3))))
+            if cache:
+                cache_file.write_text(json.dumps(
+                    full_cache(prs("someone/theirs", [1.0] * 3))))
             out = Path(td) / "out"
             argv = ["render-responsiveness.py", "--user", "me", "--token", "t",
                     "--out-dir", str(out), "--theme", "tokyonight",
@@ -676,6 +678,21 @@ class DegradedPath(unittest.TestCase):
             resp, "fetch_prs", side_effect=self.BOOM)))
         self.assertIn("fetch_prs", line)
         self.assertIn("SERVICE_UNAVAILABLE", line)
+
+    def test_a_leftover_label_does_not_name_the_next_run(self):
+        # Two runs in one process, which no single-run control can see. Run 1
+        # fails inside an acquisition with no cache, so it propagates and
+        # nothing consumes the label. Run 2's failure is outside both
+        # acquisitions entirely — the honest name is the entry point, and a
+        # leftover from run 1 would suppress exactly that.
+        with self.assertRaises(RuntimeError):
+            self.degraded_run(mock.patch.object(
+                resp.common, "fetch_identity", side_effect=self.BOOM),
+                cache=False)
+        line = self.fallback_line(self.degraded_run(mock.patch.object(
+            resp, "fetch_prs", side_effect=self.BOOM)))
+        self.assertIn("fetch_prs", line)
+        self.assertNotIn("fetch_identity", line)
 
     def test_each_inner_acquisition_is_named_in_its_own_line(self):
         # fetch_prs is two acquisitions, not one: naming only the entry point

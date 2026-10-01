@@ -548,6 +548,8 @@ def load_inputs(args, token):
         # there is.
         cached = read_impact_cache(args.cache_file, args.user)
         if cached is None:
+            # Nothing here will carry the name, so drop the label.
+            common.take_last_acquisition()
             raise
         prs, insiders, stale = cached
         # fetch_prs is two acquisitions; the label the failing one left behind
