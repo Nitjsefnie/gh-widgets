@@ -39,8 +39,8 @@ baseline = load_baseline()
 
 
 def load_comparator():
-    """`compare_durations` by path — scripts/ci is not a package."""
-    path = REPO_ROOT / "scripts" / "ci" / "compare_durations.py"
+    """`compare_counters` by path — scripts/ci is not a package."""
+    path = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
     spec = importlib.util.spec_from_file_location("ghw_comparator_test", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path}")
@@ -427,7 +427,7 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
             loaded["populations"]["unit-suite"]["population"],
             "speed-baseline.json's unit-suite digest describes a population "
             "this tree no longer collects — re-derive it with "
-            "`compare_durations.py --print-population .` and "
+            "`compare_counters.py --print-population .` and "
             "`counter.population_digest(...)`")
 
     def test_the_committed_workload_digest_matches_the_harness(self):
@@ -493,7 +493,7 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         protection it did not have, which is the same defect three times in
         this branch.
 
-        So the factor comes from `compare_durations.SMOKE_FACTOR` — the same
+        So the factor comes from `compare_counters.SMOKE_FACTOR` — the same
         object `smoke_failures` defaults to — and the assertion is that every
         ceiling leaves headroom over the worst wall the cell recorded.
         """

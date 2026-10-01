@@ -95,7 +95,7 @@ until someone looks at a broken README.
 nothing left to do here. It was `speed.yml`'s timing harness, collecting
 these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
 that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
-own JUnit. It was also imported by `test_compare_durations.py`, which
+own JUnit. It was also imported by `test_compare_counters.py`, which
 `unittest discover` had to be able to import in order to collect the suite;
 that file is now stdlib unittest like everything else. `requirements-test.txt`
 still pins it so a local `pytest` run of the same file works, and nothing in

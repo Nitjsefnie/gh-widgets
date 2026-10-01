@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The committed counter baseline: its shape, and the envelope inside it.
 
-Split out of compare_durations.py because it is a separate question. That
+Split out of compare_counters.py because it is a separate question. That
 file answers "did this commit get more expensive than the baseline?"; this
 one answers "what IS the baseline, and is this document one we are willing
 to judge against?". Both change when the baseline changes, and they do not

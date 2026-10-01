@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Compare a counter against the committed baseline, per test and per workload.
 
-THE NAME IS HISTORICAL. `compare_durations` compared wall-clock durations; it
-now compares COUNTERS — CPU seconds, which exclude steal time and are
-therefore the first quantity runner load cannot move. The filename is kept
-because it is on every command line and in another test module's import, and
-renaming it would break that seat's work mid-flight. A rename to
-`compare_counters.py` is owed.
+THE NAME STATES ITS JOB. `compare_counters` compares CPU-second counters
+against the committed baseline. CPU seconds exclude steal time and are
+therefore the first quantity runner load cannot move.
 
 WHY NOT WALL TIME. A GitHub-hosted runner is a multi-tenant VM: steal time, a
 neighbour, a different core and a different CPU model all move an elapsed
@@ -56,7 +53,7 @@ EXIT CODES. 0 within budget, 1 over budget, 2 could not compare at all.
 Deliberately different: a workflow that reports a restructured suite as a
 performance regression teaches people to read the red as noise.
 
-    compare_durations.py --baseline speed-baseline.json --population unit-suite \
+    compare_counters.py --baseline speed-baseline.json --population unit-suite \
                          --head head1.xml head2.xml \
                          --require-test e2e::bench.render
 """

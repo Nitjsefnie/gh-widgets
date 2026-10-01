@@ -30,7 +30,7 @@ WORKLOADS = (
 )
 DEAD_PROXY = "http://127.0.0.1:9"
 # The JUnit classname, and therefore the first half of every node id this
-# harness emits. compare_durations.py reconstructs it from the classname and
+# harness emits. compare_counters.py reconstructs it from the classname and
 # the testcase name, so the two must agree; the speed workflow asks this
 # module for its workload list by --list-workloads rather than hard-coding
 # names, which is only safe because they come from here.

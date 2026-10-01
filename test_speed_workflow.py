@@ -136,7 +136,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     unit_metric=UNIT_METRIC):
         """The tree speed.yml's Compare step expects, entirely synthetic."""
         head = root / "head"
-        for relative in ("scripts/ci/compare_durations.py",
+        for relative in ("scripts/ci/compare_counters.py",
                          "scripts/ci/counter.py",
                          "scripts/ci/baseline.py",
                          "scripts/bench/e2e_bench.py"):
@@ -203,7 +203,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                      ["config", "user.name", "bench"]):
             subprocess.run(git + args, check=True)
         subprocess.run(git + ["add", "speed-baseline.json",
-                              "scripts/ci/compare_durations.py",
+                              "scripts/ci/compare_counters.py",
                               "scripts/ci/counter.py",
                               "scripts/ci/baseline.py",
                               "scripts/bench/e2e_bench.py"], check=True)
@@ -454,7 +454,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_the_baseline_ratchet_refuses_a_raised_entry_and_allows_a_lower(self):
         root = self._temp_root("ghw-speed-ratchet-")
         self._write_tree(root, baseline=True)
-        comparator = root / "head" / "scripts" / "ci" / "compare_durations.py"
+        comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
         target = root / "head" / "speed-baseline.json"
 
         def run(old_render_entries):

@@ -208,7 +208,7 @@ name: speed
 # installed pytest as a timing harness; it is the end state. The harness went
 # when the counter took over, and the install outlived it only because
 # `unittest discover` imports every test_*.py module it collects and
-# test_compare_durations.py still imported pytest at module level. That file
+# test_compare_counters.py still imported pytest at module level. That file
 # is now stdlib unittest like everything else, so both reasons are gone. The
 # measurement below runs on a bare interpreter, which is also why the
 # suite's own coverage and lint toolchain cannot be in this job's path.
@@ -293,7 +293,7 @@ jobs:
       # the standard library. It used to install pytest as a timing harness,
       # and then kept the install after the harness went because
       # `unittest discover` imports every test module it collects and
-      # test_compare_durations.py imported pytest at module level. Both
+      # test_compare_counters.py imported pytest at module level. Both
       # reasons are gone — the counter writes the JUnit itself, and that
       # test file is now stdlib unittest like everything else — so the
       # measurement runs on a bare interpreter.
@@ -384,7 +384,7 @@ jobs:
         working-directory: head
         run: |
           mkdir -p "$REPORTS"
-          python3 scripts/ci/compare_durations.py \
+          python3 scripts/ci/compare_counters.py \
             --print-population . > "$REPORTS/unit-population.txt"
           wc -l "$REPORTS/unit-population.txt"
 
@@ -460,7 +460,7 @@ jobs:
           # comparison stays permissive — but the population digest above
           # still has to match, or the two sides were not asked the same
           # question.
-          if python3 scripts/ci/compare_durations.py \
+          if python3 scripts/ci/compare_counters.py \
             --baseline "$BASELINE" \
             --population unit-suite \
             --head "$REPORTS/unit-1.xml" "$REPORTS/unit-2.xml" \
@@ -554,7 +554,7 @@ jobs:
           printf '%s\n' "$listing" > "$REPORTS/renderer-population.txt"
 
           # shellcheck disable=SC2046
-          if python3 scripts/ci/compare_durations.py \
+          if python3 scripts/ci/compare_counters.py \
             --baseline "$BASELINE" \
             --population renderer-workloads \
             --head $(ls "$REPORTS"/bench-head-*.xml) \
@@ -672,7 +672,7 @@ jobs:
             echo "Declared workload removals: ${removals[*]}"
           fi
 
-          python3 scripts/ci/compare_durations.py \
+          python3 scripts/ci/compare_counters.py \
             --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
             "${removals[@]}"
 
