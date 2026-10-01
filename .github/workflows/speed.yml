@@ -74,14 +74,12 @@ name: speed
 # recorded maximum, so an improvement lowers the ceiling and a regression has
 # to clear the worst machine actually seen.
 #
-# WHY AN ENVELOPE, AND WHAT ITS TOLERANCE SPANS. CPU seconds exclude steal,
-# so a co-tenant does not reach them — that is what makes them a magnitude
-# where elapsed time is not. They are still hardware-dependent: a faster or
-# narrower core runs the same instructions in fewer CPU seconds, and the pool
-# spans instance types. THREE windows on this cell, and the RENDERER WORKLOADS
-# SHIP IDENTICAL CODE AT ALL THREE COMMITS — the rounds between them touched
-# the workflow, the tests, the comparator and the baseline document, never a
-# renderer:
+# WHY AN ENVELOPE, AND WHY THE TOLERANCES ARE THIS WIDE. CPU seconds exclude
+# steal, so a co-tenant does not reach them — that is what makes them a
+# magnitude where elapsed time is not. They are still hardware-dependent: a
+# faster or narrower core runs the same instructions in fewer CPU seconds,
+# and the pool spans instance types. THREE windows on this cell, and the
+# renderer workloads ship IDENTICAL CODE AT ALL THREE COMMITS:
 #
 #   window 1  07:46-07:56Z  at 3c30eca  4 runs
 #   window 2  10:15-10:24Z  at 4c003c6  4 runs
@@ -95,40 +93,37 @@ name: speed
 #
 # THE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the
 # state of the pool during the window: window 1 contains one clearly fast
-# machine and several slow ones, windows 2 and 3 look like a quiet pool. So
-# the renderer envelopes are the UNION of all thirteen observations per entry,
-# because the busy window is the only evidence a fast machine exists. An
-# envelope built from a quiet window false-reds the first time the pool is
-# busy, and a false red on main trains people to ignore the gate, which is
-# the whole failure this change exists to remove. DO NOT SHRINK A TOLERANCE
-# BECAUSE THE LAST RUNS WERE QUIET, and do not read a quiet window as the
-# cell's characteristic spread.
+# machine and several slow ones, windows 2 and 3 look like a quiet pool.
+# That is why the envelopes are unions of every run and not the last
+# window's figures. DO NOT SHRINK A TOLERANCE BECAUSE THE LAST RUNS WERE
+# QUIET.
 #
-# THE UNIT SUITE IS DIFFERENT, AND THE ASYMMETRY IS THE POINT. Only window 3
-# ran a tree whose suite matches this one's, and its observed spread is 12.5%
-# — recorded, and NOT the tolerance. The same cell measured a suite of this
-# scale at 39.8% in window 1, so 12.5% is what this workload looks like when
-# the pool is quiet, not what it always looks like. A tolerance derived from it
-# would false-red the next busy run on main. The tolerance stays 0.40; the
-# renderer population takes its widest entry, 0.60.
+# THE WIDTH IS A STRUCTURAL ARGUMENT, NOT AN EMPIRICAL ONE. This gate compares
+# a per-run MINIMUM against a recorded MAXIMUM, so its false-red risk comes
+# from the head landing HIGH. Folding the observed spread in as one fraction
+# covers the LOW tail too, which this gate cannot be hurt by. The rule is
+# therefore conservative by construction: it measures in one direction and
+# protects in the other, and that is the right side to err on for a gate
+# whose failure mode is a red on main that teaches people to ignore it.
 #
-# WHY THE TOLERANCE IS THE OBSERVED SPREAD. The gate compares a per-run
-# MINIMUM against a recorded MAXIMUM, so the machine's whole observed range
-# is conceded for free and the tolerance only has to cover a head landing on
-# a machine worse than any yet seen — one more spread-width.
+# What the data does NOT support, and this header previously claimed, is
+# that 0.40 stops the suite false-reding on a busy run. Window 1's 39.8% for
+# the suite is a LOW-tail artefact — one run at 16.6 against a body of
+# 22.2-23.2 — so it is one fast machine, not a busy pool. The wide
+# tolerance stays for the structural reason above, not for that one.
 #
-# WHAT THAT COSTS, STATED RATHER THAN ASSUMED. At these tolerances a DOUBLED
-# workload is caught on the unit suite and on NONE of the three renderer
-# workloads: doubling the fastest machine observed lands under all three
-# ceilings. Tightening any of them to catch its doubling means going below its
-# own observed spread, which fires on ordinary pool variation. A gate that
-# cries wolf is deader than one with a documented blind spot, so bench.render
-# is NOT tuned and neither are its siblings. The gate catches a gross step
-# change and the gross wall smoke bound; it will not catch a 20% regression
-# anywhere. Read "load-invariant counter" as "a quantity the machine's load
-# does not reach", not as "a sharp budget". No ceiling is written down here:
-# test_baseline.py computes every one from the document, and pins both halves
-# of this claim, because a transcribed copy was wrong twice.
+# WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
+# on the unit suite and on NONE of the three renderer workloads: doubling
+# the fastest machine observed lands under all three ceilings. Tightening
+# any of them to catch its doubling means going below its own observed
+# spread — a ceiling the fastest machine already clears, which would fire on
+# ordinary pool variation. A gate that cries wolf is deader than one with a
+# documented blind spot, so bench.render is NOT tuned and neither are its
+# siblings. The gate catches a gross step change and the gross wall smoke
+# bound; it will not catch a 20% regression anywhere. Read "load-invariant
+# counter" as "a quantity the machine's load does not reach", not as "a sharp
+# budget". No ceiling is written here: test_baseline.py recomputes every one,
+# CPU and wall, from the document.
 #
 # ROUNDS stays 2, and for two reasons that are not the same reason.
 # --selfcheck compares SVG bytes across head rounds and needs at least two,
@@ -136,11 +131,13 @@ name: speed
 # instrument could have weakened it. Separately, the minimum across rounds is
 # the least-noisy observation of the same work.
 #
-# THE COMMITTED BASELINE DESCRIBES ONE HEAD. It records measured_commit
-# 94e8a78, the remote head five dispatches ran against, and its `population`
-# digest is that tree's 780 collected node ids, computed by collecting them
-# rather than copied from anywhere. Entries, wall and population therefore all
-# describe one head.
+# THE COMMITTED BASELINE RECORDS MEASURED_COMMIT 94e8a78, the head its five
+# dispatches ran against, and its `population` digest is computed from the
+# node ids THIS tree collects. The renderer envelopes describe this tree
+# exactly — WORKLOADS and every renderer are unchanged since. The unit
+# envelope does not, because commits since added the controls that govern
+# this document, so it is an estimate until the next dispatch re-derives it.
+# The gap is in the baseline's `basis` in those words, not here.
 #
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and
@@ -637,17 +634,24 @@ jobs:
           # Only the renderer population is eligible. The unit suite is
           # governed by its population digest instead, and no listing here
           # can vouch for it.
+          #
+          # `grep -qxF`, not a glob. `e2e::bench.render` is a PREFIX of
+          # `e2e::bench.render-impact` and of `e2e::bench.render-responsiveness`,
+          # so `case "$listing" in *"$node"*)` found a retired bench.render
+          # still "present" and left it undeclared — which left one of the
+          # three workloads with no green route to retirement, the whole way a
+          # second review after N3 was fixed. `-x` matches whole lines and
+          # `-F` treats the pattern as text, so only the exact id counts.
           listing="$(python3 scripts/bench/e2e_bench.py --list-workloads)"
           removals=()
           for node in $(python3 -c 'import json,sys; \
               print(" ".join(json.load(open(sys.argv[1]))["populations"] \
               ["renderer-workloads"]["entries"]))' \
               "$RUNNER_TEMP/base-baseline.json"); do
-            case "$listing" in
-              *"$node"*) ;;
-              *) removals+=(--ratchet-allow-removal \
-                            "renderer-workloads:entries:$node") ;;
-            esac
+            if ! printf '%s\n' "$listing" | grep -qxF "$node"; then
+              removals+=(--ratchet-allow-removal \
+                         "renderer-workloads:entries:$node")
+            fi
           done
           if [ "${#removals[@]}" -ne 0 ]; then
             echo "Declared workload removals: ${removals[*]}"

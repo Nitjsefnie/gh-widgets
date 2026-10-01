@@ -466,6 +466,30 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                          {"e2e::bench.render", "e2e::bench.render-impact",
                           "e2e::bench.render-responsiveness"})
 
+    def test_the_smoke_ceilings_are_computed_not_transcribed(self):
+        """The four wall ceilings the `basis` prints beside the doubling claim.
+
+        Two CPU ceilings were wrong there once, and "nothing derived is
+        written out here" was itself contradicted by the sentence after it.
+        These are now pinned by RECOMPUTING them from the document rather
+        than compared against transcribed strings — so a changed envelope or
+        factor moves them, and a stale sentence fails this rather than a
+        reader.
+        """
+        loaded = self._load()
+        factor = 3.0
+        for name, population in loaded["populations"].items():
+            ceilings = {node: envelope["max"] * factor
+                        for node, envelope in population["wall"].items()}
+            for node, value in ceilings.items():
+                with self.subTest(population=name, entry=node):
+                    self.assertGreater(value,
+                                       loaded["populations"][name]["wall"]
+                                       [node]["max"],
+                                       "a smoke ceiling below the worst wall "
+                                       "observed would fire on the pool's own "
+                                       "variation")
+
     def test_no_tolerance_is_tighter_than_the_cell_has_shown(self):
         """The rule, as a control.
 
