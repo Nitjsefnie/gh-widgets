@@ -164,7 +164,107 @@ def monthly_windows(now):
     return list(zip(bounds, bounds[1:]))
 
 
-def fetch(token, login, cached_days=None):
+# The account's own profile: who it is, how many followers, and every org
+# it belongs to. `pageInfo` is requested so the membership can be walked to
+# its end — the first 100 memberships are not all of them, and an org left
+# out of this list classifies the account's own work in that org as external.
+ORG_QUERY = """
+query($login: String!, $cursor: String) {
+  user(login: $login) {
+    login
+    name
+    followers { totalCount }
+    organizations(first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { login }
+    }
+  }
+}
+"""
+
+# The repos×languages half, paged for the same reason. The filters are
+# unchanged and load-bearing: owned-only, non-fork, public — they keep
+# private repository names out of a public SVG.
+REPO_QUERY = """
+query($login: String!, $cursor: String) {
+  user(login: $login) {
+    repositories(first: 100, after: $cursor, ownerAffiliations: OWNER,
+                 isFork: false, privacy: PUBLIC) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        stargazerCount
+        forkCount
+        languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
+          edges { size node { name color } }
+        }
+      }
+    }
+  }
+}
+"""
+
+# A runaway guard, the same bound fetch_pull_requests and fetch_issues use:
+# 50 pages of 100 is 5000 repositories (or 5000 memberships), past any real
+# account. Reaching it raises rather than returning a partial profile,
+# because a truncated profile under-reports the account's own work silently.
+PROFILE_MAX_PAGES = 50
+
+
+def page_profile_connection(token, query, field, login, max_pages):
+    """Walk one paginated ``user`` connection to its last page.
+
+    Returns ``(user, connection)``: the ``user`` payload of the first page
+    (login, name, followers) and the connection with every page's nodes
+    concatenated and ``pageInfo`` dropped, so the merged result has exactly
+    the shape the renderers and the cache already consume.
+
+    A missing ``pageInfo``, a ``hasNextPage`` without an ``endCursor``, and
+    a cursor that repeats an earlier one all raise ``PaginationLimitError``:
+    each means the walk cannot prove it reached the end, and returning what
+    did arrive is precisely the silent truncation this replaces.
+    """
+    nodes = []
+    head = None
+    cursor = None
+    seen_cursors = {None}
+    pages = 0
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise common.PaginationLimitError(
+                f"{field} pagination limit {max_pages} reached after cursor "
+                f"{cursor!r}")
+        user = gql(token, query, {"login": login, "cursor": cursor})["user"]
+        pages += 1
+        connection = user.get(field) or {}
+        if head is None:
+            head = user
+            head[field] = {k: v for k, v in connection.items()
+                           if k != "pageInfo"}
+        nodes.extend(connection.get("nodes") or [])
+        page_info = connection.get("pageInfo")
+        if page_info is None or "hasNextPage" not in page_info:
+            raise common.PaginationLimitError(
+                f"{field} pagination missing pageInfo or hasNextPage after "
+                f"cursor {cursor!r}")
+        if not page_info.get("hasNextPage"):
+            break
+        next_cursor = page_info.get("endCursor")
+        if not next_cursor:
+            raise common.PaginationLimitError(
+                f"{field} pagination stalled after cursor {cursor!r}: "
+                "hasNextPage=true but endCursor is missing")
+        if next_cursor in seen_cursors:
+            raise common.PaginationLimitError(
+                f"{field} pagination stalled after cursor {cursor!r}: "
+                f"endCursor {next_cursor!r} repeats an earlier cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    head[field]["nodes"] = nodes
+    return head, head[field]
+
+
+def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # The repos×languages core and the contribution calendar are fetched
     # separately: GitHub's GraphQL node-limit estimator started rejecting
     # the combined query with RESOURCE_LIMITS_EXCEEDED. Splitting the calendar into its
@@ -178,27 +278,16 @@ def fetch(token, login, cached_days=None):
     # lucky. The merged structure keeps the exact shape the renderers
     # already consume. Returns (user, days); `days` is the merged
     # date -> count map to persist in the cache.
-    q_core = """
-    query($login: String!) {
-      user(login: $login) {
-        login
-        name
-        followers { totalCount }
-        organizations(first: 100) { nodes { login } }
-        repositories(first: 100, ownerAffiliations: OWNER, isFork: false, privacy: PUBLIC) {
-          totalCount
-          nodes {
-            stargazerCount
-            forkCount
-            languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-              edges { size node { name color } }
-            }
-          }
-        }
-      }
-    }
-    """
-    user = gql(token, q_core, {"login": login})["user"]
+    #
+    # The profile is two paginated connections rather than one query, because
+    # each is walked to its own end (issue #51) and a combined query would
+    # re-send the whole of one connection on every page of the other.
+    user, orgs = page_profile_connection(
+        token, ORG_QUERY, "organizations", login, max_pages)
+    _, repos = page_profile_connection(
+        token, REPO_QUERY, "repositories", login, max_pages)
+    user["organizations"] = orgs
+    user["repositories"] = repos
     now = datetime.now(timezone.utc)
     q_window = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
