@@ -11,6 +11,13 @@ to run with read-only access, how its candidate floor is announced, what its
 check run is called, and what measured population in tests.yml has to be.
 It also owns the small structural reader those cases are written against.
 
+These checks are regression tripwires over reviewed source, not a sandbox. The
+permission reader decodes simple YAML keys, with optional single or double
+quotes, and fails closed outside that subset. The shell reader removes a
+backslash-newline splice without inserting whitespace, then decodes words with
+POSIX `shlex.split`. Bash ANSI-C quoting (`$'gh'`), backtick-obfuscated words,
+and other obfuscation-only spellings are OUT OF SCOPE.
+
 
 WHY IT IS A SEPARATE MODULE, and why not to merge it back. `test_ci_workflows.py`
 holds the invariants that predate this file and was already the largest module in
@@ -25,6 +32,7 @@ Stdlib unittest, matching the rest of this repo's suite.
 """
 import json
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -112,15 +120,36 @@ def _without_comment(value):
     return value.strip()
 
 
+def _yaml_scalar(value):
+    """Decode a simple YAML scalar; reject malformed quote spellings."""
+    value = _without_comment(value).strip()
+    if value.startswith(("'", '"')):
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote:
+            raise AssertionError(f"unrecognised quoted YAML scalar: {value!r}")
+        value = value[1:-1]
+    elif "'" in value or '"' in value:
+        raise AssertionError(f"unrecognised YAML scalar: {value!r}")
+    return value
+
+
+def _yaml_key(value):
+    """Decode a simple YAML key, allowing optional single or double quotes."""
+    key = _yaml_scalar(value)
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", key):
+        raise AssertionError(f"unrecognised YAML declaration key: {value!r}")
+    return key
+
+
 def _block(records, indent, key):
     """The records nested under `key` at `indent`; [] for a scalar or absent."""
     for index, (at, content) in enumerate(records):
         if at != indent or content.startswith("- "):
             continue
         name, value = _partition(content)
-        if name != key:
+        if _yaml_key(name) != key:
             continue
-        if value:
+        if _without_comment(value):
             return []          # a scalar carries no nested block
         start = index + 1
         if start >= len(records) or records[start][0] <= indent:
@@ -206,7 +235,7 @@ def _jobs(text):
 
 
 def _without_job_permissions(text):
-    """Remove job overrides so planted controls isolate their own fixture."""
+    """Remove supported job permission overrides for isolated fixtures."""
     out = []
     in_jobs = False
     dropping_block = False
@@ -222,11 +251,13 @@ def _without_job_permissions(text):
         dropping_block = False
         if indent == 0:
             name, value = _partition(stripped)
-            in_jobs = name == "jobs" and not value
-        if in_jobs and indent == 4 and _partition(stripped)[0] == "permissions":
-            _name, value = _partition(stripped)
-            dropping_block = not value
-            continue
+            in_jobs = (_yaml_key(name) == "jobs"
+                       and not _without_comment(value))
+        if in_jobs and indent == 4:
+            name, value = _partition(stripped)
+            if _yaml_key(name) == "permissions":
+                dropping_block = not _without_comment(value)
+                continue
         out.append(line)
     return "".join(out)
 
@@ -283,16 +314,14 @@ def _run_lines(step):
 
 
 def _command(step):
-    """A step's `run:` block as one line, continuations joined.
+    """A step's `run:` block with shell line splices removed.
 
     Read from the step's own body and only from the lines nested under its
     `run:` key, so an `if:` or an `env:` above it is not mistaken for shell.
 
-    The whitespace is normalised AFTER the continuation backslash is folded
-    out, and both steps are load-bearing: joining first and normalising after
-    turns `pip \\` + `install` into `pip  install` — two spaces — which
-    `assertNotIn("pip install")` reads as an absent string. A guard built on
-    a spelling the caller controls is not a guard.
+    The YAML lines are joined with a separating space. Removing the splice
+    backslash and following whitespace leaves the source space before the
+    backslash, so `pip \\` + `install` becomes `pip install`.
     """
     lines = []
     run_indent = None
@@ -307,21 +336,8 @@ def _command(step):
             run_indent = at
             if value not in ("|", ">", "|-", ">-"):
                 lines.append(value)
-    joined = re.sub(r"\\\s*", " ", " ".join(lines))
+    joined = re.sub(r"\\\s*", "", " ".join(lines))
     return re.sub(r"\s+", " ", joined).strip()
-
-
-def _yaml_scalar(value):
-    """Decode the simple YAML scalar spellings used by permission values."""
-    value = _without_comment(value).strip()
-    if value.startswith(("'", '"')):
-        quote = value[0]
-        if len(value) < 2 or value[-1] != quote:
-            raise AssertionError(f"unrecognised quoted YAML scalar: {value!r}")
-        value = value[1:-1]
-    elif "'" in value or '"' in value:
-        raise AssertionError(f"unrecognised YAML scalar: {value!r}")
-    return value
 
 
 def _flow_mapping_entries(value):
@@ -354,7 +370,7 @@ def _flow_mapping_entries(value):
     scopes = {}
     for entry in entries:
         key, permission = _flow_partition(entry)
-        key = _yaml_scalar(key)
+        key = _yaml_key(key)
         if not key or key in scopes:
             raise AssertionError(f"unrecognised permissions mapping entry: {entry!r}")
         scopes[key] = _permission_value(permission)
@@ -387,19 +403,22 @@ def _permission_value(value):
 
 
 def _job_permissions(records):
-    """Return one job's permission scopes, failing closed on declared shapes."""
-    declaration = next(
-        (content for at, content in records
-         if at == 4 and _partition(content)[0] == "permissions"), None)
-    if declaration is None:
+    """Return a job's scopes; decode simple quoted keys and fail closed."""
+    declarations = []
+    for at, content in records:
+        if at != 4 or content.startswith("- "):
+            continue
+        name, value = _partition(content)
+        if _yaml_key(name) == "permissions":
+            declarations.append(value)
+    if len(declarations) > 1:
+        raise AssertionError("duplicate permissions declaration in job")
+    if not declarations:
         return {}  # An absent job override inherits the read-only workflow map.
 
-    _name, value = _partition(declaration)
-    value = _without_comment(value)
-    if value == "read-all":
-        return {"*": "read"}
-    if value == "write-all":
-        return {"*": "write"}
+    value = _without_comment(declarations[0])
+    if value in {"read-all", "write-all"}:
+        return {"*": value.split("-", maxsplit=1)[0]}
     if value.startswith("{"):
         return _flow_mapping_entries(value)
     if value:
@@ -415,7 +434,7 @@ def _job_permissions(records):
             raise AssertionError(
                 f"unrecognised nested permissions shape: {content!r}")
         key, permission = _partition(content)
-        key = _yaml_scalar(key)
+        key = _yaml_key(key)
         if not key or key in scopes or not permission:
             raise AssertionError(
                 f"unrecognised permissions mapping entry: {content!r}")
@@ -437,12 +456,25 @@ def _assert_no_job_write_scopes(text):
 
 
 def _step_github_api_calls(text):
-    """Return step commands that invoke `gh api`, after folding shell syntax."""
+    """Return commands with adjacent decoded `gh api` shell words.
+
+    `_command()` removes shell line splices and `shlex.split()` decodes POSIX
+    words. This is a regression tripwire over reviewed text, not a sandbox;
+    Bash ANSI-C quoting (`$'gh'`), backtick-obfuscated words, and other
+    obfuscation-only spellings are OUT OF SCOPE.
+    """
     calls = []
     for job, records in _jobs(text).items():
         for step in _steps(records):
             command = _command(step)
-            if re.search(r"\bgh\s+api\b", command):
+            try:
+                words = shlex.split(command)
+            except ValueError as error:
+                raise AssertionError(
+                    f"uninterpretable shell command in {job}/{step['name']}: "
+                    f"{error}") from error
+            if any(left == "gh" and right == "api"
+                   for left, right in zip(words, words[1:])):
                 calls.append((job, step["name"], command))
     return calls
 
@@ -461,11 +493,8 @@ class TestTheWorkflowReader(unittest.TestCase):
     """
 
     def test_a_line_continued_command_normalises_to_single_spaces(self):
-        # Without the whitespace pass, `pip \` + `install` joins to
-        # `pip  install` — and then `assertNotIn("pip install")` is reading a
-        # spelling the file under test chose. Asserted directly rather than
-        # only through a planted command, so dropping EITHER normalisation
-        # step is caught here instead of at the next mutation round.
+        # Shell removes the splice but preserves the source space before it,
+        # so `pip \` + `install` remains two words with one separator.
         step = {"body": [(4, "run: |"), (6, "python3 -m pip \\"),
                          (6, "install --upgrade requests")]}
         self.assertEqual(_command(step),
@@ -546,6 +575,14 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         plants = {
             "write-all": base.replace(
                 marker, "    permissions: write-all\n" + marker, 1),
+            "double-quoted declaration key": base.replace(
+                marker,
+                '    "permissions": {contents: write}\n' + marker,
+                1),
+            "single-quoted declaration key": base.replace(
+                marker,
+                "    'permissions': write-all\n" + marker,
+                1),
             "inline flow mapping": base.replace(
                 marker, "    permissions: {contents: write}\n" + marker, 1),
             "quoted inline value": base.replace(
@@ -577,6 +614,31 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             with self.subTest(read_only=declaration):
                 _assert_no_job_write_scopes(
                     base.replace(marker, declaration + marker, 1))
+
+    def test_permission_fixture_isolation_removes_each_declaration_form(self):
+        # Plant into a clean workflow and require exact restoration, including
+        # preserving the job and its unrelated fields.
+        base = _without_job_permissions(self.text)
+        marker = "    runs-on: ubuntu-latest"
+        declarations = {
+            "block": "    permissions:\n      contents: write\n",
+            "flow": "    permissions: {contents: write}\n",
+            "scalar": "    permissions: write-all\n",
+            "double-quoted key": (
+                '    "permissions": {contents: write}\n'),
+            "single-quoted key": "    'permissions': write-all\n",
+            "commented block header": (
+                "    permissions: # override\n      contents: write\n"),
+        }
+        for spelling, declaration in declarations.items():
+            with self.subTest(spelling=spelling):
+                planted = base.replace(marker, declaration + marker, 1)
+                isolated = _without_job_permissions(planted)
+                self.assertEqual(isolated, base)
+                self.assertEqual(set(_jobs(isolated)), set(_jobs(base)))
+                self.assertIn("measure", _jobs(isolated))
+                self.assertEqual(
+                    _job_permissions(_jobs(isolated)["measure"]), {})
 
     def test_an_unrecognised_job_permission_shape_fails_closed(self):
         base = _without_job_permissions(self.text)
@@ -689,6 +751,53 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 self.assertNotEqual(planted, self.text)
                 with self.assertRaisesRegex(AssertionError, "invoke gh api"):
                     _assert_no_step_github_api(planted)
+
+    def test_each_quoted_or_spliced_api_word_is_caught(self):
+        marker = "          cp coverage-floor.json"
+        plants = {
+            "quoted command word": self.text.replace(
+                marker,
+                '          "gh" api repos/example/example\n' + marker,
+                1),
+            "quoted operation word": self.text.replace(
+                marker,
+                "          gh 'api' repos/example/example\n" + marker,
+                1),
+            "midword continuation": self.text.replace(
+                marker,
+                "          gh a" + "\\\n"
+                + "          pi repos/example/example\n" + marker,
+                1),
+        }
+        for spelling, planted in plants.items():
+            with self.subTest(spelling=spelling):
+                self.assertNotEqual(planted, self.text)
+                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
+                    _assert_no_step_github_api(planted)
+
+    def test_quoted_read_permission_and_api_prose_stay_allowed(self):
+        marker = "    runs-on: ubuntu-latest"
+        command_marker = "          cp coverage-floor.json"
+        base = _without_job_permissions(self.text)
+        self.assertIn(marker, base)
+        self.assertIn(command_marker, base)
+        planted = base.replace(
+            marker,
+            '    "permissions": {contents: "read"}\n' + marker,
+            1).replace(
+                command_marker,
+                '          echo "gh api"\n' + command_marker,
+                1)
+        _assert_no_job_write_scopes(planted)
+        self.assertEqual(_step_github_api_calls(planted), [])
+
+    def test_an_unbalanced_shell_quote_fails_closed(self):
+        marker = "          cp coverage-floor.json"
+        planted = self.text.replace(
+            marker, '          echo "unclosed\n' + marker, 1)
+        with self.assertRaisesRegex(
+                AssertionError, "uninterpretable shell command"):
+            _assert_no_step_github_api(planted)
 
     def test_the_check_run_name_is_the_release_manifest_entry(self):
         """The manifest entry is written against a check-run name.
