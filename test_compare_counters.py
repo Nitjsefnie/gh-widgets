@@ -1,8 +1,9 @@
 """Tests for the test-speed comparator.
 
 This file is part of the stdlib unittest suite so its gate's own tests run in
-the gate that measures coverage. pytest still collects these TestCases for
-speed.yml's timing harness; it can also emit --junitxml, which unittest cannot.
+the gate that measures coverage. The suite runner is unittest, and the speed
+gate counts CPU seconds while scripts/ci/counter.py writes its own JUnit
+output, so that measurement needs nothing beyond the standard library.
 
 The comparator is a gate, so its own failure modes matter more than most
 code here: a false red teaches people to ignore it, and a false green
