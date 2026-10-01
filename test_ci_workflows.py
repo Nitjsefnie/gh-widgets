@@ -250,7 +250,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             **os.environ,
             "BASELINE": "speed-baseline.json",
             "GITHUB_STEP_SUMMARY": str(root / "summary.md"),
-            "MAX_REGRESSION": "0.30",
+            "TOTAL_BUDGET": "0.30",
             "ALLOWED_WORKLOAD_REMOVALS": allowed_removals,
             "GITHUB_OUTPUT": str(root / "output.txt"),
             "GITHUB_ENV": str(root / "env.txt"),
@@ -338,6 +338,105 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
         self.assertNotIn("GH_COUNTER_METRIC: ${{", text)
         self.assertIn("id: probe", text)
+
+    # -- the cwd defect (runs 36820664288, 36820703818, 36820741554) --------
+
+    def test_the_unit_suite_is_measured_inside_the_checkout(self):
+        """The step must name the directory discovery runs in.
+
+        Three CI runs collected 724 node ids in the step BEFORE this one and
+        then measured 0.05 CPU seconds of interpreter startup, because
+        discovery ran from the parent of the checkout, found nothing, and
+        exited 5. The counter reported exactly what it was asked for; the
+        question was the wrong one. `--cwd` makes the directory part of the
+        command rather than something the shell's working directory decides.
+        """
+        block = self._run_block("Measure the unit suite")
+        self.assertIn('--cwd "$GITHUB_WORKSPACE/head"', block)
+        self.assertIn("--name 'counter::unit-suite'", block)
+        # And the reports are written outside the checkout, so that naming
+        # the cwd can never also move where this step's own output lands.
+        self.assertIn('--junit-file "$GITHUB_WORKSPACE/reports/unit-$round.xml"',
+                      block)
+
+    def test_a_measurement_runs_in_the_directory_it_was_given(self):
+        """counter.py's half of the cwd fix, at the tool rather than the YAML.
+
+        The assertion above is about the workflow's text. This is about the
+        tool's behaviour, so that the next way of getting the directory
+        wrong — a stale flag, a missing one, a wrapper shell — fails a test
+        rather than a CI run. The two measurements differ only in `cwd`, and
+        only one of them can see the marker file.
+        """
+        counter = self._install_counter(
+            self._temp_root("ghw-counter-cwd-") / "head")
+        listing = "import os; print(sorted(os.listdir('.')))"
+        with tempfile.TemporaryDirectory(prefix="ghw-cwd-probe-") as td:
+            root = Path(td)
+            (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
+            inside = counter.measure([sys.executable, "-c", listing],
+                                     cwd=root,
+                                     metric=counter.CPU_METRIC)
+            outside = counter.measure(
+                [sys.executable, "-c", listing],
+                metric=counter.CPU_METRIC)
+        self.assertIn("marker-only-here.txt", inside.stdout)
+        self.assertNotIn("marker-only-here.txt", outside.stdout)
+
+    # -- the missing baseline is an expected outcome, not a traceback -------
+
+    def test_a_missing_baseline_prints_no_traceback(self):
+        """Two stack traces ahead of every green first run train readers to
+        scroll past the red ones."""
+        root = self._run_with_tree("ghw-speed-missing-baseline-",
+                                   baseline=False)
+        completed, summary = self._execute_compare(root)
+
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout + completed.stderr)
+        for stream in (completed.stdout, completed.stderr):
+            self.assertNotIn("Traceback", stream)
+            self.assertNotIn("MissingBaseline", stream)
+        self.assertIn("No baseline to compare against", summary)
+
+    def test_a_missing_baseline_with_a_failed_suite_is_still_clean(self):
+        """The combination that produced it: no baseline AND a suite that did
+        not pass. The failure is about the head, so it is reported as one —
+        exit 2 with a message — rather than escaping the handler as a
+        traceback."""
+        root = self._run_with_tree("ghw-speed-missing-and-failed-",
+                                   baseline=False)
+        for round_number in (1, 2):
+            suite = ET.Element("testsuite", {
+                "name": "counter", "tests": "1", "failures": "1",
+                "errors": "0", "skipped": "0", "time": "0.05",
+                "gh-metric": "cpu_time"})
+            case = ET.SubElement(suite, "testcase", {
+                "classname": "counter", "name": "unit-suite",
+                "time": "0.05", "gh-wall": "0.6"})
+            ET.SubElement(case, "failure", {
+                "message": "command exited with code 5",
+                "type": "CommandFailure"})
+            ET.ElementTree(suite).write(
+                root / "reports" / f"unit-{round_number}.xml",
+                encoding="utf-8", xml_declaration=True)
+        completed, summary = self._execute_compare(root)
+
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertIn("COULD NOT COMPARE", summary)
+        self.assertIn("no baseline to compare against", summary)
+
+    def test_the_total_budget_is_not_named_like_the_threshold(self):
+        """`tolerance` in the baseline is the gate. An env var reading as
+        "the maximum" would be read as the threshold and is not."""
+        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        # As an env key it is gone; the name survives in the comment that
+        # explains why it was renamed, which is the point of renaming it.
+        self.assertNotIn("      MAX_REGRESSION:", text)
+        self.assertIn('TOTAL_BUDGET: "0.30"', text)
+        self.assertIn("NOT THE THRESHOLD", text)
 
     # -- refusals ------------------------------------------------------------
 
@@ -481,8 +580,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0,
                          completed.stdout + completed.stderr)
-        self.assertIn("committed baseline (unit suite)", summary)
-        self.assertIn("committed baseline (renderer workloads)", summary)
+        self.assertIn("committed baseline, unit suite", summary)
+        self.assertIn("committed baseline, renderer workloads", summary)
 
     def test_each_population_is_judged_by_its_own_metric(self):
         """The collision a single document-wide `metric` could not express.
@@ -513,7 +612,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             **os.environ,
             "BASELINE": "speed-baseline.json",
             "GITHUB_STEP_SUMMARY": str(root / "summary.md"),
-            "MAX_REGRESSION": "0.30",
+            "TOTAL_BUDGET": "0.30",
             "ALLOWED_WORKLOAD_REMOVALS": "",
         }
         completed = subprocess.run(
@@ -529,8 +628,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         completed, summary = self._execute_compare(root)
 
         self.assertEqual(completed.returncode, 1)
-        self.assertIn("committed baseline (unit suite)", summary)
-        self.assertIn("committed baseline (renderer workloads)", summary)
+        self.assertIn("committed baseline, unit suite", summary)
+        self.assertIn("committed baseline, renderer workloads", summary)
 
     def test_missing_renderer_workload_fails_the_compare_step(self):
         """Issue #36: a shipped renderer that stops being measured is red."""

@@ -67,35 +67,48 @@ name: speed
 # use can then see that the alternatives were measured and unavailable or too
 # expensive, rather than assuming nobody thought of them.
 #
-# ONE BUDGET PER POPULATION, BECAUSE THEIR SPREADS DIFFER BY AN ORDER OF
-# MAGNITUDE. Measured on this box against this tree, and re-measured after the
-# rebase onto main — which moved them, because main's renderer work changed
-# what these workloads actually do. Unit suite, six runs: 36.026 / 37.051 /
-# 38.823 / 42.145 / 43.017 / 43.687 CPU seconds, 21.3% min-to-max. Renderer
-# workloads, eight runs each: bench.render 0.1251-0.1843 (47.3%),
-# bench.render-impact 3.3450-3.7062 (10.8%), bench.render-responsiveness
-# 0.1277-0.1726 (35.2%). The SHORT workloads are the noisiest in two of the
-# three cases, which is the opposite of what was expected when these budgets
-# were chosen: fixed overhead and a co-tenant's load dominate a brief
-# measurement, so a 0.1 s workload's relative spread says more about the box
-# than about the program. So the renderer half does not get a tight budget for
-# free — it needs a loose one, for a different reason than the suite needs a
-# loose one, and one global `tolerance` could not have expressed that. Each
-# population therefore carries its own `metric` and `tolerance` in
-# speed-baseline.json, and each comparison names the population it judges.
+# THE BUDGETS COME FROM THE CELL THAT READS THEM, AND THE CELLS DIFFER BY A
+# FACTOR OF THREE. Measured on both, same tree, CPU seconds:
 #
-# THOSE FIGURES ARE A SHARED-BOX ARTEFACT AND MUST NOT BE CARRIED. This box
-# has a co-tenant; the runner does not. The rule written here is therefore not
-# a number but a procedure: a budget must be AT LEAST TWICE THE SPREAD
-# MEASURED ON THE CELL THAT WILL READ THE BASELINE, and re-derived there.
-# From this box's numbers that would be 0.45 for the suite and above 0.7 for
-# bench.render — the second is not a gate at all. On a quiet dedicated cell
-# the same kind of workload spread 7.6% min-to-max (run 36812285024), where
-# 0.25 is honest. Whoever derives the baseline on the runner measures both
-# populations again first; if the runner's spreads come anywhere near this
-# box's, the honest conclusion is that CPU seconds cannot gate per entry on
-# that cell, and the baseline's `basis` must say so rather than record a
-# number that looks like a gate.
+#   on the RUNNER (runs 36820664288 / 36820703818 / 36820741554, three rounds
+#   each):
+#     bench.render                     0.080747 0.080496 0.091849   14.1%
+#     bench.render-impact              1.344901 1.340172 1.441353    7.5%
+#     bench.render-responsiveness     0.078168 0.078769 0.089779   14.9%
+#   on a SHARED box (eight rounds each, same tree):
+#     bench.render                     0.1251 - 0.1843                47.3%
+#     bench.render-impact              3.3450 - 3.7062                10.8%
+#     bench.render-responsiveness     0.1277 - 0.1726                35.2%
+#
+# Two things follow, and they are the whole reason the budget is a procedure
+# rather than a number:
+#
+#   1. THE DIRECTION FLIPS. On the shared box the two brief workloads were the
+#      NOISIEST of all — fixed overhead and a co-tenant's load dominate a short
+#      measurement. On the runner they are among the quietest, and the briefest
+#      of the three is the tightest. A budget derived from the box would have
+#      been far too loose for CI and would have let a real renderer regression
+#      through for months.
+#   2. bench.render-impact IS THE ONE THAT MATTERS MOST: it is the workload
+#      tracing made unaffordable, it is the slowest, and at 7.5% it earns
+#      twice-the-spread = 0.15, a budget that would actually bite. On the
+#      shared box the same workload needed 0.22 for the same reason and none
+#      of the three would have bitten.
+#
+# So: a population's budget is AT LEAST TWICE THE SPREAD MEASURED ON THE CELL
+# THAT WILL READ IT, re-derived there, and never carried. On the runner that
+# is 0.15 for bench.render-impact, 0.30 for render and render-responsiveness,
+# and UNWRITTEN for the unit suite until it is measured there — a budget
+# derived from nothing is worse than no budget. The shared-box numbers are
+# kept above because they are the reason the rule exists, not because they
+# apply to CI.
+#
+# ONE BUDGET PER POPULATION ANYWAY. The spreads are not uniform even on one
+# cell — 7.5% to 14.9% across three workloads on the runner — so one global
+# `tolerance` would be right for at most one of them and wrong, by a factor of
+# two, for the other two. Each population therefore carries its own `metric`
+# and `tolerance` in speed-baseline.json, and each comparison names the
+# population it judges.
 #
 # ROUNDS stays 2, for two reasons that are not the same reason. --selfcheck
 # compares SVG bytes across head rounds and needs at least two, and that
@@ -122,12 +135,6 @@ name: speed
 # 0 — the same shape as the "no release exists yet" path this file has always
 # had. A green gate with an EMPTY summary is the thing this repository keeps
 # failing reviews over, so that path is not silent.
-#
-# WHY THE BASELINE ONLY RATCHETS DOWN. The comparator refuses a head counter
-# above baseline x (1 + tolerance) per entry. Separately, the last step
-# diffs the committed baseline against the MERGE BASE's copy and fails if any
-# entry went up — otherwise a commit could raise the ceiling it is measured
-# against in the same push, and the gate would be switched off from inside.
 #
 # WHICH CONTROLS SURVIVED, AND WHY.
 #   * The offline fixtures and pinned inputs are untouched: a measurement of
@@ -191,10 +198,14 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Fractional increase in the shared total that fails the job. The
-      # per-entry down-only tolerance comes from the baseline's own
-      # `tolerance`, which is where a number that must be re-derived belongs.
-      MAX_REGRESSION: "0.30"
+      # NOT THE THRESHOLD. The budget that decides the gate is the per-entry
+      # `tolerance` inside each population of speed-baseline.json, and it is
+      # re-derived whenever the cell or the instrument changes. This one
+      # bounds the TOTAL across the shared population — a second, weaker net
+      # for a case where every entry is under its own tolerance but the sum
+      # has drifted. Named TOTAL_BUDGET rather than MAX_REGRESSION so nobody
+      # reads an env var as the gate's threshold when it is not.
+      TOTAL_BUDGET: "0.30"
       ROUNDS: "2"
       BASELINE: speed-baseline.json
 
@@ -243,20 +254,32 @@ jobs:
         # One CPU-second measurement of the whole suite per round, emitted as
         # one JUnit suite each.
         #
+        # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
+        # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
+        # exits 5, and the counter faithfully measures 0.05 CPU seconds of
+        # interpreter startup. That is exactly what three CI runs did: the
+        # step before this one had collected 724 node ids from the checkout,
+        # so the job collected a 724-test population and measured none of it,
+        # and a baseline derived from that would have been derived from a
+        # population it never actually ran. The reports are written to
+        # $GITHUB_WORKSPACE too, so that naming the cwd can never also move
+        # where this step's own output lands.
+        #
         # The suite's exit code is deliberately NOT this job's verdict:
-        # tests.yml owns pass/fail. What this step must guarantee is that a
-        # report exists for every round, so it checks for them explicitly
-        # rather than trusting a code it ignores.
+        # tests.yml owns pass/fail. But a counter measured over a suite that
+        # did not run is not comparable, and the step below says so, which is
+        # why a non-zero code is reported here rather than swallowed.
         env:
           GH_COUNTER_METRIC: cpu_time
         run: |
-          mkdir -p reports
+          mkdir -p "$GITHUB_WORKSPACE/reports"
           for round in $(seq 1 "$ROUNDS"); do
             echo "::group::unit suite round $round"
             status=0
             python3 head/scripts/ci/counter.py \
-              --junit-file "reports/unit-$round.xml" \
+              --junit-file "$GITHUB_WORKSPACE/reports/unit-$round.xml" \
               --name 'counter::unit-suite' \
+              --cwd "$GITHUB_WORKSPACE/head" \
               --timeout 3600 \
               -- python3 -m unittest discover || status=$?
             echo "unit suite round $round exited $status" \
@@ -266,7 +289,7 @@ jobs:
 
           missing=0
           for round in $(seq 1 "$ROUNDS"); do
-            f="reports/unit-$round.xml"
+            f="$GITHUB_WORKSPACE/reports/unit-$round.xml"
             if [ ! -s "$f" ]; then
               echo "MISSING or empty: $f" >&2
               missing=1
@@ -277,7 +300,7 @@ jobs:
             echo "which is a setup failure, not a counter result." >&2
             exit 1
           fi
-          ls -la reports/
+          ls -la "$GITHUB_WORKSPACE/reports/"
 
       - name: Collect the unit-test population
         # A collection pass, not a test run: discovery imports the test
@@ -354,8 +377,8 @@ jobs:
             --population unit-suite \
             --head reports/unit-1.xml reports/unit-2.xml \
             --population-file reports/unit-population.txt \
-            --max-regression "$MAX_REGRESSION" \
-            --base-label 'the committed baseline (unit suite)' \
+            --max-regression "$TOTAL_BUDGET" \
+            --base-label 'the committed baseline, unit suite' \
             --summary-file "$GITHUB_STEP_SUMMARY"; then
             unit_status=0
           else
@@ -440,8 +463,8 @@ jobs:
             --baseline "$BASELINE" \
             --population renderer-workloads \
             --head $(ls reports/bench-head-*.xml) \
-            --max-regression "$MAX_REGRESSION" \
-            --base-label 'the committed baseline (renderer workloads)' \
+            --max-regression "$TOTAL_BUDGET" \
+            --base-label 'the committed baseline, renderer workloads' \
             --summary-file "$GITHUB_STEP_SUMMARY" \
             "${workloads[@]}" "${removals[@]}"; then
             renderer_status=0
