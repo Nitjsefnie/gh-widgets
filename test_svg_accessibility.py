@@ -74,6 +74,11 @@ class CardAccessibility(unittest.TestCase):
             "issues: 4 opened, 1 maintainer-accepted, 2 repos "
             "(25% maintainer-accepted).")
 
+    def test_empty_languages_card_describes_empty_state(self):
+        self.assert_accessible_card(
+            render.render_languages(render.THEMES["tokyonight"], []),
+            "languages", "Top languages", "No language data available.")
+
     def test_impact_card_has_accessible_headline_figures(self):
         row = impact.ImpactRow(
             score=1.0, base=1.0, share=50.0, ours=250, total=500,
@@ -93,6 +98,23 @@ class CardAccessibility(unittest.TestCase):
         self.assert_accessible_card(
             svg, "impact", "External impact",
             "No external contributions to show.")
+
+    def test_impact_without_loc_counts_only_displayed_unique_repos(self):
+        def impact_row(repo):
+            return impact.ImpactRow(
+                score=1.0, base=1.0, share=50.0, ours=250, total=500,
+                repo=repo)
+
+        svg = impact.render_impact(
+            impact.THEMES["tokyonight"],
+            [impact_row("outside/shared"), impact_row("outside/pr-visible"),
+             impact_row("outside/pr-hidden")],
+            [impact_row("outside/shared"), impact_row("outside/issue-visible")],
+            [], top_n=2)
+
+        self.assert_accessible_card(
+            svg, "impact", "External impact",
+            "Shown external repos: 3. No live-code rows.")
 
     def test_responsiveness_card_summarizes_prs_and_wait(self):
         svg = responsiveness.render_responsiveness(
