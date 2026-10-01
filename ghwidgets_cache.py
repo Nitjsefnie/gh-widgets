@@ -1,8 +1,8 @@
 """Cache validation, locking, and atomic writes shared by the renderers.
 
-Plain sibling imports are intentional: the repository root is ``sys.path[0]``
-in development and tests, while ``/usr/local/bin`` is ``sys.path[0]`` for each
-deployed renderer.
+``ghwidgets_common`` loads this sibling by path and registers it in
+``sys.modules`` so path-loaded consumers share the same state as normal
+imports. Normal imports work when this directory is on the import path.
 """
 import contextlib
 import json

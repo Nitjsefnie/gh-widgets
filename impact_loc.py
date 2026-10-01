@@ -7,31 +7,68 @@ not create a second copy of the shared runtime module.
 """
 
 import contextlib
+import importlib.util
 import json
 import os
 import selectors
 import signal
 import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-import impact_clone
+
+def _load_sibling(name):
+    """Load an adjacent module once, sharing state with normal imports."""
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+impact_clone = _load_sibling("impact_clone")
 # Preserve the clone/scratch surface and renderer-visible stdlib exports.
-from impact_clone import (  # pylint: disable=unused-import
-    _CLONE_PROCESSES, _CLONE_STARTING, _CLONE_PROCESSES_LOCK,
-    _CLONE_SHUTDOWN, _SIGNAL_CLEANUP_CLAIMS, _CloneLaunch,
-    _signal_clone_process, _stop_clone_processes, _run_clone_command,
-    _run_clone_command_worker, _wait_for_clone_launches,
-    _SCRATCH_DIRS, _SCRATCH_LOCKS, _SIGNAL_HANDLERS_INSTALLED,
-    _SCRATCH_OWNER_LOCK_SUFFIX, _scratch_owner_lock_path,
-    _acquire_scratch_owner_lock, _release_scratch_owner_lock,
-    _retry_readonly_scratch_removal, _handle_scratch_signal,
-    load_repo_pins, checkout_pin, clone_repo, clone_lookahead,
-    register_scratch_dir, remove_scratch_dir, install_scratch_signal_handlers,
-    scavenge_scratch_dirs, prefetched_clones,
-    shutil, tempfile, futures,
-)
+_CLONE_PROCESSES = getattr(impact_clone, "_CLONE_PROCESSES")
+_CLONE_STARTING = getattr(impact_clone, "_CLONE_STARTING")
+_CLONE_PROCESSES_LOCK = getattr(impact_clone, "_CLONE_PROCESSES_LOCK")
+_CLONE_SHUTDOWN = getattr(impact_clone, "_CLONE_SHUTDOWN")
+_SIGNAL_CLEANUP_CLAIMS = getattr(impact_clone, "_SIGNAL_CLEANUP_CLAIMS")
+_CloneLaunch = getattr(impact_clone, "_CloneLaunch")
+_signal_clone_process = getattr(impact_clone, "_signal_clone_process")
+_stop_clone_processes = getattr(impact_clone, "_stop_clone_processes")
+_run_clone_command = getattr(impact_clone, "_run_clone_command")
+_run_clone_command_worker = getattr(impact_clone, "_run_clone_command_worker")
+_wait_for_clone_launches = getattr(impact_clone, "_wait_for_clone_launches")
+_SCRATCH_DIRS = getattr(impact_clone, "_SCRATCH_DIRS")
+_SCRATCH_LOCKS = getattr(impact_clone, "_SCRATCH_LOCKS")
+_SIGNAL_HANDLERS_INSTALLED = getattr(impact_clone, "_SIGNAL_HANDLERS_INSTALLED")
+_SCRATCH_OWNER_LOCK_SUFFIX = getattr(impact_clone, "_SCRATCH_OWNER_LOCK_SUFFIX")
+_scratch_owner_lock_path = getattr(impact_clone, "_scratch_owner_lock_path")
+_acquire_scratch_owner_lock = getattr(impact_clone, "_acquire_scratch_owner_lock")
+_release_scratch_owner_lock = getattr(impact_clone, "_release_scratch_owner_lock")
+_retry_readonly_scratch_removal = getattr(
+    impact_clone, "_retry_readonly_scratch_removal")
+_handle_scratch_signal = getattr(impact_clone, "_handle_scratch_signal")
+load_repo_pins = impact_clone.load_repo_pins
+checkout_pin = impact_clone.checkout_pin
+clone_repo = impact_clone.clone_repo
+clone_lookahead = impact_clone.clone_lookahead
+register_scratch_dir = impact_clone.register_scratch_dir
+remove_scratch_dir = impact_clone.remove_scratch_dir
+install_scratch_signal_handlers = impact_clone.install_scratch_signal_handlers
+scavenge_scratch_dirs = impact_clone.scavenge_scratch_dirs
+prefetched_clones = impact_clone.prefetched_clones
+shutil = impact_clone.shutil
+tempfile = impact_clone.tempfile
+futures = impact_clone.futures
 
 
 common: Any = None

@@ -26,9 +26,11 @@ fails loudly at startup instead of rendering wrong numbers.
 
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
+import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 import urllib.error
@@ -38,29 +40,42 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Optional
 
+
+def _load_sibling(name):
+    """Load an adjacent module once, sharing state with normal imports."""
+    if name in sys.modules:
+        return sys.modules[name]
+    path = Path(__file__).resolve().with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+ghwidgets_cache = _load_sibling("ghwidgets_cache")
+ghwidgets_journal = _load_sibling("ghwidgets_journal")
 # Preserve the original importable cache surface for callers of ghwidgets_common.
-from ghwidgets_cache import (  # pylint: disable=unused-import
-    CACHE_LOCK_TIMEOUT,
-    CacheShapeError,
-    _lock_once,
-    _lock_until,
-    _open_lock_file,
-    _validate_count,
-    _validate_impact_map,
-    _write_cache,
-    cache_lock,
-    load_cache,
-    merge_cache,
-    save_cache,
-    validate_cache_shape,
-)
-from ghwidgets_journal import (  # pylint: disable=unused-import
-    CacheFallback,
-    _LAST_ACQUISITION,
-    _XML_FORBIDDEN,
-    acquisition,
-    take_last_acquisition,
-)
+CACHE_LOCK_TIMEOUT = ghwidgets_cache.CACHE_LOCK_TIMEOUT
+CacheShapeError = ghwidgets_cache.CacheShapeError
+_lock_once = getattr(ghwidgets_cache, "_lock_once")
+_lock_until = getattr(ghwidgets_cache, "_lock_until")
+_open_lock_file = getattr(ghwidgets_cache, "_open_lock_file")
+_validate_count = getattr(ghwidgets_cache, "_validate_count")
+_validate_impact_map = getattr(ghwidgets_cache, "_validate_impact_map")
+_write_cache = getattr(ghwidgets_cache, "_write_cache")
+cache_lock = ghwidgets_cache.cache_lock
+load_cache = ghwidgets_cache.load_cache
+merge_cache = ghwidgets_cache.merge_cache
+save_cache = ghwidgets_cache.save_cache
+validate_cache_shape = ghwidgets_cache.validate_cache_shape
+CacheFallback = ghwidgets_journal.CacheFallback
+_LAST_ACQUISITION = getattr(ghwidgets_journal, "_LAST_ACQUISITION")
+_XML_FORBIDDEN = getattr(ghwidgets_journal, "_XML_FORBIDDEN")
+acquisition = ghwidgets_journal.acquisition
+take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 
 # Bumped whenever this module's interface changes in a way that would make an

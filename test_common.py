@@ -8,7 +8,10 @@ No network: the identity test drives a fake gql.
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -59,6 +62,83 @@ class InsiderSet(unittest.TestCase):
 
 
 class CommonModuleExports(unittest.TestCase):
+    def test_path_loaded_donors_share_live_modules_without_import_path(self):
+        script = textwrap.dedent('''
+            import importlib.util
+            import sys
+            from pathlib import Path
+
+            root = Path(sys.argv[1]).resolve()
+            names = ('ghwidgets_cache', 'ghwidgets_journal', 'impact_clone')
+            assert root not in [Path(p).resolve() for p in sys.path]
+            assert all(name not in sys.modules for name in names)
+            import_path = list(sys.path)
+
+            def load(name, filename):
+                spec = importlib.util.spec_from_file_location(
+                    name, root / filename)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+
+            common = load('isolated_common', 'ghwidgets_common.py')
+            loc = load('isolated_loc', 'impact_loc.py')
+            assert sys.path == import_path
+            exports = (
+                (common, 'ghwidgets_cache', (
+                    'load_cache', 'CacheShapeError', 'validate_cache_shape',
+                    'CACHE_LOCK_TIMEOUT', 'cache_lock', 'save_cache',
+                    'merge_cache')),
+                (common, 'ghwidgets_journal', (
+                    'CacheFallback', 'acquisition', 'take_last_acquisition')),
+                (loc, 'impact_clone', (
+                    'load_repo_pins', 'checkout_pin', 'clone_repo',
+                    'clone_lookahead', 'register_scratch_dir',
+                    'remove_scratch_dir', 'install_scratch_signal_handlers',
+                    'scavenge_scratch_dirs', 'prefetched_clones')),
+            )
+            for donor, name, public_names in exports:
+                module = importlib.import_module(name)
+                assert module is sys.modules[name]
+                assert getattr(donor, name) is module
+                for public_name in public_names:
+                    assert getattr(donor, public_name) is getattr(
+                        module, public_name), public_name
+
+            cache = sys.modules['ghwidgets_cache']
+            journal = sys.modules['ghwidgets_journal']
+            clone = sys.modules['impact_clone']
+            assert common.load_cache.__globals__ is vars(cache)
+            assert loc.clone_repo.__globals__ is vars(clone)
+            loc.configure(common)
+            assert clone.common is common
+            try:
+                with common.acquisition('isolated-phase'):
+                    raise ValueError('failure')
+            except ValueError:
+                pass
+            assert journal.take_last_acquisition() == 'isolated-phase'
+            assert common.take_last_acquisition() is None
+            again = load('isolated_common_again', 'ghwidgets_common.py')
+            assert again.ghwidgets_cache is cache
+            assert again.ghwidgets_journal is journal
+            again = load('isolated_loc_again', 'impact_loc.py')
+            assert again.impact_clone is clone
+            print('isolated path-load: all three modules share live exports')
+        ''')
+        env = dict(os.environ)
+        env.pop('PYTHONPATH', None)
+        with tempfile.TemporaryDirectory(prefix="ghw-path-load-") as unrelated:
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script,
+                 str(Path(__file__).resolve().parent)],
+                cwd=unrelated, env=env, capture_output=True, text=True,
+                timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.stdout.strip(),
+            'isolated path-load: all three modules share live exports')
+
     def test_cache_names_are_reexports_of_ghwidgets_cache(self):
         for name in (
                 "load_cache", "CacheShapeError", "validate_cache_shape",
