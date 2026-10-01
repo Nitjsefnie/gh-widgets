@@ -78,52 +78,65 @@ name: speed
 # steal, so a co-tenant does not reach them — that is what makes them a
 # magnitude where elapsed time is not. They are still hardware-dependent: a
 # faster or narrower core runs the same instructions in fewer CPU seconds,
-# and the pool spans instance types. THREE windows on this cell, and the
-# renderer workloads ship IDENTICAL CODE AT ALL THREE COMMITS:
+# and the pool spans instance types. FOUR windows on this cell, the renderer
+# workloads shipping IDENTICAL CODE at every one of them:
 #
 #   window 1  07:46-07:56Z  at 3c30eca  4 runs
 #   window 2  10:15-10:24Z  at 4c003c6  4 runs
 #   window 3  10:35-10:47Z  at 94e8a78  5 runs
+#   window 4  2026-10-01    at 0f767ce  3 runs
 #
-#   entry                         window 1        window 2        window 3
-#   counter::unit-suite            16.593-23.203   22.852-24.544   21.657-24.360
-#   e2e::bench.render               0.056- 0.084     0.080- 0.087     0.079- 0.084
-#   e2e::bench.render-impact        1.019- 1.351     1.332- 1.404     1.045- 1.355
-#   e2e::bench.render-responsiveness 0.060- 0.080     0.078- 0.086     0.078- 0.082
+#   entry                         window 1        window 2        window 3        window 4
+#   counter::unit-suite            16.593-23.203   22.852-24.544   21.657-24.360   16.333-23.603
+#   e2e::bench.render               0.056- 0.084     0.080- 0.087     0.079- 0.084     0.057- 0.082
+#   e2e::bench.render-impact        1.019- 1.351     1.332- 1.404     1.045- 1.355     0.956- 1.346
+#   e2e::bench.render-responsiveness 0.060- 0.080     0.078- 0.086     0.078- 0.082     0.059- 0.080
 #
 # THE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the
-# state of the pool during the window: window 1 contains one clearly fast
-# machine and several slow ones, windows 2 and 3 look like a quiet pool.
-# That is why the envelopes are unions of every run and not the last
-# window's figures. DO NOT SHRINK A TOLERANCE BECAUSE THE LAST RUNS WERE
-# QUIET.
+# state of the pool during the window. Windows 2 and 3 were quiet; windows 1
+# and 4 were not, on the same cell, the same image and the same programs —
+# window 4's suite spans 16.333 against a body around 22-23.6, the same shape
+# as window 1. A tolerance derived from the quiet windows alone would have
+# been far too tight, and a quiet window is not a measurement of the cell.
+# THAT IS WHY NOTHING HERE IS DERIVED FROM THE MOST RECENT RUNS.
+#
+# The renderer envelopes span all four windows: no renderer and no WORKLOADS
+# entry has changed since 3c30eca, so all sixteen dispatches measure one
+# program. The SUITE's envelope is window 4 alone, because each earlier
+# window measured a tree with a different number of collected tests — 770,
+# 777, 780, 784 — and the renderer's justification for unioning does not
+# transfer to a different program. Its 44.5% is this suite's own figure,
+# and its tolerance is the rule's answer to it: 0.45.
 #
 # THE WIDTH IS A STRUCTURAL ARGUMENT, NOT AN EMPIRICAL ONE. This gate compares
 # a per-run MINIMUM against a recorded MAXIMUM, so its false-red risk comes
 # from the head landing HIGH. Folding the observed spread in as one fraction
 # covers the LOW tail too, which this gate cannot be hurt by. The rule is
-# therefore conservative by construction: it measures in one direction and
-# protects in the other, and that is the right side to err on for a gate
-# whose failure mode is a red on main that teaches people to ignore it.
+# conservative by construction: it measures in one direction and protects in
+# the other, and that is the right side to err on for a gate whose failure
+# mode is a red on main that teaches people to ignore it.
 #
 # What the data does NOT support, and this header previously claimed, is
-# that 0.40 stops the suite false-reding on a busy run. Window 1's 39.8% for
-# the suite is a LOW-tail artefact — one run at 16.6 against a body of
-# 22.2-23.2 — so it is one fast machine, not a busy pool. The wide
-# tolerance stays for the structural reason above, not for that one.
+# that a tolerance was needed to stop the suite false-reding on a busy run.
+# Window 1's 39.8% is a LOW-tail artefact — one run at 16.6 against a body
+# of 22.2-23.2 — so it was one fast machine, not a busy pool. That claim
+# is withdrawn. The suite's tolerance MOVED from 0.40 to 0.45, and the
+# reason is not slack: it is the rule applied to this tree's own 44.5%
+# instead of to a neighbour's quiet-window 13.3%.
 #
 # WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
-# on the unit suite and on NONE of the three renderer workloads: doubling
-# the fastest machine observed lands under all three ceilings. Tightening
-# any of them to catch its doubling means going below its own observed
-# spread — a ceiling the fastest machine already clears, which would fire on
+# on NO ENTRY. The suite's ceiling is 34.2 against a doubled fastest run of
+# 32.7; the renderers miss by 0.113/0.144, 2.038/2.305 and 0.120/0.140.
+# That is the rule applied to this tree's own measurement, not a rounding
+# artefact. Going tighter would mean going below each entry's own observed
+# spread — a ceiling the fastest machine already clears, which fires on
 # ordinary pool variation. A gate that cries wolf is deader than one with a
-# documented blind spot, so bench.render is NOT tuned and neither are its
-# siblings. The gate catches a gross step change and the gross wall smoke
-# bound; it will not catch a 20% regression anywhere. Read "load-invariant
+# documented blind spot, so nothing here is tuned. The gate catches a gross
+# step change and the gross wall smoke bound; it will not catch a 20%
+# regression anywhere, and now not a doubling either. Read "load-invariant
 # counter" as "a quantity the machine's load does not reach", not as "a sharp
-# budget". No ceiling is written here: test_baseline.py recomputes every one,
-# CPU and wall, from the document.
+# budget". No ceiling is written here: test_baseline.py recomputes every
+# one, CPU and wall, from the document.
 #
 # ROUNDS stays 2, and for two reasons that are not the same reason.
 # --selfcheck compares SVG bytes across head rounds and needs at least two,
@@ -131,13 +144,10 @@ name: speed
 # instrument could have weakened it. Separately, the minimum across rounds is
 # the least-noisy observation of the same work.
 #
-# THE COMMITTED BASELINE RECORDS MEASURED_COMMIT 94e8a78, the head its five
-# dispatches ran against, and its `population` digest is computed from the
-# node ids THIS tree collects. The renderer envelopes describe this tree
-# exactly — WORKLOADS and every renderer are unchanged since. The unit
-# envelope does not, because commits since added the controls that govern
-# this document, so it is an estimate until the next dispatch re-derives it.
-# The gap is in the baseline's `basis` in those words, not here.
+# THE COMMITTED BASELINE RECORDS MEASURED_COMMIT 0f767ce, the head its
+# window-4 dispatches ran against, and its `population` digest is computed
+# from the node ids THIS tree collects. The renderer envelopes describe this
+# tree exactly; the suite's do too, because window 4 measured it.
 #
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and

@@ -442,13 +442,13 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         """The gate's stated power, computed from the committed numbers.
 
         This pins the honest answer, which is uncomfortable and which a
-        tolerance chosen to look better would have hidden: the envelopes span
-        BOTH windows the cell has shown, so a doubled workload is caught on
-        the unit suite and on none of the three renderer workloads.
-        Tightening a renderer tolerance to catch its doubling would mean
-        going below that entry's own observed spread, which is a gate firing
-        on ordinary pool variation. bench.render is not tuned, and neither
-        are its siblings.
+        tolerance chosen to look better would have hidden. The envelopes span
+        every window the cell has shown, including the busy ones, so at
+        these tolerances a doubled workload is caught on NO ENTRY — which is
+        what re-deriving against this tree's own 44.5% spread bought. Going
+        tighter would mean going below each entry's own observed spread, and
+        a ceiling the fastest machine already clears fires on ordinary pool
+        variation. Nothing is tuned.
 
         It also pins the ANSWER, not just the property, so that changing an
         envelope or a tolerance has to be a deliberate act here.
@@ -461,9 +461,10 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 doubled = envelope["min"] * 2
                 (caught if doubled > ceilings[name][node] else missed).add(
                     node)
-        self.assertEqual(caught, {"counter::unit-suite"})
+        self.assertEqual(caught, set())
         self.assertEqual(missed,
-                         {"e2e::bench.render", "e2e::bench.render-impact",
+                         {"counter::unit-suite", "e2e::bench.render",
+                          "e2e::bench.render-impact",
                           "e2e::bench.render-responsiveness"})
 
     def test_the_smoke_ceilings_are_computed_not_transcribed(self):
