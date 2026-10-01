@@ -63,10 +63,10 @@ jobs:
       - name: Install pyright
         run: |
           python -m pip install --upgrade pip
-          # requirements-test.txt too, or pyright cannot resolve the pytest
-          # import in test_compare_counters.py and reports it as an error.
-          # The runtime is stdlib, so this IS the whole set of third-party
-          # names pyright needs to know about.
+          # Install requirements-test.txt too: pyright checks the whole tree, so
+          # give it the full pinned toolchain to resolve the suite's names.
+          # The runtime is stdlib; these pinned requirements supply the
+          # third-party tools available for that check.
           pip install -r requirements-dev.txt -r requirements-test.txt
 
       - name: pyright
