@@ -264,15 +264,30 @@ class TestTheSmokeGate(unittest.TestCase):
                 self.assertGreaterEqual(envelope["n"],
                                         baseline.MIN_ENVELOPE_SAMPLES)
 
-    def test_the_unit_suite_smoke_bound_is_unarmed_and_says_so(self):
-        # No wall observations were supplied for it, so the map is empty
-        # rather than guessed. If that ever changes, this test is what
-        # should be looked at first: a gate that claims coverage it does not
-        # have is the failure this file is for.
+    def test_the_unit_suite_smoke_bound_is_armed_too(self):
+        # It was unarmed for two rounds because no wall observation had been
+        # supplied for it — not because the suite should be exempt. Now that
+        # the gh-wall attributes of the same six dispatches have been read,
+        # both populations are armed, and their ceilings differ by two orders
+        # of magnitude for the reason the basis records: the same machine
+        # effect measured at two scales.
         loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
-        self.assertEqual(loaded["populations"]["unit-suite"]["wall"], {})
-        self.assertIn("unit-suite population's `wall` map is empty",
-                      loaded["basis"])
+        wall = loaded["populations"]["unit-suite"]["wall"]
+        self.assertEqual(list(wall), ["counter::unit-suite"])
+        self.assertEqual(wall["counter::unit-suite"],
+                         {"min": 41.09, "max": 46.84, "n": 6})
+
+    def test_both_populations_carry_a_smoke_bound(self):
+        loaded = baseline.read_baseline(REPO_ROOT / "speed-baseline.json")
+        for name, population in loaded["populations"].items():
+            with self.subTest(population=name):
+                # A population with an empty wall map is a gate that claims
+                # less than it could, and it is exactly the gap that went
+                # unnoticed for two rounds. Both are armed; this pins it.
+                self.assertTrue(population["wall"], name)
+                for envelope in population["wall"].values():
+                    self.assertGreaterEqual(envelope["n"],
+                                            baseline.MIN_ENVELOPE_SAMPLES)
 
 
 class TestTheCommittedBaseline(unittest.TestCase):

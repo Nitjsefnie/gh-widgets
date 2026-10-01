@@ -122,10 +122,17 @@ name: speed
 # I/O, a network call or a lock wait looks like. The report still prints no
 # elapsed time at all: a verdict and no number.
 #
-# The unit suite's smoke bound is NOT armed. No wall observations were
-# supplied for counter::unit-suite in those dispatches, so its `wall` map is
-# empty rather than guessed, and the gross bound covers the renderer
-# workloads only.
+# The unit suite's bound is armed too, and it is a different number: 41.09 -
+# 46.84 seconds over the same six dispatches, a 14.0% spread against the
+# renderers' 52-63%, so its ceiling is 140.5s where theirs are under five.
+# That contrast is the reason the baseline carries per-population records
+# rather than one number between them — it is the SAME machine effect
+# measured at two scales. The suite is long enough that fixed per-VM overhead
+# stops dominating and the spread falls to 14%; the renderer workloads are
+# short enough that the overhead IS the measurement. One wall figure for both
+# would have been either too tight for the renderers, firing on ordinary
+# pool variation, or so loose for the suite that it could not catch a suite
+# that started waiting on something.
 #
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and
