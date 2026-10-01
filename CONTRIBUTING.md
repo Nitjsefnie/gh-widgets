@@ -177,7 +177,10 @@ named back. Note the shape of this repo — the renderers and their tests
 live at the ROOT, so the root block names back `*.py` directly, which is
 exactly why `__pycache__/` must stay denied and never re-opened. A new
 file of an unlisted type is invisible to git and will NOT appear in
-`git status`; `git check-ignore -v <path>` names the rule hiding it.
+`git status`; `git check-ignore -v <path>` names the rule hiding an
+UNTRACKED file. For a file the repo tracks, add `--no-index`, because
+`check-ignore` otherwise consults the index and a tracked path is never
+subject to the rules.
 
 ## House style
 

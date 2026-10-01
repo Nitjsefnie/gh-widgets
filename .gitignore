@@ -18,7 +18,9 @@
 #
 # Adding a file whose type is not already named back for its directory means
 # adding a rule here. `git status` will NOT tell you the file is missing; it
-# simply never appears. `git check-ignore -v <path>` names the rule hiding it.
+# simply never appears. `git check-ignore -v <path>` names the rule hiding an
+# UNTRACKED file. For a tracked file, add `--no-index`: check-ignore otherwise
+# consults the index, and a tracked path is never subject to the rules.
 
 *
 
