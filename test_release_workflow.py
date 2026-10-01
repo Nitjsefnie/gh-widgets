@@ -50,6 +50,7 @@ requires_bash = unittest.skipIf(
     "runners in production, and the block-text assertions in "
     "test_release_workflow.py — "
     "test_manifest_names_the_workflows_a_version_push_schedules, "
+    "test_the_self_exclusion_names_the_job_instead_of_a_prefix, "
     "test_tag_guards_are_identical_in_both_steps, "
     "test_the_shipped_wait_budget_is_the_documented_one and "
     "test_no_dispatch_input_is_inlined_into_a_run_block — run on every OS",
@@ -259,21 +260,26 @@ exit 1
         fixture that used to use one was wrong about the API, not the code
         under test.
 
-        The two shapes that would break an exact match — a `name:` override
-        and a matrix `strategy:` — are refused here rather than passed over,
-        because every caller that matches on this name needs it to be exact.
+        The job is found by the step that runs inside it rather than by being
+        the only one, so a second job added here is a detail rather than
+        thirty-odd unrelated failures. The two shapes that would break an
+        exact match — a `name:` override and a matrix `strategy:` — are
+        refused rather than passed over, because every caller that matches on
+        this name needs it to be exact.
         """
         text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-        try:
-            body = text.split("\njobs:\n", 1)[1]
-        except IndexError:
-            raise AssertionError("release.yml has no jobs: block") from None
-        jobs = re.findall(r"(?m)^  ([a-z][a-z-]*):$", body)
-        if len(jobs) != 1:
+        step = "      - name: Wait for the other gates on this commit"
+        # Actions job ids: a letter or underscore, then letters, digits,
+        # underscores and dashes.
+        owners = [job for job in re.findall(
+            r"(?m)^  ([A-Za-z_][A-Za-z0-9_-]*):$",
+            text.split("\njobs:\n", 1)[-1])
+            if step in "\n".join(cls._job_block(text, job))]
+        if len(owners) != 1:
             raise AssertionError(
-                f"release.yml declares {len(jobs)} jobs ({jobs}); the wait "
-                "step's own check run is no longer a single name")
-        job = jobs[0]
+                f"{len(owners)} jobs in release.yml contain the wait step "
+                f"({owners}); its own check run is not a single name")
+        job = owners[0]
         job_block = "\n".join(cls._job_block(text, job))
         override = re.search(r"(?m)^ {4}name:\s*(\S.*)$", job_block)
         if override:
@@ -380,7 +386,7 @@ class TestReleaseWorkflowGates(_ReleaseWorkflowFixture):
 Issue #34 — the wait step must not release on a subset of the gates.
 
 Every case runs the shipped `run:` block against a stubbed `gh`; the
-last four read the workflow as text, so they run on every OS.
+    ones that only read the workflow as text run on every OS.
     """
     # pylint: disable=too-many-public-methods
 
@@ -656,7 +662,12 @@ last four read the workflow as text, so they run on every OS.
         # and it is matched exactly. Both directions are driven: a red one is
         # refused, and a running one is waited for rather than ignored.
         own = self._own_check_name()
-        for other in (f"{own}-notes-lint", f"{own}-notes-lint (lint)"):
+        # The bare prefix, the decorated one, and the matrix form of the job's
+        # OWN name — that last is the shape a wrong fix reaches for when it
+        # tries to be future-proof, and it is the same dropped-gate bug one
+        # delimiter down. This job is not a matrix and its name is exact.
+        for other in (f"{own}-notes-lint", f"{own}-notes-lint (lint)",
+                      f"{own} (waived)"):
             with self.subTest(check_run=other):
                 self.setUp()
                 self._write_runs([("completed", "failure", other)]
@@ -883,6 +894,10 @@ last four read the workflow as text, so they run on every OS.
         self.assertIn("SELF: ${{ github.job }}", text)
         self.assertIn('-v self="$SELF"', block)
         self.assertNotIn(f'self="{own}"', block)
+        # A second exclusion is the shape a drifted copy takes, and a
+        # hard-coded literal left alongside the real one would satisfy every
+        # other assertion here while pinning the name all over again.
+        self.assertNotIn("select(", block)
         # `startswith("release")` was the bug, not the general shape of the
         # word, so it is spelled out rather than derived from `own`.
         self.assertNotIn("startswith", block)
