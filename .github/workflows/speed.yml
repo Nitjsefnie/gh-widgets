@@ -16,11 +16,11 @@ name: speed
 # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
 # counts and syscall counts are both deterministic and both would have been
 # strictly better instruments; neither survived measurement on the cell that
-# will read this baseline. What ships is a GROSS-REGRESSION NET, not a
-# sensitive gate, and the budgets below are sized to stay quiet on a noisy
-# cell rather than to catch a 10% regression. That is a real cost of the
-# minutes budget, and it is named as one here, in counter.py's docstring, in
-# the comparator's METRIC_NOTES, and in every report this job writes.
+# will read this baseline. What ships is a STEP-CHANGE DETECTOR, not a
+# sensitive gate: it catches a doubled workload and will not catch a 20%
+# regression. That is a real cost, and it is named as one here, in
+# counter.py's docstring, in the comparator's METRIC_NOTES and in the
+# envelope section below, and in every report this job writes.
 #
 # THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured on
 # this cell — ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure — not
@@ -45,8 +45,8 @@ name: speed
 #                render-impact.py, which shells out to git (237727-238180
 #                syscalls at 63.7-74.6 wall seconds traced, while render.py at
 #                2007 syscalls and render-responsiveness.py at 1927 are
-#                seconds each). On a cell whose suite round is ~20s, 12.8x on
-#                two bench rounds costs minutes to save tens of seconds.
+#                seconds each). Over the renderer workloads that is 12.8x per
+#                bench round, on a workload set the gate exists to measure.
 #
 # The standing rule that leaves: an instrument the cell cannot use does not
 # belong in the gate, and neither does one that costs more than the thing it
@@ -67,54 +67,45 @@ name: speed
 # use can then see that the alternatives were measured and unavailable or too
 # expensive, rather than assuming nobody thought of them.
 #
-# THE BUDGETS COME FROM THE CELL THAT READS THEM, AND THE CELLS DIFFER BY A
-# FACTOR OF THREE. Measured on both, same tree, CPU seconds:
+# THE BASELINE IS AN OBSERVED ENVELOPE, NOT A NUMBER. Each entry in
+# speed-baseline.json records the RANGE it was actually seen over — a min, a
+# max, and how many observations — and the gate fails only when a head value
+# exceeds `observed maximum x (1 + tolerance)`. The ratchet acts on that
+# recorded maximum, so an improvement lowers the ceiling and a regression has
+# to clear the worst machine actually seen.
 #
-#   on the RUNNER (runs 36820664288 / 36820703818 / 36820741554, three rounds
-#   each):
-#     bench.render                     0.080747 0.080496 0.091849   14.1%
-#     bench.render-impact              1.344901 1.340172 1.441353    7.5%
-#     bench.render-responsiveness     0.078168 0.078769 0.089779   14.9%
-#   on a SHARED box (eight rounds each, same tree):
-#     bench.render                     0.1251 - 0.1843                47.3%
-#     bench.render-impact              3.3450 - 3.7062                10.8%
-#     bench.render-responsiveness     0.1277 - 0.1726                35.2%
+# WHY AN ENVELOPE. CPU seconds exclude steal, so a co-tenant does not reach
+# them — that is what makes them a magnitude where elapsed time is not. They
+# are still hardware-dependent: a faster or narrower core runs the same
+# instructions in fewer CPU seconds, and the ubuntu-latest pool spans instance
+# types. Six dispatches of one tree on this cell, at the image and runner
+# version in the baseline's `cell`:
 #
-# Two things follow, and they are the whole reason the budget is a procedure
-# rather than a number:
+#   entry                          min        max      spread
+#   counter::unit-suite            10.287820  16.340854   58.8%
+#   e2e::bench.render               0.055953   0.090278   61.3%
+#   e2e::bench.render-impact        0.770657   1.414891   83.6%
+#   e2e::bench.render-responsiveness 0.054544  0.087334   60.1%
 #
-#   1. THE DIRECTION FLIPS. On the shared box the two brief workloads were the
-#      NOISIEST of all — fixed overhead and a co-tenant's load dominate a short
-#      measurement. On the runner they are among the quietest, and the briefest
-#      of the three is the tightest. A budget derived from the box would have
-#      been far too loose for CI and would have let a real renderer regression
-#      through for months.
-#   2. bench.render-impact IS THE ONE THAT MATTERS MOST: it is the workload
-#      tracing made unaffordable, it is the slowest, and at 7.5% it earns
-#      twice-the-spread = 0.15, a budget that would actually bite. On the
-#      shared box the same workload needed 0.22 for the same reason and none
-#      of the three would have bitten.
+# The two rounds WITHIN a dispatch agree to about 2%. Across dispatches they
+# do not, and the whole vector moves together — the fastest run 35-40% below
+# the slowest on every entry at once, which is a property of the machine and
+# not of the code. A single stored value plus a budget wide enough to cover
+# that would need a tolerance above 1.0 on some entries: not a loose gate, a
+# gate that cannot fire.
 #
-# So: a population's budget is AT LEAST TWICE THE SPREAD MEASURED ON THE CELL
-# THAT WILL READ IT, re-derived there, and never carried. On the runner that
-# is 0.15 for bench.render-impact, 0.30 for render and render-responsiveness,
-# and UNWRITTEN for the unit suite until it is measured there — a budget
-# derived from nothing is worse than no budget. The shared-box numbers are
-# kept above because they are the reason the rule exists, not because they
-# apply to CI.
+# WHAT THIS GATE IS, STATED RATHER THAN IMPLIED. The recorded maximum already
+# contains the entire observed spread, so the tolerance covers what was NOT
+# observed. At 0.25 on top of the worst run seen, this is a STEP-CHANGE
+# DETECTOR, NOT A REGRESSION DETECTOR: it catches a doubled workload and an
+# accidental quadratic, and it will not catch a 20% regression. Do not read
+# "load-invariant counter" as "sharp budget" — the envelope is the reason the
+# instrument is usable at all, and its price is stated here rather than left
+# to be discovered by someone who assumed otherwise.
 #
-# ONE BUDGET PER POPULATION ANYWAY. The spreads are not uniform even on one
-# cell — 7.5% to 14.9% across three workloads on the runner — so one global
-# `tolerance` would be right for at most one of them and wrong, by a factor of
-# two, for the other two. Each population therefore carries its own `metric`
-# and `tolerance` in speed-baseline.json, and each comparison names the
-# population it judges.
-#
-# ROUNDS stays 2, for two reasons that are not the same reason. --selfcheck
-# compares SVG bytes across head rounds and needs at least two, and that
-# control is byte-identity, not timing, so nothing about the instrument could
-# have weakened it. Separately, with a counter this noisy the minimum across
-# repeated rounds is the least-noisy observation of the same work.
+# The numbers above are recorded in speed-baseline.json's `basis` next to the
+# envelope they produced, so the next person sees the shape of the cell
+# instead of spending a morning deriving it.
 #
 # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
 # comparison point reviewable. The previous shape ran the last release and
@@ -127,14 +118,15 @@ name: speed
 # entry went up — otherwise a commit could raise the ceiling it is measured
 # against in the same push, and the gate would be switched off from inside.
 #
-# UNTIL A BASELINE EXISTS. There is no speed-baseline.json committed yet,
-# because a baseline has to be measured ON THIS CELL and inventing one from
-# another machine would be exactly the error this whole change exists to stop
-# committing. Until it exists the comparator prints what it measured, writes
-# it to the step summary in a form that can be pasted straight in, and exits
-# 0 — the same shape as the "no release exists yet" path this file has always
-# had. A green gate with an EMPTY summary is the thing this repository keeps
-# failing reviews over, so that path is not silent.
+# IF THE BASELINE IS EVER DELETED. The comparator then prints what it
+# measured and exits 0 — the same shape as the "no release exists yet" path
+# this file always had — with the measured entries in the envelope shape at
+# `n: 1`, which the validator REFUSES on purpose. A baseline from one dispatch
+# records what one machine did once and calls it a worst case, so the refusal
+# is the intended behaviour: re-run the job several times on this cell and
+# build the envelope from those. A green gate with an EMPTY summary is the
+# thing this repository keeps failing reviews over, so that path is not
+# silent — but it is not an invitation to paste the first result in.
 #
 # WHICH CONTROLS SURVIVED, AND WHY.
 #   * The offline fixtures and pinned inputs are untouched: a measurement of
