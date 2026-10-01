@@ -143,12 +143,14 @@ name: speed
 #     was compared, because a red box with an empty summary is a red nobody
 #     can act on.
 #
-# PYTEST IS STILL INSTALLED, AND IT IS NOT A TIMING HARNESS ANY MORE.
-# `unittest discover` imports every test_*.py module it collects, and
-# test_compare_durations.py imports pytest at module level; without pytest the
-# discovery pass — and therefore this measurement — cannot run at all. The
-# install below is for that import and nothing else. No test in this
-# repository is written against pytest.
+# THIS JOB INSTALLS NOTHING. That is not an oversight left over from when it
+# installed pytest as a timing harness; it is the end state. The harness went
+# when the counter took over, and the install outlived it only because
+# `unittest discover` imports every test_*.py module it collects and
+# test_compare_durations.py still imported pytest at module level. That file
+# is now stdlib unittest like everything else, so both reasons are gone. The
+# measurement below runs on a bare interpreter, which is also why the
+# suite's own coverage and lint toolchain cannot be in this job's path.
 
 on:
   push:
@@ -203,15 +205,14 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install the test toolchain
-        # NOT a timing harness. `unittest discover` imports every test
-        # module it collects, and test_compare_durations.py imports pytest
-        # at module level; without it the collection pass this job depends
-        # on cannot run. pytest emits no report here — the counter writes
-        # the JUnit itself.
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r head/requirements-test.txt
+      # No install step, and that is the point: this job needs nothing but
+      # the standard library. It used to install pytest as a timing harness,
+      # and then kept the install after the harness went because
+      # `unittest discover` imports every test module it collects and
+      # test_compare_durations.py imported pytest at module level. Both
+      # reasons are gone — the counter writes the JUnit itself, and that
+      # test file is now stdlib unittest like everything else — so the
+      # measurement runs on a bare interpreter.
 
       - name: Probe the counter instrument
         id: probe

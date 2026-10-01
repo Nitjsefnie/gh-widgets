@@ -16,7 +16,7 @@
 version: 2
 updates:
   # requirements-dev.txt (lint/type toolchain) and requirements-test.txt
-  # (coverage + pytest, which one test module imports). There is no backend
+  # (coverage + pytest, pinned for local runs only). There is no backend
   # entry: the runtime is pure stdlib with zero third-party imports, so
   # these tool pins are the entire pip surface.
   - package-ecosystem: pip

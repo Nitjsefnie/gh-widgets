@@ -91,15 +91,17 @@ touches the network, and it must stay that way. If you add a rendering
 branch, add a case that pins its output; SVG regressions are invisible
 until someone looks at a broken README.
 
-**`unittest discover` is the runner and stays the runner.** pytest appears
-in `requirements-test.txt` for one reason: `test_compare_durations.py`
-imports it, and `unittest discover` imports every `test_*.py` module it
-collects, so the suite cannot be collected at all without it. It measures
-nothing and emits no report — `speed.yml` once ran the suite through it as a
-timing harness and no longer does, because the gate now counts work done
-(CPU seconds, so steal time is excluded) instead of elapsed time. Do not write a test against pytest
-fixtures or `assert`-rewriting — it would run in CI and then not run for
-anyone using the documented command.
+**`unittest discover` is the runner and stays the runner**, and pytest has
+nothing left to do here. It was `speed.yml`'s timing harness, collecting
+these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
+that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
+own JUnit. It was also imported by `test_compare_durations.py`, which
+`unittest discover` had to be able to import in order to collect the suite;
+that file is now stdlib unittest like everything else. `requirements-test.txt`
+still pins it so a local `pytest` run of the same file works, and nothing in
+CI asks it for anything. Do not write a test against pytest fixtures or
+`assert`-rewriting — it would run in CI and then not run for anyone using
+the documented command.
 
 ## CI
 
