@@ -622,10 +622,15 @@ class WorkflowDriftTests(unittest.TestCase):
         trigger_lines = '\n'.join(self.trigger_block(text))
         push_block = trigger_lines.split('  push:\n', 1)[1].split('  pull_request:\n', 1)[0]
         pull_request_block = trigger_lines.split('  pull_request:\n', 1)[1].split('  workflow_dispatch:\n', 1)[0]
-        self.assertIn('    branches: [main]', push_block,
-                      'issue #89: a branch push fired a second aggregate on the PR head SHA; its behind/diverged '
-                      'comparison failed and blocked the merge under require-ci-aggregate until re-run')
-        self.assertNotIn('branches:', pull_request_block)
+        push_branch_filters = [line.strip() for line in push_block.splitlines()
+                               if ag.re.match(r'^    branches(?:-ignore)?:', line)]
+        pull_request_branch_filters = [line.strip() for line in pull_request_block.splitlines()
+                                       if ag.re.match(r'^    branches(?:-ignore)?:', line)]
+        self.assertEqual(push_branch_filters, ['branches: [main]'],
+                         'issue #89: a branch push fired a second aggregate on the PR head SHA; its behind/diverged '
+                         'comparison failed and blocked merging under require-ci-aggregate; rerunning failed again')
+        self.assertEqual(pull_request_branch_filters, [],
+                         'pull_request must not define branches or branches-ignore')
         self.assertIn('actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1', text)
         self.assertIn('actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0', text)
         block = text.split('        run: |', 1)[1]

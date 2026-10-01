@@ -11,11 +11,11 @@ name: aggregate
 # #89's fix, a push to a PR branch also fired aggregate on the same head SHA.
 # When that branch was behind or diverged from the default branch, the push
 # comparison failed. That failed check, with the same name as the passing
-# pull_request check, blocked the merge under require-ci-aggregate until
-# re-run; re-running failed again because the event payload's before/after
-# comparison was stale. Nothing requires a verdict on a non-default-branch
-# push outside a PR, so the push trigger is main-only. A VERSION push to main
-# still schedules aggregate, keeping release.yml's manifest entry valid.
+# pull_request check, blocked merging under require-ci-aggregate; rerunning
+# failed again because the event payload's before/after comparison was stale.
+# Nothing requires a verdict on a non-default-branch push outside a PR, so
+# the push trigger is main-only. A VERSION push to main still schedules
+# aggregate, keeping release.yml's manifest entry valid.
 # Neither trigger has a path filter: a docs-only change still gets a verdict
 # on every pull request and on main.
 #
