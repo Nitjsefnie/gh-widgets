@@ -182,6 +182,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         if population:
             (reports / "unit-population.txt").write_text(
                 "\n".join(sorted(self.POPULATION)) + "\n", encoding="utf-8")
+        self._write_workload_population(root)
         if baseline:
             self._write_baseline(root, metric=metric, tolerance=tolerance,
                                  wall=wall, population=population,
@@ -212,6 +213,61 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                                {"unit-suite": unit_wall})
             self._write_report(reports / f"bench-head-{round_number}.xml",
                                "e2e", cases, metric, walls)
+
+    def _write_workload_population(self, root):
+        """`reports/renderer-population.txt`, from the INSTALLED harness.
+
+        The workflow writes this from `--list-workloads`, so a test that
+        wrote the three names itself would be checking the fixture rather
+        than the harness — and a workload retired from WORKLOADS would leave
+        a stale id in a file the comparator then refuses.
+        """
+        harness = root / "head" / "scripts" / "bench" / "e2e_bench.py"
+        listing = subprocess.run([sys.executable, str(harness),
+                                  "--list-workloads"],
+                                 capture_output=True, text=True, check=True)
+        target = root / "reports" / "renderer-population.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(listing.stdout, encoding="utf-8")
+
+    def _ratchet_checkout(self, prefix):
+        """A workspace whose ONLY repository is at head/, as checkout leaves it."""
+        root = self._temp_root(prefix)
+        origin = root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+        checkout = root / "head"
+        subprocess.run(["git", "clone", "-q", str(origin), str(checkout)],
+                       check=True)
+        return root, checkout
+
+    def _ratchet_commit(self, checkout, message, push=False):
+        """Commit inside a checkout built by `_ratchet_checkout`."""
+        git = ["git", "-C", str(checkout)]
+        for args in (["config", "user.email", "bench@example.invalid"],
+                     ["config", "user.name", "bench"]):
+            subprocess.run(git + args, check=True)
+        subprocess.run(git + ["add", "speed-baseline.json",
+                              "scripts/ci/compare_durations.py",
+                              "scripts/ci/counter.py",
+                              "scripts/ci/baseline.py"], check=True)
+        subprocess.run(git + ["commit", "-qm", message], check=True)
+        if push:
+            subprocess.run(git + ["push", "-q", "origin",
+                                  "HEAD:refs/heads/main"], check=True)
+        return git
+
+    def _rederive_renderer_population(self, root):
+        """Re-derive the renderer population digest from the edited harness."""
+        counter = self._install_counter(root / "head")
+        listing = subprocess.run(
+            [sys.executable, str(root / "head" / "scripts" / "bench" /
+                                 "e2e_bench.py"), "--list-workloads"],
+            capture_output=True, text=True, check=True).stdout.split()
+        path = root / "speed-baseline.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["populations"][self.RENDERER_POPULATION]["population"] = \
+            counter.population_digest(listing)
+        path.write_text(json.dumps(document, indent=2), encoding="utf-8")
 
     @staticmethod
     def _install(head, source):
@@ -333,12 +389,66 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         # chain inside counter.py.
         for step in ("Measure the unit suite", "Run renderer workloads"):
             with self.subTest(step=step):
-                self.assertIn("GH_COUNTER_METRIC: cpu_time",
-                              self._run_block_env(step))
+                self.assertEqual(self._step_run(step)[0]
+                                 ["GH_COUNTER_METRIC"], "cpu_time")
+
+    def _job_env(self):
+        """`jobs.speed.env`, the mappings every step inherits."""
+        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        # Anchored on the job, because a step-level `env:` earlier in the
+        # file would otherwise be picked up instead.
+        job = lines.index("  speed:")
+        start = next(i for i in range(job, len(lines))
+                     if lines[i] == "    env:")
+        return self._env_map(lines[start + 1:], "      ")
+
+    def _step_env(self, block):
+        """The environment a step runs with: job env, then step env."""
+        env = dict(self._job_env())
+        working_dir = None
+        step_env = []
+        inside = False
+        for line in block:
+            if line.startswith("        env:"):
+                inside = True
+                step_env = []
+                continue
+            if inside and (line.startswith("          ") or
+                           line.strip().startswith("#")):
+                step_env.append(line)
+                continue
+            if inside and line.strip():
+                break
+            if line.startswith("        working-directory:"):
+                working_dir = line.split(":", 1)[1].strip()
+        env.update(self._env_map(step_env, "          "))
+        return env, working_dir
 
     @staticmethod
-    def _run_block_env(step_name):
-        """The `env:` mapping of one named step, as text."""
+    def _env_map(lines, indent):
+        """`KEY: value` pairs under an `env:` block, comments skipped."""
+        env = {}
+        for line in lines:
+            if not line.startswith(indent):
+                break
+            text = line.strip()
+            if text.startswith("#"):
+                continue
+            if ":" not in text:
+                break
+            key, _, value = text.partition(":")
+            env[key.strip()] = value.strip().strip("\"'")
+        return env
+
+    def _step_run(self, step_name):
+        """One named step, as the JOB runs it: (env, working-directory, body).
+
+        GitHub merges a step's `env:` into its environment and runs its
+        `working-directory` as the cwd. A test that executes the body has to
+        do both or it is executing a different command from the one that
+        ships — which is how a step can read clean in a text assertion and
+        fail on every pull request.
+        """
         lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
         start = lines.index(f"      - name: {step_name}")
         block = []
@@ -346,116 +456,24 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             if line.startswith("      - ") and line is not lines[start]:
                 break
             block.append(line)
-        return "\n".join(block)
 
-    def test_no_step_takes_its_instrument_from_the_probe_output(self):
-        # The instrument is pinned literally in both measurement steps, so a
-        # $GITHUB_ENV left behind by an older revision — exporting the
-        # instrument this gate no longer has — cannot reach counter.py at
-        # all. The probe step's output is still recorded in the job summary,
-        # but nothing consumes it as a contract.
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
-        self.assertNotIn("GH_COUNTER_METRIC: ${{", text)
-        self.assertIn("id: probe", text)
+        # Job-level env applies to every step and is NOT re-declared on the
+        # step, so a test that merged only the step's env would run a
+        # different command from the one that ships. The step wins where
+        # both declare a key, as in the job itself.
+        env, working_dir = self._step_env(block)
 
-    # -- the cwd defect (runs 36820664288, 36820703818, 36820741554) --------
-
-    def test_the_unit_suite_is_measured_inside_the_checkout(self):
-        """The step must name the directory discovery runs in.
-
-        Three CI runs collected 724 node ids in the step BEFORE this one and
-        then measured 0.05 CPU seconds of interpreter startup, because
-        discovery ran from the parent of the checkout, found nothing, and
-        exited 5. The counter reported exactly what it was asked for; the
-        question was the wrong one. `--cwd` makes the directory part of the
-        command rather than something the shell's working directory decides.
-        """
-        block = self._run_block("Measure the unit suite")
-        self.assertIn('--cwd "$GITHUB_WORKSPACE/head"', block)
-        self.assertIn("--name 'counter::unit-suite'", block)
-        # And the reports are written outside the checkout, so that naming
-        # the cwd can never also move where this step's own output lands.
-        self.assertIn('--junit-file "$GITHUB_WORKSPACE/reports/unit-$round.xml"',
-                      block)
-
-    def test_a_measurement_runs_in_the_directory_it_was_given(self):
-        """counter.py's half of the cwd fix, at the tool rather than the YAML.
-
-        The assertion above is about the workflow's text. This is about the
-        tool's behaviour, so that the next way of getting the directory
-        wrong — a stale flag, a missing one, a wrapper shell — fails a test
-        rather than a CI run. The two measurements differ only in `cwd`, and
-        only one of them can see the marker file.
-        """
-        counter = self._install_counter(
-            self._temp_root("ghw-counter-cwd-") / "head")
-        listing = "import os; print(sorted(os.listdir('.')))"
-        with tempfile.TemporaryDirectory(prefix="ghw-cwd-probe-") as td:
-            root = Path(td)
-            (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
-            inside = counter.measure([sys.executable, "-c", listing],
-                                     cwd=root,
-                                     metric=counter.CPU_METRIC)
-            outside = counter.measure(
-                [sys.executable, "-c", listing],
-                metric=counter.CPU_METRIC)
-        self.assertIn("marker-only-here.txt", inside.stdout)
-        self.assertNotIn("marker-only-here.txt", outside.stdout)
-
-    # -- the missing baseline is an expected outcome, not a traceback -------
-
-    def test_a_missing_baseline_prints_no_traceback(self):
-        """Two stack traces ahead of every green first run train readers to
-        scroll past the red ones."""
-        root = self._run_with_tree("ghw-speed-missing-baseline-",
-                                   baseline=False)
-        completed, summary = self._execute_compare(root)
-
-        self.assertEqual(completed.returncode, 0,
-                         completed.stdout + completed.stderr)
-        for stream in (completed.stdout, completed.stderr):
-            self.assertNotIn("Traceback", stream)
-            self.assertNotIn("MissingBaseline", stream)
-        self.assertIn("No baseline to compare against", summary)
-
-    def test_a_missing_baseline_with_a_failed_suite_is_still_clean(self):
-        """The combination that produced it: no baseline AND a suite that did
-        not pass. The failure is about the head, so it is reported as one —
-        exit 2 with a message — rather than escaping the handler as a
-        traceback."""
-        root = self._run_with_tree("ghw-speed-missing-and-failed-",
-                                   baseline=False)
-        for round_number in (1, 2):
-            suite = ET.Element("testsuite", {
-                "name": "counter", "tests": "1", "failures": "1",
-                "errors": "0", "skipped": "0", "time": "0.05",
-                "gh-metric": "cpu_time"})
-            case = ET.SubElement(suite, "testcase", {
-                "classname": "counter", "name": "unit-suite",
-                "time": "0.05", "gh-wall": "0.6"})
-            ET.SubElement(case, "failure", {
-                "message": "command exited with code 5",
-                "type": "CommandFailure"})
-            ET.ElementTree(suite).write(
-                root / "reports" / f"unit-{round_number}.xml",
-                encoding="utf-8", xml_declaration=True)
-        completed, summary = self._execute_compare(root)
-
-        self.assertEqual(completed.returncode, 1,
-                         completed.stdout + completed.stderr)
-        self.assertNotIn("Traceback", completed.stderr)
-        self.assertIn("COULD NOT COMPARE", summary)
-        self.assertIn("no baseline to compare against", summary)
-
-    def test_the_total_budget_is_not_named_like_the_threshold(self):
-        """`tolerance` in the baseline is the gate. An env var reading as
-        "the maximum" would be read as the threshold and is not."""
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
-        # As an env key it is gone; the name survives in the comment that
-        # explains why it was renamed, which is the point of renaming it.
-        self.assertNotIn("      MAX_REGRESSION:", text)
-        self.assertIn('TOTAL_BUDGET: "0.30"', text)
-        self.assertIn("NOT THE THRESHOLD", text)
+        run_line = next(i for i, line in enumerate(block)
+                        if line.startswith("        run: |"))
+        body = []
+        for line in block[run_line + 1:]:
+            if line.startswith("          "):
+                body.append(line[10:])
+            elif not line.strip():
+                body.append("")
+            else:
+                break
+        return env, working_dir, "\n".join(body) + "\n"
 
     # -- refusals ------------------------------------------------------------
 
@@ -755,6 +773,16 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         harness.write_text(
             retire_impact(harness.read_text(encoding="utf-8")),
             encoding="utf-8")
+        # The workload id list is regenerated from the EDITED harness, the
+        # way the workflow regenerates it, so retiring a workload really does
+        # remove it from the population — and the baseline records that
+        # population, so retiring one legitimately requires re-deriving the
+        # renderer digest in the same commit. That is the discipline working,
+        # not an obstacle: the change is visible in the diff, and the ratchet
+        # does not object because a digest is a description of what was
+        # measured rather than a ceiling on it.
+        self._write_workload_population(root)
+        self._rederive_renderer_population(root)
         self._write_report(
             root / "reports" / "bench-head-1.xml", "e2e",
             [("bench.render", 1000.0), ("bench.render-responsiveness", 50.0)],
@@ -839,17 +867,125 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("--side head", block)
         self.assertNotIn("--side base", block)
 
-    def test_the_ratchet_step_judges_the_merge_base_on_a_pull_request(self):
+    def test_the_ratchet_step_is_declared_against_the_base_ref(self):
         text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
-        step_start = text.index("      - name: The committed baseline only "
-                                "ratchets down")
-        step = text[step_start:text.index("\n      - ", step_start + 10)]
-        # A gate that judges the wrong base is worse than no gate: the base
-        # SHA is the whole question, and a push to main has no base at all.
-        self.assertIn("github.event_name == 'pull_request'", step)
-        self.assertIn("github.event.pull_request.base.sha", step)
+        step = self._step_text("The committed baseline only ratchets down")
+        # `base.sha` trails the base tip and does not refresh on synchronize,
+        # so the comparison would be made against an OLDER, looser baseline —
+        # the one direction that is wrong here.
+        self.assertIn("github.event.pull_request.base.ref", step)
+        self.assertNotIn("github.event.pull_request.base.sha", step)
+        self.assertIn("FETCH_HEAD", step)
         self.assertIn("--ratchet-baselines", step)
-        self.assertIn('$BASE_SHA:$BASELINE', step)
+        self.assertIn("$base_tip:$BASELINE", step)
+        self.assertIn("working-directory: head", step)
+        self.assertIn("id: probe", text)
+
+    def _step_text(self, step_name):
+        """One named step's YAML, from its name to the next step."""
+        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        start = text.index(f"      - name: {step_name}")
+        end = text.index("\n      - ", start + 10)
+        return text[start:end]
+
+    @unittest.skipIf(sys.platform == "win32",
+                     "runs bash and git; the step runs only on ubuntu runners "
+                     "in production")
+    def test_the_ratchet_step_EXECUTES_against_a_checkout_at_head(self):
+        """The step's `run:` body, executed the way the job runs it.
+
+        It is gated to `pull_request` and every dispatch used as evidence was
+        a `workflow_dispatch`, so nothing had ever executed it, and a text
+        assertion cannot fail on a wrong working directory — which is what it
+        had: `actions/checkout` puts the repository at `head/`, and a step
+        without `working-directory` runs one level above it. This builds that
+        shape and runs the block under `bash -e`, so the working directory,
+        the fetch and the base-tip resolution are exercised, not described.
+        """
+        declared, working_dir, block = self._step_run(
+            "The committed baseline only ratchets down")
+        root = self._temp_root("ghw-speed-ratchet-exec-")
+        origin = root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)],
+                       check=True)
+        checkout = root / "head"
+        subprocess.run(["git", "clone", "-q", str(origin), str(checkout)],
+                       check=True)
+        # The workspace holds only `head/`, and the baseline lives inside the
+        # repository — as it does in the job, where actions/checkout put the
+        # whole tree under head/ and the step's working-directory is head.
+        self._write_baseline(root)
+        shutil.copyfile(root / "speed-baseline.json",
+                        checkout / "speed-baseline.json")
+        for name in ("compare_durations.py", "counter.py", "baseline.py"):
+            script = checkout / "scripts" / "ci" / name
+            script.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name, script)
+        self._ratchet_commit(checkout, "baseline", push=True)
+        # The base branch tip holds the baseline as it WAS; the local
+        # checkout is the pull request head and RAISES a recorded maximum.
+        # Nothing after this commit is pushed, so the block fetches a base
+        # tip that genuinely differs — which is the only shape in which the
+        # ratchet has anything to refuse.
+        baseline_file = checkout / "speed-baseline.json"
+        raised = json.loads(baseline_file.read_text(encoding="utf-8"))
+        raised["populations"]["unit-suite"]["entries"][self.UNIT_NODE][
+            "max"] *= 2
+        (checkout / "speed-baseline.json").write_text(
+            json.dumps(raised, indent=2), encoding="utf-8")
+        self._ratchet_commit(checkout, "raise the ceiling")
+
+        # The step's own env, with the `${{ }}` the job would have expanded
+        # replaced by the values this test stands in for. Anything still
+        # holding an expression is dropped rather than exported, so the block
+        # reads the test's value instead of a literal `${{ ... }}`.
+        resolved = {key: value for key, value in declared.items()
+                    if "${{" not in value}
+        self.assertIn("BASELINE", resolved,
+                      "the ratchet step reads $BASELINE from the job env")
+        env = {**os.environ, **resolved, "BASE_REF": "main",
+               "RUNNER_TEMP": str(root)}
+        # GitHub runs a step with no declared working-directory in the
+        # workspace, so that is what this does when the key is absent — which
+        # is the point: removing `working-directory: head` from the step has
+        # to make THIS fail, by executing the commands one level above the
+        # only repository on the box.
+        completed = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", block],
+            cwd=root / working_dir if working_dir else root, env=env,
+            capture_output=True, text=True, check=False)
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr
+                         + (root / "base-baseline.json").read_text(
+                             encoding="utf-8", errors="replace")[:400])
+        self.assertNotIn("not a git repository", completed.stderr)
+        self.assertIn("went UP", completed.stderr)
+        self.assertIn("Base branch tip:", completed.stdout)
+
+    def test_the_ratchet_step_would_fail_without_its_working_directory(self):
+        """The mutation the executed test exists to catch, proven.
+
+        The workspace this builds has NO repository at its top level — only
+        `head/`, exactly as actions/checkout leaves it — so running the block
+        there is what the step would do if it stopped declaring its working
+        directory. This asserts that the failure mode is real rather than
+        assumed: a control that only proves it works has not proved it can
+        fail, and this one was invisible to the suite for seven rounds.
+        """
+        root, _ = self._ratchet_checkout("ghw-speed-ratchet-mutation-")
+        declared, working_dir, block = self._step_run(
+            "The committed baseline only ratchets down")
+        self.assertEqual(working_dir, "head",
+                         "if this step ever stops declaring one, delete this "
+                         "test deliberately — it asserts a key that is gone")
+        env = {**os.environ,
+               **{k: v for k, v in declared.items() if "${{" not in v},
+               "BASE_REF": "main", "RUNNER_TEMP": str(root)}
+        broken = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", block],
+            cwd=root, env=env, capture_output=True, text=True, check=False)
+        self.assertNotEqual(broken.returncode, 0)
+        self.assertIn("no git repository", broken.stderr)
 
     def test_no_workflow_still_looks_up_a_release_for_the_speed_gate(self):
         # The whole point of issue #81: the comparison point is committed

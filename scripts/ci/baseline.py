@@ -221,21 +221,36 @@ def envelope_maxima(entries: dict) -> dict:
 
 
 def raised_entries(old: dict, new: dict) -> dict:
-    """Entries that went UP between two baseline documents.
+    """Entries that went UP between two baseline documents, or went AWAY.
 
     The comparator refuses to let a head counter exceed its baseline, but
     nothing there stops a commit from EDITING the baseline upwards in the
     same push — which is the gate switched off from the inside. So the
-    workflow diffs the committed baseline against the merge base's copy and
-    fails on any entry that moved up, and the tolerance lives here so the
-    question is answered once.
+    workflow diffs the committed baseline against the base branch tip's
+    copy and fails on any entry that moved up.
+
+    A DELETED entry is a raise too, and that took a second pass to learn:
+    iterating only the new document never visits an entry that was removed,
+    so dropping one from the baseline passed this check silently. The
+    workload's `--require-test` still demanded it ran, so nothing went red —
+    it simply stopped being compared, which is a second and much quieter
+    route to the same outcome as retiring it properly through WORKLOADS. A
+    gate that measures fewer renderers than it advertises is decorative, and
+    so is a ratchet a deletion walks straight through.
+
+    Lowering an entry's recorded maximum, or raising its minimum alone, is
+    an improvement and stays allowed: the ceiling is the maximum.
     """
     moved = {}
-    for name, population in sorted(new.get("populations", {}).items()):
+    for name in sorted(set(old.get("populations", {}))
+                       | set(new.get("populations", {}))):
         before = old.get("populations", {}).get(name, {}).get("entries", {})
-        for node, envelope in population.get("entries", {}).items():
+        after = new.get("populations", {}).get(name, {}).get("entries", {})
+        for node in sorted(set(before) | set(after)):
             was = before.get(node, {}).get("max")
-            now = envelope.get("max")
-            if was is None or now > was:
+            now = after.get(node, {}).get("max")
+            if now is None:
+                moved[f"{name}:{node}"] = (was, None)
+            elif was is None or now > was:
                 moved[f"{name}:{node}"] = (was, now)
     return moved
