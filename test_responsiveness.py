@@ -9,12 +9,14 @@ hand-built cache payload.
 """
 import datetime
 import importlib.util
+import io
 import json
 import os
 import re
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -629,6 +631,38 @@ class DegradedPath(unittest.TestCase):
             svg = (out / "responsiveness.svg").read_text()
             self.assertIn("someone/theirs", svg)
             self.assertNotIn("me/mine", svg)
+
+    def test_the_fallback_line_names_the_acquisition_and_the_error(self):
+        # The line is the operator's only account of what broke, so it has to
+        # say which call failed and why (issue #55).
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                full_cache(prs("someone/theirs", [1.0] * 3))))
+            out = Path(td) / "out"
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
+            lines = [line for line in buf.getvalue().splitlines()
+                     if line.startswith("fetch failed")]
+            self.assertEqual(len(lines), 1)
+            self.assertIn("fetch_prs", lines[0])
+            self.assertIn("SERVICE_UNAVAILABLE", lines[0])
+
+    def test_a_multiline_error_keeps_the_line_to_one_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                full_cache(prs("someone/theirs", [1.0] * 3))))
+            out = Path(td) / "out"
+            boom = RuntimeError("GraphQL errors:\n  one\n  two")
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                run_main(cache_file, out, gql_fn=fake_gql(error=boom))
+            lines = [line for line in buf.getvalue().splitlines()
+                     if line.startswith("fetch failed")]
+            self.assertEqual(len(lines), 1)
+            self.assertIn("two", lines[0])
 
 
 if __name__ == "__main__":

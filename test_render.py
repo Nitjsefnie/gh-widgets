@@ -7,6 +7,7 @@ No network: every case is a hand-built contribution calendar.
 """
 import datetime
 import importlib.util
+import io
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -190,6 +192,21 @@ CORE_USER = {
 EXTERNAL_REPO = {"nameWithOwner": "other/proj", "isPrivate": False,
                  "owner": {"login": "other"}}
 
+PR_NODE = {"id": "P1", "merged": True, "repository": EXTERNAL_REPO}
+
+
+def complete_cache():
+    """A cache holding every input load_inputs needs, so a failed fetch can
+    still render (the durability fallback's precondition)."""
+    return {
+        "version": render.CACHE_VERSION,
+        "fetched_at": "2026-07-20T06:00:00+00:00",
+        "user": json.loads(json.dumps(CORE_USER)),
+        "calendar_days": recent_days(3),
+        "prs": {"P1": json.loads(json.dumps(PR_NODE))},
+        "issues": [],
+    }
+
 
 def weeks_of(days):
     """A one-week contributionCalendar payload from a date -> count map."""
@@ -362,15 +379,7 @@ class WindowedCalendar(unittest.TestCase):
 
 class DurabilityFallback(unittest.TestCase):
     def snapshot(self):
-        return {
-            "version": render.CACHE_VERSION,
-            "fetched_at": "2026-07-20T06:00:00+00:00",
-            "user": json.loads(json.dumps(CORE_USER)),
-            "calendar_days": recent_days(3),
-            "prs": {"P1": {"id": "P1", "merged": True,
-                           "repository": EXTERNAL_REPO}},
-            "issues": [],
-        }
+        return complete_cache()
 
     def test_failed_fetch_renders_from_cache_and_exits_zero(self):
         with tempfile.TemporaryDirectory() as td:
@@ -398,6 +407,77 @@ class DurabilityFallback(unittest.TestCase):
             api.fail = True
             with self.assertRaises(RuntimeError):
                 run_main(api, Path(td) / "out", Path(td) / "cache.json")
+
+
+class FallbackNaming(unittest.TestCase):
+    """The fallback line says WHICH acquisition failed and why (issue #55).
+
+    Injecting the same error at each of the three phases used to produce
+    three byte-identical lines, so an operator reading a journal had nothing
+    to act on beyond "something, somewhere, went wrong".
+    """
+
+    PHASES = ("fetch", "fetch_pull_requests", "fetch_issues")
+    BOOM = "GraphQL errors: SERVICE_UNAVAILABLE"
+
+    def fallback_line(self, phase, error):
+        """Run main() with `phase` failing against a complete cache, and
+        return (the fallback line, the output directory)."""
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "cache.json"
+            out = Path(td) / "out"
+            render.save_cache(cache_file, complete_cache())
+            api = FakeAPI()
+            api.full_calendar = recent_days(3)
+            buf = io.StringIO()
+            with mock.patch.object(render, phase, side_effect=error), \
+                    redirect_stdout(buf):
+                run_main(api, out, cache_file)
+            lines = [line for line in buf.getvalue().splitlines()
+                     if line.startswith("fetch failed")]
+            self.assertEqual(len(lines), 1)
+            # The durability contract is unchanged: cards written, cache
+            # timestamp untouched, and main() returned rather than raising
+            # (a non-zero exit comes from the __main__ wrapper).
+            for name in ("stats.svg", "streak.svg", "languages.svg",
+                         "external.svg"):
+                self.assertTrue((out / name).exists())
+            self.assertEqual(render.load_cache(cache_file)["fetched_at"],
+                             "2026-07-20T06:00:00+00:00")
+            return lines[0], out
+
+    def test_each_phase_names_itself_and_its_error(self):
+        for phase in self.PHASES:
+            with self.subTest(phase=phase):
+                error = RuntimeError(f"boom during {phase}")
+                line, _out = self.fallback_line(phase, error)
+                self.assertIn(phase, line)
+                self.assertIn("boom during " + phase, line)
+
+    def test_the_three_lines_are_distinguishable(self):
+        # The point of the fix: one identical failure at three different
+        # phases must not read identically in a journal. The output path
+        # differs per run, so it is normalized away — otherwise every line
+        # would be "distinct" for a reason that has nothing to do with it.
+        lines = set()
+        for phase in self.PHASES:
+            line, out = self.fallback_line(
+                phase, RuntimeError(self.BOOM))
+            lines.add(line.replace(str(out), "<out>"))
+        self.assertEqual(len(lines), 3)
+
+    def test_the_line_is_still_one_line_without_a_traceback(self):
+        # A multi-line error text (a JSON body, a wrapped traceback) must not
+        # turn the summary into a journal the operator has to reassemble.
+        line, _out = self.fallback_line(
+            "fetch", RuntimeError("boom:\n  line two\n  line three"))
+        self.assertNotIn("\n", line)
+        self.assertIn("line three", line)
+
+    def test_an_exception_with_no_message_still_names_its_type(self):
+        line, _out = self.fallback_line("fetch_issues", RuntimeError())
+        self.assertIn("fetch_issues", line)
+        self.assertIn("RuntimeError", line)
 
 
 class PullRequestCache(unittest.TestCase):

@@ -31,8 +31,9 @@ days, OPEN/CLOSED PRs, issues) is refetched each run — the full-year
 calendar query was getting killed with RESOURCE_LIMITS_EXCEEDED, so a
 cold cache backfills the year in 12 monthly windowed queries instead.
 A run whose fetches still fail renders from the cache, stamps the cache
-timestamp on every card, and exits 0; with no cache to fall back on it
-exits non-zero and the existing SVGs keep serving.
+timestamp on every card, names the acquisition that failed, and exits 0;
+with no cache to fall back on it exits non-zero and the existing SVGs keep
+serving.
 
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
@@ -88,6 +89,7 @@ xml_color = common.xml_color
 atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
+CacheFallback = common.CacheFallback
 
 # v2: the core query gained forkCount; a v1 cache has no fork data, so it
 # must be discarded and refetched rather than trusted.
@@ -508,25 +510,31 @@ def parse_args():
 
 def load_inputs(args, token, cache_file):
     """Fetch (or, on failure, recover from the cache) every input the cards
-    need. Returns (user, prs, issues, stale), where `stale` is the cache's
-    fetched_at when rendering from cache and None on a successful fetch."""
+    need. Returns (user, prs, issues, fallback), where `fallback` is None
+    after a successful fetch and otherwise carries the cache timestamp the
+    cards are drawn from plus the acquisition that failed."""
     cache = {} if args.resync else load_cache(cache_file)
+    # `phase` is set to the acquisition about to run, so the except clause
+    # knows which one raised without having to infer it after the fact.
+    phase = "fetch"
     try:
         user, days = fetch(token, args.user, cache.get("calendar_days") or None)
+        phase = "fetch_pull_requests"
         prs, prs_by_id = fetch_pull_requests(token, args.user, cache.get("prs") or None)
+        phase = "fetch_issues"
         issues = fetch_issues(token, args.user)
-    except Exception:
+    except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
         # exiting non-zero is still correct.
         if not cache_complete(cache):
             raise
+        fallback = CacheFallback(cache["fetched_at"], phase, exc)
         user = dict(cache["user"])
         user["contributionsCollection"] = {
             "contributionCalendar": calendar_from_days(cache["calendar_days"])}
         prs = list(cache["prs"].values())
         issues = cache["issues"]
-        stale = cache["fetched_at"]
     else:
         save_cache(cache_file, {
             "version": CACHE_VERSION,
@@ -536,8 +544,8 @@ def load_inputs(args, token, cache_file):
             "prs": prs_by_id,
             "issues": issues,
         })
-        stale = None
-    return user, prs, issues, stale
+        fallback = None
+    return user, prs, issues, fallback
 
 
 ExternalCounts = namedtuple(
@@ -575,22 +583,24 @@ def build_svgs(C, user, prs, issues):
     return svgs, (total_stars, total_forks, year_contribs, current, longest, ext)
 
 
-def write_cards(C, out, user, prs, issues, stale):
+def write_cards(C, out, user, prs, issues, fallback):
     """Write the four SVGs (stamping the cache fetch time on each when
-    stale) plus last-updated.txt, and print the summary line."""
+    rendering from cache) plus last-updated.txt, and print the summary line."""
     svgs, (total_stars, total_forks, year_contribs, current, longest, ext) = \
         build_svgs(C, user, prs, issues)
     for name, svg in svgs.items():
-        if stale:
-            svg = stamp_cache_notice(C, svg, stale)
+        if fallback:
+            svg = stamp_cache_notice(C, svg, fallback.fetched_at)
         atomic_write_text(out / name, svg)
     atomic_write_text(
         out / "last-updated.txt",
-        stale or datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        (fallback.fetched_at if fallback
+         else datetime.now(timezone.utc).isoformat(timespec="seconds")))
 
-    if stale:
-        print(f"fetch failed; rendered {out}/{{stats,streak,languages,external}}.svg "
-              f"from cache (fetched_at={stale})")
+    if fallback:
+        print(f"fetch failed at {fallback.phase}: {fallback.message}; "
+              f"rendered {out}/{{stats,streak,languages,external}}.svg from "
+              f"cache (fetched_at={fallback.fetched_at})")
     else:
         print(f"wrote {out}/{{stats,streak,languages,external}}.svg "
               f"(stars={total_stars} forks={total_forks} contribs={year_contribs} "
@@ -607,8 +617,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
-    user, prs, issues, stale = load_inputs(args, token, cache_file)
-    write_cards(C, out, user, prs, issues, stale)
+    user, prs, issues, fallback = load_inputs(args, token, cache_file)
+    write_cards(C, out, user, prs, issues, fallback)
 
 
 if __name__ == "__main__":

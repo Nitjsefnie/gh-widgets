@@ -62,9 +62,10 @@ set. GH_EXTRA_INSIDERS must match render-impact.py's, since both write the
 derived set into the same cache key.
 
 Fails gracefully, same contract as the other two renderers: a failed fetch
-renders from the cache, prints `fetch failed; rendered ... from cache`, leaves
-the cache untouched, and exits 0. With no usable cache to fall back on it
-exits non-zero and the previously rendered SVG keeps serving.
+renders from the cache, prints one line naming the acquisition that failed
+and the error it raised, leaves the cache untouched, and exits 0. With no
+usable cache to fall back on it exits non-zero and the previously rendered
+SVG keeps serving.
 
 Deps: Python stdlib only. Requires Python 3.9+.
 """
@@ -525,14 +526,15 @@ def build_card(C, prs, insiders, knobs):
 
 def load_inputs(args, token):
     """Fetch the PRs (updating the shared cache) or, on failure, recover them
-    from that cache. Returns (prs, insiders, stale), where `stale` is the
-    cached fetch time when rendering from cache and None after a live fetch.
+    from that cache. Returns (prs, insiders, fallback), where `fallback` is
+    None after a live fetch and otherwise carries the cached fetch time plus
+    the acquisition that failed.
     """
     cache = common.load_cache(args.cache_file, IMPACT_CACHE_VERSION)
     try:
         insiders, prs, prs_by_id = fetch_prs(token, args.user,
                                              cache.get("prs") or None)
-    except Exception:
+    except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # the cache and exits 0 — but only with a usable cache. Without one,
         # exiting non-zero with the fetch's own error is still correct. The
@@ -541,11 +543,14 @@ def load_inputs(args, token):
         cached = read_impact_cache(args.cache_file, args.user)
         if cached is None:
             raise
+        # This renderer makes ONE acquisition (fetch_prs); the fallback line
+        # still has to say which call failed and why (issue #55).
         prs, insiders, stale = cached
+        fallback = common.CacheFallback(stale, "fetch_prs", exc)
     else:
         update_pr_cache(args.cache_file, insiders, prs_by_id)
-        stale = None
-    return prs, insiders, stale
+        fallback = None
+    return prs, insiders, fallback
 
 
 def main():
@@ -555,7 +560,8 @@ def main():
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    prs, insiders, stale = load_inputs(args, token)
+    prs, insiders, fallback = load_inputs(args, token)
+    stale = fallback.fetched_at if fallback else None
     svg, notes = build_card(C, prs, insiders, metric_knobs())
     if stale and cache_is_stale(stale):
         # The stamp is a CAVEAT, not a label: it appears only when the data is
@@ -565,8 +571,9 @@ def main():
         svg = stamp_cache_notice(C, svg, stale)
     atomic_write_text(out / "responsiveness.svg", svg)
 
-    if stale:
-        print(f"fetch failed; rendered {out}/responsiveness.svg from cache "
+    if fallback:
+        print(f"fetch failed at {fallback.phase}: {fallback.message}; rendered "
+              f"{out}/responsiveness.svg from cache "
               f"(fetched_at={stale}, showing {notes['shown']} of "
               f"{notes['ranked']} ranked)")
     else:
