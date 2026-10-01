@@ -151,12 +151,32 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > is equivalent. A bare `pip install --upgrade git-fame` **silently undoes this
 > pin** — 4.0.0 is the higher version number and installs cleanly.
 >
+> **Wall time is not a magnitude on this box or on a CI runner.** Both are
+> multi-tenant, with steal time, CPU model and thermal state that are nobody's
+> to fix, so a wall figure moves for reasons that have nothing to do with the
+> code — and paired wall A/B is therefore not a magnitude EVEN WITHIN ONE
+> JOB, which is the case people reach for when they doubt the general claim.
+> How much it moves is measurable and smaller than folklore suggests: across
+> 15 same-day `speed` runs on `main`, same job content, this repo's own cell
+> gave IQR/p50 = 8.4% (p50 107 s, p25 102, p75 111) — routine noise is
+> single-digit. The same workload still spread 5.4%-60% across four
+> measurement windows, so a quiet afternoon is not a characterisation of the
+> cell. Quote instruction counts, syscall counts, CPU time, or statement and
+> file counts instead. **A wall figure that survives in this file is an
+> indicative observation**, labelled as one, and must never be the
+> load-bearing evidence for a decision. The memory tables below need no such
+> hedge: cgroup and RSS peaks are load-invariant sizing, not wall.
+>
 > `perf-blame` is `parallel-blame` plus `--incremental` blame parsing: the
 > parse only ever consumed chunk headers, while `--line-porcelain` re-emits
 > every commit header per LINE and both porcelain formats emit the file's
-> whole content. 53.8MB of blame output became 5.1MB on a 107k-loc repo, the
-> parse 0.90s -> 0.11s, and the blame phase of a full resync -18.6%. Output is
-> byte-identical, including on a 1.65M-loc repo.
+> whole content. The load-invariant half of that: 53.8MB of blame output
+> became 5.1MB on a 107k-loc repo, and the output is byte-identical,
+> including on a 1.65M-loc repo. The wall half — parse 0.90s -> 0.11s, blame
+> phase of a full resync -18.6% — is an INDICATIVE OBSERVATION from those
+> runs, not a magnitude: it is measured where the machine's load is not ours
+> to fix. The bytes and the equality are the argument; the seconds only
+> agree with it, and should not be carried forward without them.
 >
 > Note that under the default `BLAME_METHOD=targeted` **git-fame does not run
 > at all** — this pin only governs `fame` and the weekly `both` audit. Keep it
@@ -191,10 +211,11 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > One deliberate difference survives in upstream's version: it submits every
 > file to the pool up front (`list(ex.map(...))`) where the fork used a bounded
 > work window, so peak memory is held across all files rather than a window of
-> them. **Measured 2026-08-10 — it costs roughly 2.2× peak memory for no time
-> saving.** A full `--resync` over the same 59 repos, two runs per build on a
-> GitHub runner (workflow run `31386157081`, `gitfame-resync-memory` — never on
-> this box):
+> them. **Measured 2026-08-10 — it costs roughly 2.2× peak memory for
+> byte-identical output.** A full `--resync` over the same 59 repos, two runs
+> per build on a GitHub runner (workflow run `31386157081`,
+> `gitfame-resync-memory` — never on this box). Memory is load-invariant
+> sizing; the wall column is not, and is here as an indicative observation:
 >
 > | build | cgroup peak | sampler tree peak | `git fame` proc peak | wall |
 > |---|---|---|---|---|
@@ -205,27 +226,38 @@ adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 > `impact.svg` of an identical 11,333 B, 59 repos actually blamed, and each
 > build confirmed by its own `git-fame:` guard line. The two arms blamed the
 > same repos with the same surviving LOC, so the comparison is like-for-like.
-> The wall-clock difference is under 1% and inside run-to-run noise — the
-> memory is spent to buy nothing.
+> The wall column is an indicative observation and nothing more: "under 1%"
+> is a statement about two builds on one runner, not a magnitude, and the
+> load-invariant half of this measurement says the same thing without the
+> wall clause at all — the memory is spent to buy byte-identical output.
 >
 > **So the pin went back to the fork on 2026-08-10 (operator instruction),
-> after a brief move to 4.0.0.** Paying 2.2× peak memory to buy nothing is the
-> whole argument; the earlier decision to move had been taken on a *time* cost
+> after a brief move to 4.0.0.** Paying 2.2× peak memory for byte-identical
+> output is the whole argument, and it stands on the memory columns alone;
+> the earlier decision to move had been taken on a *wall-time* cost
 > structure, before anyone had measured memory. The peak scales with the
 > largest single repo blamed (`Nitjsefnie-OSC/codex`, 1.65 M LOC), not with the
 > repo count, so it grows as that repo does.
 >
 > **Re-measured 2026-09-30 against the CURRENT pin (`65925d8`, perf-blame):
-> the fork now wins on time as well as memory.** Workflow run `36718311078`,
-> 58 repos, two runs per build, all valid with identical output:
+> the fork now wins on peak memory by roughly 2×, and on wall time too.**
+> The memory half is the load-bearing one and is what the pin rests on; the
+> wall half is an indicative observation, and the 2026-08-10 wall result
+> above is the reminder that a wall reading on this cell is not a magnitude
+> in either direction. Workflow run `36718311078`, 58 repos, two runs per
+> build, all valid with identical output:
 >
 > | build | cgroup peak | sampler tree peak | wall |
 > |---|---|---|---|
 > | fork `65925d8` | 642.4 / 636.7 MB | 350.9 / 357.4 MB | 241.9 / 247.4 s |
 > | upstream 4.0.0 | 1209.9 / 1215.1 MB | 2166.9 / 1683.3 MB | 365.8 / 374.6 s |
 >
-> The blame phase is 155 s against 282 s. An earlier run the same day
-> (`36714006796`) showed upstream about 6% faster, but its fork arm was still
+> The blame-phase figures in those runs — 155 s against 282 s — are wall
+> observations like every other here, and an earlier run the same day
+> (`36714006796`) had upstream about 6% faster still, in the same direction
+> reversed: on a cell this variable, two runs of the same build can order
+> either way, which is exactly why the pin is decided on memory. That run's
+> fork arm was still
 > the older `a99855d3`; the measurement workflows now install the documented
 > pin, and `test_ci_workflows.py` fails if they drift from it again. The
 > fork's `git fame` process never enters the sampler's top-12 list, so that
@@ -274,7 +306,10 @@ everything, so it takes far longer than an incremental run.
 > `git grep -I .` calls text; `fame` runs git-fame over every file; `both`
 > runs the two and **fails** on any disagreement. The unit sets no
 > `BLAME_METHOD`, so production renders with `targeted` and git-fame does not
-> run at all there. Blame phase 535.6s -> 61.2s over 59 repos.
+> run at all there. The blame phase measured 535.6s -> 61.2s over 59 repos —
+> an indicative wall observation, not a magnitude; what is load-invariant
+> here is that `targeted` blames a strict subset of what `fame` does, which
+> is also why `both` exists to cross-check it.
 >
 > **Why the weekly `both` audit exists.** `targeted` selects candidate files
 > from our own history, so a rename made by somebody ELSE after our commit
@@ -319,21 +354,29 @@ everything, so it takes far longer than an incremental run.
 > are not production's. The runner token cannot see the account's private org
 > memberships, so `Nitjsefnie-OSC` and `Nitjsefnie-Games` repos come out
 > external there and get blamed; on the box they are derived insiders and are
-> never cloned. Those three repos are 33.2s of the audit's 44.1s blame phase,
-> so production's is nearer 11s. This is deliberate — a superset is a stricter
-> correctness check — but do not read the audit's wall time as the box's.
+> never cloned. Those three repos were 33.2s of the audit's 44.1s blame phase,
+> so production's would be nearer 11s — indicative wall figures, like every
+> wall figure here. The load-invariant statement is the one to keep: the audit
+> blames strictly MORE repos than production does, on purpose, because a
+> superset is a stricter correctness check. Do not read the audit's wall time
+> as the box's, as production's, or as a magnitude at all: it is the wall of
+> a shared CI runner measuring a different program.
 
 > **`CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
 > blame consuming them. Clone waits on the network, blame saturates the CPUs,
-> so the overlap is close to free: measured 125.4s of 159.0s clone hidden,
-> against 60s hidden at depth 1. It costs that many extra checkouts on disk
-> and that many concurrent transfers, which is why it is bounded.
+> so the overlap is close to free: those runs measured 125.4s of 159.0s
+> clone hidden against 60s hidden at depth 1, an indicative wall observation
+> on a runner this variable. What the setting actually trades is load-invariant
+> — extra checkouts on disk and that many concurrent transfers, which is why
+> it is bounded — and the wall figure only agrees with that.
 >
-> **Depth 8 is faster and reads as a memory regression, but read the two
-> instruments before believing that.** Depth 8 gets wall 101.6s -> 79.3s with
-> cgroup peak 554.6MB -> 769.3MB, which is worse than the 624.6MB baseline —
-> while the sampler's RSS sum only moves 221MB -> 327MB, far under the 894MB
-> baseline on that same instrument. cgroup `memory.peak` **counts page cache**,
+> **Depth 8 read as a memory regression, but read the two instruments before
+> believing that.** Its cgroup peak went 554.6MB -> 769.3MB against the
+> 624.6MB baseline, while the sampler's RSS sum only moves 221MB -> 327MB,
+> far under the 894MB
+> baseline on that same instrument. (Depth 8's wall, 101.6s -> 79.3s, is an
+> indicative observation and is not part of this argument either way.)
+> cgroup `memory.peak` **counts page cache**,
 > and eight concurrent clones write much more file data, so most of that
 > "regression" is reclaimable cache rather than process memory. Capping
 > index-pack (`CLONE_PACK_THREADS`, `CLONE_WINDOW_MB`) confirmed it: 769MB ->
@@ -346,8 +389,10 @@ everything, so it takes far longer than an incremental run.
 
 > **`DEBUG_TIMING=1`** — per-repo clone/wait/fame seconds plus a phase summary
 > that closes named phases against real elapsed time. The residual is the
-> point: it was a stable ~36s of unattributed run until the fetch phases were
-> wrapped, and is now ~2s. A growing residual means an unmeasured phase, not a
+> point: before the fetch phases were wrapped a stable ~36s of each run was
+> unattributed, and is now ~2s — indicative wall observations, and the
+> diagnostic they evidence is that nothing is left unaccounted for, not how
+> long any part takes. A growing residual means an unmeasured phase, not a
 > fast run.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
