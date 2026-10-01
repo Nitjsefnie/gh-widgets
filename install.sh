@@ -75,7 +75,7 @@ EOF
                     [ -n "$timer_state_snapshot" ]; then
                 for timer_snapshot in $timer_state_snapshot; do
                     case "$timer_snapshot" in
-                        *:disabled)
+                        *:disabled|*:not-found)
                             timer=${timer_snapshot%:*}
                             systemctl disable --now "$timer" >/dev/null 2>&1 || :
                             ;;
@@ -241,9 +241,10 @@ for u in $UNITS; do
 done
 
 # Capture and validate the textual enablement state before changing any unit
-# files. systemctl reports "disabled" with status 1; enabled timers report
-# "enabled" or "enabled-runtime" with status 0. Unknown output or query errors
-# abort the units phase while renderer backups are still available.
+# files. systemctl reports "disabled" with status 1 and "not-found" with
+# status 4 when a timer is not installed yet. Enabled timers report "enabled"
+# or "enabled-runtime" with status 0. Unknown output or query errors abort the
+# units phase while renderer backups are still available.
 for timer in gh-widgets.timer gh-widgets-resync.timer; do
     timer_state=""
     if timer_state=$(systemctl is-enabled "$timer" 2>/dev/null); then
@@ -256,10 +257,13 @@ for timer in gh-widgets.timer gh-widgets-resync.timer; do
         esac
     else
         timer_status=$?
-        if [ "$timer_state" != "disabled" ] || [ "$timer_status" -ne 1 ]; then
-            echo "install.sh: could not determine whether $timer was enabled" >&2
-            exit 1
-        fi
+        case "$timer_status:$timer_state" in
+            1:disabled|4:not-found) ;;
+            *)
+                echo "install.sh: could not determine whether $timer was enabled" >&2
+                exit 1
+                ;;
+        esac
     fi
     if [ -n "$timer_state_snapshot" ]; then
         timer_state_snapshot="$timer_state_snapshot $timer:$timer_state"
