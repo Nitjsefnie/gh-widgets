@@ -19,6 +19,20 @@ import xml.etree.ElementTree as ET
 
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+
+def envelope(value, samples=6):
+    """A baseline entry as an OBSERVED RANGE, not a single number.
+
+    The committed baseline records what each entry was seen over — min, max
+    and how many observations — because a single stored value plus a budget
+    wide enough to cover a 60-84% spread would need a tolerance above 1.0,
+    which is a gate that cannot fire. Tests that want a head value to land
+    exactly on the ceiling build the envelope around that value.
+    """
+    return {"min": round(value * 0.8, 6), "max": value, "n": samples}
+
+
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CODEQL_USE = re.compile(r"uses:\s*github/codeql-action/([\w-]+)@(\S+)")
 FORK_PIN = re.compile(r'FORK_PIN="git\+https://github\.com/Nitjsefnie-OSC/'
@@ -157,6 +171,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         """The tree speed.yml's Compare step expects, entirely synthetic."""
         head = root / "head"
         for relative in ("scripts/ci/compare_durations.py",
+                         "scripts/ci/counter.py",
+                         "scripts/ci/baseline.py",
                          "scripts/bench/e2e_bench.py"):
             self._install(head, REPO_ROOT / relative)
         self._install_counter(head)
@@ -211,11 +227,11 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         """The committed document, with one sub-document per population."""
         counter = self._install_counter(root / "head")
         digest = counter.population_digest(self.POPULATION)
-        workloads = {f"e2e::{name}": value
+        workloads = {f"e2e::{name}": envelope(value)
                      for name, value, _ in self.WORKLOADS}
         unit_walls = {self.UNIT_NODE: 5.0} if unit_wall is None else unit_wall
         document = {
-            "schema": 2,
+            "schema": 3,
             "basis": "fixture baseline for the workflow tests",
             "cell": "ubuntu-latest / 3.13",
             "measured_commit": "0" * 40,
@@ -225,7 +241,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     "metric": unit_metric,
                     "tolerance": unit_tolerance,
                     "population": digest if population else "0" * 64,
-                    "entries": {self.UNIT_NODE: 10.0},
+                    "entries": {self.UNIT_NODE: envelope(10.0)},
                     "wall": unit_walls,
                 },
                 self.RENDERER_POPULATION: {
@@ -548,29 +564,82 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                  "--ratchet-baselines", str(old), str(target)],
                 capture_output=True, text=True, check=False)
 
-        current = {"e2e::bench.render": 1000.0,
-                   "e2e::bench.render-impact": 200.0,
-                   "e2e::bench.render-responsiveness": 50.0}
+        current = {f"e2e::{name}": envelope(value)
+                   for name, value, _ in self.WORKLOADS}
 
-        # The ceiling is raised in the same push that is measured against it.
-        raised = run({**current, "e2e::bench.render": 900.0})
+        # The ceiling is raised in the same push that is measured against
+        # it: the merge base recorded 800 and the head records 1200.
+        raised = run({**current,
+                      "e2e::bench.render": envelope(800.0)})
         self.assertEqual(raised.returncode, 1, raised.stdout + raised.stderr)
         self.assertIn("went UP", raised.stderr)
         self.assertIn("e2e::bench.render", raised.stderr)
         self.assertIn(self.RENDERER_POPULATION, raised.stderr)
 
-        # Lowering is what the ratchet is for, and is always allowed.
-        lowered = run({**current, "e2e::bench.render": 1500.0})
+        # Lowering the recorded maximum is what the ratchet is for.
+        lowered = run({**current,
+                       "e2e::bench.render": envelope(1200.0)})
         self.assertEqual(lowered.returncode, 0,
                          lowered.stdout + lowered.stderr)
 
-        # A population the merge base did not have at all is a raise by
-        # definition, not a silent addition nobody reviewed.
-        added = subprocess.run(
-            [sys.executable, str(comparator), "--ratchet-baselines",
-             str(root / "old.json"), str(target)],
-            capture_output=True, text=True, check=False)
-        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+    def test_an_envelope_from_one_observation_is_refused(self):
+        """A single sample's maximum is a measurement, not a worst case.
+
+        Refused rather than marked: a file that says PROVISIONAL in a key
+        nobody reads reads as authoritative.
+        """
+        root = self._run_with_tree("ghw-speed-envelope-n1-")
+        document = json.loads((root / "speed-baseline.json").read_text(
+            encoding="utf-8"))
+        document["populations"][self.UNIT_POPULATION]["entries"][
+            self.UNIT_NODE]["n"] = 1
+        (root / "speed-baseline.json").write_text(
+            json.dumps(document, indent=2), encoding="utf-8")
+        completed, summary = self._execute_compare(root)
+
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr)
+        self.assertIn("at least 2", summary)
+        self.assertIn("COULD NOT COMPARE", summary)
+
+    def test_an_entry_with_min_above_max_is_refused(self):
+        root = self._run_with_tree("ghw-speed-envelope-inverted-")
+        document = json.loads((root / "speed-baseline.json").read_text(
+            encoding="utf-8"))
+        document["populations"][self.UNIT_POPULATION]["entries"][
+            self.UNIT_NODE] = {"min": 20.0, "max": 10.0, "n": 6}
+        (root / "speed-baseline.json").write_text(
+            json.dumps(document, indent=2), encoding="utf-8")
+        completed, summary = self._execute_compare(root)
+
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr)
+        self.assertIn("not a range", summary)
+
+    def test_the_gate_is_measured_against_the_recorded_maximum(self):
+        """The head clears `max x (1 + tolerance)`, not `min x (...)`.
+
+        This is the whole point of the envelope: the observed spread is
+        already inside the recorded maximum, so a budget over the middle of
+        the range would fire on noise and a budget over a single stored value
+        would need a tolerance above 1.0.
+        """
+        root = self._run_with_tree("ghw-speed-envelope-ceiling-",
+                                   unit_counter=12.5)
+        # max 10.0 x 1.25 = 12.5 exactly, so this is the boundary.
+        completed, summary = self._execute_compare(root)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout + completed.stderr)
+        # The report says what the gate is, every time, so nobody has to
+        # infer it from a threshold.
+        self.assertIn("step-change detector", summary.lower())
+
+        above = self._run_with_tree("ghw-speed-envelope-over-",
+                                    unit_counter=12.6)
+        completed, summary = self._execute_compare(above)
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr)
+        self.assertIn("past the down-only tolerance", summary)
 
     # -- the closed-set renderer gate, unchanged by any of the above ---------
 
