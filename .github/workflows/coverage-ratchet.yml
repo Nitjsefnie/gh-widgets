@@ -1,16 +1,15 @@
 name: coverage-ratchet
 
-# Raises the committed coverage floor in coverage-floor.json, and only ever
-# raises it. The floor used to be a hand-edited `--fail-under=81` literal in
-# tests.yml with a comment telling the next human to bump it, which is a
-# ratchet nobody ratchets: it rots until it is deleted or ignored. Here the
-# movement is CI's job, and the direction is the script's only option.
+# Measures coverage against the committed floor and announces a candidate when
+# the measured floor is higher. The floor is only ever raised through a human
+# pull request. The old hand-edited fail-under literal in tests.yml rotted until
+# it was deleted or ignored; this workflow keeps the comparison tied to the
+# committed floor while leaving the decision to raise it reviewable.
 #
 # WHY THIS IS A SEPARATE WORKFLOW. tests.yml runs a matrix and a whole test
-# suite; the write belongs nowhere near either. This file is the only one in
-# the repository that holds a `contents: write` token for a routine push, and
-# keeping it alone here means the entire write surface is one short file a
-# reviewer can read in full.
+# suite; this workflow measures the release branch on the same cell named by
+# the floor and publishes a candidate artifact for review. The committed floor
+# changes through a pull request, where the data change is visible.
 #
 # WHY IT IS A RELEASE GATE. release.yml's manifest lists this workflow, so a
 # release waits for it. The floor is committed DATA now, and a release must
@@ -20,16 +19,9 @@ name: coverage-ratchet
 # subject: a release waits for lint and for types because it must not ship a
 # tree that does not lint or does not typecheck.
 #
-# WHICH OF ITS JOBS CAN BLOCK A RELEASE. Only `measure`, whose check run is
-# named `coverage-ratchet` and is the manifest entry. `raise` is a maintenance
-# action — it writes the floor file — and it must NEVER be able to fail a
-# release: it is designed to fail its own compare-and-swap when something
-# landed on main concurrently, and that outcome is correct. release.yml treats
-# any check run outside the manifest with a bad conclusion as grounds to
-# refuse, so a red `raise` would block a release for a reason this repository
-# has declared correct. It therefore tolerates its own failure loudly: stderr
-# and a dated line in the step summary, then exit 0. The write did not happen,
-# the next push to main measures again and retries, and nothing is corrupted.
+# WHICH OF ITS JOBS CAN BLOCK A RELEASE. Only measure, whose check run is
+# named coverage-ratchet and is the manifest entry. This workflow has no
+# other job, so it creates no incidental check run for release.yml to classify.
 #
 # AND WHAT IT BLOCKS AFTER MERGE. Adding or removing a measured module leaves
 # tests.yml green on the pull request, because the gate deliberately judges
@@ -41,14 +33,9 @@ name: coverage-ratchet
 # floor has to be told.
 
 on:
-  # The ONLY trigger, and the narrowest one that can fire. The job below holds
-  # a write token, so it runs on a trusted event over already-merged,
-  # already-reviewed code and over nothing else: no pull_request (a
-  # same-repository PR would retain the write scope — an added trigger
-  # inherits the job's permissions, it does not shrink them), no
-  # workflow_dispatch, no schedule, no workflow_run. main is the branch
-  # whose every commit has been through every other gate.
-  #
+  # The ONLY trigger and the narrowest one that matches this release gate.
+  # The workflow measures the already-merged main branch after its changes have
+  # passed review; it does not measure pull request or manually dispatched trees.
   # WHY THE PUSH BLOCK CARRIES A DENY-LIST AT ALL. This workflow is a release
   # gate (see the header), and the manifest admits a push-triggered workflow
   # only if its push block has no allow-list — an allow-list would have to
@@ -79,10 +66,8 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer main supersedes an in-flight raise. Cancelling is right here and
-  # wrong in release.yml for the opposite reason: a stale measurement raising a
-  # floor from a commit that is no longer the tip would raise the floor to a
-  # number the tree no longer has.
+  # A newer main supersedes an in-flight measurement. Cancelling keeps an
+  # older candidate from being announced after the branch has advanced.
   group: coverage-ratchet-${{ github.ref }}
   cancel-in-progress: true
 
@@ -133,20 +118,63 @@ jobs:
             --coverage-json coverage.json
 
       - name: Compute the candidate floor
-        # The DECISION is made here, in the job that holds no write scope and
-        # is the only job with a tree on disk. What comes out is a finished
-        # file — the raise job below compares it with main's copy and PUTs it
-        # or does nothing, and never runs a line of this repository.
+        # The decision remains in this read-only job. The coverage-floor-candidate
+        # artifact is the input to the deliberate raise procedure: replace
+        # coverage-floor.json and open a pull request. The checked-out floor
+        # stays untouched because the raise subcommand operates on its copy.
         #
-        # `--floor-file` is pointed at a copy so the checkout is not dirtied
-        # by the run, and so the artifact is unmistakably the ratchet's
-        # OUTPUT rather than the file that went in.
+        # --floor-file points at a copy so the checkout is not dirtied by the
+        # run, and so the artifact is unmistakably the ratchet's output rather
+        # than the file that went in.
         run: |
           cp coverage-floor.json candidate-coverage-floor.json
           python scripts/ci/coverage_ratchet.py raise \
             --coverage-json coverage.json \
             --floor-file candidate-coverage-floor.json \
             --commit "$GITHUB_SHA"
+
+      - name: Announce a climbable floor
+        # Compare local files only. The candidate step above changed its copy;
+        # coverage-floor.json in the checkout remains the committed floor.
+        run: |
+          if ! candidate=$(jq -r '.floor' candidate-coverage-floor.json); then
+            echo "::error::Could not read the candidate coverage floor."
+            exit 1
+          fi
+          if ! committed=$(jq -r '.floor' coverage-floor.json); then
+            echo "::error::Could not read the committed coverage floor."
+            exit 1
+          fi
+          if ! climbed=$(awk -v candidate="$candidate" -v committed="$committed" \
+              'BEGIN { print (candidate > committed) ? 1 : 0 }'); then
+            echo "::error::Could not compare the coverage floors."
+            exit 1
+          fi
+
+          if [ "$climbed" = 1 ]; then
+            if ! cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ### Coverage floor can climb
+          Measured coverage floor: $candidate; committed floor: $committed.
+
+          To raise it, download the coverage-floor-candidate artifact and open a
+          pull request; see CONTRIBUTING.md.
+          EOF
+            then
+              echo "::error::Could not append the coverage floor summary."
+              exit 1
+            fi
+            notice="Measured coverage floor is $candidate; committed floor is $committed. "
+            notice+="The measured floor exceeds the committed floor. "
+            notice+="To raise it, download the coverage-floor-candidate "
+            notice+="artifact and open a pull request; see CONTRIBUTING.md."
+            if ! printf '::notice::%s\n' "$notice"; then
+              exit 1
+            fi
+          else
+            if ! printf '%s\n' "Coverage floor has not climbed."; then
+              exit 1
+            fi
+          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -159,126 +187,3 @@ jobs:
           name: coverage-floor-candidate
           path: candidate-coverage-floor.json
           if-no-files-found: error
-
-  raise:
-    needs: measure
-    runs-on: ubuntu-latest
-
-    # The only `contents: write` in the repository's CI. Read what is NOT
-    # next to it: there is no checkout step, so this job has no copy of this
-    # repository on disk at all — nothing a merged commit could put there can
-    # be executed, because there is nothing there to execute. Nothing is
-    # installed either. The job reads one JSON artifact the read-only job
-    # above produced, fetches main's copy of the same file through the
-    # Contents API, and writes only when the two differ.
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          # A single artifact named here is extracted straight into `path`,
-          # not into a subdirectory named after it.
-          name: coverage-floor-candidate
-          path: candidate
-
-      - name: Raise the floor if coverage climbed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        # Every command below moves or compares bytes, and none of them can
-        # run code: `gh`, `jq` and the coreutils are preinstalled on the
-        # runner, and nothing here reads from, writes to, or executes anything
-        # under a checkout, because there is none.
-        #
-        # PRECONDITION, NOT A GUARANTEE: the commit this step makes is itself
-        # a push to main, so it starts one more run of this workflow. That run
-        # terminates after one extra pass ONLY IF the measurement is
-        # deterministic for an unchanged tree on one cell — which is a property
-        # of coverage, not of this mechanism. If the runner's per-file coverage
-        # drifts upward between pushes, each push raises the floor again. There
-        # is no cap and no hysteresis, by design: a floor with a ceiling is a
-        # ceiling, not a ratchet.
-        run: |
-          # EVERY `gh api` IN THIS JOB IS CONDITIONAL, and that is load-bearing
-          # rather than decorative. This step runs under GitHub's default shell
-          # for `run:` — `bash -e {0}` — so `-e` is ON and `pipefail` is OFF
-          # (this workflow declares no `shell:`, unlike tests.yml which pins
-          # `shell: bash`). Two consequences, both measured rather than assumed:
-          #
-          #   * `x="$(cmd)"` propagates cmd's status out of the step, so an
-          #     UNGUARDED fetch fails the job — and a failed job here is a
-          #     `completed/failure` check run named `raise`, which is the
-          #     release block this step exists to avoid. The `.sha` fetch was
-          #     unguarded for exactly one round; that is the bug this fixes.
-          #   * a pipeline reports its LAST stage, so the `.content` fetch's
-          #     failure was masked: it wrote an empty file, `diff` said
-          #     "different", and the run walked on to a PUT that then failed
-          #     and was annotated. Safe by luck. Turning `pipefail` on later
-          #     would change that silently, so nothing here depends on it.
-          #
-          # So: no assignment consumes a `gh api` result, and no network call
-          # rides a pipeline. Both reads come from ONE request, so there is no
-          # second fetch to leave unguarded in the first place.
-          handled() {
-            echo "coverage-ratchet: $1" >&2
-            {
-              echo "### Coverage floor NOT raised"
-              echo
-              echo "$1"
-              echo
-              echo "Nothing is corrupted: \`coverage-floor.json\` on \`main\`"
-              echo "still carries its previous floor, and the next push to"
-              echo "\`main\` measures again and retries."
-              echo
-              echo '```'
-              echo "when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              echo "run:  $GITHUB_RUN_ID ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          }
-
-          if ! gh api "repos/$REPO/contents/coverage-floor.json?ref=main" \
-              > blob.json; then
-            handled "could not read coverage-floor.json from main; not writing"
-          fi
-          if ! jq -r .sha blob.json > blob_sha.txt \
-               || ! jq -r '.content | @base64d' blob.json \
-                    > committed-floor.json; then
-            handled "the blob GitHub returned could not be decoded; not writing"
-          fi
-
-          # The comparison is what makes the write conditional: the ratchet
-          # exits 0 whether or not it moved anything, so the only honest signal
-          # that there is something to commit is that main's copy of the file
-          # and the candidate differ.
-          if diff -q committed-floor.json candidate/candidate-coverage-floor.json \
-               >/dev/null; then
-            echo "floor unchanged — nothing to commit"
-            exit 0
-          fi
-
-          # A compare-and-swap on the blob's current SHA: if anything landed
-          # on main between the measure job's checkout and now, this PUT is
-          # rejected. That rejection is the CORRECT outcome, and it must not
-          # fail this job — see the header. `-f`, not `-F`, for the message
-          # and branch because they are strings.
-          #
-          # WHY `continue-on-error: true` IS NOT THE SAME THING. release.yml
-          # classifies check RUNS, not run conclusions: any check run outside
-          # the manifest that is `completed` with a conclusion outside
-          # {success, skipped, neutral} refuses the release. A job-level
-          # `continue-on-error` still reports a `failure` conclusion on this
-          # job's check run, so it would block the release exactly as hard.
-          # The tolerance has to be in the exit status, and it is below.
-          if gh api --method PUT "repos/$REPO/contents/coverage-floor.json" \
-              -f message='Raise the coverage floor' \
-              -f branch=main \
-              -f sha="$(cat blob_sha.txt)" \
-              -F content="$(base64 -w0 < candidate/candidate-coverage-floor.json)" \
-              --jq '.commit.sha'; then
-            echo "Raised the floor on main."
-            exit 0
-          fi
-          handled "the compare-and-swap PUT was rejected, or gh api failed; not writing"
