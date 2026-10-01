@@ -50,8 +50,9 @@ was. That is fine in both directions.
 - **Ownership matching is exact.** Commit-author email in a third-party repo
   is attacker-controllable, so it is matched by exact set membership. Do not
   reintroduce a substring, prefix, or regex test.
-- **Shared code lives in `ghwidgets_common.py`**, loaded by path and
-  version-checked via `COMMON_VERSION`. If you change that module's
+- **Shared code lives in `ghwidgets_common.py`, `ghwidgets_cache.py`, and
+  `ghwidgets_journal.py`**. Renderers load `ghwidgets_common.py` by path and
+  version-check it via `COMMON_VERSION`. If you change that module's
   interface, bump `COMMON_VERSION` and both scripts' `REQUIRED_COMMON` —
   `test_common.py` fails if they drift apart.
 - **No request-time work.** The renderer runs on a timer and writes files.

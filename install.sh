@@ -7,7 +7,7 @@
 # impact.py also loads impact_loc.py beside itself. The EXIT trap rolls back
 # an interrupted or failed commit: when the trap can run, the result is the
 # complete prior set or the complete verified new set, never a mixed set.
-# Each same-filesystem mv is atomic, but the six-file commit is not one atomic
+# Each same-filesystem mv is atomic, but the nine-file commit is not one atomic
 # operation: SIGKILL or power loss cannot run a shell trap and can still leave
 # a mixed set during commit. Re-running this installer repairs that state.
 #
@@ -134,6 +134,9 @@ set -- \
     "impact_loc.py:impact_loc.py" \
     "render-responsiveness.py:render-responsiveness.py" \
     "ghwidgets_common.py:ghwidgets_common.py" \
+    "ghwidgets_cache.py:ghwidgets_cache.py" \
+    "ghwidgets_journal.py:ghwidgets_journal.py" \
+    "impact_clone.py:impact_clone.py" \
     "ghwidgets_data.py:ghwidgets_data.py"
 
 # Verify every source exists BEFORE touching the destination, so a missing
@@ -190,11 +193,12 @@ for dst in render-gh-widgets.py render-impact.py render-responsiveness.py; do
 done
 if ! PYTHONDONTWRITEBYTECODE=1 \
         PYTHONPATH="$DEST${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -c 'import ghwidgets_data' >/dev/null 2>&1; then
-    echo "install.sh: ghwidgets_data.py failed to import after install" >&2
+        python3 -c 'import ghwidgets_data, ghwidgets_cache, ghwidgets_journal, impact_clone' \
+        >/dev/null 2>&1; then
+    echo "install.sh: a shared module failed to import after install" >&2
     exit 1
 fi
-echo "verified: all renderers start and the public data module imports"
+echo "verified: all renderers start and all shipped modules import"
 
 # In bare mode this is the complete transaction. --units keeps these backups
 # until the unit files also pass systemd's load check.

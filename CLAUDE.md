@@ -17,14 +17,16 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs a six-file deployment set to `/usr/local/bin`
+unit.** Bare, it installs a nine-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`, `impact_loc.py`,
-`render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_data.py`). The
-three renderers retain their existing `ghwidgets_common.py` runtime dependency
-and assert its `COMMON_VERSION` at startup. `ghwidgets_data.py` is installed
-alongside as the separate public API for pinned consumers; the renderers do not
-import it. A partial renderer deployment missing `ghwidgets_common.py` refuses
-to run, deliberately preventing rendering from a stale module. `install.sh --units`
+`render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_cache.py`,
+`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`). The renderers
+load `ghwidgets_common.py` and assert its `COMMON_VERSION` at startup; that
+module imports the adjacent cache and journal modules, and `impact_loc.py`
+imports the adjacent clone module. `ghwidgets_data.py` is installed alongside
+as the separate public API for pinned consumers; the renderers do not import
+it. A partial deployment missing one of these runtime modules refuses to run,
+deliberately preventing rendering from stale code. `install.sh --units`
 additionally installs `units/`, reloads systemd, enables both timers and proves
 them load. Everything it installs is a *copy*, so `diff` against the repo before
 and after touching either side.
