@@ -205,6 +205,32 @@ def _jobs(text):
     return out
 
 
+def _without_job_permissions(text):
+    """Remove job overrides so planted controls isolate their own fixture."""
+    out = []
+    in_jobs = False
+    dropping_block = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        indent = _indent_of(line)
+        if not stripped or stripped.startswith("#"):
+            if not (dropping_block and indent > 4):
+                out.append(line)
+            continue
+        if dropping_block and indent > 4:
+            continue
+        dropping_block = False
+        if indent == 0:
+            name, value = _partition(stripped)
+            in_jobs = name == "jobs" and not value
+        if in_jobs and indent == 4 and _partition(stripped)[0] == "permissions":
+            _name, value = _partition(stripped)
+            dropping_block = not value
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def _steps(job):
     """[{name, uses, body, with}] for one job's step list.
 
@@ -283,6 +309,148 @@ def _command(step):
                 lines.append(value)
     joined = re.sub(r"\\\s*", " ", " ".join(lines))
     return re.sub(r"\s+", " ", joined).strip()
+
+
+def _yaml_scalar(value):
+    """Decode the simple YAML scalar spellings used by permission values."""
+    value = _without_comment(value).strip()
+    if value.startswith(("'", '"')):
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote:
+            raise AssertionError(f"unrecognised quoted YAML scalar: {value!r}")
+        value = value[1:-1]
+    elif "'" in value or '"' in value:
+        raise AssertionError(f"unrecognised YAML scalar: {value!r}")
+    return value
+
+
+def _flow_mapping_entries(value):
+    """Parse a small YAML flow mapping, rejecting shapes this reader lacks."""
+    value = value.strip()
+    if not (value.startswith("{") and value.endswith("}")):
+        raise AssertionError(f"unrecognised permissions mapping: {value!r}")
+    inner = value[1:-1].strip()
+    if not inner:
+        return {}
+
+    entries = []
+    quote = None
+    start = 0
+    for index, character in enumerate(inner):
+        if quote:
+            if character == quote:
+                quote = None
+        elif character in "'\"":
+            quote = character
+        elif character == ",":
+            entries.append(inner[start:index].strip())
+            start = index + 1
+    if quote:
+        raise AssertionError(f"unrecognised permissions mapping: {value!r}")
+    entries.append(inner[start:].strip())
+    if not all(entries):
+        raise AssertionError(f"unrecognised permissions mapping: {value!r}")
+
+    scopes = {}
+    for entry in entries:
+        key, permission = _flow_partition(entry)
+        key = _yaml_scalar(key)
+        if not key or key in scopes:
+            raise AssertionError(f"unrecognised permissions mapping entry: {entry!r}")
+        scopes[key] = _permission_value(permission)
+    return scopes
+
+
+def _flow_partition(entry):
+    """Split a flow mapping entry at its first colon outside quotes."""
+    quote = None
+    for index, character in enumerate(entry):
+        if quote:
+            if character == quote:
+                quote = None
+        elif character in "'\"":
+            quote = character
+        elif character == ":":
+            key, value = entry[:index].strip(), entry[index + 1:].strip()
+            if key and value:
+                return key, value
+            break
+    raise AssertionError(f"unrecognised permissions mapping entry: {entry!r}")
+
+
+def _permission_value(value):
+    """Decode a permission value and fail closed on unsupported YAML."""
+    decoded = _yaml_scalar(value)
+    if decoded not in {"read", "write", "none"}:
+        raise AssertionError(f"unrecognised permission value: {decoded!r}")
+    return decoded
+
+
+def _job_permissions(records):
+    """Return one job's permission scopes, failing closed on declared shapes."""
+    declaration = next(
+        (content for at, content in records
+         if at == 4 and _partition(content)[0] == "permissions"), None)
+    if declaration is None:
+        return {}  # An absent job override inherits the read-only workflow map.
+
+    _name, value = _partition(declaration)
+    value = _without_comment(value)
+    if value == "read-all":
+        return {"*": "read"}
+    if value == "write-all":
+        return {"*": "write"}
+    if value.startswith("{"):
+        return _flow_mapping_entries(value)
+    if value:
+        raise AssertionError(f"unrecognised permissions shape: {value!r}")
+
+    block = _block(records, 4, "permissions")
+    if not block:
+        raise AssertionError("unrecognised empty permissions declaration")
+    indent = block[0][0]
+    scopes = {}
+    for at, content in block:
+        if at != indent:
+            raise AssertionError(
+                f"unrecognised nested permissions shape: {content!r}")
+        key, permission = _partition(content)
+        key = _yaml_scalar(key)
+        if not key or key in scopes or not permission:
+            raise AssertionError(
+                f"unrecognised permissions mapping entry: {content!r}")
+        scopes[key] = _permission_value(permission)
+    return scopes
+
+
+def _assert_no_job_write_scopes(text):
+    """Reject every declared job writer, including writers in newly added jobs."""
+    jobs = _jobs(text)
+    if not jobs:
+        raise AssertionError("workflow has no readable jobs")
+    writers = {
+        job for job, records in jobs.items()
+        if "write" in _job_permissions(records).values()}
+    if writers:
+        raise AssertionError(
+            f"jobs hold a write scope: {', '.join(sorted(writers))}")
+
+
+def _step_github_api_calls(text):
+    """Return step commands that invoke `gh api`, after folding shell syntax."""
+    calls = []
+    for job, records in _jobs(text).items():
+        for step in _steps(records):
+            command = _command(step)
+            if re.search(r"\bgh\s+api\b", command):
+                calls.append((job, step["name"], command))
+    return calls
+
+
+def _assert_no_step_github_api(text):
+    calls = _step_github_api_calls(text)
+    if calls:
+        raise AssertionError(f"workflow steps invoke gh api: {calls!r}")
 
 
 class TestTheWorkflowReader(unittest.TestCase):
@@ -365,12 +533,59 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             {"contents": "read"})
 
     def test_no_job_holds_any_write_scope(self):
-        # Inspect every job permissions map so a new scope or job cannot
-        # restore write access under a different permission name.
-        writers = {
-            job for job, records in self.jobs.items()
-            if "write" in _mapping(_block(records, 4, "permissions")).values()}
-        self.assertEqual(writers, set())
+        # Missing job overrides inherit the top-level read map. Every declared
+        # override is decoded or rejected, including scalar and flow forms.
+        _assert_no_job_write_scopes(self.text)
+
+    def test_each_valid_job_writer_spelling_is_caught(self):
+        # These are valid YAML shapes that must not disappear at the reader
+        # boundary. The added job also pins iteration beyond the current job.
+        base = _without_job_permissions(self.text)
+        marker = "    runs-on: ubuntu-latest"
+        self.assertIn(marker, base)
+        plants = {
+            "write-all": base.replace(
+                marker, "    permissions: write-all\n" + marker, 1),
+            "inline flow mapping": base.replace(
+                marker, "    permissions: {contents: write}\n" + marker, 1),
+            "quoted inline value": base.replace(
+                marker,
+                '    permissions: {contents: "write"}\n' + marker,
+                1),
+            "quoted block value": base.replace(
+                marker,
+                '    permissions:\n      contents: "write"\n' + marker,
+                1),
+            "new writer job": base + (
+                "\n  extra-writer:\n"
+                "    permissions:\n"
+                "      contents: write\n"
+                "    steps:\n"
+                "      - run: echo writer\n"),
+        }
+        for spelling, planted in plants.items():
+            with self.subTest(spelling=spelling):
+                self.assertNotEqual(planted, base)
+                with self.assertRaisesRegex(AssertionError, "write scope"):
+                    _assert_no_job_write_scopes(planted)
+
+        # The valid read-all shorthand and quoted read value remain allowed.
+        for declaration in (
+                "    permissions: read-all\n",
+                '    permissions: {contents: "read"}\n',
+                '    permissions:\n      contents: "read"\n'):
+            with self.subTest(read_only=declaration):
+                _assert_no_job_write_scopes(
+                    base.replace(marker, declaration + marker, 1))
+
+    def test_an_unrecognised_job_permission_shape_fails_closed(self):
+        base = _without_job_permissions(self.text)
+        marker = "    runs-on: ubuntu-latest"
+        planted = base.replace(
+            marker, "    permissions: maybe-write\n" + marker, 1)
+        with self.assertRaisesRegex(AssertionError,
+                                    "unrecognised permissions shape"):
+            _assert_no_job_write_scopes(planted)
 
     def test_the_candidate_floor_is_computed_in_the_read_only_job(self):
         # The candidate is computed on a copy and uploaded for the human
@@ -452,8 +667,28 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
     def test_no_step_calls_the_github_api_or_sets_gh_token(self):
         # Check the whole workflow so job-level or top-level env cannot restore
         # a token that the individual step bodies do not declare.
-        self.assertNotIn("gh api", self.text)
+        self.assertEqual(_step_github_api_calls(self.text), [])
         self.assertNotIn("GH_TOKEN", self.text)
+
+    def test_each_github_api_spacing_spelling_is_caught(self):
+        # The command reader folds shell continuations and normalises spacing
+        # before the invocation is matched.
+        marker = "          cp coverage-floor.json"
+        self.assertIn(marker, self.text)
+        plants = {
+            "double space": self.text.replace(
+                marker, "          gh  api repos/example/example\n" + marker,
+                1),
+            "line continuation": self.text.replace(
+                marker,
+                "          gh \\\n            api repos/example/example\n" + marker,
+                1),
+        }
+        for spelling, planted in plants.items():
+            with self.subTest(spelling=spelling):
+                self.assertNotEqual(planted, self.text)
+                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
+                    _assert_no_step_github_api(planted)
 
     def test_the_check_run_name_is_the_release_manifest_entry(self):
         """The manifest entry is written against a check-run name.
