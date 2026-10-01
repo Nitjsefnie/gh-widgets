@@ -252,13 +252,15 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
         # pass — a gate that measures fewer things than it claims is
         # decorative. Fail loudly instead.
         #
-        # BASE: speed.yml runs HEAD's e2e_bench.py against BOTH checkouts,
-        # so a workload added after the last release has no renderer in the
-        # baseline release at all. That is a new-since-baseline workload, not
-        # a missing one, and excluding it from the comparison is correct.
-        # Do not "fix" this asymmetry into a failure on both sides — that
-        # would make every commit that adds a renderer fail the speed gate
-        # until the next release.
+        # BASE: retained for comparing a checkout against another — a
+        # rollback rehearsal, a local before/after. speed.yml no longer
+        # drives it: the gate measures HEAD alone against the committed
+        # baseline document, and there is no base checkout to run it against.
+        # The asymmetry stays because it is still the right answer for a
+        # side-by-side comparison: a workload that exists only in the newer
+        # checkout is a new-since-baseline workload, not a missing one, and
+        # failing it on both sides would make every commit that adds a
+        # renderer red.
         if side == "head":
             result["failure"] = (
                 f"{script_name} is missing from the head checkout "
