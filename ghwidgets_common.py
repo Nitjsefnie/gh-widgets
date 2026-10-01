@@ -445,6 +445,28 @@ class PaginationLimitError(RuntimeError):
     """Raised when a bounded pagination run cannot reach its final page."""
 
 
+class CacheFallback(namedtuple("CacheFallback", "fetched_at phase error")):
+    """A run drawing from cache because an acquisition failed.
+
+    Every renderer's fallback prints one line, and that line is all an
+    operator has to go on. It used to name neither the phase nor the cause
+    (issue #55): three different failures with three different causes printed
+    byte-identical output.
+
+    ``fetched_at`` is the cache timestamp the cards are drawn from and are
+    stamped with; ``phase`` names the acquisition function that raised, the
+    same string the renderer calls it by in its own source.
+    """
+
+    __slots__ = ()
+
+    @property
+    def message(self):
+        """The exception rendered as a single line: a GraphQL error carries a
+        JSON body and can span several, and this is a journal summary."""
+        return " ".join(str(self.error).split()) or type(self.error).__name__
+
+
 IDENTITY_QUERY = """
 query($login: String!, $cursor: String) {
   user(login: $login) {

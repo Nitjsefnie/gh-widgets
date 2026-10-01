@@ -587,6 +587,10 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale,
     return pr_rows, issue_rows, loc_rows
 
 
+# The run's own orchestration: argument handling, the fetch-or-fallback
+# decision, the card write and both summary lines all live here, so the
+# bindings add up past pylint's default.
+# pylint: disable=too-many-locals
 def main():
     args, token = parse_args()
     # Say which method ran, every run. The git-fame guard line was the health
@@ -602,21 +606,24 @@ def main():
 
     cache = {} if args.resync else load_cache(args.cache_file)
 
-    stale = None
+    # This renderer makes ONE acquisition (fetch_all), so the fallback cannot
+    # be confused with another phase — but the line still has to say which
+    # call failed and why, and the exception is right there (issue #55).
+    fallback = None
     try:
         insiders, prs, prs_by_id, issues, totals, ourloc = fetch_all(
             token, args.user, cache, args.resync)
-    except Exception:
+    except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
         # exiting non-zero is still correct.
         if not cache_complete(cache):
             raise
+        fallback = common.CacheFallback(cache["fetched_at"], "fetch_all", exc)
         prs = list(cache["prs"].values())
         issues = cache["issues"]
         totals = cache["totals"]
         ourloc = cache["ourloc"]
-        stale = cache["fetched_at"]
         # Identity is cached alongside the data precisely so this path does
         # not need the network. A cache written before identity was cached
         # degrades to "the account itself", which can over-report externals
@@ -636,11 +643,12 @@ def main():
             })
 
     pr_rows, issue_rows, loc_rows = write_card(
-        C, out, prs, issues, totals, ourloc, insiders, stale, args.top)
+        C, out, prs, issues, totals, ourloc, insiders,
+        fallback.fetched_at if fallback else None, args.top)
 
-    if stale:
-        print(f"fetch failed; rendered {out}/impact.svg from cache "
-              f"(fetched_at={stale})")
+    if fallback:
+        print(f"fetch failed at {fallback.phase}: {fallback.message}; rendered "
+              f"{out}/impact.svg from cache (fetched_at={fallback.fetched_at})")
     else:
         print(f"wrote {out}/impact.svg "
               f"(pr repos={len(pr_rows)} issue repos={len(issue_rows)} "
@@ -649,6 +657,7 @@ def main():
     # Last, so a disagreement still leaves the full report and the timings in
     # the log it fails out of.
     check_method_agreement()
+# pylint: enable=too-many-locals
 
 
 if __name__ == "__main__":
