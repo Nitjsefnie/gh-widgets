@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run deterministic renderer workloads and write one JUnit suite.
 
-Each workload is timed on a load-invariant COUNTER (instructions, or CPU
-seconds where the kernel will not count instructions), not on wall time: see
+Each workload is measured on a load-invariant COUNTER — CPU seconds, which
+exclude steal time — not on wall time: see
 scripts/ci/counter.py, which is imported by path rather than as a package
 because scripts/ci deliberately holds standalone CI entry points. The JUnit
 `time` attribute written here is therefore the COUNTER, not seconds, and the
@@ -460,7 +460,7 @@ def main(argv=None):
             "failed" if result["failure"] else "passed")
         # The counter, labelled with the instrument it is. The `s` suffix is
         # gone because the number is not seconds; leaving it would print an
-        # instruction count as though it were a duration.
+        # a counter as though it were a duration.
         print(f"{result['name']} ({args.side} round {args.round}): "
               f"{result['time']:.3f} {result['metric'] or 'unmeasured'} "
               f"{status}")

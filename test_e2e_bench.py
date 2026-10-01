@@ -467,8 +467,8 @@ class TestHarness(unittest.TestCase):
                       result.stderr)
         # The status line carries the counter and the instrument that
         # measured it. The `s` that used to sit there is gone: the number is
-        # not seconds, and printing an instruction count with a seconds
-        # suffix is the exact confusion this change exists to remove.
+        # not seconds, and printing a counter with a seconds suffix is the
+        # exact confusion this change exists to remove.
         self.assertIn("bench.render-impact (head round 1): 0.000 unmeasured "
                       "failed", result.stdout)
 

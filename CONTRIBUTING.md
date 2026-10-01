@@ -97,8 +97,7 @@ imports it, and `unittest discover` imports every `test_*.py` module it
 collects, so the suite cannot be collected at all without it. It measures
 nothing and emits no report — `speed.yml` once ran the suite through it as a
 timing harness and no longer does, because the gate now counts work done
-(syscalls for the renderer workloads, CPU seconds for the suite) instead of
-elapsed time. Do not write a test against pytest
+(CPU seconds, so steal time is excluded) instead of elapsed time. Do not write a test against pytest
 fixtures or `assert`-rewriting — it would run in CI and then not run for
 anyone using the documented command.
 
@@ -116,13 +115,21 @@ The workflow files in `.github/workflows/` are:
   in `speed-baseline.json`, which only ever ratchets down.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
-- `speed.yml` — counts **syscalls** for each renderer workload and **CPU
   seconds** for the unit suite, and compares each against its own population
   in the committed baseline `speed-baseline.json`, which only ever ratchets
   down. One instrument per population, not one per job: tracing the suite
   costs about 3.2× its untraced wall time, and the baseline carries a
   `metric` and a `tolerance` per population because one pair of keys could
   only ever be right for one of them.
+- `speed.yml` — counts **CPU seconds** for each renderer workload and for the
+  unit suite, and compares each against its own population in the committed
+  baseline `speed-baseline.json`, which only ever ratchets down. CPU seconds
+  rather than a deterministic instruction or syscall count, because neither
+  of those survives measurement on the cell that reads the baseline: one is
+  refused by the kernel's `perf_event_paranoid`, the other costs 12.8× the
+  workload it measures. The gate is therefore a gross-regression net, not a
+  sensitive gate, and the baseline carries a `metric` and a `tolerance` per
+  population because their measured spreads differ by an order of magnitude.
   of paths; branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
@@ -169,7 +176,7 @@ green on your pull request, and the file-count check fires only after merge, on
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
-work this commit does — syscalls per renderer workload, CPU seconds for the
+work this commit does in CPU seconds — per renderer workload and for the
 unit suite, on pinned offline fixtures — and fails when a committed,
 down-only baseline is exceeded; elapsed time survives only as a gross smoke
 check that reports no number), `release` (tags `v<VERSION>` once every gate a `VERSION` push
