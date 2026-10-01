@@ -1,26 +1,26 @@
 {
   "schema": 3,
-  "basis": "WHAT THIS FILE IS. The observed ENVELOPE of every entry the speed gate measures — the range it was actually seen over, with a tolerance, and never a single number pretending to be one. Recorded from EIGHT dispatches on the cell that reads it: ubuntu-latest, image ubuntu24/20260927.320, runner 2.337.0.\n\nTWO WINDOWS, AND THE FINDING THAT MATTERS MOST IN THIS FILE. Runs 36847969226, 36848207890, 36848474648 and 36848721383 ran at 4c003c6 between 2026-10-01T10:15Z and 10:24Z and measured the same renderer code as runs 36832215161, 36832519319, 36832824918 and 36833056763, which ran at 3c30eca between 07:46Z and 07:56Z. The two windows disagree by a factor of four:\n\n    entry                         07:46-07:56        10:15-10:24\n    counter::unit-suite            16.593-23.203       22.852-24.544      (58.8% vs 7.4%)\n    e2e::bench.render               0.056- 0.084         0.080- 0.087      (49.0% vs 8.4%)\n    e2e::bench.render-impact        1.019- 1.351         1.332- 1.404      (32.6% vs 5.4%)\n    e2e::bench.render-responsiveness 0.060- 0.080         0.078- 0.086      (32.9% vs 10.3%)\n\nSame cell, same image, same programs. The spread is therefore NOT a property of the workload: it is a property of the workload AND the state of the pool during the window. The first window contains one clearly fast machine and several slow ones; the second looks like a quiet pool. A tolerance derived from the quiet window would false-red the first time the pool is busy, and a false red on main trains people to ignore the gate, which is the whole failure this change exists to remove.\n\nSO THE ENVELOPES SPAN EVERYTHING THE CELL HAS SHOWN. The renderer workloads ship identical code at both commits, so all eight post-split observations describe one program and the envelope is their union — quiet window and busy window together, because the busy window is the only evidence that a fast machine exists. The unit suite is different: only the four head runs describe this tree's suite, and its observed spread is 7.4%. That 7.4% is NOT its tolerance. The same cell measured a suite of this scale at 39.8% in a busier window, and the honest reading is that 7.4% is what this workload looks like when the pool is quiet, not what it always looks like — so the tolerance stays at 0.40, and 7.4% is recorded as what was observed rather than as what to budget against. DO NOT SHRINK A TOLERANCE BECAUSE THE LAST FOUR RUNS WERE QUIET, and do not read a quiet window as the cell's characteristic spread.\n\nWHY AN ENVELOPE AT ALL. CPU seconds exclude steal, so a co-tenant does not reach them — that is what makes them a magnitude where elapsed time is not. They are still hardware-dependent: a faster or narrower core runs the same instructions in fewer CPU seconds, and the pool spans instance types. A single stored value plus a budget wide enough to cover what the cell has shown would need a tolerance above 1.0 on some entries, which is not a loose gate but a gate that cannot fire.\n\nWHY THE TOLERANCE IS THE OBSERVED SPREAD. The gate compares a per-run MINIMUM against a recorded MAXIMUM, so the machine's whole observed range is conceded for free and the tolerance only has to cover a head landing on a machine worse than any yet seen — one more spread-width. Per entry: unit suite 0.40 (the cell's demonstrated spread at this scale, not the quiet window's), bench.render 0.60, bench.render-impact 0.38, bench.render-responsiveness 0.43; a population takes its widest, so the renderer workloads carry 0.60. Those are ceilings derived from the entries above, and they are COMPUTED by test_baseline.py rather than transcribed here: a transcribed copy of one was wrong twice, understating a ceiling by enough to turn a verdict surviving on half a percent into one that reads as comfortable.\n\nWHAT THIS GATE THEREFORE CATCHES, AND WHAT IT DOES NOT. Nothing derived is written out here, and the honest summary is uncomfortable. At these tolerances a DOUBLED workload is caught on the unit suite and on NONE of the three renderer workloads: doubling the fastest machine observed gives 0.113 against bench.render's 0.144 ceiling, 2.038 against render-impact's 2.246, and 0.120 against render-responsiveness's 0.138. That is what spanning the cell's real spread costs, and the alternative — a tolerance tight enough to catch those doublings — is below the observed spread of every one of them, so it would fire on ordinary pool variation. A gate that cries wolf is deader than one with a documented blind spot, so bench.render is NOT being tuned to close this gap and neither are the other two. The gate catches a gross step change and the gross wall smoke bound; it will not catch a 20% regression anywhere, and after this widening it does not catch a doubling of a renderer workload either. Read \"load-invariant counter\" as \"a quantity the machine's load does not reach\", not as \"a sharp budget\".\n\nTHE GROSS WALL SMOKE BOUND. `wall` is an envelope for the same reason `entries` is, and it spans the same two windows: at SMOKE_FACTOR 3.0 the ceilings are 168.6 seconds, 0.261, 4.69 and 0.261. That bound is deliberately not a budget — it is a cliff detector for the class CPU cannot see at all, a workload getting slower in wall while its CPU cost holds flat, which is what blocking on I/O, a network call or a lock wait looks like. The report prints no elapsed time at all: a verdict and no number.\n\nPROVENANCE, AND WHAT `population` IS NOT. measured_commit is 4c003c6, the remote head those four dispatches resolved --ref issue-81-82 against, not a local checkout. `population` is the digest of the 777 node ids THAT TREE COLLECTED, computed by running collect_node_ids over a checkout of it rather than copied from anywhere. It is not this file's own tree: commits after 4c003c6 added controls, so a run of the head collects more, and test_the_committed_digest_matches_this_tree will refuse until a dispatch of THAT head re-derives entries, wall and population together. That refusal is the guard working. The alternative is a green document asserting it was observed over a population it was not, which is the operation this file's first rule forbids.\n\nHOW TO RE-DERIVE. Run the job at least four times on the cell that will read it, and take each entry's min and max ACROSS dispatches and windows rather than within one — a single quiet window is not a measurement of the cell, it is a measurement of a quiet afternoon. Keep every window's figures: the widest one seen for an entry governs. Re-derive, never carry, and never shrink because the latest runs were kind.",
+  "basis": "WHAT THIS FILE IS. The observed ENVELOPE of every entry the speed gate measures — the range it was actually seen over, with a tolerance, and never a single number pretending to be one. Recorded on the cell that reads it: ubuntu-latest, image ubuntu24/20260927.320, runner 2.337.0.\n\nTHREE WINDOWS, AND THE FINDING THAT MATTERS MOST IN THIS FILE. The renderer workloads ship IDENTICAL code at all three commits — the rounds between them touched the workflow, the tests, the comparator and this document, never a renderer — so every post-split observation describes one program and all of them belong in one envelope:\n\n    window 1  07:46-07:56Z  at 3c30eca  runs 36832215161 36832519319 36832824918 36833056763\n    window 2  10:15-10:24Z  at 4c003c6  runs 36847969226 36848207890 36848474648 36848721383\n    window 3  10:35-10:47Z  at 94e8a78  runs 36850024437 36850406095 36850650070 36850880222 36851111411\n\nand they disagree by a factor of four on the same programs:\n\n    entry                         window 1        window 2        window 3\n    counter::unit-suite            16.593-23.203   22.852-24.544   21.657-24.360\n    e2e::bench.render               0.056- 0.084     0.080- 0.087     0.079- 0.084\n    e2e::bench.render-impact        1.019- 1.351     1.332- 1.404     1.045- 1.355\n    e2e::bench.render-responsiveness 0.060- 0.080     0.078- 0.086     0.078- 0.082\n\nTHE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the state of the pool during the window: window 1 contains one clearly fast machine and several slow ones, windows 2 and 3 look like a quiet pool. So the renderer envelopes are the UNION of all thirteen observations per entry — 4 + 4 + 5 — because the busy window is the only evidence that a fast machine exists. An envelope built from a quiet window false-reds the first time the pool is busy, and a false red on main trains people to ignore the gate, which is the whole failure this change exists to remove. DO NOT SHRINK A TOLERANCE BECAUSE THE LAST RUNS WERE QUIET, and do not read a quiet window as the cell's characteristic spread.\n\nNote the recorded maximum for render-impact is 1.414891, from window 1. An earlier draft of this file took its maximum from window 2 and recorded 1.403799 — under-recording the worst machine by exactly the mistake the rule above exists to prevent, in the same place it had already been made once in transcribed prose.\n\nTHE UNIT SUITE IS DIFFERENT, AND THE ASYMMETRY IS THE POINT. Only windows 2 and 3 ran a tree whose suite matches this one's closely, and window 3's five runs are the ones that describe it: 21.657363-24.359847, a 12.5% spread. That is recorded — and it is NOT the tolerance. The same cell measured a suite of this scale at 39.8% in window 1, so 12.5% is what this workload looks like when the pool is quiet, not what it always looks like. A tolerance derived from it would false-red the next busy run on main. The tolerance stays 0.40, and 7.4%/12.5% are recorded as OBSERVED rather than as budgets.\n\nWHY AN ENVELOPE AT ALL. CPU seconds exclude steal, so a co-tenant does not reach them — that is what makes them a magnitude where elapsed time is not. They are still hardware-dependent: a faster or narrower core runs the same instructions in fewer CPU seconds, and the pool spans instance types. A single stored value plus a budget wide enough to cover what the cell has shown would need a tolerance above 1.0 on some entries, which is not a loose gate but a gate that cannot fire.\n\nWHY THE TOLERANCE IS THE OBSERVED SPREAD. The gate compares a per-run MINIMUM against a recorded MAXIMUM, so the machine's whole observed range is conceded for free and the tolerance only has to cover a head landing on a machine worse than any yet seen — one more spread-width. Per entry: unit suite 0.40 (the cell's demonstrated spread at this scale, not any single window's), bench.render 0.60, bench.render-impact 0.39, bench.render-responsiveness 0.45; a population takes its widest, so the renderer workloads carry 0.60.\n\nWHAT THIS GATE THEREFORE CATCHES, AND WHAT IT DOES NOT. Nothing derived is written out here, because a transcribed ceiling was wrong twice in this file's history. The honest summary is uncomfortable: at these tolerances a DOUBLED workload is caught on the unit suite and on NONE of the three renderer workloads, because doubling the fastest machine observed lands under all three ceilings. The alternative — a tolerance tight enough to catch those doublings — is below the observed spread of every one of them, and would fire on ordinary pool variation. A gate that cries wolf is deader than one with a documented blind spot, so bench.render is NOT tuned and neither are its siblings. The gate catches a gross step change and the gross wall smoke bound; it will not catch a 20% regression anywhere. Read \"load-invariant counter\" as \"a quantity the machine's load does not reach\", not as \"a sharp budget\".\n\nTHE GROSS WALL SMOKE BOUND. `wall` is an envelope for the same reason, spanning the same three windows; at SMOKE_FACTOR 3.0 the ceilings are 168.5 seconds, 0.261, 4.69 and 0.261. That bound is deliberately not a budget: it is a cliff detector for the class CPU cannot see at all, a workload getting slower in wall while its CPU cost holds flat, which is what blocking on I/O, a network call or a lock wait looks like. The report prints no elapsed time at all: a verdict and no number.\n\nPROVENANCE. measured_commit is 94e8a78, the remote head those five dispatches resolved --ref issue-81-82 against. `population` is the digest of the 780 node ids THAT TREE COLLECTED, computed by running collect_node_ids over a checkout of it — the same derivation the control performs — rather than copied from anywhere. Entries, wall and population therefore all describe one head, which is what discharges N1.\n\nHOW TO RE-DERIVE. Run the job at least four or five times on the cell that will read it, and take each entry's min and max ACROSS dispatches AND across windows rather than within one — a single quiet window is not a measurement of the cell, it is a measurement of a quiet afternoon. Keep every window's figures: the widest one seen for an entry governs. Re-derive, never carry, and never shrink because the latest runs were kind.",
   "cell": "ubuntu-latest, image ubuntu24/20260927.320, runner 2.337.0",
-  "measured_commit": "4c003c6",
-  "measured_at": "2026-10-01T10:15:00Z/2026-10-01T10:24:00Z",
+  "measured_commit": "94e8a78",
+  "measured_at": "2026-10-01T10:35:00Z/2026-10-01T10:47:00Z",
   "populations": {
     "unit-suite": {
       "metric": "cpu_time",
       "tolerance": 0.4,
-      "population": "2a60ed56657dd80df44428c05ea9dafa06fbdb6993a039a26206cb6525ceed44",
+      "population": "a6d43a8ba9eaae92c92addbb7a8c49ea5a1c8940f0843835bbd717cdbec6c6b0",
       "entries": {
         "counter::unit-suite": {
-          "min": 22.852139,
-          "max": 24.543578,
-          "n": 4
+          "min": 21.657363,
+          "max": 24.359847,
+          "n": 5
         }
       },
       "wall": {
         "counter::unit-suite": {
-          "min": 54.154,
-          "max": 56.189,
-          "n": 4
+          "min": 54.088,
+          "max": 56.176,
+          "n": 5
         }
       }
     },
@@ -32,34 +32,34 @@
         "e2e::bench.render": {
           "min": 0.056494,
           "max": 0.090278,
-          "n": 8
+          "n": 13
         },
         "e2e::bench.render-impact": {
           "min": 1.018783,
-          "max": 1.403799,
-          "n": 8
+          "max": 1.414891,
+          "n": 13
         },
         "e2e::bench.render-responsiveness": {
           "min": 0.060249,
-          "max": 0.086206,
-          "n": 8
+          "max": 0.087334,
+          "n": 13
         }
       },
       "wall": {
         "e2e::bench.render": {
           "min": 0.057,
           "max": 0.087,
-          "n": 8
+          "n": 13
         },
         "e2e::bench.render-impact": {
           "min": 1.226,
           "max": 1.564,
-          "n": 8
+          "n": 13
         },
         "e2e::bench.render-responsiveness": {
           "min": 0.06,
           "max": 0.087,
-          "n": 8
+          "n": 13
         }
       }
     }
