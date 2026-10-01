@@ -138,6 +138,61 @@ class TestPayloadDispatcher(unittest.TestCase):
         self.assertRegex(totals["data"]["a0"]["defaultBranchRef"]
                          ["target"]["oid"], r"^[0-9a-f]{40}$")
 
+    # The renderer's profile query, abbreviated but with the selections that
+    # identify it: its own fields, and an organizations connection that pages.
+    PROFILE_ORG_QUERY = (
+        "query($login: String!, $cursor: String) { user(login: $login) { "
+        "login name followers { totalCount } "
+        "organizations(first: 100, after: $cursor) { "
+        "pageInfo { hasNextPage endCursor } nodes { login } } } }")
+    # What the base release still sends: one query carrying BOTH connections,
+    # so the org branch must not steal it.
+    COMBINED_PROFILE_QUERY = (
+        "query($login: String!) { user(login: $login) { login name "
+        "followers { totalCount } organizations(first: 100) { nodes { login } } "
+        "repositories(first: 100, ownerAffiliations: OWNER, isFork: false) { "
+        "totalCount nodes { stargazerCount } } } }")
+
+    def test_dispatches_the_profile_org_query_with_its_own_fields(self):
+        # The identity payload models the identity query and carries no
+        # followers; serving it here made render.py exit 2 on 'followers'.
+        response = self.graphql(self.PROFILE_ORG_QUERY, {"cursor": None})
+        user = response["data"]["user"]
+        self.assertIn("followers", user)
+        self.assertIn("name", user)
+        self.assertIn("pageInfo", user["organizations"])
+
+    def test_dispatches_both_profile_org_pages(self):
+        # A fixture that only ever answers hasNextPage: false cannot tell a
+        # renderer that walks the connection from one that stops at page one.
+        first_page = self.graphql(self.PROFILE_ORG_QUERY, {"cursor": None})
+        connection = first_page["data"]["user"]["organizations"]
+        self.assertTrue(connection["pageInfo"]["hasNextPage"])
+        second_page = self.graphql(
+            self.PROFILE_ORG_QUERY,
+            {"cursor": connection["pageInfo"]["endCursor"]})
+        self.assertFalse(second_page["data"]["user"]["organizations"]
+                         ["pageInfo"]["hasNextPage"])
+        self.assertNotEqual(
+            [node["login"] for node in connection["nodes"]],
+            [node["login"] for node
+             in second_page["data"]["user"]["organizations"]["nodes"]])
+
+    def test_the_org_branch_does_not_steal_identity_or_the_combined_query(self):
+        # Two neighbours the org branch could swallow by accident: the
+        # identity query, which contains organizations too, and the base
+        # release's single combined profile query, which contains BOTH
+        # connections and also selects followers.
+        identity = self.graphql("query { user { login databaseId "
+                                "organizations { nodes { login } } } }")
+        self.assertIn("databaseId", identity["data"]["user"])
+        self.assertIn("emails", identity["data"]["user"])
+
+        combined = self.graphql(self.COMBINED_PROFILE_QUERY, {"cursor": None})
+        self.assertIn("repositories", combined["data"]["user"])
+        self.assertIn("followers", combined["data"]["user"])
+        self.assertIn("pullRequests", combined["data"]["user"])
+
     def test_foreign_urls_pass_through_without_installing_the_shim(self):
         original_urlopen = urllib.request.urlopen
         request = urllib.request.Request("https://example.invalid/api")
