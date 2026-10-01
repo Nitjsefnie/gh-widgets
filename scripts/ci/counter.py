@@ -1,103 +1,91 @@
 #!/usr/bin/env python3
 """What did that command cost, in a quantity runner load cannot move?
 
-THE QUESTION THIS FILE ANSWERS. speed.yml used to decide pass or fail from
+THE QUESTION THIS FILE ANSWERS. speed.yml used to decide pass/fail from
 wall-clock durations taken on a GitHub-hosted runner, which is a multi-tenant
-VM: steal time, a neighbour, a different CPU model all move a duration, and
-none of that is the code being measured. A duration measured there is not a
-magnitude. So the quantity gated here is a COUNTER.
+VM: steal time, a neighbour, a different CPU model. The maintainer ruling
+behind issue #81 is that paired wall-clock A/B is not a valid magnitude
+ANYWHERE — not on a shared box, and not in one job on a CI runner. So the
+quantity gated here is not an elapsed time.
 
-TWO INSTRUMENTS, IN A FIXED PREFERENCE ORDER.
+ONE INSTRUMENT: CPU SECONDS.
+`resource.getrusage(RUSAGE_CHILDREN)`, as a delta across one child. On-CPU
+time, so steal time — the thing that makes a duration on a shared runner
+meaningless — is excluded, which is what makes this valid under the ruling
+at all.
 
-    syscalls    `strace -f -c -o <report> -- <cmd>`, total row
-    cpu_time    resource.getrusage(RUSAGE_CHILDREN), across one child
+IT IS NOT DETERMINISTIC, AND THE GATE IS WEAKER FOR IT. That is a real cost
+and it is named rather than buried: measured on this box, the same program
+measured repeatedly spreads 22.2% over six runs (unit suite) and 19.5-72.9%
+over eight runs (the three renderer workloads, the short ones worst because
+fixed overhead and co-tenant load dominate a brief measurement). A quiet
+dedicated cell spreads far less — 7.6% min-to-max for one workload, run
+36812285024 — but even there the budget has to be looser than a
+deterministic counter would need. The budgets in the committed baseline are
+per population for exactly this reason, and at its budget the unit-suite
+half is a GROSS-REGRESSION NET, not a sensitive gate.
 
-WHY NOT INSTRUCTION COUNTS. `perf stat -e instructions` is the obvious
-first choice and it does not work on this cell. Measured on ubuntu24 image
-20260927.320.1, kernel 6.17.0-1022-azure (run 36811152307):
-perf_event_paranoid is 4, `perf` IS installed, and the probe still exits 255
-with "Access to performance monitoring and observability operations is
-limited." An unreachable branch in a gate is worse than no branch — it is a
-code path that never runs and never gets tested by production — so perf is
-not here at all. The lesson it leaves is the one below: the probe MEASURES,
-it does not look for a binary.
+THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured, not
+assumed, and both are recorded here so the next reader does not re-derive
+them — and so nobody adds one back without also re-deriving what it costs.
 
-WHY strace IS ALLOWED TO ATTACH. The runner has yama ptrace_scope=1, which
-restricts tracing to your own descendants — and strace here IS the parent of
-the thing it traces, so it is inside the restriction rather than outside it.
-The scope value is printed by the probe anyway, because a reader who is told
-the fallback fired deserves to know what forbade it.
+  Instruction counts (`perf stat -e instructions`) — UNAVAILABLE. On
+  ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure (run 36811152307)
+  perf_event_paranoid is 4, `perf` IS installed, and it still exits 255 with
+  "Access to performance monitoring and observability operations is limited."
 
-WHY SYSCALL COUNTS. They are exactly deterministic. Three runs of an
-identical workload under `strace -f -c` on that same cell (run 36812466498)
-reported the same total — 870 calls, 89 errors — every time, while the
-`% time` and `seconds` columns strace also prints swung between 17.34% and
-48.84% on the same row. The COUNT is the stable quantity in that report and
-the timing columns are noise, which is exactly the distinction this whole
-change is about.
+  Syscall counts (`strace -f -c`) — AVAILABLE, DETERMINISTIC, AND NOT
+  AFFORDABLE. On that same cell three runs of one workload reported the same
+  total every time (870 calls, 89 errors; run 36812466498) while that
+  report's own timing columns swung between 17.34% and 48.84%. Its overhead
+  is the problem: 0.24-0.25 s against 0.19 s untraced on that small workload,
+  but tracing overhead scales with syscall count, and over the real renderer
+  workloads it measured 64830/68057/75870 ms per bench round against
+  5053/5684/6215 ms untraced — 12.8x, landing almost entirely on
+  render-impact.py, which shells out to git. On a cell whose suite round is
+  ~20 s, 12.8x on two bench rounds costs minutes to save tens of seconds.
 
-`-f` is not optional. The renderers shell out to `git`; the quantity that
-matters is the work the workload actually does, including in its children,
-and a count that stopped at execve would measure the wrong program.
+The standing rule this leaves: an instrument the cell cannot use does not
+belong in the gate, and neither does one that costs more than the thing it
+measures. Both were tried; both lost on numbers.
 
-Tracing is not free: 0.24-0.25s against 0.19s untraced on that workload
-(~1.26x, run 36812466498). That overhead scales with syscall count, so 1.26x
-is not a prediction for the unit suite. It is an argument that the counter
-is not wall time and must not be read as such — the traced process really
-does do more work than the untraced one, which is why the count is compared
-against a baseline traced the same way and never against an untraced one.
+ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in
+its own step, and exports the result as GH_COUNTER_METRIC; this file honours
+that variable and does not have to be asked. Two call sites in one comparison
+that picked different instruments would produce two incomparable numbers.
 
-WHY CPU SECONDS IS THE FALLBACK AND NOT THE PRIMARY. It is on-CPU time, so
-steal time is excluded, which is what makes it valid under the ruling at
-all. It is also not tight: five runs of one workload on a quiet runner
-spread 7.6% min to max (run 36812285024). A gate whose budget has to be
-looser than the noise it is measuring is a weaker gate, and it must never
-become the primary silently — the baseline records which instrument it was
-measured with, and a change of instrument is a refusal, not a conversion.
+THE PROBE RECORDS WHY THERE IS NO BETTER INSTRUMENT. It reports the metric
+in use together with perf_event_paranoid and yama ptrace_scope — the two
+kernel settings that decide whether instruction or syscall counting is even
+possible — so a reader can see that CPU seconds are a measured choice on
+this cell and not an oversight. Existence of a binary proves nothing: `perf`
+is installed on the runner and cannot count.
 
-ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in its
-own step, and exports the answer as GH_COUNTER_METRIC; this file honours that
-variable and probes for itself only when it is not set. Two call sites in one
-job that picked different instruments would produce two incomparable numbers,
-which is the entire class of bug this file exists to prevent.
+A METRIC MISMATCH IS A REFUSAL, NOT A COMPARISON. Comparing a counter
+recorded under one instrument against a baseline recorded under another is a
+category error that reads as either a catastrophic regression or a
+spectacular speedup. The comparator raises ComparisonError, which is exit 2
+and names both; nothing here silently converts one into the other.
 
-THE PROBE MEASURES; IT DOES NOT JUST LOOK FOR A BINARY. An instrument on
-PATH that cannot be used — a `strace` denied by ptrace_scope, a `perf`
-refused by perf_event_paranoid — is a FAILING probe, not a passing one. So
-the probe runs the instrument against a trivial command and requires a
-parseable, positive total. Existence of a binary proves nothing: `perf` IS
-installed on the runner and still cannot count.
-
-A METRIC MISMATCH IS A REFUSAL, NOT A COMPARISON. Comparing a syscall count
-against a CPU-seconds baseline is a category error, and it is one that reads
-as either a catastrophic regression or a spectacular speedup depending on
-which way the numbers fall. The comparator raises ComparisonError on a
-mismatch, which is exit 2 and names both metrics; nothing here silently
-converts one into the other. The baseline also carries the tolerance that
-belongs to its instrument — tight for a deterministic count, loose for CPU
-seconds — and both are re-derived together, never carried across.
-
-THE TIME ATTRIBUTE IN THE JUNIT THIS WRITES IS NOT SECONDS. It is the counter
-value. That is the whole point, and it is the first thing the next reader
-questions, so: a `time="870"` written by this file means eight hundred and
-seventy syscalls (or CPU seconds, per the suite's gh-metric) and never eight
-hundred and seventy seconds of elapsed time. The wall seconds are recorded
-separately, as gh-wall, and exist only for the gross smoke gate — never as a
-magnitude.
+THE TIME ATTRIBUTE IN THE JUNIT THIS WRITES IS NOT SECONDS. It is the CPU
+seconds the child consumed. That is still not the quantity a reader assumes
+on first sight, so: a `time="3.2"` written by this file means three-point-two
+CPU seconds of on-CPU time and never three-point-two seconds of elapsed time.
+Elapsed time is recorded separately, as gh-wall, and exists only for the
+gross smoke gate — never as a magnitude.
 
 DETERMINISM LEVERS, ALL OF THEM NAMED IN `child_environment`. The headline
-one is PYTHONHASHSEED=0, but the one that actually moved the numbers here
-was PYTHONDONTWRITEBYTECODE=1: without it the first round compiles and
-writes a .pyc and the second reads them, so two rounds of identical code
-legitimately count different syscalls. None of this makes wall time
-deterministic and nothing below pretends that it does.
+one is PYTHONHASHSEED=0, but the one that actually moved the numbers was
+PYTHONDONTWRITEBYTECODE=1: without it the first round compiles and writes a
+.pyc and the second reads them, so two rounds of identical code do different
+amounts of work. None of this makes the measurement deterministic and nothing
+here pretends that it does.
 
 IT ALSO OWNS THE POPULATION. `population_digest` and `collect_node_ids` are
 here rather than in the comparator because a digest computed two different
 ways by two tools compares unequal forever, and the resulting refusal would
 be indistinguishable from a real population change. The collector is a
-COLLECTION pass, not a test run: discovery imports the test modules and
-builds the suite, and executes nothing.
+COLLECTION pass, not a test run.
 
 CLI:
 
@@ -110,11 +98,9 @@ import argparse
 import hashlib
 import os
 import resource
-import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
@@ -122,21 +108,21 @@ from pathlib import Path
 from typing import NamedTuple, Optional, Sequence
 
 
-STRACE_METRIC = "syscalls"
 CPU_METRIC = "cpu_time"
-# The metric names this file is willing to record. Anything else arriving in
-# GH_COUNTER_METRIC is a typo or a stale export, and is refused rather than
-# measured — an unrecognised instrument silently falling back would produce a
-# number under the wrong name.
-METRICS = (STRACE_METRIC, CPU_METRIC)
+# The metric names this file is willing to record. There is exactly one, and
+# that is not an accident of implementation: see the docstring for the two
+# better instruments and the numbers that put them out. Anything else
+# arriving in GH_COUNTER_METRIC is a stale export from a shape this file has
+# left behind, and it is refused rather than measured — a number recorded
+# under a name this file does not define is the exact failure the baseline's
+# metric check exists to catch, and it should never get that far.
+METRICS = (CPU_METRIC,)
 METRIC_ENV = "GH_COUNTER_METRIC"
 # Read by the probe and printed next to the instrument, because a reader
 # deciding whether to trust a fallback needs to know whether it was the kernel
 # that forbade the primary, not whether the binary was missing.
 PARANOID_PATH = Path("/proc/sys/kernel/perf_event_paranoid")
 PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
-# The file strace is told to write its -c summary into.
-REPORT_NAME = "strace.txt"
 # A trivial command for the probe to count. `/bin/true` is not guaranteed to
 # exist everywhere and is not a Python program; `-c pass` starts the
 # interpreter, which is the closest available stand-in for "some real work"
@@ -165,55 +151,18 @@ class Measurement(NamedTuple):
     returncode: int
 
 
-def parse_strace_total(report: str) -> Optional[float]:
-    """The total CALL count out of one `strace -f -c` summary, or None.
-
-    The report's columns are `% time`, `seconds`, `usecs/call`, `calls`,
-    `errors`, `syscall`, and the last row is the aggregate, whose last field
-    is the literal `total`. This reads the CALLS from that row and nothing
-    else: the timing columns in the same report are not reproducible — the
-    same row read 17.34% and 48.84% on consecutive runs of identical code
-    (run 36812466498) while the call count was identical every time. Reading
-    `seconds` here would reintroduce exactly the wall-clock measurement this
-    file exists to replace.
-
-    None rather than zero for an unparseable report: a strace that ran and
-    could not trace is a failed probe, and reading it as 0 would make every
-    later comparison look like an infinite speedup.
-    """
-    for line in report.splitlines():
-        fields = line.split()
-        if len(fields) >= 4 and fields[-1] == "total":
-            try:
-                count = float(fields[-3])
-            except ValueError:
-                return None
-            return count if count > 0 else None
-    return None
-
-
-def _tracer_command(tracer, command, report_path):
-    """`strace -f -c -o <report> -- <command>`.
-
-    `-f` follows every fork and thread, which is the whole point: the
-    renderers shell out to git, and a count that stopped at execve would
-    measure the wrapper instead of the work. The summary goes to a file
-    rather than to stderr because stderr here belongs to the child, and
-    strace's own table is not the child's diagnostics.
-    """
-    return [tracer, "-f", "-c", "-o", str(report_path), "--", *command]
-
-
 def _run_child(command, cwd, env, timeout):
     """Run one child, returning (returncode, stdout, stderr, wall, cpu).
 
     A hand-rolled Popen rather than `subprocess.run` for exactly one reason:
-    with the strace instrument the direct child is `strace`, so a timeout
-    that killed only the direct child would orphan the real command and
-    leave it running with its output pipes held open — the timeout would then
-    never return at all, and the gate would hang rather than fail. The child
-    is therefore started in its own session and the whole process group is
-    killed, which is why this is not `subprocess.run`.
+    the renderers shell out to `git`, so a timeout that killed only the
+    direct child would orphan the real work and leave it running with its
+    output pipes held open — the timeout would then never return at all, and
+    the gate would hang rather than fail. The child is therefore started in
+    its own session and the whole process group is killed, which is why this
+    is not `subprocess.run`. The traced instruments needed it too (the direct
+    child was `strace` and the command was its grandchild), which is where
+    the requirement came from; the requirement outlived the instrument.
     """
     started = time.perf_counter()
     before = _child_cpu_seconds()
@@ -270,17 +219,19 @@ def child_environment(env=None) -> dict:
     time deterministic — they remove sources of drift from the COUNTER, which
     is a different and much smaller claim:
 
-      PYTHONHASHSEED=0       hash-order drift, which reaches counted work
+      PYTHONHASHSEED=0       hash-order drift, which reaches the work
                              wherever a set or dict is iterated.
       PYTHONDONTWRITEBYTECODE=1
                              the big one. Without it, round 1 of a run
                              compiles every module and writes a .pyc while
-                             round 2 reads them — so round 2 legitimately
-                             counts FEWER syscalls than round 1, on identical
-                             code. The minimum across rounds is taken, so it
-                             would be defensible; but a baseline re-derived
-                             on a cold tree and one measured on a warm one
-                             would not be the same number at all.
+                             round 2 reads them — so the two rounds do
+                             measurably different amounts of work on
+                             identical code, and the second looks cheaper for
+                             a reason that has nothing to do with the commit.
+                             The minimum across rounds is taken, so it would
+                             be defensible; but a baseline re-derived on a
+                             cold tree and one measured on a warm one would
+                             not be the same number at all.
       LC_ALL=C, LANG=C      locale-dependent sorting and formatting. Not a
                              run-to-run source on one cell, but it is a
                              cell-to-cell one, and this baseline is meant to
@@ -296,39 +247,6 @@ def child_environment(env=None) -> dict:
     child["LANG"] = "C"
     child["TZ"] = "UTC"
     return child
-
-
-def _read_traced_count(tracer, command) -> Optional[float]:
-    """Run one command under strace and return its total call count, or None.
-
-    The report lives in a private directory that is removed whatever happens,
-    because a leftover -o file is a syscall-count-shaped piece of scratch
-    that the next run would happily read instead of writing.
-    """
-    with tempfile.TemporaryDirectory(prefix="ghw-counter-strace-") as work:
-        report = Path(work) / REPORT_NAME
-        try:
-            _run_child(_tracer_command(tracer, command, report), None,
-                       child_environment(), PROBE_TIMEOUT)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        try:
-            text = report.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-    return parse_strace_total(text)
-
-
-def probe_strace() -> Optional[float]:
-    """Count a trivial command's syscalls, or None if strace cannot.
-
-    Returns None — never zero, never a guess — when strace is missing, cannot
-    be executed, times out, or produces a report with no usable total.
-    """
-    tracer = shutil.which("strace")
-    if not tracer:
-        return None
-    return _read_traced_count(tracer, PROBE_COMMAND)
 
 
 def choose_metric(forced: Optional[str] = None) -> str:
@@ -348,7 +266,7 @@ def choose_metric(forced: Optional[str] = None) -> str:
                 + ", ".join(METRICS) + "; refusing to measure under a name "
                 "this file does not define")
         return forced
-    return STRACE_METRIC if probe_strace() is not None else CPU_METRIC
+    return CPU_METRIC
 
 
 def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
@@ -361,46 +279,9 @@ def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
     `subprocess.run`, so nothing downstream grows a new failure path.
     """
     chosen = choose_metric(metric)
-    if chosen == STRACE_METRIC:
-        return _measure_traced(command, cwd, env, timeout)
     code, out, err, wall, cpu = _run_child(
         list(command), cwd, child_environment(env), timeout)
     return Measurement(cpu, chosen, wall, out, err, code)
-
-
-def _measure_traced(command, cwd, env, timeout) -> Measurement:
-    """The syscall instrument: strace in front, its summary behind us."""
-    tracer = shutil.which("strace")
-    if not tracer:  # pragma: no cover - the probe already ran it
-        raise CounterError("strace disappeared between the probe and the run")
-    with tempfile.TemporaryDirectory(prefix="ghw-counter-strace-") as work:
-        wrapped = _tracer_command(tracer, list(command),
-                                  Path(work) / REPORT_NAME)
-        code, out, err, wall, _cpu = _run_child(
-            wrapped, cwd, child_environment(env), timeout)
-        value = _parse_traced(work)
-    return Measurement(value, STRACE_METRIC, wall, out, err, code)
-
-
-def _parse_traced(directory: str) -> float:
-    """The total call count out of a run's strace report, or raise.
-
-    Raising here is deliberate. The instrument was chosen, the child ran, and
-    the report is unreadable or has no total: recording anything else would
-    put a number in the baseline that no later run can reproduce. That is a
-    failure to measure, and it is reported as one.
-    """
-    path = Path(directory) / REPORT_NAME
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        raise CounterError(f"the strace report is unreadable: {exc}") from exc
-    value = parse_strace_total(text)
-    if value is None:
-        raise CounterError(
-            "strace ran but reported no usable total syscall count, so "
-            f"nothing was measured:\n{text.strip()}")
-    return value
 
 
 def population_digest(node_ids) -> str:
@@ -495,22 +376,22 @@ def write_junit(path: Path, node_id: str, measurement: Measurement,
 
 
 def _probe_lines() -> list:
-    """The `key=value` lines the workflow's probe step writes to $GITHUB_OUTPUT."""
-    tracer = shutil.which("strace")
-    counted = probe_strace()
-    metric = STRACE_METRIC if counted is not None else CPU_METRIC
-    if counted is not None:
-        why = (f"strace counted {int(counted)} syscalls for a trivial command "
-               "(the call count is the deterministic part of its report; its "
-               "own timing columns are not)")
-    else:
-        why = (f"strace could not produce a positive syscall total for a "
-               f"trivial command (strace on PATH: "
-               f"{'yes' if tracer else 'no'}, ptrace_scope: "
-               f"{_setting(PTRACE_SCOPE_PATH)})")
+    """The `key=value` lines the workflow's probe step writes to $GITHUB_OUTPUT.
+
+    There is one instrument, so nothing here is being chosen — what this step
+    exists for is the RECORD of why. It prints the two kernel settings that
+    decide whether a deterministic counter is even possible on this cell:
+    perf_event_paranoid for instruction counts, yama ptrace_scope for syscall
+    counts. A reader who sees CPU seconds in use can then see that the
+    alternatives were measured and unavailable-or-too-expensive, rather than
+    assuming nobody thought of them.
+    """
     return [
-        f"metric={metric}",
-        f"metric_reason={why}",
+        f"metric={CPU_METRIC}",
+        "metric_reason=on-CPU seconds, so steal time is excluded; "
+        "instruction counts are refused by this kernel's perf_event_paranoid "
+        "and syscall counts cost 12.8x the workload they measure, so CPU "
+        "seconds is the only instrument this cell can afford to run",
         f"perf_event_paranoid={_setting(PARANOID_PATH)}",
         f"ptrace_scope={_setting(PTRACE_SCOPE_PATH)}",
     ]
