@@ -57,14 +57,15 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-`install.sh` stages a six-file deployment set: the three renderer entry
-points, `render-impact.py`'s `impact_loc.py` sibling, their existing
-`ghwidgets_common.py` runtime dependency, and the separately installed
-`ghwidgets_data.py` public API for pinned consumers.
+`install.sh` stages a nine-file deployment set: the three renderer entry
+points, `render-impact.py`'s `impact_loc.py` sibling and its `impact_clone.py`
+dependency, their shared `ghwidgets_common.py` runtime dependency and its
+`ghwidgets_cache.py` and `ghwidgets_journal.py` siblings, and the separately
+installed `ghwidgets_data.py` public API for pinned consumers.
 The renderers assert `ghwidgets_common.py`'s `COMMON_VERSION` on startup;
 they do not import `ghwidgets_data.py`. The installer moves the complete set
 into place and starts every entry point to prove the renderer deployment is
-coherent. A hand-rolled copy that omits `ghwidgets_common.py` can leave a
+coherent. A hand-rolled copy that omits a shared module can leave a
 renderer refusing to run, deliberately preventing rendering from a stale
 shared module.
 
