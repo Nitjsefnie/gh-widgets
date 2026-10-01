@@ -9,7 +9,7 @@ renderers themselves have. There are **four** files, and they replaced **ten**:
 | unit | when | what |
 |---|---|---|
 | `gh-widgets.service` + `.timer` | hourly | all three renderers, in sequence |
-| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | the same, with `--resync` — the only thing that ignores the caches |
+| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | all three renderers in sequence; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
 
 The five old `render-*` service/timer pairs are **gone**; ordering that used to
 be expressed with `After=` chains between separate units is now just the order
