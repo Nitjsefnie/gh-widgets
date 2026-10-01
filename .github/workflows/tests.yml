@@ -115,14 +115,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
 
+      - name: Install the pinned git-fame
+        if: matrix.measured == true
+        run: |
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
+          python -m pip install "$FORK_PIN"
+
       - name: Run tests
         id: unittest
         # Still `unittest discover`, under coverage on the measured cell.
         # pytest is not the runner here and should not become one; it
         # appears only in speed.yml, purely as a timing harness.
         env:
-          # Undefined on the other five cells, so this reads as "" there.
+          # Undefined on the other five cells, so these read as "" there.
           MEASURED: ${{ matrix.measured }}
+          GH_WIDGETS_REQUIRE_GIT_FAME: ${{ matrix.measured }}
         run: |
           if [ "$MEASURED" = "true" ]; then
             # Every shipped source family is in the population, scripts/

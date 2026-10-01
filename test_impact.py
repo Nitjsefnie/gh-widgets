@@ -96,6 +96,10 @@ class TestGitFameParallel(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if shutil.which("git-fame") is None:
+            if os.environ.get("GH_WIDGETS_REQUIRE_GIT_FAME"):
+                raise AssertionError(
+                    "GH_WIDGETS_REQUIRE_GIT_FAME is set but git-fame is absent; "
+                    "expected the pinned Nitjsefnie-OSC/git-fame build")
             raise unittest.SkipTest("git-fame is not installed")
         cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-fame-"))
         git("init", "-q", "-b", "main", ".", cwd=cls.tmp)
@@ -139,6 +143,10 @@ class TestGitFameRuntimeCheck(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if shutil.which("git-fame") is None:
+            if os.environ.get("GH_WIDGETS_REQUIRE_GIT_FAME"):
+                raise AssertionError(
+                    "GH_WIDGETS_REQUIRE_GIT_FAME is set but git-fame is absent; "
+                    "expected the pinned Nitjsefnie-OSC/git-fame build")
             raise unittest.SkipTest("git-fame is not installed")
 
     def test_check_is_noisy_on_success(self):
