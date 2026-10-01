@@ -220,37 +220,62 @@ def envelope_maxima(entries: dict) -> dict:
     return {node: float(envelope["max"]) for node, envelope in entries.items()}
 
 
-def raised_entries(old: dict, new: dict) -> dict:
+def raised_entries(old: dict, new: dict, allowed=frozenset()) -> dict:
     """Entries that went UP between two baseline documents, or went AWAY.
 
     The comparator refuses to let a head counter exceed its baseline, but
-    nothing there stops a commit from EDITING the baseline upwards in the
-    same push — which is the gate switched off from the inside. So the
-    workflow diffs the committed baseline against the base branch tip's
-    copy and fails on any entry that moved up.
+    nothing there stops a commit from EDITING the baseline upwards in the same
+    push — which is the gate switched off from the inside. So the workflow
+    diffs the committed baseline against the base branch tip's copy and fails
+    on any entry that moved up, in EITHER map: `entries`, which carries the
+    counter ceilings, and `wall`, which carries the gross smoke ceilings.
+    Governing only the first left half the document ungoverned, so a commit
+    could raise the smoke bound from 0.085 s to 99 s in the same push and the
+    step whose whole reason for existing would report success.
 
-    A DELETED entry is a raise too, and that took a second pass to learn:
-    iterating only the new document never visits an entry that was removed,
-    so dropping one from the baseline passed this check silently. The
-    workload's `--require-test` still demanded it ran, so nothing went red —
-    it simply stopped being compared, which is a second and much quieter
-    route to the same outcome as retiring it properly through WORKLOADS. A
-    gate that measures fewer renderers than it advertises is decorative, and
-    so is a ratchet a deletion walks straight through.
+    A DELETED entry is a raise too. Iterating only the new document never
+    visits an entry that was removed, so dropping one passed this check
+    silently while `--require-test` went on demanding the workload ran — it
+    simply stopped being compared.
 
-    Lowering an entry's recorded maximum, or raising its minimum alone, is
-    an improvement and stays allowed: the ceiling is the maximum.
+    But refusing every deletion blocked the DOCUMENTED retirement path: a
+    renderer workload is retired by dropping it from `WORKLOADS` and removing
+    its entry in the same commit, and a shipped test asserted that route
+    works. So a removal is allowed when it is DECLARED, and a declaration that
+    contradicts the document is refused rather than honoured: an id declared
+    removed but still recorded in `new` is a stale entry left behind by a
+    half-finished retirement, and `compare()` intersects, so it would be
+    silently dropped from the comparison. The caller derives the declaration
+    from what `--list-workloads` no longer emits, so declaring a removal is
+    how a commit says "the harness dropped this", and it is checked against
+    the document rather than trusted.
+
+    Lowering a recorded maximum, or raising a minimum alone, is an improvement
+    and stays allowed: the ceiling is the maximum.
     """
+    allowed = set(allowed)
     moved = {}
     for name in sorted(set(old.get("populations", {}))
                        | set(new.get("populations", {}))):
-        before = old.get("populations", {}).get(name, {}).get("entries", {})
-        after = new.get("populations", {}).get(name, {}).get("entries", {})
-        for node in sorted(set(before) | set(after)):
-            was = before.get(node, {}).get("max")
-            now = after.get(node, {}).get("max")
-            if now is None:
-                moved[f"{name}:{node}"] = (was, None)
-            elif was is None or now > was:
-                moved[f"{name}:{node}"] = (was, now)
+        for key in ("entries", "wall"):
+            before = old.get("populations", {}).get(name, {}).get(key, {})
+            after = new.get("populations", {}).get(name, {}).get(key, {})
+            for node in sorted(set(before) | set(after)):
+                slot = f"{name}:{key}:{node}"
+                if slot in allowed:
+                    if node in after:
+                        raise ComparisonError(
+                            f"{slot} was declared removed but is still "
+                            "recorded in the head document — a workload "
+                            "retired from WORKLOADS still leaves its entry "
+                            "behind here, and compare() intersects, so the "
+                            "entry would be silently dropped from the "
+                            "comparison rather than compared")
+                    continue
+                was = before.get(node, {}).get("max")
+                now = after.get(node, {}).get("max")
+                if now is None:
+                    moved[slot] = (was, None)
+                elif was is None or now > was:
+                    moved[slot] = (was, now)
     return moved

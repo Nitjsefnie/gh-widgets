@@ -106,18 +106,19 @@ name: speed
 # gives 0.40 for the unit suite and 0.50 for the renderer workloads. The RULE
 # travels; the number is derived from whichever cell reads it.
 #
-# WHAT 0.40 AND 0.50 BUY, STATED RATHER THAN ASSUMED. Ceilings are 32.4 CPU
-# seconds for the suite and 0.126 / 1.79 / 0.106. A DOUBLED workload is caught
-# on three of the four entries even on the FASTEST machine observed — the
-# suite at 33.19, bench.render-impact at 2.038, bench.render-responsiveness
-# at 0.1205 — and is MISSED on bench.render, where doubling the fastest
-# machine gives 0.113 against a 0.126 ceiling. So this is a STEP-CHANGE
-# DETECTOR, NOT A REGRESSION DETECTOR: it catches a near-doubling of the
-# suite, of the workload that matters most, and of bench.render-responsiveness;
-# it does not reliably catch a doubling of the briefest workload, and it will
-# not catch a 20% regression anywhere. Do not read "load-invariant counter"
-# as "sharp budget". Two cases in test_baseline.py assert exactly this claim
-# against the committed numbers, so it cannot drift away from them.
+# WHAT 0.40 AND 0.50 BUY, STATED RATHER THAN ASSUMED. The ceilings are NOT
+# written out here: they are `max x (1 + tolerance)` per entry, computed from
+# the document, and transcribed copies of them were wrong twice — two of
+# three understated a ceiling by enough to turn a verdict surviving on 0.5%
+# into one that read as comfortable. `test_baseline.py` computes them and
+# pins which entries catch a doubled workload on the FASTEST machine observed
+# and which do not. The shape of that answer is stable enough to state: a
+# doubling is caught on every entry EXCEPT bench.render, whose 49.0% spread
+# makes any tolerance tight enough to catch it a false-red generator on
+# ordinary pool variation. So this is a STEP-CHANGE DETECTOR, NOT A
+# REGRESSION DETECTOR, and it will not catch a 20% regression anywhere. Do
+# not read "load-invariant counter" as "sharp budget", and do not tune
+# bench.render to close the gap: that would be a gate crying wolf.
 #
 # THE GROSS WALL SMOKE GATE IS ARMED, AND IT IS NOT A WALL BUDGET. Wall time
 # spread 15.1-49.3% across the four dispatches (the unit suite 48.211-55.471,
@@ -625,8 +626,40 @@ jobs:
             exit 0
           fi
           git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+
+          # DECLARED REMOVALS, DERIVED FROM THE HARNESS. Retiring a renderer
+          # workload means dropping it from WORKLOADS and removing its entry
+          # from the baseline in the same commit, and a ratchet that refuses
+          # every deletion blocks that documented route while a shipped test
+          # asserts it works. So a removal is declared here, from what
+          # --list-workloads no longer emits — and the comparator REFUSES a
+          # declared removal that is still recorded, which is the other half
+          # of the trade: deleting an entry without dropping the workload
+          # leaves a stale entry that compare() would silently intersect
+          # away.
+          #
+          # Only the renderer population is eligible. The unit suite is
+          # governed by its population digest instead, and no listing here
+          # can vouch for it.
+          listing="$(python3 scripts/bench/e2e_bench.py --list-workloads)"
+          removals=()
+          for node in $(python3 -c 'import json,sys; \
+              print(" ".join(json.load(open(sys.argv[1]))["populations"] \
+              ["renderer-workloads"]["entries"]))' \
+              "$RUNNER_TEMP/base-baseline.json"); do
+            case "$listing" in
+              *"$node"*) ;;
+              *) removals+=(--ratchet-allow-removal \
+                            "renderer-workloads:entries:$node") ;;
+            esac
+          done
+          if [ "${#removals[@]}" -ne 0 ]; then
+            echo "Declared workload removals: ${removals[*]}"
+          fi
+
           python3 scripts/ci/compare_durations.py \
-            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE"
+            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
+            "${removals[@]}"
 
       - name: Upload JUnit reports
         if: ${{ !cancelled() }}

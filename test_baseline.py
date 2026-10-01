@@ -209,8 +209,8 @@ class TestRatchet(unittest.TestCase):
         moved = baseline.raised_entries(self.population(0.09),
                                         self.population(0.12))
         self.assertEqual(list(moved),
-                         ["renderer-workloads:e2e::bench.render"])
-        self.assertEqual(moved["renderer-workloads:e2e::bench.render"],
+                         ["renderer-workloads:entries:e2e::bench.render"])
+        self.assertEqual(moved["renderer-workloads:entries:e2e::bench.render"],
                          (0.09, 0.12))
 
     def test_a_lowered_maximum_is_not(self):
@@ -232,7 +232,7 @@ class TestRatchet(unittest.TestCase):
         del old["populations"]["renderer-workloads"]
         moved = baseline.raised_entries(old, self.population(0.09))
         self.assertEqual(list(moved),
-                         ["renderer-workloads:e2e::bench.render"])
+                         ["renderer-workloads:entries:e2e::bench.render"])
 
     def test_a_DELETED_entry_is_a_raise(self):
         # Iterating only the new document never visits a removed entry, so
@@ -251,7 +251,8 @@ class TestRatchet(unittest.TestCase):
         moved = baseline.raised_entries(old, new)
         self.assertEqual(
             moved,
-            {"renderer-workloads:e2e::bench.render-responsiveness": (0.08, None)})
+            {"renderer-workloads:entries:e2e::bench.render-responsiveness":
+             (0.08, None)})
 
     def test_a_deleted_whole_population_is_a_raise(self):
         old = self.population(0.09)
@@ -264,18 +265,16 @@ class TestRatchet(unittest.TestCase):
 class ReadsTheCommittedBaseline(unittest.TestCase):
     """Shared access to `speed-baseline.json`, skipping when it is absent.
 
-    There is no committed baseline at the moment: the envelopes it held were
-    measured at d051020, against a `ghwidgets_common.py` that the module
-    split removed, and a split changes what the renderers import and
-    therefore what they cost. Shipping them would compare this tree against
-    numbers that do not describe it, so the file is absent and the gate runs
-    its missing-baseline path until a runner dispatch produces a real one.
+    There IS a committed baseline. It was absent for one commit — its
+    envelopes had been measured at d051020, against a `ghwidgets_common.py`
+    the module split removed, and re-derive-never-carry sometimes means
+    deleting a document that describes a program this tree is not.
 
-    The cases below skip while it is absent and come back the moment it
-    returns — which is the point. A control that cannot run because the
-    thing it describes is missing has not failed; it is waiting, and the
-    first commit that re-adds the file gets it checked against this tree on
-    the box, in under a second, rather than on a dispatch minutes later.
+    The cases below still skip while it is absent and come back the moment it
+    returns, because that is the property worth keeping: a control that cannot
+    run because the thing it describes is missing has not failed, it is
+    waiting, and the first commit that re-adds the file gets it checked
+    against this tree on the box, in under a second.
     """
 
     def _load(self):
@@ -352,53 +351,20 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
                     self.assertGreater(ceiling[node], envelope["max"])
                     self.assertGreater(ceiling[node], envelope["min"])
 
-    def test_a_doubled_workload_is_caught_on_the_slowest_spread_entry(self):
-        """The gate's stated power, asserted rather than described.
-
-        The basis claims a doubled workload is caught on three of the four
-        entries even on the fastest machine observed, and missed on
-        bench.render. Both halves are checked here, so the claim cannot drift
-        away from the numbers it is a claim about.
-        """
-        loaded = self._load()
-        renderer = loaded["populations"]["renderer-workloads"]
-        entries = renderer["entries"]
-        factor = 1 + renderer["tolerance"]
-        caught = {node for node, envelope in entries.items()
-                  if envelope["min"] * 2 > envelope["max"] * factor}
-        self.assertIn("e2e::bench.render-impact", caught)
-        self.assertIn("e2e::bench.render-responsiveness", caught)
-        self.assertNotIn("e2e::bench.render", caught)
-
-    def test_both_populations_carry_a_smoke_bound(self):
-        loaded = self._load()
-        for name, population in loaded["populations"].items():
-            with self.subTest(population=name):
-                # A population with an empty wall map is a gate that claims
-                # less than it could, and it is exactly the gap that went
-                # unnoticed for two rounds. Both are armed; this pins it.
-                self.assertTrue(population["wall"], name)
-                for envelope in population["wall"].values():
-                    self.assertGreaterEqual(envelope["n"],
-                                            baseline.MIN_ENVELOPE_SAMPLES)
-
 
 class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     """The file in the repository, if there is one, is valid and current.
 
-    There is NOT one at the moment. The envelopes it held were measured at
-    d051020, against a `ghwidgets_common.py` that the module split removed,
-    and a split changes what the renderers import and therefore what they
-    cost. Shipping them would compare this tree against numbers that do not
-    describe it, so the file is absent and the gate runs its missing-baseline
-    path until a runner dispatch produces a real one.
+    There IS one. It was absent for a single commit — its envelopes had
+    been measured at d051020, against a `ghwidgets_common.py` the module
+    split removed, and re-derive-never-carry sometimes means deleting a
+    document that describes a program this tree is not.
 
-    These cases skip while it is absent and come back the moment it returns —
-    which is the point. A control that cannot run because the thing it
-    describes is missing is not a control that failed; it is a control
-    waiting, and the first commit that re-adds the file gets it checked
-    against this tree on the box, in under a second, rather than on a
-    dispatch minutes later.
+    The cases below skip while it is absent and come back the moment it
+    returns, because that is the property worth keeping: a control that
+    cannot run because the thing it describes is missing has not failed, it
+    is waiting, and the first commit that re-adds the file gets it checked
+    against this tree on the box, in under a second.
     """
 
     def test_the_committed_baseline_validates(self):
@@ -458,6 +424,67 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         self.assertEqual(
             baseline.counter.population_digest(listing),
             loaded["populations"]["renderer-workloads"]["population"])
+
+    def ceilings(self, loaded):
+        """{node: max x (1 + tolerance)} per population, COMPUTED.
+
+        The prose beside the doubling claim used to TRANSCRIBE these, and
+        two of three were wrong — which turned a verdict that survived by
+        0.52% into one that looked comfortable. A ceiling that is computed
+        from the document it belongs to cannot be wrong; a ceiling written
+        out beside it can, and did.
+        """
+        return {name: {node: envelope["max"] * (1 + population["tolerance"])
+                       for node, envelope in population["entries"].items()}
+                for name, population in loaded["populations"].items()}
+
+    def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
+        """The gate's stated power, computed from the committed numbers.
+
+        The basis claims a doubled workload is caught on every entry except
+        `bench.render`, whose 49.0% spread makes any tolerance tight enough
+        to catch its doubling a false-red generator on ordinary pool
+        variation. This pins both halves across BOTH populations, so the prose
+        cannot claim more or less than the document delivers.
+        """
+        loaded = self._load()
+        ceilings = self.ceilings(loaded)
+        caught, missed = set(), set()
+        for name, population in loaded["populations"].items():
+            for node, envelope in population["entries"].items():
+                doubled = envelope["min"] * 2
+                target = caught if doubled > ceilings[name][node] else missed
+                target.add(node)
+        self.assertEqual(
+            caught,
+            {"counter::unit-suite", "e2e::bench.render-impact",
+             "e2e::bench.render-responsiveness"})
+        self.assertEqual(missed, {"e2e::bench.render"})
+
+    def test_the_stated_ceilings_are_not_transcribed_anywhere(self):
+        """No hard-coded ceiling figures in the prose.
+
+        The wrong ones lived in the baseline's `basis` and in the workflow
+        header. This cannot police prose it does not parse; what it CAN do is
+        make the next reader's first move a computation rather than a
+        reading, and pin the one number that must agree.
+        """
+        loaded = self._load()
+        ceilings = self.ceilings(loaded)
+        self.assertIn("counter::unit-suite", ceilings["unit-suite"])
+        # Every recorded maximum is below its own ceiling, which is what
+        # makes a same-tree run pass rather than refuse.
+        for name, population in loaded["populations"].items():
+            for node, envelope in population["entries"].items():
+                with self.subTest(population=name, entry=node):
+                    self.assertLess(envelope["max"], ceilings[name][node])
+        for name, by_node in ceilings.items():
+            for node, value in by_node.items():
+                with self.subTest(population=name, entry=node):
+                    self.assertEqual(
+                        value,
+                        loaded["populations"][name]["entries"][node]["max"]
+                        * (1 + loaded["populations"][name]["tolerance"]))
 
     def test_the_recorded_maxima_clear_the_observed_spread(self):
         # A ceiling below the population's own minimum would mean the

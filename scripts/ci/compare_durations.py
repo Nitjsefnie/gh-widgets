@@ -10,25 +10,28 @@ renaming it would break that seat's work mid-flight. A rename to
 
 WHY NOT WALL TIME. A GitHub-hosted runner is a multi-tenant VM: steal time, a
 neighbour, a different core and a different CPU model all move an elapsed
-duration, and none of that is the code being measured. Two runs of IDENTICAL
-code in one job differ by a factor of two on a single test. The maintainer
-ruling behind issue #81 is stronger: paired wall-clock A/B is not a valid
-magnitude ANYWHERE — not on a shared box, and not in one job on a CI runner.
+duration, and none of that is the code being measured. The maintainer ruling
+behind issue #81 is that paired wall-clock A/B is not a valid magnitude
+ANYWHERE — not on a shared box, and not in one job on a CI runner. The scale
+of that movement is not asserted from memory here: it is measured, and the
+figures are in speed.yml's header and in the committed baseline's `basis`.
 So the quantity compared here is one runner load cannot move, and elapsed
 time survives only as a gross smoke check reported as a verdict with no
 number attached. That ruling is also why there is no base checkout any more:
 the committed baseline IS the comparison point.
 
-WHY ONE METRIC AND TOLERANCE PER POPULATION, NOT PER DOCUMENT. Both
-populations are measured in CPU seconds, but their budgets are derived from
-their own measured spreads and those spreads differ by an order of
-magnitude: on this box the unit suite spread 21.3% over six runs while the
-three renderer workloads spread 10.8%, 35.2% and 47.3% over eight each, and
-the two brief ones are among the noisiest — fixed overhead and co-tenant load
-dominate a short measurement. A single global `tolerance` could only ever be right for one of
-them, and being right for one is how a gate ends up quietly holding the
-wrong contract, so the baseline carries a sub-document per population and
---population says which contract this run is being held to.
+WHY ONE TOLERANCE PER POPULATION, NOT ONE PER DOCUMENT. Both populations
+are measured in CPU seconds, but their budgets are derived from their own
+measured spreads, and one number for both is a number chosen for whichever
+instrument is not in use. The committed figures are in the baseline's
+`basis` and the rule is in speed.yml's header: the tolerance is the
+population's own observed spread, because the gate compares a per-run MINIMUM
+against a recorded MAXIMUM, so the machine's whole observed range is conceded
+for free and the tolerance only has to cover a head landing on a machine worse
+than any seen. That is a rule, not a constant — 0.40 and 0.50 today — and
+the two populations' spreads are of the same order (39.8% against 49.0%), so
+the per-population split is about which contract a run is held to, not about
+the tolerances being far apart.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of
@@ -334,8 +337,15 @@ def verify_population(head_scans, base_folded, head_folded, require,
             "decorative:\n" + "\n".join(problems))
 
 
-def verify_unit_population(expected_digest, population_file):
-    """The unit suite's collected population must be the baseline's.
+def verify_unit_population(expected_digest, population_file,
+                           population="unit suite"):
+    # The caller passes the baseline's population key; the message reads it
+    # as prose, because it is the first thing a reader of a refusal sees.
+    """The collected population must be the one the baseline was measured over.
+
+    Named, not assumed to be the unit suite: `--population-file` is now
+    passed for the renderer workloads too, so a renderer refusal that said
+    "unit-test population" was the first thing a reader of it saw.
 
     A counter total is a ratio over whatever tests happened to run, so a
     suite that grew by twenty tests moves the total with no product change —
@@ -366,7 +376,8 @@ def verify_unit_population(expected_digest, population_file):
     actual = counter.population_digest(node_ids)
     if actual != expected_digest:
         raise ComparisonError(
-            "this run collected a different unit-test population than the "
+            "this run collected a different "
+            f"{population.replace('-', ' ')} than the "
             "baseline was measured over, so the two counters are not "
             f"comparable:\n  baseline: {expected_digest}\n"
             f"  this run: {actual}\n  Re-derive the baseline "
@@ -663,7 +674,8 @@ def _check_metric(baseline_metric, head_metric) -> None:
             "actually has.")
 
 
-def ratchet_check(old_path: Path, new_path: Path) -> int:
+def ratchet_check(old_path: Path, new_path: Path,
+                  allowed_removals=()) -> int:
     """The down-only half of the gate: no baseline entry may go UP.
 
     Every population, in one pass: the workflow runs this against the merge
@@ -677,7 +689,7 @@ def ratchet_check(old_path: Path, new_path: Path) -> int:
     """
     old = read_baseline(old_path)
     new = read_baseline(new_path)
-    moved = raised_entries(old, new)
+    moved = raised_entries(old, new, allowed_removals)
     if not moved:
         print(f"baseline ratchet: no entry raised in {new_path}")
         return 0
@@ -749,9 +761,20 @@ def main(argv: list | None = None) -> int:
                              "test run")
     parser.add_argument("--ratchet-baselines", nargs=2,
                         metavar=("OLD", "NEW"),
-                        help="fail if any entry of NEW is above its value in "
-                             "OLD; the down-only half of the gate, over "
-                             "every population. Needs nothing else")
+                        help="compare two baseline documents and fail if any "
+                             "entry of NEW is above its value in OLD, in "
+                             "either `entries` or `wall`; the down-only half "
+                             "of the gate, over every population")
+    parser.add_argument("--ratchet-allow-removal", action="append",
+                        default=[], metavar="POP:KEY:NODE",
+                        help="a `population:key:node` slot whose removal "
+                             "from NEW is declared rather than treated as a "
+                             "raise — retiring a renderer workload means "
+                             "dropping it from WORKLOADS and removing its "
+                             "entry, and the caller derives these from "
+                             "what --list-workloads no longer emits. A "
+                             "declared removal that is still recorded is "
+                             "refused")
     args = parser.parse_args(argv)
 
     if args.print_population:
@@ -792,7 +815,7 @@ def main(argv: list | None = None) -> int:
                      "accommodation this gate refuses to make")
 
     try:
-        return ratchet_check(*ratchet) if ratchet else _compare(args)
+        return ratchet_check(*ratchet, args.ratchet_allow_removal) if ratchet else _compare(args)
     except MissingBaseline as exc:
         # A missing baseline is an expected first push when a comparison was
         # asked for, and an error when the RATCHET was: there is no
@@ -825,7 +848,8 @@ def _compare(args) -> int:
     head_metric = _resolve_metric(args.head, "head")
     if recorded is not None:
         _check_metric(recorded["metric"], head_metric)
-        verify_unit_population(recorded["population"], args.population_file)
+        verify_unit_population(recorded["population"],
+                               args.population_file, args.population)
     verify_population(head_scans, base_folded, head_folded,
                       args.require_test, args.allow_removal)
 
