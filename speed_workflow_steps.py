@@ -9,11 +9,9 @@ These helpers are shared by the two test modules that need that, and are not
 a test module themselves — `unittest discover` collects `test_*.py` only.
 """
 import os
+import shutil
 import subprocess
 from pathlib import Path
-
-import os
-import shutil
 
 WORKFLOWS = Path(__file__).resolve().parent / ".github" / "workflows"
 

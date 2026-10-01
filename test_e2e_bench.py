@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+from bench_platform import REQUIRES_BENCH
+
 import impact_clone
 
 
@@ -31,7 +33,6 @@ def load_module(name, path):
 
 fixture_setup = load_module("bench_fixture_setup", BENCH_DIR / "fixture_setup.py")
 e2e_bench = load_module("bench_e2e_bench", BENCH_DIR / "e2e_bench.py")
-from bench_platform import REQUIRES_BENCH  # noqa: E402
 render_impact = load_module("bench_render_impact",
                             REPO_ROOT / "render-impact.py")
 
