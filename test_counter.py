@@ -11,6 +11,7 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 `metric=` passed straight in — rather than inherited from whatever the test
 happens to land on.
 """
+import importlib
 import importlib.util
 import os
 import subprocess
@@ -51,6 +52,91 @@ def number(element, attribute):
     if raw is None:
         raise AssertionError(f"{attribute} is absent from {element.tag}")
     return float(raw)
+
+
+class TestPlatformLimits(unittest.TestCase):
+    """What this instrument does where it cannot work.
+
+    `resource` is Unix-only and `/proc` is Linux-only, while this module is
+    imported by the comparator and the suite runs on a windows/macOS
+    matrix. A bare `import resource` turned that into an import error in
+    thirty-five unrelated tests; an unconditional `/proc` read turned a
+    probe step into a failed run. Both cases are simulated here rather than
+    hoped away — these are the shapes a Linux box never produces on its
+    own.
+    """
+
+    def test_the_module_imports_without_resource(self):
+        """The import itself is the control.
+
+        On a platform without `resource` this module must still LOAD, or
+        every test that touches the comparator dies before it runs. The
+        simulation is a real reload with `resource` blocked in `sys.modules`,
+        so it exercises the try/except rather than asserting on a literal.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "ghw_counter_without_resource",
+            REPO_ROOT / "scripts" / "ci" / "counter.py")
+        if spec is None or spec.loader is None:
+            self.fail("cannot build a spec for counter.py")
+        with mock.patch.dict(sys.modules, {"resource": None}):
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            try:
+                spec.loader.exec_module(module)
+            finally:
+                del sys.modules[spec.name]
+        self.assertIsNone(module.resource)
+        self.assertEqual(module.METRICS, (module.CPU_METRIC,))
+
+    def test_measuring_without_resource_refuses_rather_than_guessing(self):
+        # A silent fallback would return a number that measures something
+        # else. This asserts the refusal names both the platform and the
+        # reason, because a bare "unavailable" is not actionable.
+        with mock.patch.object(counter, "resource", None),                 mock.patch.object(counter.sys, "platform", "win32"):
+            with self.assertRaises(counter.CounterError) as caught:
+                counter.measure([sys.executable, "-c", "pass"],
+                                metric=counter.CPU_METRIC)
+        message = str(caught.exception)
+        self.assertIn("win32", message)
+        self.assertIn("RUSAGE_CHILDREN", message)
+        self.assertIn("POSIX", message)
+        self.assertIn("will not fall back to wall time", message)
+
+    def test_a_missing_proc_file_is_read_as_unavailable_not_fatal(self):
+        with mock.patch.object(counter, "PARANOID_PATH",
+                               Path("/nonexistent/perf_event_paranoid")):
+            self.assertEqual(counter._setting(  # pylint: disable=protected-access
+                counter.PARANOID_PATH),
+                "unavailable on this platform")
+
+    def test_the_probe_still_speaks_on_a_platform_with_no_proc(self):
+        """The probe's OUTPUT is the record, and it must exist everywhere.
+
+        A reader who sees CPU seconds in use should still see what the
+        probe looked for, even where the facility is not there to be read —
+        "I looked and there was nothing" is a real record, and a different
+        one from "the file exists and says 4".
+        """
+        with mock.patch.object(counter, "PARANOID_PATH",
+                               Path("/nonexistent/perf_event_paranoid")), \
+                mock.patch.object(counter, "PTRACE_SCOPE_PATH",
+                                  Path("/nonexistent/ptrace_scope")):
+            lines = counter._probe_lines()  # pylint: disable=protected-access
+        joined = "\n".join(lines)
+        self.assertIn(f"metric={counter.CPU_METRIC}", joined)
+        self.assertIn("perf_event_paranoid=unavailable on this platform", joined)
+        self.assertIn("ptrace_scope=unavailable on this platform", joined)
+        self.assertIn("metric_reason=", joined)
+
+    def test_every_probe_line_is_a_key_value_pair(self):
+        # The workflow pipes these into $GITHUB_OUTPUT, which accepts
+        # key=value and nothing else, and the macOS run is where a line
+        # that is not one would have shown up.
+        lines = counter._probe_lines()  # pylint: disable=protected-access
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertRegex(line, r"^[A-Za-z_][A-Za-z0-9_]*=.+")
 
 
 class TestCwdIsHonoured(unittest.TestCase):

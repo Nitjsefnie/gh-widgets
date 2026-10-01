@@ -14,6 +14,23 @@ time, so steal time — the thing that makes a duration on a shared runner
 meaningless — is excluded, which is what makes this valid under the ruling
 at all.
 
+THIS MODULE IS POSIX-ONLY, AND IT REFUSES RATHER THAN GUESSES. `resource`
+does not exist on Windows and `/proc` does not exist on macOS, and this
+module is imported by scripts/ci/compare_durations.py, which the test suite
+exercises on every OS — so a bare `import resource` turned a platform
+limitation into an import error in thirty-five unrelated tests, on a
+repository whose own CI runs a windows-latest and macos-latest matrix.
+
+So: the module IMPORTS everywhere. `measure()` on a platform with no
+RUSAGE_CHILDREN raises CounterError naming the platform, rather than
+returning a number that would be a guess. The probe still produces its
+output there, and says that the kernel settings it would normally report
+are unreadable on this platform — "I looked and there was nothing there"
+is a real record, and it is a different record from "the file exists and
+says 4". Nothing here falls back to wall time, because a silent fallback
+that measures something else is precisely the failure this instrument
+exists to prevent.
+
 IT IS NOT DETERMINISTIC, AND THE GATE IS WEAKER FOR IT. That is a real cost
 and it is named rather than buried: measured on this box, the same program
 measured repeatedly spreads 21.3% over six runs (unit suite) and 10.8%, 35.2%
@@ -113,7 +130,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-import resource
 import signal
 import subprocess
 import sys
@@ -122,6 +138,13 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import NamedTuple, Optional, Sequence
+
+try:
+    import resource
+except ImportError:  # POSIX only. Windows has no RUSAGE_CHILDREN, and this
+    # module is imported by the comparator on every OS, so the absence is
+    # recorded here and refused at the call site rather than swallowed.
+    resource = None  # type: ignore[assignment]
 
 
 CPU_METRIC = "cpu_time"
@@ -224,6 +247,13 @@ def _child_cpu_seconds() -> float:
     which is exactly the number that would then be compared against the
     baseline.
     """
+    if resource is None:
+        raise CounterError(
+            "cpu_time is measured with resource.getrusage(RUSAGE_CHILDREN), "
+            f"which {sys.platform} does not provide. This instrument is "
+            "POSIX-only: it will not fall back to wall time, because a "
+            "number that quietly measures something else is worse than no "
+            "number.")
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     return usage.ru_utime + usage.ru_stime
 
@@ -414,7 +444,18 @@ def _probe_lines() -> list:
 
 
 def _setting(path: Path) -> str:
-    return path.read_text(encoding="utf-8").strip() or "unreadable"
+    """A kernel setting's value, or what it is that there isn't one.
+
+    Read defensively rather than required to exist: `/proc` is a Linux
+    facility and this repository runs its suite on macOS and Windows, where
+    a probe step that raised would fail a run that had nothing wrong with
+    it. The distinction the value carries — a number, or "unavailable on
+    this platform" — is part of the record the probe exists to make.
+    """
+    try:
+        return path.read_text(encoding="utf-8").strip() or "unreadable"
+    except OSError:
+        return "unavailable on this platform"
 
 
 def main(argv: Optional[list] = None) -> int:
