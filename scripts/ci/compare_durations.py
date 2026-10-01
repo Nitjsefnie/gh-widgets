@@ -68,7 +68,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "speed-baseline.json"
-SUPPORTED_SCHEMA = 2
+SUPPORTED_SCHEMA = 3
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is
 # catastrophically wrong now" — an hour where the baseline says a minute — and
@@ -91,41 +91,51 @@ METRIC_NOTES = {
 NOT_PASSED = ("failure", "error", "skipped")
 
 
-class ComparisonError(RuntimeError):
-    """The comparison could not be made at all."""
+def _load_sibling(name):
+    """Import a module from beside this one, by path.
 
-
-class MissingBaseline(ComparisonError):
-    """The baseline file is not there. Exit 0: no data is not a regression.
-
-    An EXPECTED outcome, not an error, and deliberately not chained to the
-    FileNotFoundError underneath it. Two tracebacks ahead of every green
-    first run — one for the missing file and one for the handler that was
-    supposed to catch it — trains readers to scroll past the red ones, which
-    is the exact habit this file exists to prevent. Raised with `from None`
-    so that even an unhandled print is one readable line.
+    scripts/ci is not a package and deliberately has no __init__.py: it holds
+    standalone CI entry points, not an importable library. So counter.py and
+    baseline.py are loaded the way render.py loads ghwidgets_common.py.
     """
+    path = Path(__file__).resolve().with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(f"ghw_{name}", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_counter():
-    """Import scripts/ci/counter.py by path.
+    """Import scripts/ci/counter.py by path, for the same reason.
 
-    Same reason this file itself is imported by path elsewhere: scripts/ci is
-    not a package and deliberately has no __init__.py. The population digest
-    lives in counter.py because a digest computed two different ways by two
-    tools would compare unequal forever, and the resulting refusal would be
-    indistinguishable from a real population change.
+    The population digest lives there because a digest computed two
+    different ways by two tools would compare unequal forever, and the
+    resulting refusal would be indistinguishable from a real change.
     """
     path = Path(__file__).resolve().with_name("counter.py")
     spec = importlib.util.spec_from_file_location("ghw_counter", path)
     if spec is None or spec.loader is None:
-        raise ComparisonError(f"cannot load {path}")
+        raise SystemExit(f"error: cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 counter = _load_counter()
+baseline = _load_sibling("baseline")
+# The baseline document's error classes are re-exported rather than
+# redefined, so `except ComparisonError` here and `cd.ComparisonError` in a
+# test are the SAME class object and a baseline refusal is caught by this
+# file's own handler. One hierarchy, two addresses.
+ComparisonError = baseline.ComparisonError
+MissingBaseline = baseline.MissingBaseline
+
+read_baseline = getattr(baseline, "read_baseline")
+read_population = getattr(baseline, "read_population")
+envelope_maxima = getattr(baseline, "envelope_maxima")
+raised_entries = getattr(baseline, "raised_entries")
 
 
 def node_id(case: ET.Element) -> str:
@@ -429,6 +439,14 @@ def smoke_failures(head_wall: dict, baseline_wall: dict,
                   and head_wall[nid] > was * factor)
 
 
+def _range_text(envelope) -> str:
+    """One entry's observed range and its sample count, for the table."""
+    if not envelope:
+        return "unknown"
+    return (f"{_format_counter(envelope['min'])}–"
+            f"{_format_counter(envelope['max'])} (n={envelope['n']})")
+
+
 def _format_counter(value) -> str:
     """A counter for a report: grouped when integral, 6 significant otherwise."""
     if float(value).is_integer():
@@ -448,8 +466,17 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         "",
         f"- Metric: **{metric}** — {METRIC_NOTES.get(metric, 'unrecognised')}",
         f"- Compared on **{result['shared']}** entries passing in both",
-        f"- Baseline `{base_label}`: **{_format_counter(result['base_total'])}**",
+        f"- Baseline `{base_label}`: **{_format_counter(result['base_total'])}** "
+        "(the recorded MAXIMUM of each entry's observed range, summed)",
         f"- This commit: **{_format_counter(result['head_total'])}**",
+        "",
+        "**The gate this is: a step-change detector, not a regression "
+        "detector.** The baseline holds the range each entry was observed "
+        "over, so a head value has to clear the worst machine observed "
+        "before it fails. That catches a doubled workload or an accidental "
+        "quadratic. It will NOT catch a 20% regression, and this repository "
+        "should not be told otherwise by the phrase \"load-invariant "
+        "counter\".",
         "",
         "_No elapsed time appears in this report, deliberately: a "
         "multi-tenant runner makes a duration a measure of the machine. It "
@@ -556,7 +583,14 @@ def render_no_baseline(metric: str, head_folded: dict,
     the absence of data. It must NOT print nothing — a green gate with an
     empty summary is what this repository keeps failing reviews over.
     """
-    block = json.dumps({"metric": metric, "entries": head_folded},
+    # One run is one observation, and the validator refuses an envelope from
+    # fewer than two. So the block is printed in the right SHAPE and marked
+    # for what it is: pasting it in as-is is refused, which is the intended
+    # behaviour rather than an obstacle — a baseline from a single dispatch
+    # would record what one machine did once and call it a worst case.
+    provisional = {nid: {"min": value, "max": value, "n": 1}
+                   for nid, value in head_folded.items()}
+    block = json.dumps({"metric": metric, "entries": provisional},
                        indent=2, sort_keys=True)
     return "\n".join([
         f"### Counter cost vs `{base_label}`",
@@ -564,163 +598,22 @@ def render_no_baseline(metric: str, head_folded: dict,
         f"**No baseline to compare against** — `{base_label}` does not "
         "exist, so nothing was compared and nothing failed.",
         "",
-        f"This run measured **{len(head_folded)}** entries on `{metric}`. To "
-        "adopt them as the baseline, fill `entries` in the baseline "
-        "document with this block, set `metric`, `cell`, `basis`, "
-        "`measured_commit` and `measured_at`, and re-run.",
+        f"This run measured **{len(head_folded)}** entries on `{metric}`. The "
+        "block below is ONE observation of each and is written in the "
+        "baseline's envelope shape, with `n: 1` — which the validator "
+        "REFUSES, deliberately: an envelope from a single dispatch records "
+        "what one machine did once, not a worst case. Run the job several "
+        "times, take each entry's min and max across those dispatches, set "
+        "`n` to the number of observations, and choose a `tolerance` from "
+        "the spread you saw (the rule of thumb is at least a quarter, on "
+        "top of a maximum that already contains the observed spread). Then "
+        "set `cell`, `basis`, `measured_commit` and `measured_at`.",
         "",
         "```json",
         block,
         "```",
         "",
     ])
-
-
-# The committed baseline document, modelled on coverage-floor.json: a
-# REQUIRED `basis` so the reason a number sits where it does lives at the
-# number, a provenance pair, and a validator that refuses rather than
-# degrades. A baseline that defaulted every missing key would be a gate
-# reporting green precisely when its own configuration is broken.
-
-# One `metric` and one `tolerance` for the whole document is what made the
-# two populations collide: the unit suite wants CPU seconds because tracing
-# it costs three times its untraced wall time, the renderer workloads want
-# syscalls because they are the shipped product and cheap to trace, and a
-# single pair of keys can only ever be right for one of them. So the
-# baseline carries one sub-document per POPULATION, and the comparator is
-# told which one it is judging.
-REQUIRED_KEYS = ("schema", "basis", "cell", "measured_commit", "measured_at",
-                 "populations")
-POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall")
-
-
-def _is_number(value) -> bool:
-    """A JSON number, excluding booleans — `True` is an int in Python."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def read_baseline(path: Path) -> dict:
-    """The committed baseline document, validated before it is used."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            document = json.load(handle)
-    except FileNotFoundError:
-        raise MissingBaseline(
-            f"no baseline at {path} — a first push, or the file was deleted") \
-            from None
-    except (OSError, ValueError) as exc:
-        raise ComparisonError(f"{path} is not readable JSON: {exc}") from exc
-    if not isinstance(document, dict):
-        raise ComparisonError(f"{path} is not a JSON object")
-
-    absent = [key for key in REQUIRED_KEYS if key not in document]
-    if absent:
-        raise ComparisonError(
-            f"{path} is missing required key(s): " + ", ".join(absent))
-    if document["schema"] != SUPPORTED_SCHEMA:
-        raise ComparisonError(
-            f"{path} declares schema={document['schema']!r}; this script "
-            f"reads schema {SUPPORTED_SCHEMA}")
-    if not isinstance(document["basis"], str) or not document["basis"].strip():
-        raise ComparisonError(
-            f"{path} has no basis — the reason a counter baseline sits "
-            "where it does belongs at the numbers, not in the pull request "
-            "that moved them")
-    for key in ("cell", "measured_commit", "measured_at"):
-        value = document[key]
-        if not isinstance(value, str) or not value.strip():
-            raise ComparisonError(
-                f"{path} {key}={value!r} is not a non-empty string")
-    populations = document["populations"]
-    if not isinstance(populations, dict) or not populations:
-        raise ComparisonError(
-            f"{path} populations={populations!r} is not a non-empty object; "
-            "one metric and one tolerance for both populations is the shape "
-            "this document was changed to remove")
-    for name in sorted(populations):
-        _check_population(path, name, populations[name])
-    return document
-
-
-def read_population(document: dict, name: str) -> dict:
-    """One population's sub-document, named or refused. There is no
-    default: the caller says which contract it is held to.
-    """
-    populations = document["populations"]
-    if name not in populations:
-        raise ComparisonError(
-            f"this baseline has no population named {name!r}; it has "
-            + ", ".join(repr(key) for key in sorted(populations))
-            + ". Naming the population is how the right metric and the "
-              "right tolerance are chosen.")
-    return populations[name]
-
-
-def _check_population(path: Path, name: str, population) -> None:
-    """One population's metric, tolerance, digest and entry maps."""
-    where = f"{path} populations[{name!r}]"
-    if not isinstance(population, dict):
-        raise ComparisonError(f"{where} is not an object")
-    absent = [key for key in POPULATION_KEYS if key not in population]
-    if absent:
-        raise ComparisonError(
-            f"{where} is missing required key(s): " + ", ".join(absent))
-    if population["metric"] not in counter.METRICS:
-        raise ComparisonError(
-            f"{where} metric={population['metric']!r} is not an instrument "
-            "counter.py defines")
-    tolerance = population["tolerance"]
-    if not _is_number(tolerance) or tolerance <= 0:
-        raise ComparisonError(
-            f"{where} tolerance={tolerance!r} is not a positive fraction")
-    digest = population["population"]
-    if (not isinstance(digest, str) or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)):
-        raise ComparisonError(
-            f"{where} population={digest!r} is not a sha256 digest of that "
-            "population's node ids")
-    _check_entry_map(path, name, population["entries"], "entries",
-                     required=True)
-    _check_entry_map(path, name, population["wall"], "wall", required=False)
-
-
-def _check_entry_map(path: Path, name: str, mapping, key: str,
-                     required: bool) -> None:
-    """Node id -> a non-negative number."""
-    where = f"{path} populations[{name!r}]"
-    if not isinstance(mapping, dict):
-        raise ComparisonError(f"{where} {key}={mapping!r} is not an object")
-    if required and not mapping:
-        raise ComparisonError(
-            f"{where} {key} is empty — a baseline with no entries in it "
-            "compares nothing and reports that as a pass")
-    for node, value in mapping.items():
-        if not isinstance(node, str) or not node:
-            raise ComparisonError(f"{where} {key} has a non-string node id")
-        if not _is_number(value) or value < 0:
-            raise ComparisonError(
-                f"{where} {key}[{node!r}]={value!r} is not a non-negative "
-                "number")
-
-
-def raised_entries(old: dict, new: dict) -> dict:
-    """Entries that went UP between two baseline documents.
-
-    The comparator refuses to let a head counter exceed its baseline, but
-    nothing there stops a commit from EDITING the baseline upwards in the
-    same push — which is the gate switched off from the inside. So the
-    workflow diffs the committed baseline against the merge base's copy and
-    fails on any entry that moved up, and the tolerance lives here so the
-    question is answered once.
-    """
-    moved = {}
-    for name, population in sorted(new.get("populations", {}).items()):
-        before = old.get("populations", {}).get(name, {}).get("entries", {})
-        for node, now in population.get("entries", {}).items():
-            was = before.get(node)
-            if was is None or now > was:
-                moved[f"{name}:{node}"] = (was, now)
-    return moved
 
 
 def _resolve_metric(paths, label) -> str:
@@ -883,35 +776,40 @@ def main(argv: list | None = None) -> int:
 
 def _compare(args) -> int:
     """The whole comparison, once the arguments have been vetted."""
-    baseline = None
+    recorded = None
     if args.baseline:
-        baseline = read_population(read_baseline(Path(args.baseline)),
+        recorded = read_population(read_baseline(Path(args.baseline)),
                                    args.population)
-        base_folded = {nid: float(value)
-                       for nid, value in baseline["entries"].items()}
+        # The recorded MAXIMUM is what the head is judged against: the
+        # spread that was actually observed is inside it, so a budget over
+        # the top of that range fires where a budget over its middle would
+        # not.
+        base_folded = envelope_maxima(recorded["entries"])
     else:
         base_folded = fold_rounds(args.base)
 
     head_scans = [scan_junit(Path(p)) for p in args.head]
     head_folded = fold_scans(head_scans)
     head_metric = _resolve_metric(args.head, "head")
-    if baseline is not None:
-        _check_metric(baseline["metric"], head_metric)
-        verify_unit_population(baseline["population"], args.population_file)
+    if recorded is not None:
+        _check_metric(recorded["metric"], head_metric)
+        verify_unit_population(recorded["population"], args.population_file)
     verify_population(head_scans, base_folded, head_folded,
                       args.require_test, args.allow_removal)
 
     tolerance = (args.tolerance if args.tolerance is not None
-                 else (baseline["tolerance"] if baseline is not None
+                 else (recorded["tolerance"] if recorded is not None
                        else args.max_regression))
     result = compare(base_folded, head_folded)
-    result["metric"] = (baseline["metric"] if baseline is not None
+    result["metric"] = (recorded["metric"] if recorded is not None
                         else (head_metric or "counter"))
     result["tolerance"] = tolerance
     result["over"] = over_tolerance(base_folded, head_folded, tolerance)
-    if baseline is not None and baseline.get("wall"):
+    result["envelopes"] = (recorded["entries"] if recorded is not None
+                           else {})
+    if recorded is not None and recorded.get("wall"):
         result["smoke"] = smoke_failures(_fold_wall(args.head),
-                                         baseline["wall"])
+                                         recorded["wall"])
     return _verdict(args, result)
 
 
