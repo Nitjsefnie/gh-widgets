@@ -216,7 +216,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         subprocess.run(git + ["add", "speed-baseline.json",
                               "scripts/ci/compare_durations.py",
                               "scripts/ci/counter.py",
-                              "scripts/ci/baseline.py"], check=True)
+                              "scripts/ci/baseline.py",
+                              "scripts/bench/e2e_bench.py"], check=True)
         subprocess.run(git + ["commit", "-qm", message], check=True)
         if push:
             subprocess.run(git + ["push", "-q", "origin",
@@ -386,7 +387,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 1,
                          completed.stdout + completed.stderr)
-        self.assertIn("different unit-test population", summary)
+        self.assertIn("different unit suite", summary)
         self.assertIn("Re-derive the baseline", summary)
 
     def test_missing_baseline_exits_zero_with_the_measured_values(self):
@@ -592,15 +593,20 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "        self.assertTrue(True)\n", encoding="utf-8")
         return head
 
-    def test_every_repository_step_declares_the_working_directory(self):
-        """The complete enumeration, not a spot check.
+    # Every step that runs something, by name. A step added to speed.yml must
+    # be added here too, or this enumeration silently stops covering the file.
+    REPOSITORY_STEPS = (
+        "Probe the counter instrument",
+        "Build renderer fixtures",
+        "Measure the unit suite",
+        "Collect the unit-test population",
+        "Run renderer workloads",
+        "Compare",
+        "The committed baseline only ratchets down",
+    )
 
-        Four defects on this branch were a path resolved against the wrong
-        root. Three were caught by asserting on a step's text; this one was
-        not, because the assertion was on the WRONG step — the other six were
-        checked and this one was overlooked. A spot check that passes while
-        one step is left behind is worse than none, so this enumerates.
-        """
+    def _steps(self):
+        """(name, declares-working-directory, body) for every step."""
         lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
         steps = []
         name = None
@@ -626,15 +632,37 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                 body.append(line)
         if name:
             steps.append((name, working_dir, "\n".join(body)))
+        return steps
 
-        touching = [n for n, w, b in steps
-                    if "python3 scripts/" in b or "\ngit " in b]
-        self.assertGreaterEqual(len(touching), 6, touching)
-        for step in touching:
-            with self.subTest(step=step):
-                self.assertIn(
-                    step, [n for n, w, _ in steps if w],
-                    f"{step!r} invokes repository code and does not declare "
+    def test_every_repository_step_declares_the_working_directory(self):
+        """Every repository-touching step, checked by NAME.
+
+        Four defects on this branch were a path resolved against the wrong
+        root, and this control is the one that has to catch the next. An
+        earlier version classified steps by the literal substring
+        ``python3 scripts/``, which a reviewer's mutation defeated: removing a
+        step's `working-directory` AND rewriting its invocation as
+        `python3 ./scripts/...` left it green, because the substring no longer
+        matched and the count floor still held. A predicate that can be
+        defeated by rewriting the invocation is not a predicate.
+
+        So the SET is compared against a named list, and the list is checked
+        for completeness: a step that stops running, or starts running without
+        being here, is itself a failure rather than a silent skip.
+        """
+        steps = dict((n, (w, b)) for n, w, b in self._steps())
+        running = {n for n, (w, b) in steps.items() if "run:" in b}
+        self.assertEqual(running, set(self.REPOSITORY_STEPS),
+                         "speed.yml's running steps and REPOSITORY_STEPS have "
+                         f"drifted: only in the file {sorted(running - set(self.REPOSITORY_STEPS))}, "
+                         f"only in the list {sorted(set(self.REPOSITORY_STEPS) - running)}. "
+                         "A step added or removed must be reflected here or "
+                         "this enumeration stops covering the file.")
+        for name in self.REPOSITORY_STEPS:
+            with self.subTest(step=name):
+                self.assertTrue(
+                    steps[name][0],
+                    f"{name!r} runs repository code and does not declare "
                     "working-directory: head, so its paths resolve against "
                     "the workspace one level above the checkout")
 
@@ -740,6 +768,63 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          broken.stdout + broken.stderr)
         self.assertIn("No baseline to compare against", broken.stdout)
 
+    def test_a_missing_baseline_with_a_failed_suite_is_still_clean(self):
+        """The combination that produced the original traceback.
+
+        No baseline AND a suite that did not pass. `_no_baseline` reads the
+        head reports to know what it measured, and that read can fail in its
+        own right — which is what used to escape as a traceback and land on
+        exit 1 by accident. It is a problem with the HEAD, so it reports as
+        one: exit 2 with the reason.
+        """
+        root = self._run_with_tree("ghw-speed-missing-and-failed-",
+                                   baseline=False)
+        for round_number in (1, 2):
+            suite = ET.Element("testsuite", {
+                "name": "counter", "tests": "1", "failures": "1",
+                "errors": "0", "skipped": "0", "time": "0.05",
+                "gh-metric": "cpu_time"})
+            case = ET.SubElement(suite, "testcase", {
+                "classname": "counter", "name": "unit-suite",
+                "time": "0.05", "gh-wall": "0.6"})
+            ET.SubElement(case, "failure", {
+                "message": "command exited with code 5",
+                "type": "CommandFailure"})
+            ET.ElementTree(suite).write(
+                root / "reports" / f"unit-{round_number}.xml",
+                encoding="utf-8", xml_declaration=True)
+        completed, summary = self._execute_compare(root)
+
+        self.assertEqual(completed.returncode, 1,
+                         completed.stdout + completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
+        self.assertIn("COULD NOT COMPARE", summary)
+
+    def test_a_missing_baseline_prints_no_traceback(self):
+        """The green first-push path, asserted on its OUTPUT not just its code.
+
+        The exit code alone would not have caught the original: the handler
+        raised, the traceback reached stderr, and the shell's exit status
+        happened to be right. This pins the property that failed.
+        """
+        root = self._run_with_tree("ghw-speed-missing-baseline-",
+                                   baseline=False)
+        completed, summary = self._execute_compare(root)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout + completed.stderr)
+        for stream in (completed.stdout, completed.stderr):
+            self.assertNotIn("Traceback", stream)
+            self.assertNotIn("MissingBaseline", stream)
+        self.assertIn("No baseline to compare against", summary)
+
+    def test_the_total_budget_is_not_named_like_the_threshold(self):
+        """`tolerance` in the baseline is the gate. An env var reading as
+        "the maximum" would be read as the threshold and is not."""
+        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        self.assertNotIn("      MAX_REGRESSION:", text)
+        self.assertIn('TOTAL_BUDGET: "0.30"', text)
+        self.assertIn("NOT THE THRESHOLD", text)
+
     def test_a_baseline_without_a_population_is_refused(self):
         # One document carries several contracts. Guessing which one this run
         # is being held to is the accommodation the gate exists to refuse.
@@ -829,9 +914,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             self.RENDERER_METRIC)
         shutil.copyfile(root / "reports" / "bench-head-1.xml",
                         root / "reports" / "bench-head-2.xml")
-        # A retired workload's baseline entry goes with it. That edit is
-        # visible in the diff, and the ratchet step permits it precisely
-        # because removing work is what it is for.
+        # A retired workload's baseline entry goes with it. The COMPARE half
+        # is what this test asserts; the RATCHET half — that the deletion is
+        # accepted because the harness no longer lists the workload, and
+        # refused when nothing declares it — is in the four cases below.
         document = json.loads((root / "head" / "speed-baseline.json").read_text(
             encoding="utf-8"))
         document["populations"]["renderer-workloads"]["entries"].pop(
@@ -844,169 +930,103 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          completed.stdout + completed.stderr)
         self.assertIn("renderer workloads", summary)
 
-    def test_workload_listing_that_fails_stops_the_compare_step(self):
-        """A producer that dies must not silently empty the required list.
+    def _documents(self, with_impact=True, wall_max=0.085, impact_max=1.3514):
+        """A base and a head baseline document, written to a temp tree."""
+        root = self._temp_root("ghw-speed-ratchet-body-")
+        self._write_tree(root)
+        head = root / "head" / "speed-baseline.json"
+        original = json.loads(head.read_text(encoding="utf-8"))
+        renderer = original["populations"]["renderer-workloads"]
+        renderer["wall"] = {"e2e::bench.render": envelope(0.085, samples=4)}
+        renderer["entries"]["e2e::bench.render-impact"] = envelope(
+            impact_max, samples=4)
+        head_doc = json.loads(json.dumps(original))
+        if wall_max != 0.085:
+            head_doc["populations"]["renderer-workloads"]["wall"][
+                "e2e::bench.render"] = envelope(wall_max, samples=4)
+        if not with_impact:
+            head_doc["populations"]["renderer-workloads"]["entries"].pop(
+                "e2e::bench.render-impact")
+        head.write_text(json.dumps(head_doc, indent=2), encoding="utf-8")
+        base = root / "base-baseline.json"
+        base.write_text(json.dumps(original, indent=2), encoding="utf-8")
+        return base, head
 
-        bash -e cannot see a process substitution's exit status, so a broken
-        listing used to leave no --require-test at all — which is issue 36's
-        own false green, reached through a different door.
+    def _run_ratchet(self, base, head, allow_removals=()):
+        """The comparator's ratchet mode over two documents.
+
+        `--ratchet-allow-removal` is passed explicitly rather than derived,
+        because deriving it from `--list-workloads` is the STEP's job, and the
+        step's own body is executed end to end by
+        `test_the_ratchet_step_EXECUTES_against_a_checkout_at_head`.
         """
-        root = self._run_with_tree("ghw-speed-compare-broken-listing-")
-        self._edit_harness(root, 'if "--list-workloads" in argv:',
-                           'if "--list-workloads-v2" in argv:')
-        completed, _ = self._execute_compare(root)
+        command = [sys.executable,
+                   str(REPO_ROOT / "scripts" / "ci" / "compare_durations.py"),
+                   "--ratchet-baselines", str(base), str(head)]
+        for slot in allow_removals:
+            command += ["--ratchet-allow-removal", slot]
+        return subprocess.run(command, cwd=str(REPO_ROOT),
+                              capture_output=True, text=True, check=False)
 
-        self.assertNotEqual(completed.returncode, 0,
-                            completed.stdout + completed.stderr)
-        self.assertIn("workload listing", completed.stderr)
+    def test_the_ratchet_refuses_an_UNdeclared_removal(self):
+        """A removal nobody declared is still a raise.
 
-    def test_empty_workload_listing_stops_the_compare_step(self):
-        """A producer that prints nothing is as disabling as one that dies."""
-        root = self._run_with_tree("ghw-speed-compare-empty-listing-")
-        self._edit_harness(root, "        print(workload_node_id(workload[0]))",
-                           "        pass  # deliberately empty listing")
-        completed, _ = self._execute_compare(root)
-
-        self.assertNotEqual(completed.returncode, 0,
-                            completed.stdout + completed.stderr)
-        self.assertIn("workload listing is empty", completed.stderr)
-
-    def test_exempting_every_workload_stops_the_compare_step(self):
-        """The other self-disable: naming all three empties the required list.
-
-        Same false green as a broken listing, by configuration.
+        This is what made the retirement route unreachable in the first
+        place, and it has to stay refused — otherwise the allowance becomes
+        the hole I1 was fixed to close.
         """
-        root = self._run_with_tree("ghw-speed-compare-all-allowed-",
-                                   omit_renderer="bench.render-impact")
-        completed, _ = self._execute_compare(
-            root, allowed_removals=",".join(
-                f"e2e::{name}" for name, _, _ in self.WORKLOADS))
+        base, head = self._documents(with_impact=False)
+        refused = self._run_ratchet(base, head)
+        self.assertEqual(refused.returncode, 1,
+                         refused.stdout + refused.stderr)
+        self.assertIn("renderer-workloads:entries:e2e::bench.render-impact",
+                      refused.stderr)
 
-        self.assertNotEqual(completed.returncode, 0,
-                            completed.stdout + completed.stderr)
-        self.assertIn("every workload is an allowed removal",
-                      completed.stderr)
+    def test_a_declared_removal_is_the_green_route_out(self):
+        """The half that was blocked, and the workflow's own contract.
 
-    def _edit_harness(self, root, old, new):
-        harness = root / "head" / "scripts" / "bench" / "e2e_bench.py"
-        source = harness.read_text(encoding="utf-8")
-        self.assertIn(old, source)
-        harness.write_text(source.replace(old, new), encoding="utf-8")
-
-    # -- the block text that no synthetic tree can execute -------------------
-
-    def test_renderer_rounds_keep_the_head_side_and_the_selfcheck(self):
-        block = self._run_block("Run renderer workloads")
-        self.assertIn('--work-root "$RUNNER_TEMP/gh7-bench"', block)
-        self.assertIn('--junit-file "$REPORTS/bench-head-$round.xml"', block)
-        self.assertIn("--repo-root .", block)
-        self.assertIn('if [ "$round" -eq "$ROUNDS" ]; then', block)
-        self.assertIn("selfcheck=(--selfcheck)", block)
-        # Head only: there is no base checkout any more. A leftover --side
-        # loop would measure nothing, because there is nothing to measure it
-        # against.
-        self.assertIn("--side head", block)
-        self.assertNotIn("--side base", block)
-
-    def test_the_ratchet_step_is_declared_against_the_base_ref(self):
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
-        step = self.steps.step_text("The committed baseline only ratchets down")
-        # `base.sha` trails the base tip and does not refresh on synchronize,
-        # so the comparison would be made against an OLDER, looser baseline —
-        # the one direction that is wrong here.
-        self.assertIn("github.event.pull_request.base.ref", step)
-        self.assertNotIn("github.event.pull_request.base.sha", step)
-        self.assertIn("FETCH_HEAD", step)
-        self.assertIn("--ratchet-baselines", step)
-        self.assertIn("$base_tip:$BASELINE", step)
-        self.assertIn("working-directory: head", step)
-        self.assertIn("id: probe", text)
-
-    @unittest.skipIf(sys.platform == "win32",
-                     "runs bash and git; the step runs only on ubuntu runners "
-                     "in production")
-    def test_the_ratchet_step_EXECUTES_against_a_checkout_at_head(self):
-        """The ratchet step, executed: working directory, fetch, base tip.
-
-        It is gated to `pull_request` and every dispatch used as evidence was
-        a `workflow_dispatch`, so nothing had ever run it.
+        Retiring a renderer workload means dropping it from WORKLOADS and
+        removing its entry. The ratchet made that unreachable while a shipped
+        test asserted it worked; `--ratchet-allow-removal` restores it, and
+        the step derives the declaration from what --list-workloads no longer
+        emits, so it can only be declared for a workload the harness really
+        dropped.
         """
-        declared, working_dir, block = self.steps.step_run(
-            "The committed baseline only ratchets down")
-        root = self._temp_root("ghw-speed-ratchet-exec-")  # noqa: E501
-        origin = root / "origin.git"
-        subprocess.run(["git", "init", "--bare", "-q", str(origin)],
-                       check=True)
-        checkout = root / "head"
-        subprocess.run(["git", "clone", "-q", str(origin), str(checkout)],
-                       check=True)
-        # The workspace holds only `head/`, and the baseline lives inside the
-        # repository — as it does in the job, where actions/checkout put the
-        # whole tree under head/ and the step's working-directory is head.
-        self._write_baseline(root)
-        for name in ("compare_durations.py", "counter.py", "baseline.py"):
-            script = checkout / "scripts" / "ci" / name
-            script.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name, script)
-        self._ratchet_commit(checkout, "baseline", push=True)
-        # The base branch tip holds the baseline as it WAS; the local
-        # checkout is the pull request head and RAISES a recorded maximum.
-        # Nothing after this commit is pushed, so the block fetches a base
-        # tip that genuinely differs — which is the only shape in which the
-        # ratchet has anything to refuse.
-        baseline_file = checkout / "speed-baseline.json"
-        raised = json.loads(baseline_file.read_text(encoding="utf-8"))
-        raised["populations"]["unit-suite"]["entries"][self.UNIT_NODE][
-            "max"] *= 2
-        (checkout / "speed-baseline.json").write_text(
-            json.dumps(raised, indent=2), encoding="utf-8")
-        self._ratchet_commit(checkout, "raise the ceiling")
+        base, head = self._documents(with_impact=False)
+        retired = self._run_ratchet(
+            base, head,
+            allow_removals=["renderer-workloads:entries:"
+                            "e2e::bench.render-impact"])
+        self.assertEqual(retired.returncode, 0,
+                         retired.stdout + retired.stderr)
+        self.assertIn("no entry raised", retired.stdout)
 
-        # The step's own env, with the `${{ }}` the job would have expanded
-        # replaced by the values this test stands in for. Anything still
-        # holding an expression is dropped rather than exported, so the block
-        # reads the test's value instead of a literal `${{ ... }}`.
-        env = self.steps.env_for(declared, root, BASE_REF="main")
-        self.assertIn("BASELINE", env,
-                      "the ratchet step reads $BASELINE from the job env")
-        # GitHub runs a step with no declared working-directory in the
-        # workspace, so that is what this does when the key is absent — which
-        # is the point: removing `working-directory: head` from the step has
-        # to make THIS fail, by executing the commands one level above the
-        # only repository on the box.
-        completed = self.steps.bash(block, root, working_dir, env)
-        self.assertEqual(completed.returncode, 1,
-                         completed.stdout + completed.stderr
-                         + (root / "base-baseline.json").read_text(
-                             encoding="utf-8", errors="replace")[:400])
-        self.assertNotIn("not a git repository", completed.stderr)
-        self.assertIn("went UP", completed.stderr)
-        self.assertIn("Base branch tip:", completed.stdout)
+    def test_the_ratchet_refuses_a_removal_the_harness_still_lists(self):
+        """The other half of the trade, and it is the half that bites.
 
-    def test_the_ratchet_step_would_fail_without_its_working_directory(self):
-        """The mutation, proven: the same block run from the workspace.
-
-        A control that only proves it works has not proved it can fail.
+        A declared removal that is STILL recorded is refused: that is an entry
+        deleted while its workload stayed, which `compare()` would intersect
+        away silently — the decorative outcome I1 was fixed to prevent.
         """
-        root, _ = self._ratchet_checkout("ghw-speed-ratchet-mutation-")
-        declared, working_dir, block = self.steps.step_run(
-            "The committed baseline only ratchets down")
-        self.assertEqual(working_dir, "head",
-                         "if this step ever stops declaring one, delete this "
-                         "test deliberately — it asserts a key that is gone")
-        env = self.steps.env_for(declared, root, BASE_REF="main")
-        broken = self.steps.bash(block, root, None, env)
-        self.assertNotEqual(broken.returncode, 0)
-        self.assertIn("no git repository", broken.stderr)
+        base, head = self._documents()
+        refused = self._run_ratchet(
+            base, head,
+            allow_removals=["renderer-workloads:entries:e2e::bench.render"])
+        self.assertNotEqual(refused.returncode, 0,
+                            refused.stdout + refused.stderr)
+        self.assertIn("declared removed but is still recorded",
+                      refused.stderr)
 
-    def test_no_workflow_still_looks_up_a_release_for_the_speed_gate(self):
-        # The whole point of issue #81: the comparison point is committed
-        # data now, so a tag lookup here would be a leftover argument for a
-        # method this gate no longer uses.
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
-        self.assertNotIn("releases/latest", text)
-        self.assertNotIn("--base-label \"$BASE_TAG\"", text)
+    def test_the_ratchet_governs_the_wall_ceilings_too(self):
+        """Half the document used to be ungoverned.
 
-
-if __name__ == "__main__":
-    unittest.main()
+        `raised_entries` iterated `entries` and never `wall`, so the smoke
+        ceiling could be raised from 0.085 s to 99 s in the same push the
+        gate is measured in, and the step whose entire reason for existing
+        reported success.
+        """
+        base, head = self._documents(wall_max=99.0)
+        raised = self._run_ratchet(base, head)
+        self.assertEqual(raised.returncode, 1, raised.stdout + raised.stderr)
+        self.assertIn("renderer-workloads:wall:e2e::bench.render",
+                      raised.stderr)
