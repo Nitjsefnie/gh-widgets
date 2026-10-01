@@ -14,9 +14,14 @@ It also owns the small structural reader those cases are written against.
 These checks are regression tripwires over reviewed source, not a sandbox. The
 permission reader decodes simple YAML keys, with optional single or double
 quotes, and fails closed outside that subset. The shell reader removes a
-backslash-newline splice without inserting whitespace, then decodes words with
-POSIX `shlex.split`. Bash ANSI-C quoting (`$'gh'`), backtick-obfuscated words,
-and other obfuscation-only spellings are OUT OF SCOPE.
+backslash-newline splice without inserting whitespace, decodes words with POSIX
+`shlex.split`, then splits each decoded token on command-terminating operators
+`;|&()`. A word after one of those operators (or at line start) is a command
+word. Operators inside quoted words are split too; this fail-noisy behavior is
+accepted. `<` and `>` are deliberately not split: their following words are
+redirection targets, not commands (`echo hi>gh api` runs `echo`, not `gh`).
+Bash ANSI-C quoting (`$'gh'`), backticks, `$(...)`, and other substitution
+spellings are OUT OF SCOPE.
 
 
 WHY IT IS A SEPARATE MODULE, and why not to merge it back. `test_ci_workflows.py`
@@ -458,21 +463,25 @@ def _assert_no_job_write_scopes(text):
 def _step_github_api_calls(text):
     """Return commands with adjacent decoded `gh api` shell words.
 
-    `_command()` removes shell line splices and `shlex.split()` decodes POSIX
-    words. This is a regression tripwire over reviewed text, not a sandbox;
-    Bash ANSI-C quoting (`$'gh'`), backtick-obfuscated words, and other
-    obfuscation-only spellings are OUT OF SCOPE.
+    `_command()` removes shell line splices; `shlex.split()` decodes POSIX
+    words, then `;|&()` delimit command words even when adjoining them.
+    Redirection `<` and `>` stay attached because their following words are
+    targets, not commands. Operators inside quotes are also split, which is
+    fail-noisy and accepted. This is not a sandbox: Bash ANSI-C quoting,
+    backticks, `$(...)`, and other substitution spellings are OUT OF SCOPE.
     """
     calls = []
     for job, records in _jobs(text).items():
         for step in _steps(records):
             command = _command(step)
             try:
-                words = shlex.split(command)
+                shell_words = shlex.split(command)
             except ValueError as error:
                 raise AssertionError(
                     f"uninterpretable shell command in {job}/{step['name']}: "
                     f"{error}") from error
+            words = [fragment for word in shell_words
+                     for fragment in re.split(r"[;|&()]", word) if fragment]
             if any(left == "gh" and right == "api"
                    for left, right in zip(words, words[1:])):
                 calls.append((job, step["name"], command))
@@ -774,6 +783,34 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 self.assertNotEqual(planted, self.text)
                 with self.assertRaisesRegex(AssertionError, "invoke gh api"):
                     _assert_no_step_github_api(planted)
+
+    def test_each_shell_control_operator_boundary_is_caught(self):
+        marker = "          cp coverage-floor.json"
+        plants = {
+            "subshell grouping": self.text.replace(
+                marker,
+                "          (gh api repos/example/example)\n" + marker,
+                1),
+            "command separator": self.text.replace(
+                marker,
+                "          true;gh api repos/example/example\n" + marker,
+                1),
+            "pipeline": self.text.replace(
+                marker,
+                '          printf ""|gh api repos/example/example\n' + marker,
+                1),
+        }
+        for spelling, planted in plants.items():
+            with self.subTest(spelling=spelling):
+                self.assertNotEqual(planted, self.text)
+                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
+                    _assert_no_step_github_api(planted)
+        # Bash runs `echo`; `gh` is the redirection target and `api` an
+        # argument. Splitting `>` would invent a command Bash never runs.
+        redirected = self.text.replace(
+            marker, "          echo done>gh api\n" + marker, 1)
+        self.assertNotEqual(redirected, self.text)
+        self.assertEqual(_step_github_api_calls(redirected), [])
 
     def test_quoted_read_permission_and_api_prose_stay_allowed(self):
         marker = "    runs-on: ubuntu-latest"
