@@ -570,28 +570,25 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn(f"Metric: **{self.UNIT_METRIC}**",
                       self._execute_compare(root)[1])
 
-    def _real_checkout(self, root):
-        """A workspace whose only repository is a REAL checkout at head/.
+    def _small_checkout(self, root):
+        """A workspace whose only repository is a checkout at head/.
 
-        The whole tree, not just the Python: the suite reads VERSION and
-        several other non-.py files, and a partial checkout makes it fail in
-        ways that look like a gate defect. Copied rather than linked, because
-        `e2e_bench.py` refuses a work root inside the checkout and a symlink
-        would satisfy that check without the checkout being there.
+        The SHAPE the job produces — repository at `head/`, discovery run
+        over it, reports written outside it — with the smallest contents that
+        shape can hold: the scripts the step invokes and one trivial test
+        module. What this control is about is WHERE the step writes, and the
+        size of the population does not bear on that. Running the whole suite
+        here instead would have made the control the most expensive thing in
+        the suite, on a box where a leaked run can outlive its own test.
         """
         head = root / "head"
         head.mkdir(parents=True, exist_ok=True)
-        skip = {".git", "__pycache__", ".worktrees", ".superpowers",
-                "coverage.json", "widgets"}
-        for item in sorted(REPO_ROOT.iterdir()):
-            if item.name in skip:
-                continue
-            if item.is_dir():
-                shutil.copytree(item, head / item.name,
-                                ignore=shutil.ignore_patterns(
-                                    "__pycache__", "*.pyc"))
-            elif item.is_file():
-                shutil.copyfile(item, head / item.name)
+        shutil.copytree(REPO_ROOT / "scripts", head / "scripts")
+        (head / "test_one.py").write_text(
+            "import unittest\n\n\n"
+            "class TestOne(unittest.TestCase):\n"
+            "    def test_a(self):\n"
+            "        self.assertTrue(True)\n", encoding="utf-8")
         return head
 
     def test_every_repository_step_declares_the_working_directory(self):
@@ -651,7 +648,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         next step looks for it.
         """
         root = self._temp_root("ghw-speed-unit-step-exec-")
-        self._real_checkout(root)
+        self._small_checkout(root)
         declared, working_dir, block = self.steps.step_run(
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
@@ -665,6 +662,25 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(written, ["unit-1.xml"],
                          "the step must write its JUnit into $REPORTS, where "
                          "the Compare step looks for it")
+
+    def test_the_unit_suite_step_would_write_nothing_without_its_directory(self):
+        """The mutation, proven.
+
+        The same step run from the workspace cannot even find the counter, and
+        reports nothing. A control that only proves it works has not proved
+        it can fail.
+        """
+        root = self._temp_root("ghw-speed-unit-step-mutation-")
+        self._small_checkout(root)
+        declared, working_dir, block = self.steps.step_run(
+            "Measure the unit suite")
+        self.assertEqual(working_dir, "head")
+        env = self.steps.env_for(declared, root)
+        env.update({"GH_COUNTER_METRIC": "cpu_time", "ROUNDS": "1"})
+        broken = self.steps.bash(block, root, None, env)
+        self.assertNotEqual(broken.returncode, 0)
+        written = sorted(p.name for p in Path(env["REPORTS"]).glob("unit-*.xml"))
+        self.assertEqual(written, [])
 
     def test_the_compare_step_FINDS_the_baseline_in_the_checkout(self):
         """The defect that made four dispatch runs green for the wrong reason.
