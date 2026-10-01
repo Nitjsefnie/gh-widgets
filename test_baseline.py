@@ -318,16 +318,57 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
 
     def test_the_unit_suite_smoke_bound_is_armed_too(self):
         # It was unarmed for two rounds because no wall observation had been
-        # supplied for it — not because the suite should be exempt. Now that
-        # the gh-wall attributes of the same six dispatches have been read,
-        # both populations are armed, and their ceilings differ by two orders
-        # of magnitude for the reason the basis records: the same machine
-        # effect measured at two scales.
+        # supplied for counter::unit-suite — not because the suite should be
+        # exempt. Both populations are now armed, and their ceilings differ by
+        # two orders of magnitude for the reason the basis records: the same
+        # machine effect measured at two scales.
+        #
+        # Deliberately NOT pinning the figures. A test that hard-codes a
+        # baseline's numbers fails every time the baseline is re-derived from
+        # a new measurement, and the numbers belong in the file, where the
+        # dispatch that produced them is cited. What is worth pinning is that
+        # the map is populated and shaped correctly.
         loaded = self._load()
         wall = loaded["populations"]["unit-suite"]["wall"]
         self.assertEqual(list(wall), ["counter::unit-suite"])
-        self.assertEqual(wall["counter::unit-suite"],
-                         {"min": 41.09, "max": 46.84, "n": 6})
+        envelope = wall["counter::unit-suite"]
+        self.assertGreaterEqual(envelope["n"], baseline.MIN_ENVELOPE_SAMPLES)
+        self.assertLessEqual(envelope["min"], envelope["max"])
+        self.assertGreater(envelope["max"], 0.0)
+
+    def test_every_recorded_ceiling_is_above_every_observed_value(self):
+        """The gate must be able to pass on an ordinary run.
+
+        `max x (1 + tolerance)` has to clear the maximum the dispatches
+        recorded, or the baseline refuses on the very program it measured. A
+        tolerance of zero would do that; this asserts the margin is real.
+        """
+        loaded = self._load()
+        for name, population in loaded["populations"].items():
+            ceiling = {node: envelope["max"] * (1 + population["tolerance"])
+                       for node, envelope in population["entries"].items()}
+            for node, envelope in population["entries"].items():
+                with self.subTest(population=name, entry=node):
+                    self.assertGreater(ceiling[node], envelope["max"])
+                    self.assertGreater(ceiling[node], envelope["min"])
+
+    def test_a_doubled_workload_is_caught_on_the_slowest_spread_entry(self):
+        """The gate's stated power, asserted rather than described.
+
+        The basis claims a doubled workload is caught on three of the four
+        entries even on the fastest machine observed, and missed on
+        bench.render. Both halves are checked here, so the claim cannot drift
+        away from the numbers it is a claim about.
+        """
+        loaded = self._load()
+        renderer = loaded["populations"]["renderer-workloads"]
+        entries = renderer["entries"]
+        factor = 1 + renderer["tolerance"]
+        caught = {node for node, envelope in entries.items()
+                  if envelope["min"] * 2 > envelope["max"] * factor}
+        self.assertIn("e2e::bench.render-impact", caught)
+        self.assertIn("e2e::bench.render-responsiveness", caught)
+        self.assertNotIn("e2e::bench.render", caught)
 
     def test_both_populations_carry_a_smoke_bound(self):
         loaded = self._load()
