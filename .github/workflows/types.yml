@@ -63,10 +63,11 @@ jobs:
       - name: Install pyright
         run: |
           python -m pip install --upgrade pip
-          # Install requirements-test.txt too: pyright checks the whole tree, so
-          # give it the full pinned toolchain to resolve the suite's names.
-          # The runtime is stdlib; these pinned requirements supply the
-          # third-party tools available for that check.
+          # The suite is stdlib unittest; its imports come from neither
+          # requirements-dev.txt nor requirements-test.txt.
+          # Pyright includes "." and uses the exclusions in pyrightconfig.json.
+          # Install both complete pinned requirements files so their third-party
+          # tools are available for this check.
           pip install -r requirements-dev.txt -r requirements-test.txt
 
       - name: pyright
