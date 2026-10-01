@@ -53,6 +53,49 @@ def number(element, attribute):
     return float(raw)
 
 
+class TestCwdIsHonoured(unittest.TestCase):
+    """`--cwd` must reach `measure()`, not just parse.
+
+    A re-review mutated `main()` into `measure(command, cwd=None, ...)` —
+    the flag accepted, stored and silently ignored — and the whole suite
+    stayed green, because every step-level test points its `working-directory`
+    and its `--cwd` at the same directory, so an ignored flag is invisible
+    from there. This is the tool-level control that mutation defeated, and it
+    is the only place the two can be told apart.
+    """
+
+    def test_the_flag_changes_where_the_command_runs(self):
+        listing = "import os; print(sorted(os.listdir('.')))"
+        with tempfile.TemporaryDirectory(prefix="ghw-cwd-") as td:
+            root = Path(td)
+            (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
+            inside = counter.measure([sys.executable, "-c", listing], cwd=root,
+                                     metric=counter.CPU_METRIC)
+            outside = counter.measure([sys.executable, "-c", listing],
+                                      metric=counter.CPU_METRIC)
+        self.assertIn("marker-only-here.txt", inside.stdout)
+        self.assertNotIn("marker-only-here.txt", outside.stdout)
+
+    def test_the_cli_passes_the_flag_through(self):
+        # The library is only half of it: the CLI is what the workflow calls,
+        # and a flag wired to nothing there is the same defect one layer up.
+        with tempfile.TemporaryDirectory(prefix="ghw-cwd-cli-") as td:
+            root = Path(td)
+            (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
+            report = Path(td) / "r.xml"
+            result = subprocess.run(
+                [sys.executable,
+                 str(REPO_ROOT / "scripts" / "ci" / "counter.py"),
+                 "--junit-file", str(report),
+                 "--name", "counter::unit-suite",
+                 "--cwd", str(root),
+                 "--", sys.executable, "-c",
+                 "import os; print(sorted(os.listdir('.')))"],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("marker-only-here.txt", result.stdout)
+
+
 class TestTheRemovedInstrument(unittest.TestCase):
     """The instrument that lost, and must not come back by accident.
 

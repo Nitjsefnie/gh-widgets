@@ -120,11 +120,12 @@ The workflow files in `.github/workflows/` are:
   because neither survives measurement on the cell that reads the baseline:
   one is refused by the kernel's `perf_event_paranoid`, the other costs
   12.8× the work it measures. The gate is therefore a **step-change
-  detector, not a regression detector** — it catches a doubled workload and
-  will not catch a 20 % regression. There is no committed baseline at the
-  moment: the last one measured a renderer tree that the module split has
-  since changed, so the job runs its missing-baseline path until a runner
-  dispatch produces a real one.
+  detector, not a regression detector** — it catches a doubled workload
+  everywhere except `bench.render`, whose spread makes a tight-enough
+  tolerance a false-red generator, and it will not catch a 20 % regression
+  anywhere. The baseline records an observed **range** per entry rather than
+  a single number, because these counters are not deterministic and a budget
+  wide enough to cover their spread would be a gate that cannot fire.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
