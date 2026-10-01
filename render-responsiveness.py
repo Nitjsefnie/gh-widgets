@@ -18,12 +18,10 @@ Writes ONE SVG to OUT_DIR:
 This renderer OWNS its data. It fetches the account's authored pull requests
 itself — one cheap paginated GraphQL connection, the same
 common.fetch_pull_requests the other two renderers use — and MERGES the result
-into render-impact.py's cache, which is the shared home of that PR set.
-It used to read that cache read-only, which pinned it to render-impact.py's
-twice-daily schedule: the card could never be fresher than a job it did not
-depend on. Nothing here needs render-impact.py's expensive machinery (the
-per-repo git-blame walk is what makes THAT script slow), so nothing here
-should wait for it. Runs hourly.
+into render-impact.py's cache, which is the shared home of that PR set. The
+hourly gh-widgets service runs render-impact.py before this renderer; this
+renderer fetches its PR data without running the expensive per-repo git-blame
+walk. Runs hourly.
 
 Merging, not overwriting, is the whole hazard of writing to a cache someone
 else owns. This script replaces the PR half and preserves every other key

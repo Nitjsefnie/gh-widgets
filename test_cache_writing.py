@@ -24,8 +24,8 @@ spec.loader.exec_module(common)
 
 
 class CacheWriting(unittest.TestCase):
-    """Two scripts write the impact cache; the lock is what keeps the cheap
-    hourly writer from reverting the expensive twice-daily one."""
+    """Two hourly scripts write the impact cache; the lock keeps either
+    writer from reverting the other's cache changes."""
 
     def setUp(self):
         # pylint: disable=consider-using-with
