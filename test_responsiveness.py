@@ -653,8 +653,17 @@ class CacheStaleness(unittest.TestCase):
         self.assertFalse(resp.cache_is_stale(self.FRESH, now=self.at(24)))
 
     def test_a_future_stamp_is_stale(self):
-        """A stamp ahead of now — a backward clock jump — reads as fresh."""
+        """A stamp ahead of now — a backward clock jump — is treated as stale."""
         self.assertTrue(resp.cache_is_stale(self.FRESH, now=self.at(-3 * 24)))
+
+    def test_a_stamp_one_microsecond_future_is_stale(self):
+        """Even one microsecond ahead of now earns the badge."""
+        now = resp.parse_ts(self.FRESH) - datetime.timedelta(microseconds=1)
+        self.assertTrue(resp.cache_is_stale(self.FRESH, now=now))
+
+    def test_a_stamp_exactly_now_is_not_stale(self):
+        """Equality is not stale, matching the 24-hour boundary convention."""
+        self.assertFalse(resp.cache_is_stale(self.FRESH, now=self.at(0)))
 
     def test_a_missing_stamp_is_not_stale(self):
         self.assertFalse(resp.cache_is_stale(None))
