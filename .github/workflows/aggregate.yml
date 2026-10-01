@@ -3,9 +3,21 @@ name: aggregate
 # The required check that ALWAYS REPORTS (issue #37). Every sibling CI gate
 # filters paths, so a docs-only change creates no run for those gates. Making
 # any of them required would strand that change on a check that never exists.
-# This workflow has no path or branch filter: every push and pull request gets
-# a verdict, and a legitimate skip explains itself in the summary instead of
-# becoming a missing required check.
+# Pull requests and pushes to main get a verdict regardless of paths, and a
+# legitimate skip explains itself in the summary instead of becoming a missing
+# required check.
+#
+# Pull-request heads are judged by the pull_request run alone. Before issue
+# #89's fix, a push to a PR branch also fired aggregate on the same head SHA.
+# When that branch was behind or diverged from the default branch, the push
+# comparison failed. That failed check, with the same name as the passing
+# pull_request check, blocked the merge under require-ci-aggregate until
+# re-run; re-running failed again because the event payload's before/after
+# comparison was stale. Nothing requires a verdict on a non-default-branch
+# push outside a PR, so the push trigger is main-only. A VERSION push to main
+# still schedules aggregate, keeping release.yml's manifest entry valid.
+# Neither trigger has a path filter: a docs-only change still gets a verdict
+# on every pull request and on main.
 #
 # It folds WORKFLOW RUNS for this commit, using each gate's own event name.
 # Push and pull_request answer their own questions; the PR policy gate uses
@@ -20,6 +32,7 @@ name: aggregate
 
 on:
   push:
+    branches: [main]
   pull_request:
     # Include the policy gate's edit/ready actions as well as the default
     # opened/synchronize/reopened set. An edited PR body must refresh the

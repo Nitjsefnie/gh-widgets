@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fold the workflow gates for one commit into an always-reporting verdict.
+"""Fold the workflow gates for one commit into a verdict for each workflow run.
 
 WHY THIS CHECK EXISTS. Path-filtered workflows report nothing for an ignored
-change. Requiring one of those checks strands a docs-only pull request. This
-workflow always reports, explaining each gate that legitimately did not run.
+change. Requiring one of those checks strands a docs-only pull request. For
+each scheduled run, this workflow reports, explaining each gate that
+legitimately did not run.
 
 WHY WORKFLOW RUNS. A workflow owns its verdict, including a job skipped for a
 draft or Bot author. Check-run names vary across jobs and matrix cells; the
