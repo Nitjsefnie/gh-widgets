@@ -12,7 +12,7 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 happens to land on.
 """
 import importlib.util
-import stat
+import os
 import subprocess
 import sys
 import tempfile
@@ -53,105 +53,83 @@ def number(element, attribute):
     return float(raw)
 
 
-class FakeTracer:
-    """A `strace` on disk that writes whatever summary a test needs.
+class TestTheRemovedInstrument(unittest.TestCase):
+    """The instrument that lost, and must not come back by accident.
 
-    Not a mock of the parser: this is a real executable, run the same way
-    production runs it, so the test exercises the same path — Popen, a
-    session of its own, and a report read out of the file `-o` named. It
-    finds that file in its own argv rather than being told where it is,
-    because that is how the real strace is told.
+    Both better instruments were implemented, measured and dropped, and the
+    measurements are in counter.py's docstring. What is tested here is that
+    neither can be reintroduced silently: `syscalls` is no longer a name this
+    file will measure under, so an environment still exporting it — a stale
+    $GITHUB_ENV from an older revision of the workflow, most likely — is a
+    refusal rather than a measurement under a name nothing else agrees with.
     """
 
-    def __init__(self, directory: Path, report: str, returncode: int = 0):
-        self.path = directory / "strace"
-        self.path.write_text(
-            "#!/usr/bin/env python3\n"
-            "import sys\n"
-            "args = sys.argv[1:]\n"
-            "target = args[args.index('-o') + 1]\n"
-            f"open(target, 'w').write({report!r})\n"
-            f"sys.exit({returncode})\n", encoding="utf-8")
-        self.path.chmod(self.path.stat().st_mode | stat.S_IEXEC)
+    def test_syscalls_is_no_longer_a_metric(self):
+        self.assertEqual(counter.METRICS, (counter.CPU_METRIC,))
 
-    def installed(self, _name):
-        """A stand-in for shutil.which, for this strace only."""
-        return str(self.path)
+    def test_an_environment_naming_the_removed_instrument_is_refused(self):
+        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
+            with self.assertRaises(counter.CounterError) as caught:
+                counter.choose_metric()
+        self.assertIn("syscalls", str(caught.exception))
 
+    def test_the_refusal_survives_the_public_measure_call(self):
+        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
+            with self.assertRaises(counter.CounterError):
+                counter.measure([sys.executable, "-c", "pass"])
 
-class TestStraceParsing(unittest.TestCase):
-    SUMMARY = ("% time     seconds  usecs/call     calls    errors syscall\n"
-               "------ ----------- ----------- --------- --------- ----------------\n"
-               " 49.29    0.041234           2         20           0 openat\n"
-               " 17.34    0.014110           3         35           7 openat\n"
-               "------ ----------- ----------- --------- --------- ----------------\n"
-               "100.00    0.083631           1        870          89 total\n")
-
-    def test_reads_the_total_row(self):
-        self.assertEqual(counter.parse_strace_total(self.SUMMARY), 870.0)
-
-    def test_it_ignores_a_per_syscall_row_that_says_total(self):
-        # The word `total` is the last field, so only the aggregate row can
-        # match; a per-syscall row with more trailing columns must not.
-        report = ("% time seconds usecs/call calls errors syscall\n"
-                  " 50.00 0.010000 1 870 89 total_extra\n"
-                  "100.00 0.020000 1 444 63 total\n")
-        self.assertEqual(counter.parse_strace_total(report), 444.0)
-
-    def test_the_timing_columns_are_never_read(self):
-        # The same report with wildly different timings must give the same
-        # answer: those columns swung 17.34%-48.84% on identical runs while
-        # the count did not move, and reading them would put the wall clock
-        # back into a gate whose whole point is that it is gone.
-        swung = self.SUMMARY.replace("0.083631", "0.900000")
-        self.assertEqual(counter.parse_strace_total(swung), 870.0)
-
-    def test_an_untraced_or_unreadable_report_is_none_not_zero(self):
-        self.assertIsNone(counter.parse_strace_total(""))
-        self.assertIsNone(counter.parse_strace_total("strace: Operation not"
-                                                     " permitted\n"))
-        self.assertIsNone(counter.parse_strace_total(
-            "% time seconds usecs/call calls errors syscall\n"))
-        self.assertIsNone(counter.parse_strace_total(
-            "100.00    0.000000           0          0           0 total\n"))
+    def test_the_cost_of_the_instrument_is_recorded_where_the_code_is(self):
+        # The next reader has to be able to see that a deterministic counter
+        # exists and what it would cost, without re-deriving 12.8x from
+        # scratch. If this fails, the finding was deleted with the code.
+        doc = (counter.__doc__ or "")
+        self.assertIn("12.8x", doc)
+        self.assertIn("36811152307", doc)
+        self.assertIn("36812466498", doc)
 
 
 class TestMetricChoice(unittest.TestCase):
-    def test_the_jobs_export_wins_over_the_probe(self):
-        # One probe per job: an exported metric is honoured verbatim, and
-        # the probe is not even consulted. Two call sites that each probed
-        # could pick different instruments in the same job, which is the
-        # bug this file exists to prevent.
-        with mock.patch.object(counter, "probe_strace") as probe:
-            self.assertEqual(counter.choose_metric("cpu_time"), "cpu_time")
-        probe.assert_not_called()
+    def test_the_jobs_export_is_honoured_verbatim(self):
+        # The workflow pins GH_COUNTER_METRIC explicitly in both measurement
+        # steps rather than relying on a fallback, so the instrument a
+        # population is judged by is visible in the workflow rather than
+        # buried here. This is what that pin resolves to.
+        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "cpu_time"}):
+            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
+        self.assertEqual(counter.choose_metric("cpu_time"), counter.CPU_METRIC)
 
     def test_an_unrecognised_export_is_refused(self):
         with self.assertRaises(counter.CounterError) as caught:
             counter.choose_metric("furlongs")
         self.assertIn("cpu_time", str(caught.exception))
 
-    def test_a_failing_probe_falls_through_to_cpu_time(self):
-        with mock.patch.object(counter, "probe_strace", return_value=None):
-            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
+    def test_the_only_instrument_is_cpu_time(self):
+        self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
 
-    def test_a_working_probe_selects_syscalls(self):
-        with mock.patch.object(counter, "probe_strace", return_value=1.0):
-            self.assertEqual(counter.choose_metric(), counter.STRACE_METRIC)
+    def test_it_needs_no_probe_to_get_there(self):
+        # There is nothing to choose, so nothing is probed: an instrument
+        # this file cannot use is not a reason to spend a process on every
+        # call site.
+        with mock.patch.object(counter, "_probe_lines") as probe:
+            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
+        probe.assert_not_called()
 
 
 class TestProbe(unittest.TestCase):
     def test_probe_lines_name_the_instrument_and_its_reason(self):
-        with mock.patch.object(counter, "probe_strace", return_value=None), \
-                mock.patch.object(counter.shutil, "which", return_value=None), \
-                mock.patch.object(counter, "_setting", return_value="4"):
+        with mock.patch.object(counter, "_setting", return_value="4"):
             lines = counter._probe_lines()  # pylint: disable=protected-access
         joined = "\n".join(lines)
         self.assertIn("metric=cpu_time", joined)
-        # The reader of a fallback has to be able to judge it, which means
-        # knowing what the kernel said and whether the tracer was present.
-        self.assertIn("strace on PATH: no", joined)
-        self.assertIn("ptrace_scope: 4", joined)
+        # There is nothing to choose, so the step's job is the RECORD of why:
+        # the two kernel settings that decide whether a deterministic counter
+        # is possible at all.
+        self.assertIn("perf_event_paranoid=4", joined)
+        self.assertIn("ptrace_scope=4", joined)
+        self.assertIn("metric_reason=", joined)
+        # The reason names what was dropped, so the record is a record and
+        # not a bare restatement of the metric.
+        self.assertIn("12.8x", joined)
 
 
 class TestMeasure(unittest.TestCase):
@@ -191,32 +169,6 @@ class TestMeasure(unittest.TestCase):
         env = counter.child_environment({"MARKER": "kept"})
         self.assertEqual(env["MARKER"], "kept")
         self.assertEqual(env["PYTHONHASHSEED"], "0")
-
-    @unittest.skipIf(sys.platform == "win32",
-                     "the fake strace is a shebang script; on Windows the "
-                     "block runs only on ubuntu runners in production")
-    def test_the_syscall_instrument_is_measured_not_assumed(self):
-        report = TestStraceParsing.SUMMARY.replace("870", "4242")
-        with tempfile.TemporaryDirectory(prefix="ghw-counter-strace-") as td:
-            fake = FakeTracer(Path(td), report)
-            with mock.patch.object(counter.shutil, "which", fake.installed):
-                measured = counter.measure(
-                    [sys.executable, "-c", "pass"],
-                    metric=counter.STRACE_METRIC)
-
-        self.assertEqual(measured.metric, counter.STRACE_METRIC)
-        self.assertEqual(measured.value, 4242.0)
-
-    @unittest.skipIf(sys.platform == "win32",
-                     "same reason as the fake-strace test above")
-    def test_a_tracer_that_traces_nothing_is_a_failure_not_a_number(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-counter-notrace-") as td:
-            fake = FakeTracer(Path(td), "strace: Operation not permitted\n",
-                              returncode=1)
-            with mock.patch.object(counter.shutil, "which", fake.installed):
-                with self.assertRaises(counter.CounterError):
-                    counter.measure([sys.executable, "-c", "pass"],
-                                    metric=counter.STRACE_METRIC)
 
     @unittest.skipIf(sys.platform == "win32",
                      "process groups are a POSIX mechanism; the timeout "
