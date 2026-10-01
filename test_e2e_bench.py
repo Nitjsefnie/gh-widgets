@@ -41,6 +41,19 @@ def file_bytes(root, subdir):
             for path in sorted(base.rglob("*")) if path.is_file()}
 
 
+def _number(element, attribute):
+    """One XML attribute as a float, refusing to read a missing one.
+
+    `Element.get` is Optional[str]; a test that read an absent attribute as
+    zero would pass for the wrong reason, which is the defect the counter
+    change is about, applied to the test that pins it.
+    """
+    raw = element.get(attribute)
+    if raw is None:
+        raise AssertionError(f"{attribute} is absent from {element.tag}")
+    return float(raw)
+
+
 def class_temp_path(test_case, prefix):
     stack = contextlib.ExitStack()
     test_case.addClassCleanup(stack.close)
@@ -332,8 +345,20 @@ class TestHarness(unittest.TestCase):
             "bench.render-responsiveness"})
         self.assertTrue(all(case.get("classname") == "e2e"
                             for case in cases.values()))
-        self.assertTrue(all(case.get("time") is not None
-                            and case.find("failure") is None
+        self.assertTrue(all(case.find("failure") is None
+                            for case in cases.values()))
+        # `time` is the COUNTER now, not a duration, so what is pinned is
+        # that it is present and numeric — and that the suite says which
+        # instrument it is. Its magnitude is not a test-harness property.
+        self.assertTrue(all(_number(case, "time") > 0
+                            for case in cases.values()))
+        # Which instrument depends on what this host's kernel permits, so
+        # what is pinned is that the suite NAMES it and that it is the one
+        # the counter would pick here — not a particular instrument.
+        self.assertEqual(suite.get("gh-metric"),
+                         e2e_bench.counter.choose_metric())
+        self.assertIn(suite.get("gh-metric"), e2e_bench.counter.METRICS)
+        self.assertTrue(all(_number(case, "gh-wall") > 0
                             for case in cases.values()))
         self.assertTrue((work / "outputs/head-1/render/stats.svg").is_file())
         self.assertTrue((work / "outputs/head-1/render/last-updated.txt").is_file())
@@ -440,9 +465,12 @@ class TestHarness(unittest.TestCase):
         # act on without downloading the artifact first.
         self.assertIn("render-impact.py is missing from the head checkout",
                       result.stderr)
-        # The status line itself is unchanged in shape — the suite asserts it.
-        self.assertIn("bench.render-impact (head round 1): 0.000s failed",
-                      result.stdout)
+        # The status line carries the counter and the instrument that
+        # measured it. The `s` that used to sit there is gone: the number is
+        # not seconds, and printing an instruction count with a seconds
+        # suffix is the exact confusion this change exists to remove.
+        self.assertIn("bench.render-impact (head round 1): 0.000 unmeasured "
+                      "failed", result.stdout)
 
     def test_missing_renderer_is_still_skipped_on_the_base_side(self):
         """The asymmetry is deliberate, and this is what pins it.

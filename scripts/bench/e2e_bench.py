@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Run deterministic renderer workloads and write one JUnit suite."""
+"""Run deterministic renderer workloads and write one JUnit suite.
+
+Each workload is timed on a load-invariant COUNTER (instructions, or CPU
+seconds where the kernel will not count instructions), not on wall time: see
+scripts/ci/counter.py, which is imported by path rather than as a package
+because scripts/ci deliberately holds standalone CI entry points. The JUnit
+`time` attribute written here is therefore the COUNTER, not seconds, and the
+wall seconds travel separately in gh-wall for the gross smoke gate alone.
+"""
 import argparse
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -27,6 +35,24 @@ DEAD_PROXY = "http://127.0.0.1:9"
 # module for its workload list by --list-workloads rather than hard-coding
 # names, which is only safe because they come from here.
 JUNIT_CLASSNAME = "e2e"
+
+
+def _load_counter():
+    """Import scripts/ci/counter.py by path, the way the renderers load
+    ghwidgets_common.py. scripts/ci has no __init__.py and must not grow one:
+    it holds standalone entry points, not an importable library."""
+    path = Path(__file__).resolve().parent.parent / "ci" / "counter.py"
+    if not path.is_file():
+        raise SystemExit(f"error: cannot find the counter at {path}")
+    spec = importlib.util.spec_from_file_location("ghw_counter", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"error: cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+counter = _load_counter()
 
 
 def workload_name(name):
@@ -110,28 +136,39 @@ def _prepare_cache(run_dir, fixture_root, pristine_cache):
 
 
 def _run_renderer(renderer, repo_root, env):
-    result = {"time": 0.0, "failure": None, "stdout": "", "stderr": ""}
-    started = time.perf_counter()
+    """Run one renderer and report what it COST, not how long it took.
+
+    counter.measure raises exactly the trio this function already handled for
+    a bare subprocess.run — TimeoutExpired, OSError, and CounterError — so a
+    renderer that cannot even be measured lands in the same JUnit failure path
+    as one that ran and failed. The `time` key is the counter value; `wall` is
+    the elapsed seconds, kept only so the smoke gate has something gross to
+    look at.
+    """
+    result = {"time": 0.0, "metric": "", "wall": 0.0,
+              "failure": None, "stdout": "", "stderr": ""}
     try:
-        completed = subprocess.run(
+        measured = counter.measure(
             [sys.executable, str(renderer)], cwd=str(repo_root), env=env,
-            capture_output=True, text=True, check=False, timeout=600)
-        result["time"] = time.perf_counter() - started
-        result["stdout"] = completed.stdout or ""
-        result["stderr"] = completed.stderr or ""
-        if completed.returncode != 0:
+            timeout=600)
+        result["time"] = measured.value
+        result["metric"] = measured.metric
+        result["wall"] = measured.wall
+        result["stdout"] = measured.stdout
+        result["stderr"] = measured.stderr
+        if measured.returncode != 0:
             result["failure"] = (
-                f"renderer exited with code {completed.returncode}\n"
+                f"renderer exited with code {measured.returncode}\n"
                 f"stdout:\n{result['stdout']}\nstderr:\n{result['stderr']}")
     except subprocess.TimeoutExpired as exc:
-        result["time"] = time.perf_counter() - started
         result["stdout"] = _decode(exc.stdout)
         result["stderr"] = _decode(exc.stderr)
         result["failure"] = (
             "renderer exceeded the 600 second timeout\n"
             f"stdout:\n{result['stdout']}\nstderr:\n{result['stderr']}")
+    except counter.CounterError as exc:
+        result["failure"] = f"could not measure renderer: {exc}"
     except OSError as exc:
-        result["time"] = time.perf_counter() - started
         result["failure"] = f"could not run renderer: {exc}"
     return result
 
@@ -201,7 +238,8 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
                   workload):
     name, script_name = workload[:2]
     renderer = repo_root / script_name
-    result = {"name": workload_name(name), "time": 0.0, "skipped": False,
+    result = {"name": workload_name(name), "time": 0.0, "metric": "",
+              "wall": 0.0, "skipped": False,
               "failure": None, "stdout": "", "stderr": ""}
     if not renderer.is_file():
         # The two sides disagree on purpose, and that asymmetry is the whole
@@ -317,6 +355,16 @@ def _append_failure(existing, message):
 
 
 def _write_junit(path, results):
+    metrics = {result["metric"] for result in results if result["metric"]}
+    if len(metrics) > 1:
+        # Every workload in one run is measured by one instrument, because the
+        # job exported GH_COUNTER_METRIC from a single probe. Two names here
+        # means the probe was not the single authority it is supposed to be,
+        # and a suite carrying two instruments has no total.
+        raise SystemExit(
+            "error: one run recorded two instruments (" +
+            ", ".join(sorted(metrics)) +
+            "); a testsuite total across them would be a category error")
     suite = ET.Element("testsuite", {
         "name": "renderer-e2e",
         "tests": str(len(results)),
@@ -324,13 +372,17 @@ def _write_junit(path, results):
             result["failure"] is not None for result in results)),
         "errors": "0",
         "skipped": str(sum(result["skipped"] for result in results)),
+        # NOT SECONDS: the sum of the counters, in the instrument named below.
         "time": f"{sum(result['time'] for result in results):.6f}",
+        "gh-metric": sorted(metrics)[0] if metrics else "none",
     })
     for result in results:
         case = ET.SubElement(suite, "testcase", {
             "classname": JUNIT_CLASSNAME,
             "name": result["name"],
             "time": f"{result['time']:.6f}",
+            # Wall seconds, for the gross smoke gate only. Never a magnitude.
+            "gh-wall": f"{result['wall']:.6f}",
         })
         if result["skipped"]:
             ET.SubElement(case, "skipped", {"message": "renderer not present"})
@@ -406,8 +458,12 @@ def main(argv=None):
         results.append(result)
         status = "skipped" if result["skipped"] else (
             "failed" if result["failure"] else "passed")
+        # The counter, labelled with the instrument it is. The `s` suffix is
+        # gone because the number is not seconds; leaving it would print an
+        # instruction count as though it were a duration.
         print(f"{result['name']} ({args.side} round {args.round}): "
-              f"{result['time']:.3f}s {status}")
+              f"{result['time']:.3f} {result['metric'] or 'unmeasured'} "
+              f"{status}")
         # The status line above is the shape the suite asserts, and it says
         # only that something failed. The reason goes to stderr, because a red
         # step whose only detail lives in an uploaded JUnit artifact is a step

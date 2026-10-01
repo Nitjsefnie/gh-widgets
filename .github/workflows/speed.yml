@@ -1,42 +1,125 @@
 name: speed
 
-# Did the test suite get slower since the last release?
+# Did this commit get more expensive than the committed baseline says?
 #
-# THE MEASUREMENT ONLY MEANS ANYTHING BECAUSE BOTH BUILDS RUN HERE. A
-# GitHub runner's speed varies by roughly a factor of two between jobs, so
-# a duration recorded in one job compared against a duration recorded in
-# another measures the runners, not the code. This job checks out the last
-# release AND this commit, runs both on the same machine, and reports the
-# ratio. That is what makes a 30% budget a real threshold rather than a
-# coin flip.
+# WHAT IS JUDGED. Not elapsed time. `scripts/ci/counter.py` measures a
+# load-invariant COUNTER for each renderer workload and for the unit suite —
+# syscalls where the kernel lets it trace, CPU seconds where it does not —
+# and this job compares those against speed-baseline.json.
 #
-# Rounds are INTERLEAVED — base, head, base, head — and each test's
-# duration is the minimum across its rounds. Interleaving keeps a warming
-# page cache or a noisy neighbour from landing entirely on one side; the
-# minimum estimates the floor, which is the quantity that actually changes
-# when code gets slower.
+# WHY WALL TIME IS NOT A MAGNITUDE. A GitHub-hosted runner is a multi-tenant
+# VM. Steal time, a neighbouring container, a different core and a different
+# CPU model all move an elapsed duration, and none of that is the code being
+# measured. Two runs of IDENTICAL code in the same job differ by a factor of
+# two on a single test. The maintainer ruling behind issue #81 is stronger
+# than that: paired wall-clock A/B is not a valid magnitude ANYWHERE — not on
+# a shared box, and not in one job on a CI runner — so this job no longer
+# checks out the last release to get "the same runner", because the same
+# runner was never the thing that made the number mean anything.
 #
-# WHY PYTEST APPEARS HERE AND NOWHERE ELSE. This repo's suite is stdlib
-# unittest, and it stays that way — `python3 -m unittest discover` is how
-# these tests are run, in tests.yml and locally. pytest is used here purely
-# as a TIMING HARNESS: it collects the existing unittest TestCases
-# unchanged and can emit `--junitxml`, which stdlib unittest cannot, and
-# the comparator needs an exact per-test duration. Nothing in the suite is
-# written against pytest and nothing should be.
+# WHICH INSTRUMENT, AND WHY IT IS PROBED. All three of these were measured on
+# this cell — ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure — not
+# assumed, so the next reader can re-run them rather than take this file's
+# word for it:
 #
-# The runtime is pure stdlib, so neither side installs anything but the
-# timing harness — which means, unusually, that both sides run under the
-# SAME pytest. That is correct here: with no runtime dependencies there is
-# no dependency bump for this gate to attribute a slowdown to.
+#   36811152307  perf_event_paranoid is 4, `perf` IS installed, and
+#                `perf stat -e instructions` still exits 255 with "Access to
+#                performance monitoring and observability operations is
+#                limited." Instruction counts are therefore not an option
+#                here, and an unreachable branch in a gate is worse than no
+#                branch: it is a path production never executes. perf is not
+#                in counter.py at all.
+#   36812466498  `strace -f -c` works (ptrace_scope is 1, which restricts
+#                tracing to your own descendants — and strace here IS the
+#                parent of what it traces, so it is inside that restriction).
+#                Three runs of one identical workload reported the same total
+#                every time — 870 calls, 89 errors — while the `% time` and
+#                `seconds` columns of that same report swung between 17.34%
+#                and 48.84%. The CALL COUNT is the stable quantity and
+#                strace's own timings are not; counter.py reads only the
+#                total row's call count. `-f` is not optional: the renderers
+#                shell out to git, and a count that stopped at execve would
+#                measure the wrapper instead of the work.
+#   36812285024  CPU seconds are the fallback, not the primary. Five runs of
+#                one workload spread 7.6% min to max (0.1947-0.2095) on a
+#                QUIET runner, so a budget tight enough to catch a real
+#                regression would fire on that. It stays usable — it is
+#                on-CPU time, so steal time is excluded, which is what makes
+#                it valid at all — but it must never become the primary
+#                silently. Tracing costs something too (0.24-0.25s against
+#                0.19s untraced, run 36812466498, about 1.26x): that overhead
+#                scales with syscall count, so 1.26x is not a prediction for
+#                the unit suite. It is a reason the traced and untraced
+#                numbers are never compared with each other.
 #
-# CALIBRATION, so the 30% budget is not a guess. Two runs of IDENTICAL
-# code, back to back on one machine, moved the shared-test total by 1.7%
-# while individual tests moved by up to 370%. That is the whole argument
-# for this shape: gate on the total (noise ~2%, budget 30%, comfortable
-# margin) and treat any single test's number as unreliable.
+# The probe step below RUNS the instrument against a trivial command and
+# requires a parseable positive total. Existence of a binary proves nothing,
+# and `perf` is the proof: installed, on PATH, unable to count.
 #
-# Until the first release exists there is nothing to compare against, and
-# this job says so and exits green rather than failing.
+# The probe runs ONCE, in its own step, and exports the answer as
+# GH_COUNTER_METRIC. Every measurement below then honours it. Two call sites
+# in one job that picked different instruments would produce two numbers that
+# are not comparable, and that is the entire class of bug the counter module
+# exists to prevent. A metric change is not silently accommodated either: the
+# comparator refuses to compare a syscall count against a CPU-second
+# baseline, and says which is which.
+#
+# WHY A COMMITTED BASELINE. It removes the pairing entirely, which is only
+# sound because the counter is stable enough to travel between jobs — and,
+# crucially, it makes the comparison point reviewable. The previous shape ran
+# the last release and this commit side by side in one job; the ruling above
+# says that bought nothing, so the release lookup and the second checkout
+# are gone.
+#
+# THE TOLERANCE BELONGS TO THE INSTRUMENT. A syscall count is deterministic
+# and wants a tight budget; CPU seconds showed 7.6% of drift and want a loose
+# one. One number for both would be a number chosen for whichever instrument
+# is not in use, so `tolerance` sits in speed-baseline.json NEXT TO `metric`,
+# and a change of instrument re-derives both together — the same
+# re-derive-never-carry rule coverage-floor.json already follows. ROUNDS is
+# still 2: under the count it costs nothing extra, and under the fallback
+# the minimum across repeated rounds is the least-noisy observation of the
+# same work.
+#
+# UNTIL A BASELINE EXISTS. There is no speed-baseline.json committed yet,
+# because a baseline has to be measured ON THIS CELL and inventing one from
+# another machine would be exactly the error this whole change exists to stop
+# committing. Until it exists the comparator prints what it measured, writes
+# it to the step summary in a form that can be pasted straight in, and exits
+# 0 — the same shape as the "no release exists yet" path this file has always
+# had. A green gate with an EMPTY summary is the thing this repository keeps
+# failing reviews over, so that path is not silent.
+#
+# WHY THE BASELINE ONLY RATCHETS DOWN. The comparator refuses a head counter
+# above baseline x (1 + tolerance) per entry. Separately, the last step
+# diffs the committed baseline against the MERGE BASE's copy and fails if any
+# entry went up — otherwise a commit could raise the ceiling it is measured
+# against in the same push, and the gate would be switched off from inside.
+#
+# WHICH CONTROLS SURVIVED, AND WHY.
+#   * The offline fixtures and pinned inputs are untouched: a measurement of
+#     a live API is not reproducible, so the same fixtures still build the
+#     same work every round.
+#   * The closed-set check (--require-test / --allow-removal) stays, and
+#     still has to. A gate that measures fewer renderers than it advertises
+#     is decorative, whatever quantity it is comparing.
+#   * --selfcheck still runs on the last head round, and still compares SVG
+#     BYTES across head rounds. That control is byte-identity, not timing, so
+#     the counter change cannot have weakened it.
+#   * A failing suite run is NOT a speed verdict — tests.yml owns that. But a
+#     counter measured over a suite that failed is not comparable either, so
+#     the run's exit code is deliberately ignored here and the comparator's
+#     refusal (exit 2, which the step turns into a red exactly as the old
+#     contract did) is what reports it. The step summary says why nothing
+#     was compared, because a red box with an empty summary is a red nobody
+#     can act on.
+#
+# PYTEST IS STILL INSTALLED, AND IT IS NOT A TIMING HARNESS ANY MORE.
+# `unittest discover` imports every test_*.py module it collects, and
+# test_compare_durations.py imports pytest at module level; without pytest the
+# discovery pass — and therefore this measurement — cannot run at all. The
+# install below is for that import and nothing else. No test in this
+# repository is written against pytest.
 
 on:
   push:
@@ -49,7 +132,7 @@ on:
       - '.gitignore'
 
   # Read-only measurement on a contributor head, forks included
-  # (issue #8): the same base-release-vs-head comparison, before merge.
+  # (issue #8): the same counter-vs-baseline comparison, before merge.
   pull_request:
     paths-ignore:
       - '**/*.md'
@@ -73,87 +156,44 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Fractional slowdown that fails the job.
+      # Fractional increase in the shared total that fails the job. The
+      # per-entry down-only tolerance comes from the baseline's own
+      # `tolerance`, which is where a number that must be re-derived belongs.
       MAX_REGRESSION: "0.30"
       ROUNDS: "2"
+      BASELINE: speed-baseline.json
 
     steps:
-      - name: Find the baseline release
-        id: baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        # `gh api` on a 404 prints its JSON error body to STDOUT and exits
-        # nonzero, so a `|| true` here would assign that blob to $tag, the
-        # "no release yet" guard would see a non-empty string, and
-        # actions/checkout would be handed a refspec made of JSON. Hence
-        # both belts: branch on the EXIT CODE, then validate the SHAPE.
-        run: |
-          tag=""
-          if out="$(gh api -H "Cache-Control: no-cache" \
-                    "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null)"; then
-            tag="$out"
-          fi
-          case "$tag" in
-            null) tag="" ;;
-            *[!A-Za-z0-9._-]*)
-              echo "Unexpected payload where a tag was expected; treating" >&2
-              echo "as 'no baseline' rather than passing it to git." >&2
-              tag=""
-              ;;
-          esac
-          if [ -z "$tag" ]; then
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "No release exists yet, so there is no baseline to compare"
-            echo "against. This becomes a real gate once release.yml cuts one."
-            {
-              echo "### Test speed"
-              echo
-              echo "Skipped: no release exists yet to use as a baseline."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "Baseline: $tag"
-          fi
-
       - name: Check out this commit
-        if: steps.baseline.outputs.tag != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: head
           persist-credentials: false
-
-      - name: Check out the baseline release
-        if: steps.baseline.outputs.tag != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ steps.baseline.outputs.tag }}
-          path: base
-          persist-credentials: false
-
-      - name: Check out HEAD for renderer validation
-        if: steps.baseline.outputs.tag == ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: head
-          persist-credentials: false
-
-      - name: Set up Python for renderer validation
-        if: steps.baseline.outputs.tag == ''
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: steps.baseline.outputs.tag != ''
         with:
           python-version: "3.13"
 
-      - name: Install the timing harness
-        if: steps.baseline.outputs.tag != ''
+      - name: Install the test toolchain
+        # NOT a timing harness. `unittest discover` imports every test
+        # module it collects, and test_compare_durations.py imports pytest
+        # at module level; without it the collection pass this job depends
+        # on cannot run. pytest emits no report here — the counter writes
+        # the JUnit itself.
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r head/requirements-test.txt
+
+      - name: Probe the counter instrument
+        # Once per job. The result is exported so that every measurement
+        # below uses the same instrument; a per-call-site probe is how two
+        # incomparable numbers end up in one comparison.
+        run: |
+          python3 head/scripts/ci/counter.py --probe > probe.env
+          cat probe.env
+          grep -E '^(metric|metric_reason|perf_event_paranoid|ptrace_scope)=' \
+            probe.env >> "$GITHUB_OUTPUT"
+          grep '^metric=' probe.env >> "$GITHUB_ENV"
 
       - name: Build renderer fixtures
         env:
@@ -162,75 +202,60 @@ jobs:
           python3 head/scripts/bench/fixture_setup.py \
             --root "$GH_BENCH_FIXTURE_ROOT"
 
-      - name: Run both suites, interleaved
-        if: steps.baseline.outputs.tag != ''
-        # A failing test does NOT fail this job: tests.yml owns that
-        # verdict, and here a non-passing testcase is simply excluded from
-        # the comparison. What this step must guarantee is that four
-        # usable reports exist, so it checks for them explicitly rather
-        # than trusting an exit code it deliberately ignores.
+      - name: Measure the unit suite
+        # One counter measurement of the whole suite per round, emitted as
+        # one JUnit suite each. The suite's exit code is deliberately NOT
+        # this job's verdict: tests.yml owns pass/fail. What this step must
+        # guarantee is that a report exists for every round, so it checks
+        # for them explicitly rather than trusting a code it ignores.
         run: |
           mkdir -p reports
           for round in $(seq 1 "$ROUNDS"); do
-            for side in base head; do
-              echo "::group::$side round $round"
-              ( cd "$side" && python3 -m pytest -q -p no:cacheprovider --tb=no \
-                  --junitxml="$GITHUB_WORKSPACE/reports/$side-$round.xml" ) \
-                && echo "$side round $round: all passed" \
-                || echo "$side round $round: some tests did not pass (excluded)"
-              echo "::endgroup::"
-            done
+            echo "::group::unit suite round $round"
+            status=0
+            python3 head/scripts/ci/counter.py \
+              --junit-file "reports/unit-$round.xml" \
+              --name 'counter::unit-suite' \
+              --timeout 3600 \
+              -- python3 -m unittest discover || status=$?
+            echo "unit suite round $round exited $status" \
+                 "(tests.yml owns that verdict)"
+            echo "::endgroup::"
           done
 
           missing=0
           for round in $(seq 1 "$ROUNDS"); do
-            for side in base head; do
-              f="reports/$side-$round.xml"
-              if [ ! -s "$f" ]; then
-                echo "MISSING or empty: $f" >&2
-                missing=1
-              fi
-            done
+            f="reports/unit-$round.xml"
+            if [ ! -s "$f" ]; then
+              echo "MISSING or empty: $f" >&2
+              missing=1
+            fi
           done
           if [ "$missing" -ne 0 ]; then
             echo "A suite produced no JUnit report — it did not run at all," >&2
-            echo "which is a setup failure, not a speed result." >&2
+            echo "which is a setup failure, not a counter result." >&2
             exit 1
           fi
           ls -la reports/
 
-      - name: Run renderer workloads, interleaved
-        if: steps.baseline.outputs.tag != ''
-        env:
-          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+      - name: Collect the unit-test population
+        # A collection pass, not a test run: discovery imports the test
+        # modules and builds the suite without executing it. The comparator
+        # digests these node ids and refuses if the population is not the
+        # one the baseline was measured over — a counter total over a
+        # different set of tests is not a regression, and it is not a pass
+        # either.
         run: |
-          for round in $(seq 1 "$ROUNDS"); do
-            for side in base head; do
-              echo "::group::$side renderer round $round"
-              selfcheck=()
-              if [ "$side" = "head" ] && [ "$round" -eq "$ROUNDS" ]; then
-                selfcheck=(--selfcheck)
-              fi
-              python3 head/scripts/bench/e2e_bench.py \
-                --side "$side" \
-                --repo-root "$side" \
-                --round "$round" \
-                --junit-file "reports/bench-$side-$round.xml" \
-                --work-root "$RUNNER_TEMP/gh7-bench/$side" \
-                "${selfcheck[@]}"
-              echo "::endgroup::"
-            done
-          done
-          ls -la reports/
+          python3 head/scripts/ci/compare_durations.py \
+            --print-population head > reports/unit-population.txt
+          wc -l reports/unit-population.txt
 
-      - name: Validate renderer workloads without a baseline
-        if: steps.baseline.outputs.tag == ''
+      - name: Run renderer workloads
         env:
           GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
         run: |
-          mkdir -p reports
-          work_root="$RUNNER_TEMP/gh7-bench/head-only"
           for round in $(seq 1 "$ROUNDS"); do
+            echo "::group::renderer round $round"
             selfcheck=()
             if [ "$round" -eq "$ROUNDS" ]; then
               selfcheck=(--selfcheck)
@@ -240,15 +265,14 @@ jobs:
               --repo-root head \
               --round "$round" \
               --junit-file "reports/bench-head-$round.xml" \
-              --work-root "$work_root" \
+              --work-root "$RUNNER_TEMP/gh7-bench/head" \
               "${selfcheck[@]}"
+            echo "::endgroup::"
           done
           ls -la reports/
 
       - name: Compare
-        if: steps.baseline.outputs.tag != ''
         env:
-          BASE_TAG: ${{ steps.baseline.outputs.tag }}
           # The exemption list for a workload the harness STILL lists but
           # which must not be compared: a comma-separated set of workload
           # node ids. Naming one drops it from the required list, so the
@@ -274,21 +298,25 @@ jobs:
           ALLOWED_WORKLOAD_REMOVALS: ""
         # The comparator comes from the HEAD checkout, so an improvement to
         # the comparison itself takes effect on the commit that makes it
-        # rather than one release later.
+        # rather than one baseline re-derivation later.
         run: |
-          # shellcheck disable=SC2046
+          # The unit suite first. Its membership changes by design, so the
+          # comparison stays permissive — but the population digest above
+          # still has to match, or the two sides were not asked the same
+          # question.
           if python3 head/scripts/ci/compare_durations.py \
-            --base $(ls reports/base-*.xml) \
-            --head $(ls reports/head-*.xml) \
+            --baseline "$BASELINE" \
+            --head reports/unit-1.xml reports/unit-2.xml \
+            --population-file reports/unit-population.txt \
             --max-regression "$MAX_REGRESSION" \
-            --base-label "$BASE_TAG" \
+            --base-label 'the committed baseline (unit suite)' \
             --summary-file "$GITHUB_STEP_SUMMARY"; then
             unit_status=0
           else
             unit_status=$?
           fi
 
-          # Keep renderer workloads in their own testcase intersection and gate.
+          # Renderer workloads keep their own closed-set gate.
           #
           # Unlike the unit suite, this population is CLOSED. Unit tests come
           # and go by design, so an added or removed test must not turn the
@@ -363,10 +391,10 @@ jobs:
 
           # shellcheck disable=SC2046
           if python3 head/scripts/ci/compare_durations.py \
-            --base $(ls reports/bench-base-*.xml) \
+            --baseline "$BASELINE" \
             --head $(ls reports/bench-head-*.xml) \
             --max-regression "$MAX_REGRESSION" \
-            --base-label "$BASE_TAG renderer workloads" \
+            --base-label 'the committed baseline (renderer workloads)' \
             --summary-file "$GITHUB_STEP_SUMMARY" \
             "${workloads[@]}" "${removals[@]}"; then
             renderer_status=0
@@ -377,6 +405,30 @@ jobs:
           if [ "$unit_status" -ne 0 ] || [ "$renderer_status" -ne 0 ]; then
             exit 1
           fi
+
+      - name: The committed baseline only ratchets down
+        # The comparator refuses a head counter above its baseline, but
+        # nothing there stops a commit from EDITING the baseline upwards in
+        # the same push. This step judges the baseline against the MERGE
+        # BASE's copy of it, so raising the ceiling you are measured against
+        # is itself a red.
+        #
+        # Skipped on a push to main: there is no base commit for that event,
+        # and a ratchet step that silently judged the wrong base would be
+        # worse than one that does not run.
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if ! git cat-file -e "$BASE_SHA:$BASELINE" 2>/dev/null; then
+            echo "No $BASELINE at the merge base, so there is nothing to" \
+                 "ratchet against."
+            exit 0
+          fi
+          git show "$BASE_SHA:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+          python3 head/scripts/ci/compare_durations.py \
+            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE"
 
       - name: Upload JUnit reports
         if: ${{ !cancelled() }}

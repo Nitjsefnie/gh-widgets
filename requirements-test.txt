@@ -10,11 +10,16 @@
 #   emitted coverage.json to scripts/ci/coverage_ratchet.py, which reads
 #   the committed floor out of coverage-floor.json.
 #
-#   pytest — speed.yml's timing harness uses it to collect these same
-#   unittest TestCases and emit --junitxml, which stdlib unittest cannot.
-#   tests.yml no longer needs pytest for the suite; it stays pinned for the
-#   timing harness and so local pytest runs work. Nothing in the suite is
-#   WRITTEN against pytest and nothing should be: `python3 -m unittest
-#   discover` stays the way these tests are run.
+#   pytest — NEITHER a timing harness NOR a suite dependency any more, and
+#   both of those were true until this file was rewritten. It was speed.yml's
+#   timing harness, which collected these same TestCases and emitted
+#   --junitxml; that job now counts CPU seconds with
+#   scripts/ci/counter.py and writes its own JUnit, so nothing in CI asks
+#   pytest for anything. It was imported by test_compare_durations.py, which
+#   `unittest discover` had to be able to import to collect the suite; that
+#   file is now stdlib unittest like everything else, so the pin survives
+#   only so a local `pytest` run of the same file still works. Nothing in
+#   the suite is WRITTEN against pytest and nothing should be:
+#   `python3 -m unittest discover` stays the way these tests are run.
 coverage==7.16.1
 pytest==9.1.1
