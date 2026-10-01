@@ -73,6 +73,7 @@ Deps: Python stdlib only. Requires Python 3.9+.
 import argparse
 import importlib.util
 import os
+import statistics
 import sys
 import urllib.error
 from collections import namedtuple
@@ -98,7 +99,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 8
+REQUIRED_COMMON = 9
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -398,7 +399,17 @@ def render_responsiveness(C, scored):
     body += "\n  " + "\n  ".join(parts)
     # No closing rule: the card ends on its last row, like impact.svg. A rule
     # here separated the rows from a footer that no longer exists.
-    return base_card(C, CARD_W, y + 10, body)
+    if scored:
+        measured_prs = sum(row.n for row in scored)
+        median_wait = statistics.median(row.hours for row in scored)
+        desc = (f"Measured external PRs: {measured_prs} across "
+                f"{len(scored)} shown repos; median per-repo average wait: "
+                f"{fmt_duration(median_wait)}.")
+    else:
+        desc = "No external PRs yet."
+    return base_card(C, CARD_W, y + 10, body,
+                     card="responsiveness",
+                     title="External responsiveness", desc=desc)
 
 
 def parse_args():

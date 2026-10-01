@@ -549,7 +549,9 @@ class SvgInputEscaping(unittest.TestCase):
     def test_hostile_legend_color_uses_fallback_and_parses(self):
         legend = render.language_legend(
             self.C, [("Python", 100, 100.0, '\"><img src=x>')])
-        root = ET.fromstring(render.base_card(self.C, 420, 230, legend))
+        root = ET.fromstring(render.base_card(
+            self.C, 420, 230, legend, card="languages",
+            title="Top languages", desc="Top language: Python (100%)."))
 
         rect = next(
             rect for rect in root.findall(f".//{{{self.SVG_NS}}}rect")

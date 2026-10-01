@@ -4,12 +4,12 @@ Self-hosted alternative to `github-readme-stats` and friends. Renders six
 static SVGs about your GitHub profile on a cron — no JavaScript, no third-party
 service, no flakiness.
 
-<img src="https://nitjsefni.eu/widgets/stats.svg" width="720" alt="stats" /><br/>
-<img src="https://nitjsefni.eu/widgets/streak.svg" width="720" alt="streak" /><br/>
-<img src="https://nitjsefni.eu/widgets/languages.svg" width="720" alt="languages" /><br/>
-<img src="https://nitjsefni.eu/widgets/external.svg" width="720" alt="external" /><br/>
-<img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="impact" /><br/>
-<img src="https://nitjsefni.eu/widgets/responsiveness.svg" width="720" alt="responsiveness" /><br/>
+<img src="https://nitjsefni.eu/widgets/stats.svg" width="720" alt="Followers: 14; public repositories: 11; stars received: 26; forks received: 5; contributions in the last year: 36,700." /><br/>
+<img src="https://nitjsefni.eu/widgets/streak.svg" width="720" alt="Current streak: 95 days; longest streak: 95 days; total contributions: 36,700." /><br/>
+<img src="https://nitjsefni.eu/widgets/languages.svg" width="720" alt="Top language: TypeScript (48.3% of code bytes)." /><br/>
+<img src="https://nitjsefni.eu/widgets/external.svg" width="720" alt="Pull requests: 533 opened, 456 merged, 81 repos (86% merged); issues: 204 opened, 166 maintainer-accepted, 62 repos (81% maintainer-accepted)." /><br/>
+<img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="Shown external repos: 10. Top live-code repo bamdadd/multicam-sim: 7,582 of 34,205 lines (22.2%)." /><br/>
+<img src="https://nitjsefni.eu/widgets/responsiveness.svg" width="720" alt="Measured external PRs: 275 across 10 shown repos; median per-repo average wait: 5.3 h." /><br/>
 
 ## Why
 

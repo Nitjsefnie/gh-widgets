@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -766,9 +767,15 @@ class BaseCard(unittest.TestCase):
     # The shared SVG chrome every card is built on; a breakage here breaks
     # every widget at once.
     C = common.THEMES["tokyonight"]
+    SVG_NS = "http://www.w3.org/2000/svg"
+
+    def render_card(self, body="", title="Example title",
+                    desc="Example description"):
+        return common.base_card(self.C, 420, 180, body, card="example",
+                                title=title, desc=desc)
 
     def test_wraps_the_body_in_a_sized_svg(self):
-        svg = common.base_card(self.C, 420, 180, "<text>hi</text>")
+        svg = self.render_card("<text>hi</text>")
         self.assertTrue(svg.startswith(
             '<svg xmlns="http://www.w3.org/2000/svg" '
             'width="420" height="180" viewBox="0 0 420 180"'))
@@ -776,13 +783,47 @@ class BaseCard(unittest.TestCase):
         self.assertTrue(svg.rstrip().endswith("</svg>"))
 
     def test_theme_colors_are_applied(self):
-        svg = common.base_card(self.C, 420, 180, "")
+        svg = self.render_card()
         self.assertIn(f'stop-color="{self.C["bg"]}"', svg)
         self.assertIn(f'stop-color="{self.C["bg2"]}"', svg)
         self.assertIn(f'stroke="{self.C["border"]}"', svg)
 
     def test_font_is_declared(self):
-        self.assertIn(common.FONT, common.base_card(self.C, 420, 180, ""))
+        self.assertIn(common.FONT, self.render_card())
+
+    def test_title_and_desc_precede_defs_and_label_the_image(self):
+        root = ET.fromstring(self.render_card())
+        children = list(root)
+
+        self.assertEqual([child.tag for child in children[:3]], [
+            f"{{{self.SVG_NS}}}title",
+            f"{{{self.SVG_NS}}}desc",
+            f"{{{self.SVG_NS}}}defs",
+        ])
+        self.assertEqual(root.attrib["role"], "img")
+        self.assertEqual(root.attrib["aria-labelledby"],
+                         "example-title example-desc")
+        self.assertEqual(children[0].attrib["id"], "example-title")
+        self.assertEqual(children[0].text, "Example title")
+        self.assertEqual(children[1].attrib["id"], "example-desc")
+        self.assertEqual(children[1].text, "Example description")
+
+    def test_title_and_desc_text_are_escaped_in_the_svg(self):
+        raw = '<&>"\''
+        escaped = "&lt;&amp;&gt;&quot;&apos;"
+        svg = self.render_card(title=raw, desc=raw)
+
+        self.assertIn(
+            f'<title id="example-title">{escaped}</title>', svg)
+        self.assertIn(
+            f'<desc id="example-desc">{escaped}</desc>', svg)
+        root = ET.fromstring(svg)
+        self.assertEqual(list(root)[0].text, raw)
+        self.assertEqual(list(root)[1].text, raw)
+
+    def test_accessible_metadata_is_required(self):
+        with self.assertRaises(TypeError):
+            common.base_card(self.C, 420, 180, "")
 
 
 class NoreplyAddresses(unittest.TestCase):

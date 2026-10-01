@@ -97,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 8
+REQUIRED_COMMON = 9
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -466,18 +466,34 @@ def render_impact(C, pr_rows, issue_rows, loc_rows, top_n=TOP_N):
   <text x="20" y="34" fill="{C['gold']}" font-size="14" font-weight="600">external impact</text>
   <text x="20" y="52" fill="{C['dim']}" font-size="11">contribution to repos outside my own account and orgs</text>
   <line x1="20" y1="64" x2="{CARD_W - 20}" y2="64" stroke="{C['border']}"/>"""
-    sections = (("Pull Requests", pr_rows, C["blue"]),
-                ("Issues", issue_rows, C["green"]),
-                ("Live Code", loc_rows, C["purple"]))
-    for i, (title, rows, accent) in enumerate(sections):
+    for i, (title, rows, accent) in enumerate((
+            ("Pull Requests", pr_rows, C["blue"]),
+            ("Issues", issue_rows, C["green"]),
+            ("Live Code", loc_rows, C["purple"]))):
         parts, y = render_section(C, y, title, rows, accent, top_n)
         body += "\n  " + "\n  ".join(parts)
-        if i < len(sections) - 1:
+        if i < 2:
             y += 12
             body += (f'\n  <line x1="20" y1="{y}" x2="{CARD_W - 20}" y2="{y}" '
                      f'stroke="{C["border"]}"/>')
             y += 24
-    return base_card(C, CARD_W, y + 10, body)
+    shown_repos = {row.repo for section in (pr_rows, issue_rows, loc_rows)
+                   for row in section[:top_n]}
+    if not shown_repos:
+        return base_card(C, CARD_W, y + 10, body, card="impact",
+                         title="External impact",
+                         desc="No external contributions to show.")
+    if not loc_rows[:top_n]:
+        return base_card(
+            C, CARD_W, y + 10, body, card="impact",
+            title="External impact",
+            desc=f"Shown external repos: {len(shown_repos)}. "
+                 "No live-code rows.")
+    return base_card(
+        C, CARD_W, y + 10, body, card="impact", title="External impact",
+        desc=(f"Shown external repos: {len(shown_repos)}. Top live-code repo "
+              f"{loc_rows[0].repo}: {loc_rows[0].ours:,} of "
+              f"{loc_rows[0].total:,} lines ({loc_rows[0].share:.1f}%)."))
 
 
 def positive_int(raw):

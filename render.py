@@ -72,7 +72,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 8
+REQUIRED_COMMON = 9
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -363,7 +363,12 @@ def render_stats(C, user, total_stars, total_forks, year_contribs):
     <text x="20"  y="184" fill="{C['dim']}">contributions (1y)</text>
     <text x="200" y="184" fill="{C['gold']}" font-weight="500">{year_contribs:,}</text>
   </g>"""
-    return base_card(C, 420, 203, body)
+    desc = (f"Followers: {user['followers']['totalCount']}; public repositories: "
+            f"{user['repositories']['totalCount']}; stars received: "
+            f"{total_stars}; forks received: {total_forks}; contributions "
+            f"in the last year: {year_contribs:,}.")
+    return base_card(C, 420, 203, body, card="stats", title="GitHub stats",
+                     desc=desc)
 
 
 def render_streak(C, current, longest, total):
@@ -384,7 +389,10 @@ def render_streak(C, current, longest, total):
   {big(col_centers[2], 'total',   fmt_short(total),   C['cyan'])}
   <line x1="{sep_xs[0]}" y1="90" x2="{sep_xs[0]}" y2="135" stroke="{C['border']}"/>
   <line x1="{sep_xs[1]}" y1="90" x2="{sep_xs[1]}" y2="135" stroke="{C['border']}"/>"""
-    return base_card(C, 420, 170, body)
+    desc = (f"Current streak: {current} days; longest streak: {longest} days; "
+            f"total contributions: {total:,}.")
+    return base_card(C, 420, 170, body, card="streak",
+                     title="Contribution streak", desc=desc)
 
 
 def render_external(C, pr_opened, pr_merged, pr_repos,
@@ -424,7 +432,13 @@ def render_external(C, pr_opened, pr_merged, pr_repos,
   {seps(194, 232)}
   <line x1="20" y1="262" x2="400" y2="262" stroke="{C['border']}"/>
   <text x="210" y="282" text-anchor="middle" fill="{C['dim']}" font-size="11">{footer}</text>"""
-    return base_card(C, 420, 298, body)
+    return base_card(C, 420, 298, body, card="external",
+                     title="External contributions",
+                     desc=(f"Pull requests: {pr_opened} opened, "
+                           f"{pr_merged} merged, {pr_repos} repos "
+                           f"({merge_rate}); issues: {iss_opened} opened, "
+                           f"{iss_accepted} maintainer-accepted, "
+                           f"{iss_repos} repos ({accept_rate})."))
 
 
 def language_legend(C, top):
@@ -458,7 +472,11 @@ def render_languages(C, langs):
   <rect x="{bar_x}" y="{y}" width="{bar_w}" height="10" rx="2" fill="{C['border']}"/>
   {''.join(rects)}
   {language_legend(C, top)}"""
-    return base_card(C, 420, 230, body)
+    return base_card(C, 420, 230, body, card="languages",
+                     title="Top languages",
+                     desc=(f"Top language: {top[0][0]} "
+                           f"({top[0][2]:.1f}% of code bytes)."
+                           if top else "No language data available."))
 
 
 def parse_args():
