@@ -44,8 +44,7 @@ staged=""
 rollback_needed=0
 unit_commit_started=0
 timer_enable_attempted=0
-timers_enabled_before=""
-timers_disabled_before=""
+timer_state_snapshot=""
 finalizing=0
 
 cleanup_install() {
@@ -73,8 +72,15 @@ EOF
         if [ "$unit_commit_started" -eq 1 ]; then
             systemctl daemon-reload >/dev/null 2>&1 || :
             if [ "$timer_enable_attempted" -eq 1 ] &&
-                    [ -n "$timers_disabled_before" ]; then
-                systemctl disable --now $timers_disabled_before >/dev/null 2>&1 || :
+                    [ -n "$timer_state_snapshot" ]; then
+                for timer_snapshot in $timer_state_snapshot; do
+                    case "$timer_snapshot" in
+                        *:disabled)
+                            timer=${timer_snapshot%:*}
+                            systemctl disable --now "$timer" >/dev/null 2>&1 || :
+                            ;;
+                    esac
+                done
             fi
         fi
     elif [ "$finalizing" -eq 1 ]; then
@@ -234,6 +240,34 @@ for u in $UNITS; do
     fi
 done
 
+# Capture and validate the textual enablement state before changing any unit
+# files. systemctl reports "disabled" with status 1; enabled timers report
+# "enabled" or "enabled-runtime" with status 0. Unknown output or query errors
+# abort the units phase while renderer backups are still available.
+for timer in gh-widgets.timer gh-widgets-resync.timer; do
+    timer_state=""
+    if timer_state=$(systemctl is-enabled "$timer" 2>/dev/null); then
+        case "$timer_state" in
+            enabled|enabled-runtime) ;;
+            *)
+                echo "install.sh: could not determine whether $timer was enabled" >&2
+                exit 1
+                ;;
+        esac
+    else
+        timer_status=$?
+        if [ "$timer_state" != "disabled" ] || [ "$timer_status" -ne 1 ]; then
+            echo "install.sh: could not determine whether $timer was enabled" >&2
+            exit 1
+        fi
+    fi
+    if [ -n "$timer_state_snapshot" ]; then
+        timer_state_snapshot="$timer_state_snapshot $timer:$timer_state"
+    else
+        timer_state_snapshot="$timer:$timer_state"
+    fi
+done
+
 for u in $UNITS; do
     staged_file="$UNIT_DIR/.$u.new"
     if [ -n "$staged" ]; then staged="$staged
@@ -255,23 +289,6 @@ done
 staged=""
 
 systemctl daemon-reload
-# Record each timer's pre-install enablement before enable --now. On rollback,
-# only timers disabled beforehand are disabled again.
-for timer in gh-widgets.timer gh-widgets-resync.timer; do
-    if systemctl is-enabled "$timer" >/dev/null 2>&1; then
-        if [ -n "$timers_enabled_before" ]; then
-            timers_enabled_before="$timers_enabled_before $timer"
-        else
-            timers_enabled_before="$timer"
-        fi
-    else
-        if [ -n "$timers_disabled_before" ]; then
-            timers_disabled_before="$timers_disabled_before $timer"
-        else
-            timers_disabled_before="$timer"
-        fi
-    fi
-done
 timer_enable_attempted=1
 systemctl enable --now gh-widgets.timer gh-widgets-resync.timer >/dev/null
 
