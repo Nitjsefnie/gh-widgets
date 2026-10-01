@@ -248,7 +248,26 @@ jobs:
       # reads an env var as the gate's threshold when it is not.
       TOTAL_BUDGET: "0.30"
       ROUNDS: "2"
+
+      # ONE CONVENTION FOR PATHS IN THIS FILE, because three defects in this
+      # branch were all the same mistake: a path resolved against the wrong
+      # root, in a step that then reported success. The unit suite measured
+      # 0.05 CPU seconds because discovery ran one level above the checkout.
+      # The ratchet could not execute because its git commands did. And four
+      # dispatch runs said "No baseline to compare against" while a baseline
+      # sat in the tree, unread, because --baseline was repository-relative
+      # and the step's working directory was its PARENT. Three greens, one
+      # class.
+      #
+      # So: THE CHECKOUT IS THE WORKING DIRECTORY. Every step that touches
+      # the repository declares `working-directory: head` and therefore uses
+      # repository-relative paths throughout, including BASELINE below.
+      # NOTHING A STEP WRITES GOES INSIDE THE CHECKOUT: reports and scratch
+      # use $REPORTS or $RUNNER_TEMP, which are absolute and named as such.
+      # There are exactly two roots in this file and they are named here.
       BASELINE: speed-baseline.json
+      REPO: ${{ github.workspace }}/head
+      REPORTS: ${{ github.workspace }}/reports
 
     steps:
       - name: Check out this commit
@@ -278,17 +297,19 @@ jobs:
         # that decide whether a deterministic counter is possible at all, so
         # a reader who sees CPU seconds in use can see the alternatives were
         # measured rather than assumed away.
+        working-directory: head
         run: |
-          python3 head/scripts/ci/counter.py --probe > probe.env
-          cat probe.env
+          python3 scripts/ci/counter.py --probe > "$RUNNER_TEMP/probe.env"
+          cat "$RUNNER_TEMP/probe.env"
           grep -E '^(metric|metric_reason|perf_event_paranoid|ptrace_scope)=' \
-            probe.env >> "$GITHUB_OUTPUT"
+            "$RUNNER_TEMP/probe.env" >> "$GITHUB_OUTPUT"
 
       - name: Build renderer fixtures
         env:
           GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+        working-directory: head
         run: |
-          python3 head/scripts/bench/fixture_setup.py \
+          python3 scripts/bench/fixture_setup.py \
             --root "$GH_BENCH_FIXTURE_ROOT"
 
       - name: Measure the unit suite
@@ -313,14 +334,14 @@ jobs:
         env:
           GH_COUNTER_METRIC: cpu_time
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/reports"
+          mkdir -p "$REPORTS"
           for round in $(seq 1 "$ROUNDS"); do
             echo "::group::unit suite round $round"
             status=0
-            python3 head/scripts/ci/counter.py \
-              --junit-file "$GITHUB_WORKSPACE/reports/unit-$round.xml" \
+            python3 scripts/ci/counter.py \
+              --junit-file "$REPORTS/unit-$round.xml" \
               --name 'counter::unit-suite' \
-              --cwd "$GITHUB_WORKSPACE/head" \
+              --cwd "$REPO" \
               --timeout 3600 \
               -- python3 -m unittest discover || status=$?
             echo "unit suite round $round exited $status" \
@@ -330,7 +351,7 @@ jobs:
 
           missing=0
           for round in $(seq 1 "$ROUNDS"); do
-            f="$GITHUB_WORKSPACE/reports/unit-$round.xml"
+            f="$REPORTS/unit-$round.xml"
             if [ ! -s "$f" ]; then
               echo "MISSING or empty: $f" >&2
               missing=1
@@ -341,7 +362,7 @@ jobs:
             echo "which is a setup failure, not a counter result." >&2
             exit 1
           fi
-          ls -la "$GITHUB_WORKSPACE/reports/"
+          ls -la "$REPORTS/"
 
       - name: Collect the unit-test population
         # A collection pass, not a test run: discovery imports the test
@@ -350,10 +371,12 @@ jobs:
         # one the baseline was measured over — a counter total over a
         # different set of tests is not a regression, and it is not a pass
         # either.
+        working-directory: head
         run: |
-          python3 head/scripts/ci/compare_durations.py \
-            --print-population head > reports/unit-population.txt
-          wc -l reports/unit-population.txt
+          mkdir -p "$REPORTS"
+          python3 scripts/ci/compare_durations.py \
+            --print-population . > "$REPORTS/unit-population.txt"
+          wc -l "$REPORTS/unit-population.txt"
 
       - name: Run renderer workloads
         env:
@@ -362,23 +385,25 @@ jobs:
           # this population is judged by is visible in the workflow rather
           # than buried in counter.py's fallback chain.
           GH_COUNTER_METRIC: cpu_time
+        working-directory: head
         run: |
+          mkdir -p "$REPORTS"
           for round in $(seq 1 "$ROUNDS"); do
             echo "::group::renderer round $round"
             selfcheck=()
             if [ "$round" -eq "$ROUNDS" ]; then
               selfcheck=(--selfcheck)
             fi
-            python3 head/scripts/bench/e2e_bench.py \
+            python3 scripts/bench/e2e_bench.py \
               --side head \
-              --repo-root head \
+              --repo-root . \
               --round "$round" \
-              --junit-file "reports/bench-head-$round.xml" \
-              --work-root "$RUNNER_TEMP/gh7-bench/head" \
+              --junit-file "$REPORTS/bench-head-$round.xml" \
+              --work-root "$RUNNER_TEMP/gh7-bench" \
               "${selfcheck[@]}"
             echo "::endgroup::"
           done
-          ls -la reports/
+          ls -la "$REPORTS/"
 
       - name: Compare
         env:
@@ -408,16 +433,28 @@ jobs:
         # The comparator comes from the HEAD checkout, so an improvement to
         # the comparison itself takes effect on the commit that makes it
         # rather than one baseline re-derivation later.
+        #
+        # working-directory: head IS LOAD-BEARING HERE, and for a reason worth
+        # reading twice. `$BASELINE` is repository-relative, so a step running
+        # in the WORKSPACE resolves it against the workspace and silently
+        # finds nothing: the job then reports "No baseline to compare
+        # against" — a legitimate GREEN — while a baseline sits unread in the
+        # tree. Four dispatch runs did exactly that. The gate reported success
+        # while measuring nothing, which is the decorative gate this issue was
+        # filed to remove. Every step that touches the repository therefore
+        # declares this, and one test executes the block with a checkout at
+        # head/ and a baseline in it and fails if the verdict is not rendered.
+        working-directory: head
         run: |
           # The unit suite first. Its membership changes by design, so the
           # comparison stays permissive — but the population digest above
           # still has to match, or the two sides were not asked the same
           # question.
-          if python3 head/scripts/ci/compare_durations.py \
+          if python3 scripts/ci/compare_durations.py \
             --baseline "$BASELINE" \
             --population unit-suite \
-            --head reports/unit-1.xml reports/unit-2.xml \
-            --population-file reports/unit-population.txt \
+            --head "$REPORTS/unit-1.xml" "$REPORTS/unit-2.xml" \
+            --population-file "$REPORTS/unit-population.txt" \
             --max-regression "$TOTAL_BUDGET" \
             --base-label 'the committed baseline, unit suite' \
             --summary-file "$GITHUB_STEP_SUMMARY"; then
@@ -468,7 +505,7 @@ jobs:
           # then the emptiness is checked — a producer that dies and a
           # producer that legitimately prints nothing look identical from
           # stdout alone, and both must refuse rather than degrade.
-          if ! listing=$(python3 head/scripts/bench/e2e_bench.py --list-workloads); then
+          if ! listing=$(python3 scripts/bench/e2e_bench.py --list-workloads); then
             echo "::error::the workload listing failed; the renderer gate would measure an undeclared population" >&2
             exit 1
           fi
@@ -504,14 +541,14 @@ jobs:
           # it was measured over, and this is the id list that digest is
           # about. Written from the same $listing the required names come
           # from, so the two cannot disagree.
-          printf '%s\n' "$listing" > reports/renderer-population.txt
+          printf '%s\n' "$listing" > "$REPORTS/renderer-population.txt"
 
           # shellcheck disable=SC2046
-          if python3 head/scripts/ci/compare_durations.py \
+          if python3 scripts/ci/compare_durations.py \
             --baseline "$BASELINE" \
             --population renderer-workloads \
-            --head $(ls reports/bench-head-*.xml) \
-            --population-file reports/renderer-population.txt \
+            --head $(ls "$REPORTS"/bench-head-*.xml) \
+            --population-file "$REPORTS/renderer-population.txt" \
             --max-regression "$TOTAL_BUDGET" \
             --base-label 'the committed baseline, renderer workloads' \
             --summary-file "$GITHUB_STEP_SUMMARY" \
@@ -596,6 +633,6 @@ jobs:
         with:
           name: speed-junit-reports
           path: |
-            reports/
+            ${{ github.workspace }}/reports/
             ${{ runner.temp }}/gh7-bench/**/outputs/**
           if-no-files-found: warn
