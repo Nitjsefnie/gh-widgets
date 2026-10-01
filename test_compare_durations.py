@@ -61,9 +61,9 @@ def write_junit(path: Path, cases: dict, not_passed: dict | None = None) -> Path
 
 class TestComparator(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp_path = Path(tmp.name)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
 
     def test_node_id_joins_class_and_name(self):
         report = write_junit(self.tmp_path / "r.xml", {"tests.test_a::test_one": 1.0})
@@ -244,9 +244,9 @@ def verify(scans, base_folded, require=(), allow=()):
 
 class TestVerifyPopulation(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp_path = Path(tmp.name)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
 
     def test_no_flags_leaves_removals_permissive(self):
         """The unit-suite comparison must keep behaving exactly as before."""
