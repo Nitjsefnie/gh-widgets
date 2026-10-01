@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -29,6 +30,204 @@ if spec is None or spec.loader is None:
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
 impact_loc = getattr(render_impact, "_LOC_MODULE")
+
+
+class SiblingLoaderLifecycle(unittest.TestCase):
+    """Exercise actual donor execution in virgin, isolated interpreters."""
+
+    def run_scenario(self, body, fallback=False):
+        preamble = '''
+            import importlib.machinery
+            import importlib.util
+            import sys
+            import threading
+            import types
+            from pathlib import Path
+            from unittest.mock import patch
+
+            root, filename, sibling, public_name, fallback = sys.argv[1:]
+            if fallback == 'True':
+                # Hide the private API from donors, preserving normal import.
+                bootstrap = types.SimpleNamespace(
+                    **vars(importlib._bootstrap))
+                bootstrap._ModuleLockManager = None
+                importlib._bootstrap = bootstrap
+            assert sibling not in sys.modules
+            assert Path(root) not in [Path(p).resolve() for p in sys.path]
+            entered = threading.Event()
+            release = threading.Event()
+            started = threading.Event()
+            finished = threading.Event()
+            results = []
+            errors = []
+
+            def load(alias):
+                spec = importlib.util.spec_from_file_location(
+                    alias, Path(root) / filename)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+
+            def worker(alias):
+                started.set()
+                try:
+                    results.append(load(alias))
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    finished.set()
+
+            def join(threads):
+                release.set()
+                for thread in threads:
+                    thread.join(timeout=5)
+                    assert not thread.is_alive(), 'loader thread hung'
+        '''
+        # Common has two siblings; exercise each independently, plus clone.
+        for filename, sibling, public_name in (
+                ('ghwidgets_common.py', 'ghwidgets_cache', 'load_cache'),
+                ('ghwidgets_common.py', 'ghwidgets_journal', 'acquisition'),
+                ('impact_loc.py', 'impact_clone', 'clone_repo')):
+            with self.subTest(sibling=sibling, fallback=fallback):
+                env = dict(os.environ)
+                env.pop('PYTHONPATH', None)
+                with tempfile.TemporaryDirectory() as unrelated:
+                    result = subprocess.run(
+                        [sys.executable, '-I', '-B', '-c',
+                         textwrap.dedent(preamble) + textwrap.dedent(body),
+                         str(Path(__file__).resolve().parent), filename,
+                         sibling, public_name, str(fallback)],
+                        cwd=unrelated, env=env, capture_output=True, text=True,
+                        timeout=15, check=False)
+                self.assertEqual(result.returncode, 0,
+                                 result.stdout + result.stderr)
+
+    def test_overlapping_path_loads_share_modules_and_registries(self, fallback=False):
+        self.run_scenario('''
+            original = importlib.util.module_from_spec
+            def allocate(spec):
+                module = original(spec)
+                if spec.name == sibling and not entered.is_set():
+                    entered.set()
+                    assert release.wait(timeout=5), 'allocation not released'
+                return module
+
+            with patch('importlib.util.module_from_spec', allocate):
+                first = threading.Thread(target=worker, args=('first',),
+                                         daemon=True)
+                second = threading.Thread(target=worker, args=('second',),
+                                          daemon=True)
+                first.start()
+                try:
+                    assert entered.wait(timeout=5), 'pause not engaged'
+                    started.clear()
+                    second.start()
+                    assert started.wait(timeout=5), 'second loader not started'
+                    finished.wait(timeout=0.2)
+                finally:
+                    join([first] + ([second] if second.ident else []))
+            assert not errors, errors
+            assert len(results) == 2, results
+            assert getattr(results[0], sibling) is getattr(results[1], sibling), \
+                'overlapping loads published separate sibling modules'
+            if sibling == 'impact_clone':
+                assert results[0]._SCRATCH_DIRS is results[1]._SCRATCH_DIRS
+                assert results[0]._CLONE_PROCESSES is results[1]._CLONE_PROCESSES
+        ''', fallback=fallback)
+
+    def test_normal_import_waits_for_pending_execution(self, fallback=False):
+        self.run_scenario('''
+            original = importlib.machinery.SourceFileLoader.exec_module
+            imported = []
+            def pause(loader, module):
+                if module.__name__ == sibling:
+                    entered.set()
+                    assert release.wait(timeout=5), 'execution not released'
+                return original(loader, module)
+            def normal_import():
+                started.set()
+                try:
+                    imported.append(importlib.import_module(sibling))
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    finished.set()
+
+            with patch.object(importlib.machinery.SourceFileLoader,
+                              'exec_module', pause):
+                first = threading.Thread(target=worker, args=('pending',),
+                                         daemon=True)
+                second = threading.Thread(target=normal_import, daemon=True)
+                first.start()
+                try:
+                    assert entered.wait(timeout=5), 'pause not engaged'
+                    started.clear()
+                    second.start()
+                    assert started.wait(timeout=5), 'importer not started'
+                    returned_early = finished.wait(timeout=0.2)
+                finally:
+                    join([first] + ([second] if second.ident else []))
+            if fallback == 'True':
+                assert not imported, 'fallback returned a pending module'
+                assert len(errors) == 1 and isinstance(errors[0], ImportError)
+                complete = importlib.import_module(sibling)
+            else:
+                assert not returned_early, 'normal import observed pending exec'
+                assert not errors, errors
+                assert len(imported) == 1
+                complete = imported[0]
+            assert hasattr(complete, public_name), 'partial sibling returned'
+            assert complete is getattr(results[0], sibling)
+        ''', fallback=fallback)
+
+    def test_failed_execution_uncaches_attempt_and_preserves_exception(self, fallback=False):
+        self.run_scenario('''
+            original = importlib.machinery.SourceFileLoader.exec_module
+            failure = OSError('injected transient source read failure')
+            def fail(loader, module):
+                if module.__name__ == sibling:
+                    raise failure
+                return original(loader, module)
+
+            with patch.object(importlib.machinery.SourceFileLoader,
+                              'exec_module', fail):
+                try:
+                    load('failed')
+                except OSError as exc:
+                    assert exc is failure, 'original exception replaced'
+                else:
+                    raise AssertionError('injected failure did not propagate')
+            assert sibling not in sys.modules, 'failed sibling left cached'
+            retry = load('retry')
+            module = getattr(retry, sibling)
+            assert hasattr(module, public_name), 'retry returned partial sibling'
+            assert module is sys.modules[sibling]
+        ''', fallback=fallback)
+
+        self.run_scenario('''
+            original = importlib.machinery.SourceFileLoader.exec_module
+            replacement = object()
+            failure = OSError('injected failure after registry replacement')
+            def fail(loader, module):
+                if module.__name__ == sibling:
+                    sys.modules[sibling] = replacement
+                    raise failure
+                return original(loader, module)
+            with patch.object(importlib.machinery.SourceFileLoader,
+                              'exec_module', fail):
+                try:
+                    load('failed')
+                except OSError as exc:
+                    assert exc is failure
+                else:
+                    raise AssertionError('injected failure did not propagate')
+            assert sys.modules[sibling] is replacement, 'foreign entry deleted'
+        ''', fallback=fallback)
+
+    def test_fallback_serializes_rolls_back_and_refuses_partial_import(self):
+        self.test_overlapping_path_loads_share_modules_and_registries(True)
+        self.test_normal_import_waits_for_pending_execution(True)
+        self.test_failed_execution_uncaches_attempt_and_preserves_exception(True)
 
 
 class TestCloneLaunchCoverage(unittest.TestCase):

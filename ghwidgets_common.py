@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -42,17 +43,49 @@ from typing import Optional
 
 
 def _load_sibling(name):
-    """Load an adjacent module once, sharing state with normal imports."""
-    if name in sys.modules:
+    """Load beside this donor under the normal per-module import lock.
+
+    If Python removes _ModuleLockManager, shared per-name threading locks
+    still serialize by-path loads and roll back failures. During fallback
+    execution a None registration makes normal imports fail honestly; this
+    fallback cannot coordinate normal imports already in progress.
+    """
+    lock_manager = getattr(getattr(importlib, "_bootstrap", None),
+                           "_ModuleLockManager", None)
+    if lock_manager is None:
+        # importlib is shared even when donors are loaded under new aliases.
+        locks = importlib.__dict__.setdefault("_ghwidgets_sibling_locks", {})
+        lock = locks.setdefault(name, threading.Lock())
+    else:
+        lock = lock_manager(name)
+    with lock:
+        if name in sys.modules:
+            module = sys.modules[name]
+            if module is None or getattr(
+                    getattr(module, "__spec__", None), "_initializing", False):
+                raise ImportError(f"module {name} is not ready", name=name)
+            return module
+        path = Path(__file__).resolve().with_name(f"{name}.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise SystemExit(f"error: cannot load {path}")
+        module = importlib.util.module_from_spec(spec)
+        # Normal imports must see initializing before they see registration.
+        setattr(spec, "_initializing", True)
+        registration = module if lock_manager is not None else None
+        # None is Python's import-halted sentinel, omitted by typeshed.
+        sys.modules[name] = registration  # type: ignore
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            if name in sys.modules and sys.modules[name] is registration:
+                del sys.modules[name]
+            raise
+        finally:
+            setattr(spec, "_initializing", False)
+        if lock_manager is None:
+            sys.modules[name] = module
         return sys.modules[name]
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"error: cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 ghwidgets_cache = _load_sibling("ghwidgets_cache")
