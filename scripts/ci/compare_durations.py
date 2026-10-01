@@ -22,18 +22,18 @@ the committed baseline IS the comparison point.
 WHY ONE METRIC AND TOLERANCE PER POPULATION, NOT PER DOCUMENT. Both
 populations are measured in CPU seconds, but their budgets are derived from
 their own measured spreads and those spreads differ by an order of
-magnitude: on this box the unit suite spread 22.2% over six runs while the
-three renderer workloads spread 19.5-72.9% over eight each — the short ones
-WORST, because fixed overhead and co-tenant load dominate a brief
-measurement. A single global `tolerance` could only ever be right for one of
+magnitude: on this box the unit suite spread 21.3% over six runs while the
+three renderer workloads spread 10.8%, 35.2% and 47.3% over eight each, and
+the two brief ones are among the noisiest — fixed overhead and co-tenant load
+dominate a short measurement. A single global `tolerance` could only ever be right for one of
 them, and being right for one is how a gate ends up quietly holding the
 wrong contract, so the baseline carries a sub-document per population and
 --population says which contract this run is being held to.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of
-the same quantity. CPU seconds are not deterministic — 22.2% min-to-max on
-the unit suite here, 19.5-72.9% across the renderer workloads — so this is
+the same quantity. CPU seconds are not deterministic — 21.3% min-to-max on
+the unit suite here, 10.8-47.3% across the renderer workloads — so this is
 what separates a real change from one unlucky run, and it is why ROUNDS is
 still 2.
 
