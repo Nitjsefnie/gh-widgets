@@ -73,7 +73,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 9
+REQUIRED_COMMON = 10
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -282,11 +282,14 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # The profile is two paginated connections rather than one query, because
     # each is walked to its own end (issue #51) and a combined query would
     # re-send the whole of one connection on every page of the other.
-    user, orgs = page_profile_connection(
+    # The helper returns the `user` payload with the connection it walked
+    # already merged into it, so organizations is in place; ORG_QUERY's payload
+    # carries no repositories key at all, which is why the second walk's
+    # result is grafted on rather than merely read.
+    user, _orgs = page_profile_connection(
         token, ORG_QUERY, "organizations", login, max_pages)
     _, repos = page_profile_connection(
         token, REPO_QUERY, "repositories", login, max_pages)
-    user["organizations"] = orgs
     user["repositories"] = repos
     now = datetime.now(timezone.utc)
     q_window = """

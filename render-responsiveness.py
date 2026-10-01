@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 9
+REQUIRED_COMMON = 10
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -155,8 +155,14 @@ def fetch_prs(token, user, cached_prs):
     cache. Returns (insiders, prs, prs_by_id) — the keyed mapping is what gets
     persisted, matching what render-impact.py stores under the same key.
     """
-    me = common.fetch_identity(token, user, gql_fn=gql)
-    prs, prs_by_id = fetch_pull_requests(token, me.login, cached_prs)
+    # Two acquisitions, not one: each is wrapped in `common.acquisition` so
+    # the caller's fallback line can name the one that raised rather than this
+    # function, which is what the line can only do when the failure came from
+    # outside both.
+    with common.acquisition("fetch_identity"):
+        me = common.fetch_identity(token, user, gql_fn=gql)
+    with common.acquisition("fetch_pull_requests"):
+        prs, prs_by_id = fetch_pull_requests(token, me.login, cached_prs)
     return me.insiders, prs, prs_by_id
 
 
@@ -543,10 +549,12 @@ def load_inputs(args, token):
         cached = read_impact_cache(args.cache_file, args.user)
         if cached is None:
             raise
-        # This renderer makes ONE acquisition (fetch_prs); the fallback line
-        # still has to say which call failed and why (issue #55).
         prs, insiders, stale = cached
-        fallback = common.CacheFallback(stale, "fetch_prs", exc)
+        # fetch_prs is two acquisitions; the label the failing one left behind
+        # names it. `fetch_prs` itself is the honest name when the failure
+        # came from outside both (issue #55).
+        fallback = common.CacheFallback(
+            stale, common.take_last_acquisition() or "fetch_prs", exc)
     else:
         update_pr_cache(args.cache_file, insiders, prs_by_id)
         fallback = None

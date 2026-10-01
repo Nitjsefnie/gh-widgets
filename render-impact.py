@@ -97,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 9
+REQUIRED_COMMON = 10
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -545,28 +545,35 @@ def parse_args():
 
 def fetch_all(token, user, cache, resync):
     """Fetch every input the impact card needs. Returns
-    (insiders, prs, prs_by_id, issues, totals, ourloc)."""
+    (insiders, prs, prs_by_id, issues, totals, ourloc).
+
+    Five acquisitions, not one: each is wrapped in `common.acquisition` so the
+    caller's fallback line can name the one that raised rather than this
+    function, which is what the line can only do when the failure came from
+    outside all five.
+    """
     # Identity first: everything downstream depends on knowing who we are
     # and which owners are insiders. Derived from the token's own account,
     # so joining an org needs no code or config change.
-    with timed_phase("identity"):
+    with timed_phase("identity"), common.acquisition("fetch_identity"):
         me = common.fetch_identity(token, user, gql_fn=gql)
     insiders = me.insiders
-    with timed_phase("fetch_prs"):
+    with timed_phase("fetch_prs"), common.acquisition("fetch_pull_requests"):
         prs, prs_by_id = fetch_pull_requests(
             token, me.login, None if resync else cache.get("prs") or None)
-    with timed_phase("fetch_issues"):
+    with timed_phase("fetch_issues"), common.acquisition("fetch_issues"):
         issues = fetch_issues(token, me.login)
     repos = sorted({n["repository"]["nameWithOwner"]
                     for n in prs + issues
                     if common.is_external(n, insiders)})
-    with timed_phase("fetch_totals"):
+    with timed_phase("fetch_totals"), common.acquisition("fetch_repo_totals"):
         totals = fetch_repo_totals(token, repos)
     merged_repos = {n["repository"]["nameWithOwner"] for n in prs
                     if n["merged"] and common.is_external(n, insiders)}
-    ourloc = update_loc(merged_repos, totals,
-                        {} if resync else cache.get("ourloc") or {},
-                        resync, me.emails)
+    with common.acquisition("update_loc"):
+        ourloc = update_loc(merged_repos, totals,
+                            {} if resync else cache.get("ourloc") or {},
+                            resync, me.emails)
     return insiders, prs, prs_by_id, issues, totals, ourloc
 
 
@@ -587,10 +594,24 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale,
     return pr_rows, issue_rows, loc_rows
 
 
+def print_summary(out, rows, fallback):
+    """The run's one-line summary: what was rendered, and from where.
+
+    `rows` is write_card's (pr_rows, issue_rows, loc_rows). Split out of main()
+    so the orchestration function holds the run's data rather than the run's
+    wording.
+    """
+    if fallback:
+        print(f"fetch failed at {fallback.phase}: {fallback.message}; rendered "
+              f"{out}/impact.svg from cache (fetched_at={fallback.fetched_at})")
+    else:
+        print(f"wrote {out}/impact.svg "
+              f"(pr repos={len(rows[0])} issue repos={len(rows[1])} "
+              f"loc repos={len(rows[2])})")
+
+
 # The run's own orchestration: argument handling, the fetch-or-fallback
-# decision, the card write and both summary lines all live here, so the
-# bindings add up past pylint's default.
-# pylint: disable=too-many-locals
+# decision, the card write, and handing both to print_summary.
 def main():
     args, token = parse_args()
     # Say which method ran, every run. The git-fame guard line was the health
@@ -606,9 +627,6 @@ def main():
 
     cache = {} if args.resync else load_cache(args.cache_file)
 
-    # This renderer makes ONE acquisition (fetch_all), so the fallback cannot
-    # be confused with another phase — but the line still has to say which
-    # call failed and why, and the exception is right there (issue #55).
     fallback = None
     try:
         insiders, prs, prs_by_id, issues, totals, ourloc = fetch_all(
@@ -619,7 +637,11 @@ def main():
         # exiting non-zero is still correct.
         if not cache_complete(cache):
             raise
-        fallback = common.CacheFallback(cache["fetched_at"], "fetch_all", exc)
+        # fetch_all is five acquisitions; the label the failing one left
+        # behind names it. `fetch_all` itself is the honest name when the
+        # failure came from outside all five (issue #55).
+        fallback = common.CacheFallback(
+            cache["fetched_at"], common.take_last_acquisition() or "fetch_all", exc)
         prs = list(cache["prs"].values())
         issues = cache["issues"]
         totals = cache["totals"]
@@ -642,22 +664,13 @@ def main():
                 "ourloc": ourloc,
             })
 
-    pr_rows, issue_rows, loc_rows = write_card(
-        C, out, prs, issues, totals, ourloc, insiders,
-        fallback.fetched_at if fallback else None, args.top)
-
-    if fallback:
-        print(f"fetch failed at {fallback.phase}: {fallback.message}; rendered "
-              f"{out}/impact.svg from cache (fetched_at={fallback.fetched_at})")
-    else:
-        print(f"wrote {out}/impact.svg "
-              f"(pr repos={len(pr_rows)} issue repos={len(issue_rows)} "
-              f"loc repos={len(loc_rows)})")
+    rows = write_card(C, out, prs, issues, totals, ourloc, insiders,
+                      fallback.fetched_at if fallback else None, args.top)
+    print_summary(out, rows, fallback)
     print_timing_summary()
     # Last, so a disagreement still leaves the full report and the timings in
     # the log it fails out of.
     check_method_agreement()
-# pylint: enable=too-many-locals
 
 
 if __name__ == "__main__":

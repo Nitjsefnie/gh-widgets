@@ -7,6 +7,7 @@ No network at all: the renderer now fetches its own PRs, so every end-to-end
 case drives a fake `gql` (see fake_gql) and, where the cache matters, a
 hand-built cache payload.
 """
+import contextlib
 import datetime
 import importlib.util
 import io
@@ -632,37 +633,75 @@ class DegradedPath(unittest.TestCase):
             self.assertIn("someone/theirs", svg)
             self.assertNotIn("me/mine", svg)
 
+    def fallback_line(self, text):
+        """The run's one fallback line, out of everything the run printed."""
+        matched = [line for line in text.splitlines()
+                   if line.startswith("fetch failed")]
+        self.assertEqual(len(matched), 1)
+        return matched[0]
+
+    def degraded_run(self, *patchers, error=None):
+        """A complete cache, then main() with `patchers` (and an optional
+        error for the whole fetch) in place. Returns all of stdout."""
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps(
+                full_cache(prs("someone/theirs", [1.0] * 3))))
+            out = Path(td) / "out"
+            argv = ["render-responsiveness.py", "--user", "me", "--token", "t",
+                    "--out-dir", str(out), "--theme", "tokyonight",
+                    "--cache-file", str(cache_file)]
+            buf = io.StringIO()
+            with mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(resp, "gql", fake_gql(error=error)), \
+                    redirect_stdout(buf), \
+                    contextlib.ExitStack() as stack:
+                for patcher in patchers:
+                    stack.enter_context(patcher)
+                resp.main()
+            return buf.getvalue()
+
     def test_the_fallback_line_names_the_acquisition_and_the_error(self):
         # The line is the operator's only account of what broke, so it has to
-        # say which call failed and why (issue #55).
-        with tempfile.TemporaryDirectory() as td:
-            cache_file = Path(td) / "impact-cache.json"
-            cache_file.write_text(json.dumps(
-                full_cache(prs("someone/theirs", [1.0] * 3))))
-            out = Path(td) / "out"
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                run_main(cache_file, out, gql_fn=fake_gql(error=self.BOOM))
-            lines = [line for line in buf.getvalue().splitlines()
-                     if line.startswith("fetch failed")]
-            self.assertEqual(len(lines), 1)
-            self.assertIn("fetch_prs", lines[0])
-            self.assertIn("SERVICE_UNAVAILABLE", lines[0])
+        # say which call failed and why (issue #55). A transport failure lands
+        # inside whichever acquisition was running — here the first one.
+        line = self.fallback_line(self.degraded_run(error=self.BOOM))
+        self.assertIn("fetch_identity", line)
+        self.assertIn("SERVICE_UNAVAILABLE", line)
+
+    def test_a_failure_outside_both_acquisitions_names_the_entry_point(self):
+        # Nothing inside fetch_prs was running when it raised, so the honest
+        # name is the entry point itself.
+        line = self.fallback_line(self.degraded_run(mock.patch.object(
+            resp, "fetch_prs", side_effect=self.BOOM)))
+        self.assertIn("fetch_prs", line)
+        self.assertIn("SERVICE_UNAVAILABLE", line)
+
+    def test_each_inner_acquisition_is_named_in_its_own_line(self):
+        # fetch_prs is two acquisitions, not one: naming only the entry point
+        # is issue #55's defect at half scale.
+        lines = set()
+        for phase in ("fetch_identity", "fetch_pull_requests"):
+            with self.subTest(phase=phase):
+                # fetch_identity is reached through `common`; the other is
+                # this module's own global.
+                target = resp.common if phase == "fetch_identity" else resp
+                text = self.degraded_run(mock.patch.object(
+                    target, phase, side_effect=self.BOOM))
+                line = self.fallback_line(text)
+                self.assertIn(phase, line)
+                lines.add(line.split("; rendered")[0])
+        self.assertEqual(len(lines), 2)
 
     def test_a_multiline_error_keeps_the_line_to_one_line(self):
-        with tempfile.TemporaryDirectory() as td:
-            cache_file = Path(td) / "impact-cache.json"
-            cache_file.write_text(json.dumps(
-                full_cache(prs("someone/theirs", [1.0] * 3))))
-            out = Path(td) / "out"
-            boom = RuntimeError("GraphQL errors:\n  one\n  two")
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                run_main(cache_file, out, gql_fn=fake_gql(error=boom))
-            lines = [line for line in buf.getvalue().splitlines()
-                     if line.startswith("fetch failed")]
-            self.assertEqual(len(lines), 1)
-            self.assertIn("two", lines[0])
+        # Asserted over the WHOLE output: an uncollapsed message would spill
+        # "one" and "two" onto lines of their own, which a per-line assertion
+        # on the matched line cannot see.
+        text = self.degraded_run(
+            error=RuntimeError("GraphQL errors:\n  one\n  two"))
+        line = self.fallback_line(text)
+        self.assertIn("GraphQL errors: one two", text)
+        self.assertIn("two", line)
 
 
 if __name__ == "__main__":

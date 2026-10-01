@@ -5,9 +5,16 @@
 
 Separate from test_impact.py because that module is about the blame pass and
 its external git-fame dependency; this is about what a run prints when the
-network fails and the cache carries the run. No network, no git: `fetch_all`
-is replaced outright, so the fallback path is exercised without either.
+network fails and the cache carries the run.
+
+No network and no git: the acquisitions are stubbed, so the fallback path is
+exercised without either. `fetch_all` itself is stubbed for the cases that
+only care about the fallback, but the cases that care WHICH acquisition failed
+run it for real, one inner acquisition broken at a time — a fallback line that
+names `fetch_all` for all five of them is exactly issue #55's defect, moved
+into this renderer.
 """
+import contextlib
 import importlib.util
 import io
 import json
@@ -27,13 +34,34 @@ render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
 
 
-class TestDurabilityFallback(unittest.TestCase):
-    """A failed acquisition renders from the cache and says what failed.
+# Each inner acquisition of fetch_all, and where the callable it calls lives.
+# `fetch_identity` is the one fetch_all reaches through `common`, the other
+# four are its own module globals — so the patch target differs per phase.
+INNER_ACQUISITIONS = {
+    "fetch_identity": "common",
+    "fetch_pull_requests": "module",
+    "fetch_issues": "module",
+    "fetch_repo_totals": "module",
+    "update_loc": "module",
+}
 
-    This renderer makes ONE acquisition (`fetch_all`), so there is no phase to
-    confuse it with — but the line is the operator's only account of what
-    broke, so it must still name the call and the error (issue #55).
-    """
+EMPTY_PAGE = {"pageInfo": {"hasNextPage": False, "endCursor": None}}
+
+
+def fake_gql(token, query, variables=None, **kwargs):
+    """Just enough of the API for fetch_all to reach its fifth acquisition:
+    identity, then one empty page each of PRs and issues. With no external
+    repos there is nothing to blame, so the run never reaches git."""
+    if "organizations" in query:
+        return {"user": {"login": "me", "databaseId": 1,
+                         "organizations": {**EMPTY_PAGE, "nodes": []}}}
+    if "pullRequests" in query:
+        return {"user": {"pullRequests": {**EMPTY_PAGE, "nodes": []}}}
+    return {"user": {"issues": {**EMPTY_PAGE, "nodes": []}}}
+
+
+class TestDurabilityFallback(unittest.TestCase):
+    """A failed acquisition renders from the cache and says which one failed."""
 
     BOOM = RuntimeError("GraphQL errors: [{'type': 'SERVICE_UNAVAILABLE'}]")
 
@@ -43,9 +71,9 @@ class TestDurabilityFallback(unittest.TestCase):
                 "insiders": ["me"],
                 "prs": {}, "issues": [], "totals": {}, "ourloc": {}}
 
-    def fallback_run(self, error):
-        """main() with fetch_all failing against a complete cache. Returns
-        (the fallback line, the output directory, the cache file)."""
+    def run_main(self, *patchers):
+        """main() with `patchers` in place against a complete cache. Returns
+        (everything main printed, the output directory, the cache file)."""
         td = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, td)
         cache_file = Path(td) / "impact-cache.json"
@@ -55,32 +83,82 @@ class TestDurabilityFallback(unittest.TestCase):
                 "--out-dir", str(out), "--cache-file", str(cache_file)]
         buf = io.StringIO()
         with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(render_impact, "fetch_all",
-                                  side_effect=error), \
-                redirect_stdout(buf):
+                mock.patch.object(render_impact, "gql", fake_gql), \
+                redirect_stdout(buf), \
+                contextlib.ExitStack() as stack:
+            for patcher in patchers:
+                stack.enter_context(patcher)
             render_impact.main()
-        lines = [line for line in buf.getvalue().splitlines()
-                 if line.startswith("fetch failed")]
-        self.assertEqual(len(lines), 1)
-        return lines[0], out, cache_file
+        return buf.getvalue(), out, cache_file
+
+    def broken(self, name, error):
+        """A patcher that makes the named callable raise `error`."""
+        target = (render_impact.common if INNER_ACQUISITIONS[name] == "common"
+                  else render_impact)
+        return mock.patch.object(target, name, side_effect=error)
+
+    def fallback_line(self, text):
+        """The run's one fallback line, out of everything the run printed.
+
+        Counted over the whole output rather than asserted on a
+        `splitlines()` element: the line cannot contain a newline by
+        construction, so that property has to be asserted somewhere else
+        (see the collapsed-message test).
+        """
+        matched = [line for line in text.splitlines()
+                   if line.startswith("fetch failed")]
+        self.assertEqual(len(matched), 1)
+        return matched[0]
+
+    def whole_fetch_failure(self, error):
+        """main() with the whole fetch entry point failing."""
+        return self.run_main(
+            mock.patch.object(render_impact, "fetch_all", side_effect=error))
 
     def test_the_line_names_the_acquisition_and_the_error(self):
-        line, out, _ = self.fallback_run(self.BOOM)
+        text, out, _cache = self.whole_fetch_failure(self.BOOM)
+        line = self.fallback_line(text)
         self.assertIn("fetch_all", line)
         self.assertIn("SERVICE_UNAVAILABLE", line)
         self.assertTrue((out / "impact.svg").exists())
 
-    def test_the_cache_is_left_byte_identical(self):
-        # The cache is the only data left on this path.
-        line, _out, cache_file = self.fallback_run(self.BOOM)
-        snapshot = cache_file.read_bytes()
-        self.fallback_run(self.BOOM)
-        self.assertEqual(cache_file.read_bytes(), snapshot)
-        self.assertIn("fetch_all", line)
+    def test_each_inner_acquisition_is_named_in_its_own_line(self):
+        # The whole point: five acquisitions behind one entry point, five
+        # names. Naming only the entry point is issue #55's defect.
+        for phase in INNER_ACQUISITIONS:
+            with self.subTest(phase=phase):
+                text, _out, _cache = self.run_main(self.broken(phase, self.BOOM))
+                self.assertIn(phase, self.fallback_line(text))
+
+    def test_the_five_lines_are_distinguishable(self):
+        # The output directory differs per run, so everything from "; rendered"
+        # on is normalised away — otherwise the lines would be "distinct" for
+        # a reason that has nothing to do with the phase.
+        lines = set()
+        for phase in INNER_ACQUISITIONS:
+            text, _out, _cache = self.run_main(self.broken(
+                phase, RuntimeError("GraphQL errors: SERVICE_UNAVAILABLE")))
+            lines.add(self.fallback_line(text).split("; rendered")[0])
+        self.assertEqual(len(lines), len(INNER_ACQUISITIONS))
+
+    def test_the_fallback_run_does_not_write_the_cache(self):
+        # The cache is the only data left on this path; writing a
+        # half-fetched set over it would throw that away too.
+        _text, _out, cache_file = self.run_main(
+            mock.patch.object(render_impact, "fetch_all", side_effect=self.BOOM))
+        before = cache_file.read_bytes()
+        self.run_main(mock.patch.object(render_impact, "fetch_all",
+                                        side_effect=self.BOOM))
+        self.assertEqual(cache_file.read_bytes(), before)
 
     def test_a_multiline_error_keeps_the_line_to_one_line(self):
-        line, _out, _cache = self.fallback_run(
+        # Asserted over the WHOLE output: an uncollapsed message would spill
+        # "one" and "two" onto lines of their own, which no per-line
+        # assertion on the matched line would see.
+        text, _out, _cache = self.whole_fetch_failure(
             RuntimeError("GraphQL errors:\n  one\n  two"))
+        line = self.fallback_line(text)
+        self.assertIn("GraphQL errors: one two", text)
         self.assertIn("two", line)
 
     def test_an_incomplete_cache_still_propagates(self):
