@@ -96,8 +96,9 @@ in `requirements-test.txt` for one reason: `test_compare_durations.py`
 imports it, and `unittest discover` imports every `test_*.py` module it
 collects, so the suite cannot be collected at all without it. It measures
 nothing and emits no report — `speed.yml` once ran the suite through it as a
-timing harness and no longer does, because the gate now counts syscalls (or
-CPU seconds) instead of elapsed time. Do not write a test against pytest
+timing harness and no longer does, because the gate now counts work done
+(syscalls for the renderer workloads, CPU seconds for the suite) instead of
+elapsed time. Do not write a test against pytest
 fixtures or `assert`-rewriting — it would run in CI and then not run for
 anyone using the documented command.
 
@@ -111,11 +112,18 @@ The workflow files in `.github/workflows/` are:
 - `audit.yml` — dependency vulnerability checks.
 - `codeql.yml` — security analysis.
 - `actionlint.yml` — workflow syntax and security checks.
-- `speed.yml` — counts syscalls (or CPU seconds) for the unit suite and for
   each renderer workload, and compares them against the committed baseline
   in `speed-baseline.json`, which only ever ratchets down.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
+- `speed.yml` — counts **syscalls** for each renderer workload and **CPU
+  seconds** for the unit suite, and compares each against its own population
+  in the committed baseline `speed-baseline.json`, which only ever ratchets
+  down. One instrument per population, not one per job: tracing the suite
+  costs about 3.2× its untraced wall time, and the baseline carries a
+  `metric` and a `tolerance` per population because one pair of keys could
+  only ever be right for one of them.
+  of paths; branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
   measured coverage exceeds the committed floor. The floor only moves
@@ -161,10 +169,10 @@ green on your pull request, and the file-count check fires only after merge, on
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
-work this commit does — syscalls per renderer workload and for the unit
-suite, on pinned offline fixtures — and fails when a committed, down-only
-baseline is exceeded; elapsed time survives only as a gross smoke check
-that reports no number), `release` (tags `v<VERSION>` once every gate a `VERSION` push
+work this commit does — syscalls per renderer workload, CPU seconds for the
+unit suite, on pinned offline fixtures — and fails when a committed,
+down-only baseline is exceeded; elapsed time survives only as a gross smoke
+check that reports no number), `release` (tags `v<VERSION>` once every gate a `VERSION` push
 schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
 `aggregate` —
 has both *reported* and passed; a gate that never reports stops the release

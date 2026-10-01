@@ -1,71 +1,58 @@
 #!/usr/bin/env python3
 """Compare a counter against the committed baseline, per test and per workload.
 
-THE NAME IS HISTORICAL. `compare_durations` compared wall-clock durations;
-it now compares load-invariant COUNTERS — instruction counts, or CPU seconds
-where the kernel refuses to count instructions. The filename is kept because
-it is on every command line, in a workflow and in another test module's
-import, and renaming it would break that seat's work mid-flight. A rename to
-something like `compare_counters.py` is owed; it is not done here because
-doing it here is not free.
+THE NAME IS HISTORICAL. `compare_durations` compared wall-clock durations; it
+now compares load-invariant COUNTERS — syscalls for the renderer workloads,
+CPU seconds for the unit suite. The filename is kept because it is on every
+command line and in another test module's import, and renaming it would break
+that seat's work mid-flight. A rename to `compare_counters.py` is owed.
 
-Answers one question: did the work that exists in BOTH the baseline and this
-commit get more expensive?
+WHY NOT WALL TIME. A GitHub-hosted runner is a multi-tenant VM: steal time, a
+neighbour, a different core and a different CPU model all move an elapsed
+duration, and none of that is the code being measured. Two runs of IDENTICAL
+code in one job differ by a factor of two on a single test. The maintainer
+ruling behind issue #81 is stronger: paired wall-clock A/B is not a valid
+magnitude ANYWHERE — not on a shared box, and not in one job on a CI runner.
+So the quantity compared here is one runner load cannot move, and elapsed
+time survives only as a gross smoke check reported as a verdict with no
+number attached. That ruling is also why there is no base checkout any more:
+the committed baseline IS the comparison point.
 
-WHY NOT WALL TIME. The obvious metric — how long did it take — punishes the
-wrong thing and, worse, measures the machine rather than the code. A
-GitHub-hosted runner is a multi-tenant VM: steal time, a neighbour, a
-different CPU model and a different core all move an elapsed duration. Two
-runs of IDENTICAL code on the same runner differ by a factor of two on a
-single test. The maintainer ruling behind issue #81 is that paired wall-clock
-A/B is not a valid magnitude ANYWHERE — not on a shared box, and not in the
-same job on a CI runner. So the quantity compared here is one runner load
-cannot move, and elapsed time survives only as a gross smoke check that is
-reported as a verdict with no number attached.
+WHY ONE METRIC AND TOLERANCE PER POPULATION, NOT PER DOCUMENT. The renderer
+workloads are counted with `strace -f -c`: they are the shipped product,
+they are cheap to trace, and a syscall count over them is stable. The unit
+suite is measured with CPU seconds instead, because tracing it measured at
+about 3.2x its untraced wall time (this box; the runner is faster but the
+ratio is the point). One global `metric` can therefore only ever be right
+for one of the two, so the baseline carries a sub-document per population,
+each with the tolerance that belongs to its own instrument, and --population
+says which contract this run is being held to.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
-offline inputs; the minimum across them is the least-noisy observation of the
-same quantity. Under the syscall instrument the count is deterministic and
-this costs nothing but the runs it already needed. Under the CPU-seconds
-fallback it is what separates a real change from one unlucky run, because
-those seconds are not deterministic — which is also why the tolerance lives
-in the baseline next to its metric and is re-derived whenever the metric
-changes, rather than being one number that would have to be right for
-whichever instrument is not in use.
-
-WHY THE BASELINE IS COMMITTED DATA. The alternative — checking out the last
-release and running both sides in this job — bought "the same runner", which
-the ruling above says is not enough to make a wall-clock ratio meaningful. A
-committed baseline removes the pairing entirely, and it is only sound because
-the counter is stable enough to travel between jobs. It also means the
-comparison point is reviewable: a baseline change shows up in the diff.
+offline inputs, and the minimum across them is the least-noisy observation of
+the same quantity. Under the syscall count that costs nothing extra. Under
+CPU seconds — which are not deterministic, 15.9% min-to-max here — it is what
+separates a real change from one unlucky run.
 
 WHY THE CLOSED POPULATION IS OPTIONAL, AND WHY IT EXISTS HERE. The
-intersection is deliberately permissive: adding a test or deleting a test
-cannot move the number, and that is right for a suite whose membership
-changes by design. It is wrong for a workload set that IS the thing being
-gated. If a shipped renderer is renamed or its checkout is incomplete, the
-intersection quietly compares one fewer program and the gate reports a
-healthy improvement while measuring less than it claims — a gate that
-measures fewer programs than it advertises is decorative. --require-test and
---allow-removal turn that off for a named population: each required name must
-be present and passing in EVERY head round, and in that closed-set mode every
-baseline name that vanished must be accounted for by --allow-removal.
+intersection is deliberately permissive: adding or removing a test cannot move
+the number, which is right for a suite whose membership changes by design. It
+is wrong for a workload set that IS the thing being gated — a renamed renderer
+would leave the gate comparing one fewer program and still calling it healthy,
+and a gate that measures fewer programs than it advertises is decorative.
+--require-test and --allow-removal turn that off for a named population.
 
-A METRIC MISMATCH IS EXIT 2, NEVER A COMPARISON. An instruction count and a
-CPU-second count are different quantities. Dividing one by the other produces
-either a catastrophic regression or a spectacular speedup, depending on
-which way the numbers fall, and neither reading would be true. So the metric
-recorded in the baseline is checked against the metric the head run measured,
-and a difference is a refusal naming both.
+A METRIC MISMATCH IS EXIT 2, NEVER A COMPARISON. A syscall count and a
+CPU-second count are different quantities; dividing one by the other produces
+either a catastrophic regression or a spectacular speedup, and neither reading
+would be true.
 
 EXIT CODES. 0 within budget, 1 over budget, 2 could not compare at all. Those
 are deliberately different: a workflow that reports a restructured suite as a
-performance regression teaches people to read the red as noise, and a
-ComparisonError therefore keeps the code it has always had.
+performance regression teaches people to read the red as noise.
 
-    compare_durations.py --baseline speed-baseline.json \\
-                         --head head1.xml head2.xml \\
+    compare_durations.py --baseline speed-baseline.json --population unit-suite \
+                         --head head1.xml head2.xml \
                          --require-test e2e::bench.render
 """
 from __future__ import annotations
@@ -74,13 +61,12 @@ import argparse
 import importlib.util
 import json
 import sys
-import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "speed-baseline.json"
-SUPPORTED_SCHEMA = 1
+SUPPORTED_SCHEMA = 2
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is
 # catastrophically wrong now" — an hour where the baseline says a minute — and
@@ -150,21 +136,16 @@ def scan_junit(path: Path) -> tuple:
     not pass, which is right for the arithmetic and useless for the
     diagnosis: when a gated workload goes missing, "it is not in the
     intersection" and "it is in the report but failed" are different bugs
-    with different fixes, and the reader of a red gate needs to be told
-    which one happened. So the scan keeps both raw sets.
+    with different fixes. So the scan keeps both raw sets. `present` is every
+    node id in the report; `not_passed` is every one that produced no usable
+    passing value — a failure, an error, a skip, or a testcase with no `time`
+    at all.
 
-    `present` is every node id in the report. `not_passed` is every node id
-    that produced no usable passing value — a failure, an error, a skip, or a
-    testcase with no `time` attribute at all. Anything in `present -
-    not_passed` is in the first element, so the folded dict is exactly the
-    first element of every scan intersected.
-
-    The `time` attribute read here is whatever the producer wrote into it.
-    For counter.py and e2e_bench.py that is the COUNTER, not seconds, and
-    the producer says which in the suite's gh-metric attribute; this file does
-    not care, because a counter and a duration are both numbers and the one
-    thing that must never happen — comparing across two different metrics —
-    is checked explicitly in `_resolve_metric`.
+    The `time` attribute read here is whatever the producer wrote into it:
+    for counter.py and e2e_bench.py that is the COUNTER, not seconds, and
+    the producer says which in the suite's gh-metric. This file does not
+    care, because comparing across two different metrics is checked
+    explicitly in `_resolve_metric` and `_check_metric`.
     """
     try:
         root = ET.parse(path).getroot()
@@ -284,26 +265,25 @@ def verify_population(head_scans, base_folded, head_folded, require,
     Two distinct checks, because a gated set can be broken in two distinct
     ways and one of them is invisible to the other:
 
-    * A name in `require` must exist and pass in EVERY head round. This
-      catches a workload that is absent altogether, and one that is present
-      but skipped or failed — the two are reported differently, since a
-      silent skip is a renamed renderer while a failure is a real one.
+    * A name in `require` must exist and pass in EVERY head round, which
+      catches a workload that is absent altogether and one that is present
+      but skipped or failed — reported differently, since a silent skip is a
+      renamed renderer while a failure is a real one.
     * In closed-set mode (either flag given), every name that passed in the
-      baseline must still pass at the head, unless it was named in
-      `allow_removal`. This catches the variant that leaves no trace at all
-      in the report: a deleted testcase, rather than a skipped one.
+      baseline must still pass at the head unless it was named in
+      `allow_removal`. This catches the variant that leaves no trace at all:
+      a deleted testcase rather than a skipped one.
 
-    Presence is decided on `head_folded` — what would actually be compared,
-    and folded by the caller so the value the verdict rests on is derived
-    once rather than twice — while the diagnosis reads the scans, which still
-    know which rounds the name was missing from.
+    Presence is decided on `head_folded` — what would actually be compared —
+    while the diagnosis reads the scans, which know which rounds a name was
+    missing from.
 
     The "gone from the baseline" check is scoped to the JUNIT CLASSNAMES the
-    head reports actually carry. One committed baseline covers every family
-    the job measures, and each half of the gate sees only its own reports, so
-    an unscoped check would report the unit-suite entry as a retired
-    renderer every single run. A name whose classname appears nowhere in the
-    head reports belongs to a comparison that is not this one.
+    head reports carry. One baseline covers every population the job
+    measures and each half of the gate sees only its own reports, so an
+    unscoped check would report the unit-suite entry as a retired renderer on
+    every run. A name whose classname appears nowhere in the head reports
+    belongs to a comparison that is not this one.
     """
     require = list(require)
     allow_removal = list(allow_removal)
@@ -352,12 +332,13 @@ def verify_unit_population(expected_digest, population_file):
     suite that grew by twenty tests moves the total with no product change —
     the field guide's own counter-ratchet lesson. Refusing is the honest form
     of that: it does not silently compare two different populations, and it
-    does not exit green either. Re-deriving the baseline is a deliberate act.
+    does not exit green either. This matters MORE under the tight syscall
+    budget than it would under a loose CPU one, because a tight budget makes
+    an unrelated population change look exactly like a regression.
 
     No `--population-file` means the caller is gating a population whose
     membership this file cannot enumerate — the renderer workload set, which
-    is guarded instead by --require-test. The guard is therefore opt-in and
-    applies to the one family that needs it.
+    is guarded instead by --require-test. The guard is therefore opt-in.
     """
     if not population_file:
         return
@@ -471,24 +452,19 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         f"- Baseline `{base_label}`: **{_format_counter(result['base_total'])}**",
         f"- This commit: **{_format_counter(result['head_total'])}**",
         "",
-        "_No elapsed time appears in this report, deliberately. A "
-        "GitHub-hosted runner is a multi-tenant VM, so a wall-clock duration "
-        "measured here is not a magnitude of anything; it survives only as "
-        "the gross smoke check below, which reports a verdict and no "
-        "number._",
+        "_No elapsed time appears in this report, deliberately: a "
+        "multi-tenant runner makes a duration a measure of the machine. It "
+        "survives only as the gross smoke check below, which reports a "
+        "verdict and no number._",
     ]
     if result.get("head_only"):
         lines.append(
-            f"- {len(result['head_only'])} entry/entries in this report "
-            "that the baseline does not record, excluded from the comparison"
-        )
+            f"- {len(result['head_only'])} entry/entries in this report the "
+            "baseline does not record, excluded from the comparison")
     if result.get("base_only"):
         lines.append(
-            f"- {len(result['base_only'])} baseline entry/entries not "
-            "present in these head reports, excluded from the comparison "
-            "(the baseline covers every family this job measures, and each "
-            "half of the gate sees only its own reports)"
-        )
+            f"- {len(result['base_only'])} baseline entry/entries not in "
+            "these head reports, excluded from the comparison")
 
     over = result.get("over") or {}
     if over:
@@ -525,8 +501,8 @@ def render(result: dict, threshold: float, base_label: str) -> str:
             "the total and the down-only ratchet above; a row is where to "
             "start looking once one of those has gone red. A CPU-second "
             "counter is only approximately stable — cache and frequency "
-            "effects move it — so a single entry's percentage is a "
-            "starting point, not a finding._",
+            "effects move it — so one entry's percentage is a starting "
+            "point, not a finding._",
             "",
             "_Entries whose baseline value is under 0.05 are omitted — at "
             "that scale the number is overhead, not the work. They still "
@@ -557,12 +533,10 @@ def render(result: dict, threshold: float, base_label: str) -> str:
 def render_failure(base_label: str, message: str) -> str:
     """A job summary for the ComparisonError path.
 
-    The full detail is already on stderr and in the step log; this is
-    deliberately much terser, but it names the baseline and says what went
-    wrong, which is the difference between a failure somebody can act on and
-    one they have to go and reconstruct from a log. A green gate with an
-    empty summary is the same defect pointed the other way, which is why the
-    no-baseline path below writes one too.
+    The full detail is already on stderr and in the step log; this is much
+    terser, but it names the baseline and says what went wrong, which is the
+    difference between a failure somebody can act on and one they have to go
+    and reconstruct from a log.
     """
     first = message.splitlines()[0] if message else "no reason given"
     return "\n".join([
@@ -582,11 +556,10 @@ def render_no_baseline(metric: str, head_folded: dict,
     """The report for a first run with nothing committed to compare against.
 
     Same shape as the "no release exists yet" path this file has always had:
-    it states plainly that no comparison happened, and it exits 0 rather than
-    failing a commit for the absence of data. What it must NOT do is print
-    nothing — a green gate with an empty summary is the thing this
-    repository keeps failing reviews over — so it carries the measured
-    counters in a form a person can paste straight into the baseline.
+    no comparison happened, and it exits 0 rather than failing a commit for
+    the absence of data. It must NOT print nothing — a green gate with an
+    empty summary is what this repository keeps failing reviews over — so it
+    carries the counters in a form a person can paste straight in.
     """
     block = json.dumps({"metric": metric, "entries": head_folded},
                        indent=2, sort_keys=True)
@@ -608,21 +581,24 @@ def render_no_baseline(metric: str, head_folded: dict,
     ])
 
 
-# ---------------------------------------------------------------------------
-# The committed baseline document.
-#
-# Modelled on coverage-floor.json, deliberately: committed data rather than a
-# literal in a workflow, a REQUIRED `basis` so the reason a number sits where
-# it does lives at the number rather than in a pull request that will not be
-# there when someone reads the file, a provenance pair, and a validator that
-# refuses rather than degrades. A baseline that silently defaulted every
-# missing key would be a gate that reports green precisely when its own
-# configuration is broken.
-# ---------------------------------------------------------------------------
+# The committed baseline document, modelled on coverage-floor.json:
+# committed data rather than a literal in a workflow, a REQUIRED `basis` so
+# the reason a number sits where it does lives at the number rather than in a
+# pull request that will not be there when someone reads the file, a
+# provenance pair, and a validator that refuses rather than degrades. A
+# baseline that defaulted every missing key would be a gate reporting green
+# precisely when its own configuration is broken.
 
-REQUIRED_KEYS = ("schema", "basis", "metric", "cell", "tolerance",
-                 "measured_commit", "measured_at", "population", "entries",
-                 "wall")
+# One `metric` and one `tolerance` for the whole document is what made the
+# two populations collide: the unit suite wants CPU seconds because tracing
+# it costs three times its untraced wall time, the renderer workloads want
+# syscalls because they are the shipped product and cheap to trace, and a
+# single pair of keys can only ever be right for one of them. So the
+# baseline carries one sub-document per POPULATION, and the comparator is
+# told which one it is judging.
+REQUIRED_KEYS = ("schema", "basis", "cell", "measured_commit", "measured_at",
+                 "populations")
+POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall")
 
 
 def _is_number(value) -> bool:
@@ -631,7 +607,7 @@ def _is_number(value) -> bool:
 
 
 def read_baseline(path: Path) -> dict:
-    """The committed baseline, validated before it is used for anything."""
+    """The committed baseline document, validated before it is used."""
     try:
         with open(path, encoding="utf-8") as handle:
             document = json.load(handle)
@@ -655,45 +631,83 @@ def read_baseline(path: Path) -> dict:
             f"{path} has no basis — the reason a counter baseline sits "
             "where it does belongs at the numbers, not in the pull request "
             "that moved them")
-    if document["metric"] not in counter.METRICS:
-        raise ComparisonError(
-            f"{path} metric={document['metric']!r} is not an instrument "
-            "counter.py defines")
     for key in ("cell", "measured_commit", "measured_at"):
         value = document[key]
         if not isinstance(value, str) or not value.strip():
             raise ComparisonError(
                 f"{path} {key}={value!r} is not a non-empty string")
-    tolerance = document["tolerance"]
-    if not _is_number(tolerance) or tolerance <= 0:
+    populations = document["populations"]
+    if not isinstance(populations, dict) or not populations:
         raise ComparisonError(
-            f"{path} tolerance={tolerance!r} is not a positive fraction")
-    population = document["population"]
-    if (not isinstance(population, str)
-            or len(population) != 64
-            or any(character not in "0123456789abcdef" for character in population)):
-        raise ComparisonError(
-            f"{path} population={population!r} is not a sha256 digest of the "
-            "suite's collected node ids")
-    _check_entry_map(path, document["entries"], "entries", required=True)
-    _check_entry_map(path, document["wall"], "wall", required=False)
+            f"{path} populations={populations!r} is not a non-empty object; "
+            "one metric and one tolerance for both populations is the shape "
+            "this document was changed to remove")
+    for name in sorted(populations):
+        _check_population(path, name, populations[name])
     return document
 
 
-def _check_entry_map(path: Path, mapping, key: str, required: bool) -> None:
-    """Node id -> a positive number. Named for `entries` and `wall`."""
+def read_population(document: dict, name: str) -> dict:
+    """One population's sub-document, named or refused.
+
+    There is no default. Picking a population by inference would be exactly
+    the kind of quiet accommodation this gate exists to avoid: the caller
+    says which contract it is being held to.
+    """
+    populations = document["populations"]
+    if name not in populations:
+        raise ComparisonError(
+            f"this baseline has no population named {name!r}; it has "
+            + ", ".join(repr(key) for key in sorted(populations))
+            + ". Naming the population is how the right metric and the "
+              "right tolerance are chosen.")
+    return populations[name]
+
+
+def _check_population(path: Path, name: str, population) -> None:
+    """One population's metric, tolerance, digest and entry maps."""
+    where = f"{path} populations[{name!r}]"
+    if not isinstance(population, dict):
+        raise ComparisonError(f"{where} is not an object")
+    absent = [key for key in POPULATION_KEYS if key not in population]
+    if absent:
+        raise ComparisonError(
+            f"{where} is missing required key(s): " + ", ".join(absent))
+    if population["metric"] not in counter.METRICS:
+        raise ComparisonError(
+            f"{where} metric={population['metric']!r} is not an instrument "
+            "counter.py defines")
+    tolerance = population["tolerance"]
+    if not _is_number(tolerance) or tolerance <= 0:
+        raise ComparisonError(
+            f"{where} tolerance={tolerance!r} is not a positive fraction")
+    digest = population["population"]
+    if (not isinstance(digest, str) or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)):
+        raise ComparisonError(
+            f"{where} population={digest!r} is not a sha256 digest of that "
+            "population's node ids")
+    _check_entry_map(path, name, population["entries"], "entries",
+                     required=True)
+    _check_entry_map(path, name, population["wall"], "wall", required=False)
+
+
+def _check_entry_map(path: Path, name: str, mapping, key: str,
+                     required: bool) -> None:
+    """Node id -> a non-negative number, under `entries` and under `wall`."""
+    where = f"{path} populations[{name!r}]"
     if not isinstance(mapping, dict):
-        raise ComparisonError(f"{path} {key}={mapping!r} is not an object")
+        raise ComparisonError(f"{where} {key}={mapping!r} is not an object")
     if required and not mapping:
         raise ComparisonError(
-            f"{path} {key} is empty — a baseline with no entries in it "
+            f"{where} {key} is empty — a baseline with no entries in it "
             "compares nothing and reports that as a pass")
     for node, value in mapping.items():
         if not isinstance(node, str) or not node:
-            raise ComparisonError(f"{path} {key} has a non-string node id")
+            raise ComparisonError(f"{where} {key} has a non-string node id")
         if not _is_number(value) or value < 0:
             raise ComparisonError(
-                f"{path} {key}[{node!r}]={value!r} is not a non-negative "
+                f"{where} {key}[{node!r}]={value!r} is not a non-negative "
                 "number")
 
 
@@ -708,47 +722,21 @@ def raised_entries(old: dict, new: dict) -> dict:
     question is answered once.
     """
     moved = {}
-    for node, now in new.get("entries", {}).items():
-        was = old.get("entries", {}).get(node)
-        if was is None or now > was:
-            moved[node] = (was, now)
+    for name, population in sorted(new.get("populations", {}).items()):
+        before = old.get("populations", {}).get(name, {}).get("entries", {})
+        for node, now in population.get("entries", {}).items():
+            was = before.get(node)
+            if was is None or now > was:
+                moved[f"{name}:{node}"] = (was, now)
     return moved
 
 
-def collect_node_ids(directory: Path) -> list:
-    """The test node ids a discovery pass collects under `directory`.
-
-    A COLLECTION pass, not a test run: `unittest.TestLoader().discover`
-    imports every test module and builds the suite, but executes nothing.
-    That is the cheap half of what the baseline's population digest is about
-    — the expensive half is running the tests, which the caller has already
-    done and reported.
-    """
-    loader = unittest.TestLoader()
-    try:
-        discovered = loader.discover(str(directory), top_level_dir=str(directory))
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise ComparisonError(
-            f"{directory} could not be collected, so the population digest "
-            f"cannot be computed: {exc}") from exc
-    found = []
-
-    def walk(item):
-        for thing in item:
-            if isinstance(thing, unittest.TestSuite):
-                walk(thing)
-            else:
-                found.append(thing.id())
-
-    walk(discovered)
-    if not found:
-        raise ComparisonError(
-            f"{directory} collected no tests, which is not a population")
-    return sorted(set(found))
-
-
 def _resolve_metric(paths, label) -> str:
-    """The one instrument every head report agrees on, or a refusal."""
+    """The one instrument every head report agrees on, or a refusal.
+
+    Two rounds disagreeing means there is no single number to compare, and
+    picking one of them silently is the failure this whole file is about.
+    """
     seen = []
     for path in paths:
         metric, _wall = scan_instrument(Path(path))
@@ -774,6 +762,11 @@ def _check_metric(baseline_metric, head_metric) -> None:
 
 def ratchet_check(old_path: Path, new_path: Path) -> int:
     """The down-only half of the gate: no baseline entry may go UP.
+
+    Every population, in one pass: the workflow runs this against the merge
+    base's copy of the document, and a population added by the head commit
+    has no baseline there, which is a raise by definition and is reported as
+    one.
 
     Run against the MERGE BASE's copy of the baseline, not the parent's last
     successful run and not the previous commit on this branch — a gate that
@@ -802,19 +795,28 @@ def main(argv: list | None = None) -> int:
     )
     parser.add_argument("--base", nargs="+", metavar="XML",
                         help="baseline JUnit report(s), for the historical "
-                             "same-job comparison. Mutually exclusive with "
+                             "same-job comparison; mutually exclusive with "
                              "--baseline")
     parser.add_argument("--baseline", default=None, metavar="PATH",
-                        help="the committed baseline document to compare "
-                             f"against (e.g. {DEFAULT_BASELINE})")
+                        help=f"the committed baseline document (e.g. "
+                             f"{DEFAULT_BASELINE})")
     parser.add_argument("--head", nargs="+", metavar="XML",
                         help="this commit's JUnit report(s)")
     parser.add_argument("--max-regression", type=float, default=0.30,
                         help="fail above this fractional increase in the "
                              "total (default: 0.30 = 30%%)")
+    parser.add_argument("--population", default=None, metavar="NAME",
+                        help="which population of --baseline this run is "
+                             "judging, e.g. unit-suite. Required with "
+                             "--baseline: it is what selects that "
+                             "population's own metric and tolerance")
     parser.add_argument("--tolerance", type=float, default=None,
-                        help="per-entry down-only tolerance, as a fraction. "
-                             "Defaults to the baseline's own `tolerance`")
+                        help="one fractional allowance, applied to EVERY "
+                             "entry in the population being compared; "
+                             "defaults to that population's own "
+                             "`tolerance`. The check is per entry, the "
+                             "allowance is one value — that is what this "
+                             "flag is, and the wording says so")
     parser.add_argument("--base-label", default="the committed baseline",
                         help="name of the baseline, for the report")
     parser.add_argument("--summary-file", default=None,
@@ -824,37 +826,42 @@ def main(argv: list | None = None) -> int:
                         metavar="NAME",
                         help="node id that must be present and passing in "
                              "EVERY head report, e.g. e2e::bench.render. "
-                             "Repeatable. A name absent from the head "
-                             "reports, or skipped/failed in any round, is a "
-                             "ComparisonError (exit 2).")
+                             "Repeatable. Absent, or skipped/failed in any "
+                             "round, is a ComparisonError (exit 2).")
     parser.add_argument("--allow-removal", action="append", default=[],
                         metavar="NAME",
                         help="node id whose disappearance from the head "
-                             "reports is deliberate. Repeatable. Passing "
-                             "either this or --require-test switches the "
-                             "gate to CLOSED-SET mode, where every name that "
-                             "passed at the baseline must still pass at the "
-                             "head unless it is named here. With neither "
-                             "flag, removals are reported and excluded, "
-                             "which is this tool's historical behaviour.")
+                             "reports is deliberate. Repeatable. Either flag "
+                             "switches the gate to CLOSED-SET mode, where "
+                             "every name that passed at the baseline must "
+                             "still pass at the head unless named here.")
     parser.add_argument("--population-file", default=None, metavar="PATH",
-                        help="the node ids this run COLLECTED, one per line. "
-                             "Their digest is checked against the "
-                             "baseline's, and a difference is a refusal "
+                        help="the node ids this run COLLECTED, one per line; "
+                             "their digest is checked against that "
+                             "population's, and a difference is a refusal "
                              "(exit 2). Produced by --print-population")
     parser.add_argument("--print-population", default=None, metavar="DIR",
-                        help="collect the test node ids under DIR, print "
-                             "them one per line, and exit. A collection "
-                             "pass, not a test run")
+                        help="collect the node ids under DIR, print them one "
+                             "per line and exit; a collection pass, not a "
+                             "test run")
     parser.add_argument("--ratchet-baselines", nargs=2,
                         metavar=("OLD", "NEW"),
-                        help="compare two baseline documents and fail if any "
-                             "entry in NEW is above its value in OLD; the "
-                             "down-only half of the gate. Needs nothing else")
+                        help="fail if any entry of NEW is above its value in "
+                             "OLD; the down-only half of the gate, over "
+                             "every population. Needs nothing else")
     args = parser.parse_args(argv)
 
     if args.print_population:
-        print("\n".join(collect_node_ids(Path(args.print_population))))
+        try:
+            collected = counter.collect_node_ids(Path(args.print_population))
+        except counter.CounterError as exc:
+            # The collection pass is cheap, but a tree that cannot even be
+            # IMPORTED is a setup failure, and a traceback in a CI log is
+            # the least actionable form of saying so.
+            print(f"cannot collect the test population: {exc}",
+                  file=sys.stderr)
+            return 2
+        print("\n".join(collected))
         return 0
 
     if args.ratchet_baselines:
@@ -869,6 +876,11 @@ def main(argv: list | None = None) -> int:
                      "baseline there is nothing to compare against")
     if not args.head:
         parser.error("--head is required")
+    if args.baseline and not args.population:
+        parser.error("--baseline needs --population: the document carries "
+                     "one metric and one tolerance per population, and "
+                     "guessing which contract this run is held to is the "
+                     "accommodation this gate refuses to make")
 
     try:
         return _compare(args)
@@ -882,7 +894,8 @@ def _compare(args) -> int:
     """The whole comparison, once the arguments have been vetted."""
     baseline = None
     if args.baseline:
-        baseline = read_baseline(Path(args.baseline))
+        baseline = read_population(read_baseline(Path(args.baseline)),
+                                   args.population)
         base_folded = {nid: float(value)
                        for nid, value in baseline["entries"].items()}
     else:

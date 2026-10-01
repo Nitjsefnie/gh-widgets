@@ -60,6 +60,7 @@ class TestGitFameForkPin(unittest.TestCase):
 
 
 class TestSpeedWorkflowRendererGate(unittest.TestCase):
+    # pylint: disable=too-many-public-methods
     """Drive the real step scripts out of speed.yml against a synthetic tree.
 
     The property being preserved is that the WORKFLOW's own shell decides
@@ -78,6 +79,13 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     workflow = WORKFLOWS / "speed.yml"
 
     UNIT_NODE = "counter::unit-suite"
+    # The two populations the workflow compares, and the instrument each is
+    # held to. These names are the baseline's keys, so they are spelled the
+    # same in speed.yml, here and in the document itself.
+    UNIT_POPULATION = "unit-suite"
+    RENDERER_POPULATION = "renderer-workloads"
+    UNIT_METRIC = "cpu_time"
+    RENDERER_METRIC = "syscalls"
     WORKLOADS = (("bench.render", 1000.0, 2.0),
                  ("bench.render-impact", 200.0, 1.0),
                  ("bench.render-responsiveness", 50.0, 0.5))
@@ -143,8 +151,9 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         return module
 
     def _write_tree(self, root, unit_counter=10.0, workload_counter=None,
-                    omit_renderer=None, metric="cpu_time", wall=None,
-                    baseline=True, population=True, tolerance=0.10):
+                    omit_renderer=None, metric=RENDERER_METRIC, wall=None,
+                    baseline=True, population=True, tolerance=0.05,
+                    unit_metric=UNIT_METRIC):
         """The tree speed.yml's Compare step expects, entirely synthetic."""
         head = root / "head"
         for relative in ("scripts/ci/compare_durations.py",
@@ -153,17 +162,18 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self._install_counter(head)
         reports = root / "reports"
         self._write_reports(reports, unit_counter, workload_counter,
-                            omit_renderer, metric, wall)
+                            omit_renderer, metric, wall, unit_metric)
         if population:
             (reports / "unit-population.txt").write_text(
                 "\n".join(sorted(self.POPULATION)) + "\n", encoding="utf-8")
         if baseline:
             self._write_baseline(root, metric=metric, tolerance=tolerance,
-                                 wall=wall, population=population)
+                                 wall=wall, population=population,
+                                 unit_metric=unit_metric)
         return head
 
     def _write_reports(self, reports, unit_counter, workload_counter,
-                       omit_renderer, metric, wall):
+                       omit_renderer, metric, wall, unit_metric=UNIT_METRIC):
         """Two rounds of both report families, as speed.yml produces them.
 
         `omit_renderer` drops one workload from the renderer reports, which is
@@ -178,8 +188,11 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          if name != omit_renderer}
         unit_wall = walls.get("unit-suite", 5.0)
         for round_number in (1, 2):
+            # Two populations, two instruments: the whole point of the
+            # per-population schema, and the reason a document-wide `metric`
+            # could not have worked.
             self._write_report(reports / f"unit-{round_number}.xml", "counter",
-                               [("unit-suite", unit_counter)], metric,
+                               [("unit-suite", unit_counter)], unit_metric,
                                {"unit-suite": unit_wall})
             self._write_report(reports / f"bench-head-{round_number}.xml",
                                "e2e", cases, metric, walls)
@@ -191,30 +204,43 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         shutil.copyfile(source, destination)
         return destination
 
-    def _write_baseline(self, root, metric="cpu_time", tolerance=0.10,
-                        wall=None, population=True, overrides=None):
+    def _write_baseline(self, root, metric=RENDERER_METRIC, tolerance=0.05,
+                        wall=None, population=True,
+                        unit_metric=UNIT_METRIC, unit_tolerance=0.25,
+                        unit_wall=None):
+        """The committed document, with one sub-document per population."""
         counter = self._install_counter(root / "head")
+        digest = counter.population_digest(self.POPULATION)
+        workloads = {f"e2e::{name}": value
+                     for name, value, _ in self.WORKLOADS}
+        unit_walls = {self.UNIT_NODE: 5.0} if unit_wall is None else unit_wall
         document = {
-            "schema": 1,
+            "schema": 2,
             "basis": "fixture baseline for the workflow tests",
-            "metric": metric,
             "cell": "ubuntu-latest / 3.13",
-            "tolerance": tolerance,
             "measured_commit": "0" * 40,
             "measured_at": "2026-10-01T00:00:00Z",
-            "population": (counter.population_digest(self.POPULATION)
-                           if population else ""),
-            "entries": {
-                self.UNIT_NODE: 10.0,
-                **{f"e2e::{name}": counter_value
-                   for name, counter_value, _ in self.WORKLOADS},
+            "populations": {
+                self.UNIT_POPULATION: {
+                    "metric": unit_metric,
+                    "tolerance": unit_tolerance,
+                    "population": digest if population else "0" * 64,
+                    "entries": {self.UNIT_NODE: 10.0},
+                    "wall": unit_walls,
+                },
+                self.RENDERER_POPULATION: {
+                    "metric": metric,
+                    "tolerance": tolerance,
+                    # The renderer population's digest is over the workload
+                    # node ids, which the closed-set check already guards;
+                    # this copy is for uniformity and for the record.
+                    "population": counter.population_digest(
+                        [f"e2e::{name}" for name, _, _ in self.WORKLOADS]),
+                    "entries": workloads,
+                    "wall": wall or {},
+                },
             },
-            "wall": wall or {},
         }
-        if overrides:
-            document.update(overrides)
-        if not document["population"]:
-            document["population"] = "0" * 64
         (root / "speed-baseline.json").write_text(
             json.dumps(document, indent=2), encoding="utf-8")
         return document
@@ -314,14 +340,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_metric_mismatch_is_exit_two_not_a_comparison(self):
         root = self._run_with_tree("ghw-speed-metric-mismatch-",
                                    baseline=True)
-        # Re-measure the head on the other instrument; the baseline still
-        # says cpu_time.
-        self._write_report(root / "reports" / "unit-1.xml", "counter",
-                           [("unit-suite", 10.0)], "syscalls",
-                           {"unit-suite": 5.0})
-        self._write_report(root / "reports" / "unit-2.xml", "counter",
-                           [("unit-suite", 10.0)], "syscalls",
-                           {"unit-suite": 5.0})
+        # The renderer population's baseline says syscalls; re-measure the
+        # renderer reports in CPU seconds, which is the collision a single
+        # document-wide `metric` could not have expressed.
+        for round_number in (1, 2):
+            self._write_report(
+                root / "reports" / f"bench-head-{round_number}.xml", "e2e",
+                [(name, value) for name, value, _ in self.WORKLOADS],
+                "cpu_time")
         completed, summary = self._execute_compare(root)
 
         self.assertEqual(completed.returncode, 1,
@@ -359,20 +385,25 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     # -- verdicts ------------------------------------------------------------
 
     def test_a_counter_above_tolerance_is_red_and_one_below_is_green(self):
+        # 12.6 against a 10.0 baseline is +26%: inside the 30% total budget,
+        # outside the unit population's own 25% tolerance. That separation is
+        # the point — the per-entry ratchet is not the total restated.
         over = self._run_with_tree("ghw-speed-over-tolerance-",
-                                   unit_counter=12.0)
+                                   unit_counter=12.6)
         completed, summary = self._execute_compare(over)
         self.assertEqual(completed.returncode, 1,
                          completed.stdout + completed.stderr)
         self.assertIn("down-only tolerance", completed.stderr)
         self.assertIn("past the down-only tolerance", summary)
+        self.assertIn("within budget", summary)
 
         under = self._run_with_tree("ghw-speed-under-tolerance-",
-                                    unit_counter=10.5)
+                                    unit_counter=11.0)
         completed, summary = self._execute_compare(under)
         self.assertEqual(completed.returncode, 0,
                          completed.stdout + completed.stderr)
         self.assertIn("within budget", summary)
+        self.assertNotIn("down-only tolerance", summary)
 
     def test_the_smoke_gate_fires_on_a_gross_outlier_without_a_number(self):
         # A wall figure at all is the thing being removed; the smoke verdict
@@ -382,8 +413,9 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         # smoke gate is a cliff detector, not a measurement.
         root = self._run_with_tree("ghw-speed-smoke-", baseline=False,
                                    wall={"unit-suite": 600.0})
-        # Keyed by node id, like every other map in the baseline.
-        self._write_baseline(root, wall={self.UNIT_NODE: 5.0})
+        # Keyed by node id, like every other map in the baseline, and in the
+        # population that actually measured it.
+        self._write_baseline(root, unit_wall={self.UNIT_NODE: 5.0})
         completed, summary = self._execute_compare(root)
 
         self.assertEqual(completed.returncode, 1,
@@ -392,37 +424,49 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn(self.UNIT_NODE, summary)
         # 600 is the wall seconds the fixture used. A verdict, no number.
         self.assertNotIn("600", summary)
-        self.assertIn("No elapsed time is reported", summary)
+        self.assertIn("Elapsed time is not reported", summary)
 
     def test_the_baseline_ratchet_refuses_a_raised_entry_and_allows_a_lower(self):
         root = self._temp_root("ghw-speed-ratchet-")
         self._write_tree(root, baseline=True)
         comparator = root / "head" / "scripts" / "ci" / "compare_durations.py"
+        target = root / "speed-baseline.json"
 
-        def run(old_entries):
+        def run(old_render_entries):
+            """The merge base's copy of the baseline, one entry moved."""
+            document = json.loads(target.read_text(encoding="utf-8"))
+            document["populations"][self.RENDERER_POPULATION]["entries"] = \
+                old_render_entries
             old = root / "old.json"
-            document = json.loads(
-                (root / "speed-baseline.json").read_text(encoding="utf-8"))
-            document["entries"] = old_entries
             old.write_text(json.dumps(document), encoding="utf-8")
             return subprocess.run(
                 [sys.executable, str(comparator),
-                 "--ratchet-baselines", str(old),
-                 str(root / "speed-baseline.json")],
+                 "--ratchet-baselines", str(old), str(target)],
                 capture_output=True, text=True, check=False)
 
-        current = {self.UNIT_NODE: 10.0, "e2e::bench.render": 1000.0,
+        current = {"e2e::bench.render": 1000.0,
                    "e2e::bench.render-impact": 200.0,
                    "e2e::bench.render-responsiveness": 50.0}
 
+        # The ceiling is raised in the same push that is measured against it.
         raised = run({**current, "e2e::bench.render": 900.0})
         self.assertEqual(raised.returncode, 1, raised.stdout + raised.stderr)
         self.assertIn("went UP", raised.stderr)
         self.assertIn("e2e::bench.render", raised.stderr)
+        self.assertIn(self.RENDERER_POPULATION, raised.stderr)
 
+        # Lowering is what the ratchet is for, and is always allowed.
         lowered = run({**current, "e2e::bench.render": 1500.0})
         self.assertEqual(lowered.returncode, 0,
                          lowered.stdout + lowered.stderr)
+
+        # A population the merge base did not have at all is a raise by
+        # definition, not a silent addition nobody reviewed.
+        added = subprocess.run(
+            [sys.executable, str(comparator), "--ratchet-baselines",
+             str(root / "old.json"), str(target)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
 
     # -- the closed-set renderer gate, unchanged by any of the above ---------
 
@@ -434,6 +478,45 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          completed.stdout + completed.stderr)
         self.assertIn("committed baseline (unit suite)", summary)
         self.assertIn("committed baseline (renderer workloads)", summary)
+
+    def test_each_population_is_judged_by_its_own_metric(self):
+        """The collision a single document-wide `metric` could not express.
+
+        The renderer population is measured in syscalls and the unit suite in
+        CPU seconds, from one document. If either comparison were reading the
+        other's contract it would refuse outright rather than divide one by
+        the other — which is what this asserts by watching both halves pass
+        at once with two different instruments in play.
+        """
+        root = self._run_with_tree("ghw-speed-two-instruments-")
+        self.assertIn(f"Metric: **{self.RENDERER_METRIC}**",
+                      self._execute_compare(root)[1])
+        self.assertIn(f"Metric: **{self.UNIT_METRIC}**",
+                      self._execute_compare(root)[1])
+
+    def test_a_baseline_without_a_population_is_refused(self):
+        # One document carries several contracts. Guessing which one this run
+        # is being held to is the accommodation the gate exists to refuse.
+        root = self._run_with_tree("ghw-speed-no-population-")
+        # The step's own block with the flag removed, so what is under test is
+        # the comparator's refusal and not a shell quoting accident.
+        block = "".join(
+            line for line in self._run_block("Compare").splitlines(True)
+            if "--population unit-suite" not in line)
+        block = block.replace("--population renderer-workloads \\\n", "")
+        env = {
+            **os.environ,
+            "BASELINE": "speed-baseline.json",
+            "GITHUB_STEP_SUMMARY": str(root / "summary.md"),
+            "MAX_REGRESSION": "0.30",
+            "ALLOWED_WORKLOAD_REMOVALS": "",
+        }
+        completed = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", block],
+            cwd=root, env=env, capture_output=True, text=True, check=False)
+        self.assertNotEqual(completed.returncode, 0,
+                            completed.stdout + completed.stderr)
+        self.assertIn("needs --population", completed.stderr)
 
     def test_unit_regression_still_runs_renderer_comparison(self):
         root = self._run_with_tree("ghw-speed-compare-failure-shape-",
@@ -495,7 +578,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self._write_report(
             root / "reports" / "bench-head-1.xml", "e2e",
             [("bench.render", 1000.0), ("bench.render-responsiveness", 50.0)],
-            "cpu_time")
+            self.RENDERER_METRIC)
         shutil.copyfile(root / "reports" / "bench-head-1.xml",
                         root / "reports" / "bench-head-2.xml")
         # A retired workload's baseline entry goes with it. That edit is
@@ -503,7 +586,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         # because removing work is what it is for.
         document = json.loads((root / "speed-baseline.json").read_text(
             encoding="utf-8"))
-        document["entries"].pop("e2e::bench.render-impact")
+        document["populations"]["renderer-workloads"]["entries"].pop(
+            "e2e::bench.render-impact")
         (root / "speed-baseline.json").write_text(
             json.dumps(document, indent=2), encoding="utf-8")
         completed, summary = self._execute_compare(root)
