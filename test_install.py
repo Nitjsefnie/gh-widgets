@@ -66,10 +66,13 @@ def assert_no_transaction_files(test_case, destination):
 
 
 def old_renderer_set(destination):
-    """Seed and return a literal coherent previous renderer set."""
+    """Seed and return a runnable previous renderer set."""
     previous = {}
-    for installed_name in RENDERER_SOURCES.values():
-        content = f"old renderer version: {installed_name}\n".encode("utf-8")
+    for source_name, installed_name in RENDERER_SOURCES.items():
+        content = (ROOT / source_name).read_bytes()
+        if not content.endswith(b"\n"):
+            content += b"\n"
+        content += b"# previous version\n"
         (destination / installed_name).write_bytes(content)
         previous[installed_name] = content
     return previous
@@ -190,10 +193,10 @@ class TestRendererInstall(unittest.TestCase):
     "install.sh --units checks for root; run this isolated fake-systemctl test as root",
 )
 class TestUnitInstallRollback(unittest.TestCase):
-    """A failed unit load restores scratch unit files and timer enablement."""
+    """Unit installs verify scratch files and preserve timer enablement."""
 
     # pylint: disable=too-many-locals
-    def make_fixture(self, root, timer_states, corrupt_unit=True):
+    def make_fixture(self, root, timer_states, corrupt_unit=True, seed_units=True):
         """Make an isolated unit installation and a stateful systemctl fake."""
         source_dir = root / "src"
         script = copy_installation(source_dir, with_units=True)
@@ -202,10 +205,11 @@ class TestUnitInstallRollback(unittest.TestCase):
         renderer_dir = root / "bin"
         renderer_dir.mkdir()
         old_units = {}
-        for name in UNIT_NAMES:
-            content = f"old unit version: {name}\n".encode("utf-8")
-            (unit_dir / name).write_bytes(content)
-            old_units[name] = content
+        if seed_units:
+            for name in UNIT_NAMES:
+                content = f"old unit version: {name}\n".encode("utf-8")
+                (unit_dir / name).write_bytes(content)
+                old_units[name] = content
         old_renderers = old_renderer_set(renderer_dir)
 
         if corrupt_unit:
@@ -241,10 +245,13 @@ class TestUnitInstallRollback(unittest.TestCase):
             'printf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\n'
             'case "$1" in\n'
             '  is-enabled)\n'
-            '    state=$(cat "$TIMER_STATE_DIR/$2") || exit 2\n'
+            '    state_file="$TIMER_STATE_DIR/$2"\n'
+            '    if [ ! -f "$state_file" ]; then printf \'not-found\\n\'; exit 4; fi\n'
+            '    state=$(cat "$state_file") || exit 2\n'
             '    case "$state" in\n'
             '      enabled) printf \'enabled\\n\'; exit 0 ;;\n'
             '      disabled) printf \'disabled\\n\'; exit 1 ;;\n'
+            '      unknown-response) printf \'mystery-state\\n\'; exit 4 ;;\n'
             '      *) printf \'query failed\\n\' >&2; exit 2 ;;\n'
             '    esac\n'
             '    ;;\n'
@@ -313,6 +320,41 @@ class TestUnitInstallRollback(unittest.TestCase):
         log = fixture["log"]
         return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
+    def assert_timer_snapshot_fails_closed(self, response):
+        """Check an invalid is-enabled result aborts before unit deployment."""
+        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-query-error-") as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": response},
+                corrupt_unit=False,
+            )
+
+            proc = self.run_fixture(fixture)
+
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertEqual(read_files(fixture["unit_dir"], UNIT_NAMES), fixture["old_units"])
+            self.assertEqual(
+                read_files(fixture["renderer_dir"], fixture["old_renderers"]),
+                fixture["old_renderers"],
+            )
+            self.assertEqual(
+                self.timer_states(fixture),
+                {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": response},
+            )
+            calls = self.systemctl_calls(fixture)
+            self.assertIn("is-enabled gh-widgets.timer", calls)
+            self.assertIn("is-enabled gh-widgets-resync.timer", calls)
+            self.assertFalse(
+                any(call.startswith("enable --now") for call in calls),
+                "timer snapshot errors must abort before enabling either timer",
+            )
+            self.assertFalse(
+                any(call.startswith("cat ") for call in calls),
+                "timer snapshot errors must abort before unit verification",
+            )
+            assert_no_transaction_files(self, fixture["unit_dir"])
+            assert_no_transaction_files(self, fixture["renderer_dir"])
+
     def test_failed_unit_verification_keeps_previously_enabled_timers_enabled(self):
         with tempfile.TemporaryDirectory(prefix="ghwidgets-units-enabled-") as temp:
             fixture = self.make_fixture(
@@ -368,36 +410,36 @@ class TestUnitInstallRollback(unittest.TestCase):
             assert_no_transaction_files(self, fixture["renderer_dir"])
 
     def test_timer_state_query_error_aborts_before_unit_commit_and_enable(self):
-        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-query-error-") as temp:
+        self.assert_timer_snapshot_fails_closed("query-error")
+
+    def test_unknown_timer_state_aborts_before_unit_commit_and_enable(self):
+        self.assert_timer_snapshot_fails_closed("unknown-response")
+
+    def test_fresh_unit_install_accepts_confirmed_missing_timers(self):
+        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-fresh-") as temp:
             fixture = self.make_fixture(
                 Path(temp),
-                {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": "query-error"},
+                {},
                 corrupt_unit=False,
+                seed_units=False,
             )
+            self.assertEqual(list(fixture["unit_dir"].iterdir()), [])
 
             proc = self.run_fixture(fixture)
 
-            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-            self.assertEqual(read_files(fixture["unit_dir"], UNIT_NAMES), fixture["old_units"])
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(
-                read_files(fixture["renderer_dir"], fixture["old_renderers"]),
-                fixture["old_renderers"],
+                read_files(fixture["renderer_dir"], RENDERER_SOURCES.values()),
+                source_renderer_bytes(fixture["source_dir"]),
             )
+            expected_units = read_files(
+                fixture["source_dir"] / "units", UNIT_NAMES)
+            self.assertEqual(read_files(fixture["unit_dir"], UNIT_NAMES), expected_units)
             self.assertEqual(
                 self.timer_states(fixture),
-                {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": "query-error"},
+                {"gh-widgets.timer": "enabled\n", "gh-widgets-resync.timer": "enabled\n"},
             )
-            calls = self.systemctl_calls(fixture)
-            self.assertIn("is-enabled gh-widgets.timer", calls)
-            self.assertIn("is-enabled gh-widgets-resync.timer", calls)
-            self.assertFalse(
-                any(call.startswith("enable --now") for call in calls),
-                "timer snapshot errors must abort before enabling either timer",
-            )
-            self.assertFalse(
-                any(call.startswith("cat ") for call in calls),
-                "timer snapshot errors must abort before unit verification",
-            )
+            self.assertIn("verified: units loaded; timers enabled", proc.stdout)
             assert_no_transaction_files(self, fixture["unit_dir"])
             assert_no_transaction_files(self, fixture["renderer_dir"])
 
