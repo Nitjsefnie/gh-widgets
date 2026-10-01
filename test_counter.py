@@ -11,6 +11,7 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 `metric=` passed straight in — rather than inherited from whatever the test
 happens to land on.
 """
+import ast
 import importlib
 import importlib.util
 import os
@@ -173,9 +174,15 @@ class TestCwdIsHonoured(unittest.TestCase):
         self.assertIn("marker-only-here.txt", inside.stdout)
         self.assertNotIn("marker-only-here.txt", outside.stdout)
 
+    @REQUIRES_BENCH
     def test_the_cli_passes_the_flag_through(self):
-        # The library is only half of it: the CLI is what the workflow calls,
-        # and a flag wired to nothing there is the same defect one layer up.
+        # The library is only half of it: the CLI is what the workflow
+        # calls, and a flag wired to nothing there is the same defect one
+        # layer up. It is also the same POPULATION as the library cases — the
+        # CLI can only produce output where the instrument works, because
+        # `main()` turns the refusal into exit 2 and writes no JUnit. Which
+        # is why it is guarded on the INSTRUMENT's facility rather than on
+        # its own: the limit it hits is `measure()`'s, not a shell question.
         with tempfile.TemporaryDirectory(prefix="ghw-cwd-cli-") as td:
             root = Path(td)
             (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
@@ -227,6 +234,117 @@ class TestTheRemovedInstrument(unittest.TestCase):
         self.assertIn("12.8x", doc)
         self.assertIn("36811152307", doc)
         self.assertIn("36812466498", doc)
+
+
+class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
+    """No test reaches `measure()` by a path its own guard does not cover.
+
+    The body-walk that places the guards looks for `measure(` IN THE
+    BODY. That misses two paths, and both have already cost a Windows
+    round: a CLI invocation of counter.py in a subprocess, and a helper the
+    walk cannot see. So this asks the question directly, over the whole
+    suite, by the two patterns that reach the instrument:
+
+      * a literal `.measure(` or `counter.measure(` inside a test, and
+      * counter.py named as an argv element of a subprocess call
+
+    A test that reaches either from inside a `REQUIRES_BENCH` or
+    `REQUIRES_POSIX_SHELL` boundary is fine. One that reaches either
+    without one is not, and on Linux that is invisible — which is how a
+    guard lands on the preceding method and nobody sees it for a round.
+    """
+
+    # Reaches, spelled the two ways the instrument is actually entered.
+    REACHES = (".measure(", "counter.py")
+
+    # Named, with the reason each cannot reach `measure()`. An allowlist is
+    # only worth having if it is explicit and narrow: anything NEW is
+    # flagged, which is the whole point. Each of these was checked, not
+    # assumed.
+    ALLOWED = {
+        "test_counter.py::test_the_module_imports_without_resource":
+            "loads the module; the import is the thing under test and the "
+            "refusal is asserted, not triggered",
+        "test_counter.py::test_probe_writes_github_output_shaped_lines":
+            "runs `--probe`, which prints the record and never measures",
+        "test_counter.py::test_no_command_is_an_error_not_a_silent_success":
+            "runs with no command, so argparse refuses before `measure`",
+        "test_counter.py::test_counter_is_a_file_and_not_a_package":
+            "names counter.py as a PATH and checks the filesystem",
+        "test_counter.py::test_the_new_files_are_named_back_by_the_ignore_file":
+            "names counter.py as a path for `git check-ignore`",
+        "test_counter.py::test_the_time_attribute_is_the_counter_not_seconds":
+            "calls write_junit with a FABRICATED Measurement; no process",
+        "test_counter.py::test_a_failing_command_is_a_junit_failure":
+            "write_junit with a fabricated return code; no process",
+        "test_counter.py::test_a_name_that_is_not_a_node_id_is_refused":
+            "write_junit with a bad node id; no process",
+        "test_counter.py::test_no_unguarded_test_reaches_the_instrument":
+            "this control; it names the patterns it is looking for",
+        "test_speed_workflow.py::test_both_measurement_steps_pin_the_instrument":
+            "reads the workflow's text",
+    }
+
+    def test_no_unguarded_test_reaches_the_instrument(self):
+        offenders = []
+        for path in sorted(REPO_ROOT.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                if not node.name.startswith("test_"):
+                    continue
+                body = ast.get_source_segment(source, node) or ""
+                if not any(reach in body for reach in self.REACHES):
+                    continue
+                decorators = "".join(
+                    ast.get_source_segment(source, d) or ""
+                    for d in node.decorator_list)
+                # A class-level guard covers everything in it.
+                enclosing = self._enclosing_guards(source, node)
+                if any(word in decorators + enclosing
+                       for word in ("REQUIRES_BENCH", "REQUIRES_POSIX_SHELL")):
+                    continue
+                name = f"{path.name}::{node.name}"
+                if name not in self.ALLOWED:
+                    offenders.append(name)
+        self.assertEqual(
+            offenders, [],
+            "these tests reach counter.measure() — directly or through its "
+            "CLI — without a guard, so they fail on a platform where the "
+            "instrument refuses: " + ", ".join(offenders))
+
+    def test_every_allowance_is_still_relevant(self):
+        """An allowlist rots quietly if nothing checks it.
+
+        Each entry names a test that MIGHT reach the instrument; if that
+        test is deleted or renamed the entry is stale, and a stale entry is
+        one more way for a new offender to slip past a control that has
+        stopped reading.
+        """
+        for name in self.ALLOWED:
+            module, _, test = name.partition("::")
+            with self.subTest(entry=name):
+                self.assertTrue(
+                    (REPO_ROOT / module).is_file()
+                    and f"def {test}(" in (REPO_ROOT / module).read_text(
+                        encoding="utf-8"),
+                    f"{name} is allowlisted but no longer exists")
+
+    @staticmethod
+    def _enclosing_guards(source, target):
+        """Guards declared on a class the function sits inside."""
+        import ast  # pylint: disable=import-outside-toplevel
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if any(child is target for child in node.body):
+                return "".join(ast.get_source_segment(source, d) or ""
+                               for d in node.decorator_list) + "".join(
+                                   ast.get_source_segment(source, stmt) or ""
+                                   for stmt in node.body[:1])
+        return ""
 
 
 class TestTheBenchPredicate(unittest.TestCase):
