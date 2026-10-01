@@ -15,7 +15,7 @@
 #   timing harness, which collected these same TestCases and emitted
 #   --junitxml; that job now counts CPU seconds with
 #   scripts/ci/counter.py and writes its own JUnit, so nothing in CI asks
-#   pytest for anything. It was imported by test_compare_durations.py, which
+#   pytest for anything. It was imported by test_compare_counters.py, which
 #   `unittest discover` had to be able to import to collect the suite; that
 #   file is now stdlib unittest like everything else, so the pin survives
 #   only so a local `pytest` run of the same file still works. Nothing in

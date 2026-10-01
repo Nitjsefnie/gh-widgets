@@ -16,7 +16,7 @@ at all.
 
 THIS MODULE IS POSIX-ONLY, AND IT REFUSES RATHER THAN GUESSES. `resource`
 does not exist on Windows and `/proc` does not exist on macOS, and this
-module is imported by scripts/ci/compare_durations.py, which the test suite
+module is imported by scripts/ci/compare_counters.py, which the test suite
 exercises on every OS — so a bare `import resource` turned a platform
 limitation into an import error in thirty-five unrelated tests, on a
 repository whose own CI runs a windows-latest and macos-latest matrix.

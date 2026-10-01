@@ -136,7 +136,7 @@ jobs:
         run: |
           if [ "$MEASURED" = "true" ]; then
             # Every shipped source family is in the population, scripts/
-            # included: resolve-repo-pins.py, compare_durations.py and the
+            # included: resolve-repo-pins.py, compare_counters.py and the
             # three bench files all run in workflows below, so omitting them
             # reported a coverage number for a smaller program than the one
             # that ships. Only the tests themselves are left out — they are

@@ -27,7 +27,7 @@ from bench_platform import REQUIRES_POSIX_SHELL
 from speed_workflow_steps import StepRunner
 
 REPO_ROOT = Path(__file__).resolve().parent
-COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_durations.py"
+COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
 HARNESS = REPO_ROOT / "scripts" / "bench" / "e2e_bench.py"
 
 WORKLOAD_NODES = ("e2e::bench.render", "e2e::bench.render-impact",

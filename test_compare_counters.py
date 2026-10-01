@@ -25,16 +25,16 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 
 def _load():
-    """Import scripts/ci/compare_durations.py by path.
+    """Import scripts/ci/compare_counters.py by path.
 
     scripts/ci is not a package and deliberately has no __init__.py — it
     holds standalone CI entry points, not an importable library.
     """
-    path = REPO_ROOT / "scripts" / "ci" / "compare_durations.py"
-    spec = importlib.util.spec_from_file_location("compare_durations", path)
+    path = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
+    spec = importlib.util.spec_from_file_location("compare_counters", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    sys.modules["compare_durations"] = module
+    sys.modules["compare_counters"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -194,13 +194,13 @@ class TestComparator(unittest.TestCase):
 
         argv = sys.argv
         try:
-            sys.argv = ["compare_durations.py", "--base", str(base),
+            sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(slow), "--max-regression", "0.30",
                         "--summary-file", str(summary)]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cd.main(), 1)
 
-            sys.argv = ["compare_durations.py", "--base", str(base),
+            sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(fine), "--max-regression", "0.30"]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cd.main(), 0)
@@ -217,7 +217,7 @@ class TestComparator(unittest.TestCase):
 
         argv = sys.argv
         try:
-            sys.argv = ["compare_durations.py", "--base", str(base),
+            sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(other)]
             # 2, not 1: "could not compare" is a different thing from "slower",
             # and a workflow that conflates them reports a restructure as a
@@ -380,7 +380,7 @@ class TestVerifyPopulation(unittest.TestCase):
 
         argv = sys.argv
         try:
-            sys.argv = ["compare_durations.py", "--base", str(base),
+            sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(head), "--require-test", "e2e::a",
                         "--base-label", "v1.2.3",
                         "--summary-file", str(summary)]
