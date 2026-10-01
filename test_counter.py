@@ -335,7 +335,6 @@ class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
     @staticmethod
     def _enclosing_guards(source, target):
         """Guards declared on a class the function sits inside."""
-        import ast  # pylint: disable=import-outside-toplevel
         for node in ast.walk(ast.parse(source)):
             if not isinstance(node, ast.ClassDef):
                 continue
