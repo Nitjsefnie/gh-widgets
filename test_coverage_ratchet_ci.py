@@ -14,16 +14,18 @@ It also owns the small structural reader those cases are written against.
 These checks are regression tripwires, not a sandbox. The permission reader
 decodes simple YAML keys with optional quotes and fails closed outside that
 subset. The shell reader removes backslash-plus-whitespace splices without
-inserting spaces, then uses POSIX `shlex.split`. A token's first `<` or `>`
-starts a redirect. Keep its left fragment unless empty, all digits, or `&`;
-recognize the full operator, then drop its target through the first `;|&()`
-after the operator, preserving that separator and suffix. A standalone
-operator consumes its next target token and preserves any suffix after its
-first terminator. Split remaining words on `;|&()` and match adjacent
-`gh`, `api`. Redirects neither terminate commands nor make targets command
-words (`echo done>gh api` runs `echo`). Quoted operators may split
-prose (fail-noisy). Bash ANSI-C quoting
-(`$'gh'`), backticks, `$(...)`, and other substitutions are OUT OF SCOPE.
+subset. The shell reader removes backslash-plus-whitespace splices without
+inserting spaces, then uses POSIX `shlex.split` and rejects any step that
+mentions the decoded word `gh`. It also catches that word when an unquoted
+command separator or redirect remains attached to it in a token; this handles
+ordinary spellings such as `gh>/dev/null` without reconstructing argv. A bare
+redirect target such as `2> gh api` can fire, which is accepted for a workflow
+that has no reason to name `gh`. An attached target such as `echo done>gh api`
+stays green, and prose such as `echo "gh api"` stays one token. Operators
+inside quoted words may split the mention check (fail-noisy). Quoting and
+concatenations such as `"gh"`, `'gh'`, `"g""h"`, `g''h`, and `g\\h` decode
+to `gh`. Bash ANSI-C quoting (`$'gh'`), backticks, `$(...)`, and other
+substitutions are OUT OF SCOPE.
 
 
 WHY IT IS A SEPARATE MODULE, and why not to merge it back. `test_ci_workflows.py`
@@ -51,9 +53,6 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 RATCHET_WORKFLOW = WORKFLOWS / "coverage-ratchet.yml"
 PINNED_USE = re.compile(r"^\s*-?\s*uses:\s*[\w.-]+/[\w.-]+@[0-9a-f]{40}"
                         r"\s+#\s+v[0-9][0-9A-Za-z.\-]*$")
-REDIRECTION_OPERATOR = re.compile(
-    r"(?:<<<|<<-?|>>|<>|>&|<&|>\||>|<)")
-SHELL_TERMINATOR = re.compile(r"[;|&()]")
 
 
 USES_LINE = re.compile(r"^\s*-?\s*uses:")
@@ -465,69 +464,41 @@ def _assert_no_job_write_scopes(text):
             f"jobs hold a write scope: {', '.join(sorted(writers))}")
 
 
-def _redirect_suffix(word, start=0):
-    boundary = SHELL_TERMINATOR.search(word, start)
-    return word[boundary.start():] if boundary else ""
+def _mentions_gh_word(word):
+    """Match decoded `gh` and ordinary shell punctuation fused to that word."""
+    return (word == "gh" or
+            re.search(r"(?:^|[;|&()])gh(?=$|[;|&()<>])", word) is not None)
 
 
-def _command_word_fragments(shell_words, index):
-    word = shell_words[index]
-    redirect_at = min((point for point in
-                       (word.find("<"), word.find(">")) if point >= 0),
-                      default=-1)
-    if redirect_at < 0:
-        return [word], 1
-    left = word[:redirect_at]
-    operator = REDIRECTION_OPERATOR.match(word, redirect_at)
-    if operator is None:
-        raise AssertionError(f"unrecognised redirect operator in {word!r}")
-    fragments = ([left] if left and not left.isdigit() and left != "&"
-                 else [])
-    suffix = word[redirect_at:]
-    if REDIRECTION_OPERATOR.fullmatch(suffix) and not fragments:
-        target_at = index + 1
-        if target_at < len(shell_words):
-            fragments.extend(_redirect_suffix(shell_words[target_at]).split())
-        return fragments, 2
-    operator_end = operator.end()
-    fragments.extend(_redirect_suffix(word, operator_end).split())
-    return fragments, 1
+def _step_gh_words(text):
+    """Return steps that mention decoded `gh`, without reconstructing argv.
 
-
-def _normalised_command_words(command, context):
-    try:
-        shell_words = shlex.split(command)
-    except ValueError as error:
-        raise AssertionError(
-            f"uninterpretable shell command in {context}: {error}") from error
-    words = []
-    index = 0
-    while index < len(shell_words):
-        fragments, consumed = _command_word_fragments(shell_words, index)
-        words.extend(fragments)
-        index += consumed
-    return [fragment for word in words
-            for fragment in SHELL_TERMINATOR.split(word) if fragment]
-
-
-def _step_github_api_calls(text):
-    """Return commands with adjacent decoded `gh api` shell words."""
-    calls = []
+    POSIX shlex decoding catches quoted and concatenated spellings of the word.
+    Shell separators or redirects may remain glued to a token, so those
+    ordinary boundaries are checked too. Bare redirect-target words can flag;
+    argument prose such as `echo "gh api"` remains one non-matching token.
+    Operators inside quoted words can trigger fail-noisy matches. ANSI-C
+    quoting, backticks, `$(...)`, and other substitutions are out of scope.
+    """
+    mentions = []
     for job, records in _jobs(text).items():
         for step in _steps(records):
             command = _command(step)
-            words = _normalised_command_words(
-                command, f"{job}/{step['name']}")
-            if any(left == "gh" and right == "api"
-                   for left, right in zip(words, words[1:])):
-                calls.append((job, step["name"], command))
-    return calls
+            try:
+                words = shlex.split(command)
+            except ValueError as error:
+                raise AssertionError(
+                    f"uninterpretable shell command in "
+                    f"{job}/{step['name']}: {error}") from error
+            if any(_mentions_gh_word(word) for word in words):
+                mentions.append((job, step["name"], command))
+    return mentions
 
 
-def _assert_no_step_github_api(text):
-    calls = _step_github_api_calls(text)
-    if calls:
-        raise AssertionError(f"workflow steps invoke gh api: {calls!r}")
+def _assert_no_step_gh_words(text):
+    mentions = _step_gh_words(text)
+    if mentions:
+        raise AssertionError(f"workflow steps mention gh: {mentions!r}")
 
 
 class TestTheWorkflowReader(unittest.TestCase):
@@ -771,15 +742,14 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                         "false")
         self.assertEqual(seen, 1)
 
-    def test_no_step_calls_the_github_api_or_sets_gh_token(self):
+    def test_no_step_mentions_gh_or_sets_gh_token(self):
         # Check the whole workflow so job-level or top-level env cannot restore
         # a token that the individual step bodies do not declare.
-        self.assertEqual(_step_github_api_calls(self.text), [])
+        self.assertEqual(_step_gh_words(self.text), [])
         self.assertNotIn("GH_TOKEN", self.text)
 
-    def test_each_github_api_spacing_spelling_is_caught(self):
-        # The command reader folds shell continuations and normalises spacing
-        # before the invocation is matched.
+    def test_each_gh_word_spacing_spelling_is_caught(self):
+        # Shell continuations are removed before shlex decodes each word.
         marker = "          cp coverage-floor.json"
         self.assertIn(marker, self.text)
         plants = {
@@ -794,8 +764,8 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         for spelling, planted in plants.items():
             with self.subTest(spelling=spelling):
                 self.assertNotEqual(planted, self.text)
-                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
-                    _assert_no_step_github_api(planted)
+                with self.assertRaisesRegex(AssertionError, "mention gh"):
+                    _assert_no_step_gh_words(planted)
 
     def test_each_quoted_or_spliced_api_word_is_caught(self):
         marker = "          cp coverage-floor.json"
@@ -817,8 +787,8 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         for spelling, planted in plants.items():
             with self.subTest(spelling=spelling):
                 self.assertNotEqual(planted, self.text)
-                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
-                    _assert_no_step_github_api(planted)
+                with self.assertRaisesRegex(AssertionError, "mention gh"):
+                    _assert_no_step_gh_words(planted)
 
     def test_shell_operators_and_redirections_are_caught(self):
         marker = "          cp coverage-floor.json"
@@ -853,14 +823,26 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 "false>/dev/null||gh api repos/example/example",
             "short redirect target then separator":
                 "true>x;gh api repos/example/example",
+            # The control is mention-level, not invocation-level: `api` would
+            # run, but the argument still names `gh`.
+            "argument-only gh mention": "api gh repos/x",
+            # The control is mention-level, not invocation-level: this names
+            # the redirect target, which the shell would use as a file.
+            "redirect-target-only gh mention": "echo ready > gh",
+            "redirect attached to gh command":
+                "gh>/dev/null api repos/example/example",
+            "separator and redirect attached to gh command":
+                "echo ready>/dev/null;gh>/dev/null api repos/example/example",
+            "and list and redirect attached to gh command":
+                "true>/dev/null&&gh</dev/null api repos/example/example",
         }
         for spelling, command in command_plants.items():
             with self.subTest(spelling=spelling):
                 planted = self.text.replace(
                     marker, f"          {command}\n" + marker, 1)
                 self.assertNotEqual(planted, self.text)
-                with self.assertRaisesRegex(AssertionError, "invoke gh api"):
-                    _assert_no_step_github_api(planted)
+                with self.assertRaisesRegex(AssertionError, "mention gh"):
+                    _assert_no_step_gh_words(planted)
 
         # Bash redirects echo to `gh`; the first `api` is its argument, and the
         # second is a separate command. Neither spelling invokes `gh api`.
@@ -869,7 +851,7 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 redirected = self.text.replace(
                     marker, f"          {command}\n" + marker, 1)
                 self.assertNotEqual(redirected, self.text)
-                self.assertEqual(_step_github_api_calls(redirected), [])
+                self.assertEqual(_step_gh_words(redirected), [])
 
     def test_quoted_read_permission_and_api_prose_stay_allowed(self):
         marker = "    runs-on: ubuntu-latest"
@@ -885,7 +867,7 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                 '          echo "gh api"\n' + command_marker,
                 1)
         _assert_no_job_write_scopes(planted)
-        self.assertEqual(_step_github_api_calls(planted), [])
+        self.assertEqual(_step_gh_words(planted), [])
 
     def test_an_unbalanced_shell_quote_fails_closed(self):
         marker = "          cp coverage-floor.json"
@@ -893,7 +875,7 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             marker, '          echo "unclosed\n' + marker, 1)
         with self.assertRaisesRegex(
                 AssertionError, "uninterpretable shell command"):
-            _assert_no_step_github_api(planted)
+            _assert_no_step_gh_words(planted)
 
     def test_the_check_run_name_is_the_release_manifest_entry(self):
         """The manifest entry is written against a check-run name.
