@@ -56,7 +56,7 @@ except ImportError:  # POSIX
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 8
+COMMON_VERSION = 9
 
 
 def _read_repo_version() -> str:
@@ -865,8 +865,10 @@ def xml_color(value, fallback="#888888"):
         r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", str(value)) else fallback)
 
 
-def base_card(C, w, h, body):
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" {FONT}>
+def base_card(C, w, h, body, *, card, title, desc):
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" role="img" aria-labelledby="{card}-title {card}-desc" {FONT}>
+  <title id="{card}-title">{xml_escape(title)}</title>
+  <desc id="{card}-desc">{xml_escape(desc)}</desc>
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="{C['bg']}"/>
