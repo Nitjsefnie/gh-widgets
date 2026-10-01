@@ -3,133 +3,112 @@ name: speed
 # Did this commit get more expensive than the committed baseline says?
 #
 # WHAT IS JUDGED. Not elapsed time. `scripts/ci/counter.py` measures a
-# load-invariant COUNTER for each renderer workload and for the unit suite,
-# and this job compares those against speed-baseline.json.
+# load-invariant COUNTER for the unit suite and for each renderer workload,
+# and this job compares them against speed-baseline.json.
 #
-# ONE INSTRUMENT PER POPULATION, NOT ONE PER JOB. The renderer workloads are
-# counted with `strace -f -c`; the unit suite is measured in CPU seconds.
-# That is a decision about cost, not about principle. Measured on this box,
-# tracing the whole unit suite costs about 3.2x its untraced wall time
-# (225/233/230 s traced against 65/70/83 s untraced) — tracing overhead
-# scales with syscall count, and the suite is not a small program. The
-# renderer workloads are seconds each and shell out to git, so they carry
-# their own tracing overhead; that one IS measured, in the paragraph below,
-# because it is the number this arrangement rests on.
+# ONE INSTRUMENT FOR BOTH POPULATIONS: CPU SECONDS, from
+# `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
+# time, so steal time — the thing that makes a duration on a shared runner
+# meaningless — is excluded, which is what makes it valid under the ruling
+# behind issue #81.
 #
-# The consequence is that the baseline carries a `metric` and a `tolerance`
-# per population, and each comparison names the population it is judging. A
-# single document-wide pair of keys could only ever be right for one of the
-# two, and being right for one of them is how a gate ends up quietly holding
-# the wrong contract.
+# READ THIS BEFORE THE NUMBERS BELOW, BECAUSE IT CHANGES WHAT THEY ARE WORTH:
+# THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
+# counts and syscall counts are both deterministic and both would have been
+# strictly better instruments; neither survived measurement on the cell that
+# will read this baseline. What ships is a GROSS-REGRESSION NET, not a
+# sensitive gate, and the budgets below are sized to stay quiet on a noisy
+# cell rather than to catch a 10% regression. That is a real cost of the
+# minutes budget, and it is named as one here, in counter.py's docstring, in
+# the comparator's METRIC_NOTES, and in every report this job writes.
 #
-# WHY WALL TIME IS NOT A MAGNITUDE. A GitHub-hosted runner is a multi-tenant
-# VM. Steal time, a neighbouring container, a different core and a different
-# CPU model all move an elapsed duration, and none of that is the code being
-# measured. Two runs of IDENTICAL code in the same job differ by a factor of
-# two on a single test. The maintainer ruling behind issue #81 is stronger
-# than that: paired wall-clock A/B is not a valid magnitude ANYWHERE — not on
-# a shared box, and not in one job on a CI runner — so this job no longer
-# checks out the last release to get "the same runner", because the same
-# runner was never the thing that made the number mean anything.
-#
-# WHICH INSTRUMENT, AND WHY IT IS PROBED. All three of these were measured on
+# THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured on
 # this cell — ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure — not
 # assumed, so the next reader can re-run them rather than take this file's
 # word for it:
 #
-#   36811152307  perf_event_paranoid is 4, `perf` IS installed, and
-#                `perf stat -e instructions` still exits 255 with "Access to
-#                performance monitoring and observability operations is
-#                limited." Instruction counts are therefore not an option
-#                here, and an unreachable branch in a gate is worse than no
-#                branch: it is a path production never executes. perf is not
-#                in counter.py at all.
-#   36812466498  `strace -f -c` works (ptrace_scope is 1, which restricts
-#                tracing to your own descendants — and strace here IS the
-#                parent of what it traces, so it is inside that restriction).
-#                Three runs of one identical workload reported the same total
-#                every time — 870 calls, 89 errors — while the `% time` and
-#                `seconds` columns of that same report swung between 17.34%
-#                and 48.84%. The CALL COUNT is the stable quantity and
-#                strace's own timings are not; counter.py reads only the
-#                total row's call count. `-f` is not optional: the renderers
-#                shell out to git, and a count that stopped at execve would
-#                measure the wrapper instead of the work.
-#   36812285024  CPU seconds are the fallback, not the primary. Five runs of
-#                one workload spread 7.6% min to max (0.1947-0.2095) on a
-#                QUIET runner, so a budget tight enough to catch a real
-#                regression would fire on that. It stays usable — it is
-#                on-CPU time, so steal time is excluded, which is what makes
-#                it valid at all — but it must never become the primary
-#                silently. Tracing costs something too (0.24-0.25s against
-#                0.19s untraced, run 36812466498, about 1.26x): that overhead
-#                scales with syscall count, so 1.26x is not a prediction for
-#                the unit suite. It is a reason the traced and untraced
-#                numbers are never compared with each other.
+#   36811152307  Instruction counts: perf_event_paranoid is 4, `perf` IS
+#                installed, and `perf stat -e instructions` still exits 255
+#                with "Access to performance monitoring and observability
+#                operations is limited." Unavailable.
+#   36812466498  Syscall counts: `strace -f -c` works here (ptrace_scope is 1,
+#                which restricts tracing to your own descendants — and
+#                strace IS the parent of what it traces, so it is inside the
+#                restriction). It is exactly deterministic: three runs of one
+#                workload gave the same total every time (870 calls, 89
+#                errors) while that report's own `% time` column swung
+#                between 17.34% and 48.84%. DETERMINISTIC, AND NOT
+#                AFFORDABLE: 0.24-0.25s against 0.19s untraced on that small
+#                workload, and over the real renderer workloads 64830 /
+#                68057 / 75870 ms per bench round against 5053 / 5684 /
+#                6215 ms untraced — 12.8x, landing almost entirely on
+#                render-impact.py, which shells out to git (237727-238180
+#                syscalls at 63.7-74.6 wall seconds traced, while render.py at
+#                2007 syscalls and render-responsiveness.py at 1927 are
+#                seconds each). On a cell whose suite round is ~20s, 12.8x on
+#                two bench rounds costs minutes to save tens of seconds.
 #
-# The probe step below RUNS the instrument against a trivial command and
-# requires a parseable positive total. Existence of a binary proves nothing,
-# and `perf` is the proof: installed, on PATH, unable to count.
+# The standing rule that leaves: an instrument the cell cannot use does not
+# belong in the gate, and neither does one that costs more than the thing it
+# measures. Both were tried. Both lost on numbers.
 #
-# The probe runs ONCE, in its own step, and records which instrument this
-# cell can actually produce. It is exported as GH_COUNTER_METRIC to the
-# RENDERER step only; the unit-suite step pins its own instrument, by the
-# decision above. Two call sites inside ONE comparison that picked different
-# instruments would produce two numbers that are not comparable, and that is
-# the entire class of bug the counter module exists to prevent — hence one
-# probe per instrument, not one per job.
+# WHY WALL TIME IS NOT A MAGNITUDE. A GitHub-hosted runner is a multi-tenant
+# VM. Steal time, a neighbouring container, a different core and a different
+# CPU model all move an elapsed duration, and none of that is the code being
+# measured. The maintainer ruling behind issue #81 is stronger than that:
+# paired wall-clock A/B is not a valid magnitude ANYWHERE — not on a shared
+# box, and not in one job on a CI runner — so this job no longer checks out
+# the last release to get "the same runner", because the same runner was
+# never the thing that made the number mean anything.
 #
-# A metric change is never silently accommodated either: each population's
-# baseline names its own metric, and a run that measures a different one is a
-# refusal naming both, not a conversion.
+# The probe step below still runs, and still prints the two kernel settings
+# that decide whether a deterministic counter is possible at all —
+# perf_event_paranoid and yama ptrace_scope. A reader who sees CPU seconds in
+# use can then see that the alternatives were measured and unavailable or too
+# expensive, rather than assuming nobody thought of them.
 #
-# WHY A COMMITTED BASELINE. It removes the pairing entirely, which is only
-# sound because the counter is stable enough to travel between jobs — and,
-# crucially, it makes the comparison point reviewable. The previous shape ran
-# the last release and this commit side by side in one job; the ruling above
-# says that bought nothing, so the release lookup and the second checkout
-# are gone.
+# ONE BUDGET PER POPULATION, BECAUSE THEIR SPREADS DIFFER BY AN ORDER OF
+# MAGNITUDE. Measured here: the unit suite spread 22.2% min-to-max over six
+# runs (27.434 / 27.988 / 28.920 / 30.210 / 32.044 / 33.521), while over
+# eight runs each the renderer workloads spread 19.5% (bench.render-impact,
+# 3.4578-4.1315), 54.1% (bench.render, 0.1179-0.1817) and 72.9%
+# (bench.render-responsiveness, 0.1103-0.1907). The short workloads are the
+# WORST, not the best, which is the opposite of what was expected when this
+# budget was chosen: fixed overhead and a co-tenant's load dominate a
+# measurement this brief. So the renderer half does not get a tight budget
+# for free — it needs a loose one for a different reason than the suite needs
+# a loose one, and one global `tolerance` could not have expressed that. Each
+# population therefore carries its own `metric` and `tolerance` in
+# speed-baseline.json, and each comparison names the population it judges.
 #
-# THE TOLERANCE BELONGS TO THE INSTRUMENT. A syscall count is deterministic
-# and wants a tight budget; CPU seconds showed 7.6% of drift and want a loose
-# one. One number for both would be a number chosen for whichever instrument
-# is not in use, so `tolerance` sits in speed-baseline.json NEXT TO each
-# population's `metric`, and a change of instrument re-derives both together —
-# the same re-derive-never-carry rule coverage-floor.json already follows.
-# ROUNDS stays 2: --selfcheck compares SVG bytes across head rounds and needs
-# two, and the minimum across repeated rounds is the least-noisy observation
-# of the same work under either instrument.
+# DERIVING THOSE BUDGETS: AT LEAST TWICE THE SPREAD MEASURED ON THE CELL THAT
+# WILL READ THE BASELINE, and re-derived there — never carried from here. This
+# box is shared, so its numbers are an upper bound: a budget sized from 22.2%
+# would be 0.45, and from 72.9% above 1.4, which is not a gate at all. On a
+# quiet dedicated cell the same kind of workload spread 7.6% min-to-max (run
+# 36812285024), and 0.25 — roughly three times that — would be honest there.
+# Whoever derives the baseline on the runner measures both populations again
+# first; if the runner's spreads come anywhere near this box's, the honest
+# conclusion is that CPU seconds cannot gate per entry on that cell, and the
+# baseline's `basis` must say so rather than record a number that looks like
+# a gate.
 #
-# WHAT TRACING THE RENDERERS ACTUALLY COSTS, MEASURED, NOT ASSUMED. One bench
-# round over the pinned fixtures on this box: 64830 / 68057 / 75870 ms traced
-# against 5053 / 5684 / 6215 ms untraced — about 12.8x on the round. That is
-# NOT small, and it is stated here rather than buried because the whole
-# arrangement rests on it. The cost is concentrated exactly where the design
-# predicts: render-impact.py, which shells out to git, measured 237727 /
-# 238180 / 237738 syscalls at 63.7 / 67.0 / 74.6 wall seconds traced, while
-# render.py (2007 syscalls) and render-responsiveness.py (1927) are seconds
-# each. So "the renderer half is cheap to trace" is true of two of the three
-# workloads and false of the one that matters most. The arrangement is still
-# the cheapest of the three available — all-traced costs 2 x 230 s for the
-# suite alone, all-untraced gives up the determinism the renderer gate exists
-# for, and this one is the middle — but the honest figure is 12.8x, not a
-# rounding error, and if the job's minutes are the deciding quantity this is
-# the number to weigh.
+# ROUNDS stays 2, for two reasons that are not the same reason. --selfcheck
+# compares SVG bytes across head rounds and needs at least two, and that
+# control is byte-identity, not timing, so nothing about the instrument could
+# have weakened it. Separately, with a counter this noisy the minimum across
+# repeated rounds is the least-noisy observation of the same work.
 #
-# THE TOLERANCES, DERIVED FROM THE SPREADS ABOVE AND NOT GUESSED.
-#   renderer-workloads (syscalls): three rounds spread 0.00% (render 2007,
-#     2007, 2007; responsiveness 1927, 1927, 1927) and 0.19% (render-impact
-#     237727-238180). 0.05 — five percent — is about 26x the worst observed
-#     spread, and a renderer that starts doing real work again moves by
-#     orders of magnitude, not by one percent.
-#   unit-suite (cpu_time): 15.9% min-to-max over three runs (28.920 / 30.210 /
-#     33.521). 0.25 — a quarter — is roughly 1.6x that, because a budget
-#     below the spread is not a gate, it is a coin flip. READ THIS AS A
-#     LIMITATION, NOT A TARGET: at a quarter the unit-suite half catches
-#     GROSS regressions and will not catch a real 10% one. That is the price
-#     of not paying 3.2x the job's wall time to trace a population that is
-#     not the shipped product. If the suite's cost ever stops mattering more
-#     than its sensitivity, re-derive it onto syscalls and tighten it.
+# WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
+# comparison point reviewable. The previous shape ran the last release and
+# this commit side by side in one job; the ruling above says that bought
+# nothing, so the release lookup and the second checkout are gone.
+#
+# WHY THE BASELINE ONLY RATCHETS DOWN. The comparator refuses a head counter
+# above baseline x (1 + tolerance) per entry. Separately, the last step
+# diffs the committed baseline against the MERGE BASE's copy and fails if any
+# entry went up — otherwise a commit could raise the ceiling it is measured
+# against in the same push, and the gate would be switched off from inside.
 #
 # UNTIL A BASELINE EXISTS. There is no speed-baseline.json committed yet,
 # because a baseline has to be measured ON THIS CELL and inventing one from
@@ -236,13 +215,12 @@ jobs:
 
       - name: Probe the counter instrument
         id: probe
-        # Once per job, for the renderer population. The unit suite pins
-        # CPU seconds in its own step by decision, not by probe — but the
-        # kernel settings still belong in the log, because a reader has to be
-        # able to tell "the tracer worked" from "the tracer was never tried".
-        # Not exported to $GITHUB_ENV: two steps here use two instruments,
-        # and a job-wide default would silently give one of them the
-        # other's contract.
+        # Once per job. There is one instrument, so nothing is being chosen
+        # here — what this step exists for is the RECORD of why. It prints
+        # perf_event_paranoid and yama ptrace_scope, the two kernel settings
+        # that decide whether a deterministic counter is possible at all, so
+        # a reader who sees CPU seconds in use can see the alternatives were
+        # measured rather than assumed away.
         run: |
           python3 head/scripts/ci/counter.py --probe > probe.env
           cat probe.env
@@ -258,10 +236,7 @@ jobs:
 
       - name: Measure the unit suite
         # One CPU-second measurement of the whole suite per round, emitted as
-        # one JUnit suite each. Traced instead would cost about 3.2x the
-        # wall time (measured above) for a population that is not the shipped
-        # product, so this one is measured in CPU seconds and its tolerance
-        # is the loose one that instrument needs.
+        # one JUnit suite each.
         #
         # The suite's exit code is deliberately NOT this job's verdict:
         # tests.yml owns pass/fail. What this step must guarantee is that a
@@ -314,11 +289,10 @@ jobs:
       - name: Run renderer workloads
         env:
           GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
-          # Whatever the probe found this cell can actually produce. If that
-          # is cpu_time, the renderer population's baseline says syscalls and
-          # the comparator refuses — correctly, because the baseline has to
-          # be re-derived on whatever instrument is really in use.
-          GH_COUNTER_METRIC: ${{ steps.probe.outputs.metric }}
+          # Explicit, rather than relying on the default, so the instrument
+          # this population is judged by is visible in the workflow rather
+          # than buried in counter.py's fallback chain.
+          GH_COUNTER_METRIC: cpu_time
         run: |
           for round in $(seq 1 "$ROUNDS"); do
             echo "::group::renderer round $round"
