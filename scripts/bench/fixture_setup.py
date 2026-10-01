@@ -12,6 +12,13 @@ from pathlib import Path
 
 USER = "bench-user"
 ORG = "bench-org"
+# A membership that only arrives on the org connection's SECOND page. The
+# profile card builds its insider set from that query, so a fixture that only
+# ever answers one page cannot tell a renderer that walks the connection from
+# one that stops at the first hundred. It stays out of identity.json and the
+# manifest on purpose: those model the identity query, which the other two
+# renderers use to derive identity.
+ORG_ON_PAGE_TWO = "bench-org-late"
 AUTHOR_EMAIL = "bench-user@users.noreply.github.com"
 # The renderers still call datetime.now(); these fixed future inputs make
 # current output stable without proving those wall-clock reads are absent.
@@ -202,9 +209,13 @@ def _write_json(path, payload):
                     encoding="utf-8")
 
 
+def _organization(login, org_id):
+    return {"id": org_id, "login": login, "isPublic": True,
+            "url": f"https://github.com/{login}"}
+
+
 def _write_identity_payload(payload_dir):
-    org = {"id": 9001, "login": ORG, "isPublic": True,
-           "url": f"https://github.com/{ORG}"}
+    org = _organization(ORG, 9001)
     organizations = {
         "totalCount": 1,
         "nodes": [org],
@@ -293,6 +304,26 @@ def _write_calendar_payload(payload_dir):
     return calendar_days, contribution_calendar
 
 
+def _write_profile_orgs_payload(payload_dir, identity_user):
+    """ORG_QUERY's payload: the account's own fields and a paged org
+    connection. Two pages, so a run walks to the second and merges both orgs
+    into the insider set the profile card classifies against."""
+    pages = [
+        _connection_page([_organization(ORG, 9001)], True,
+                         "profile-orgs-page-2", 2),
+        _connection_page([_organization(ORG_ON_PAGE_TWO, 9002)], False,
+                         None, 2),
+    ]
+    _write_json(payload_dir / "profile-orgs.json", {
+        "user": {
+            "login": identity_user["login"],
+            "name": identity_user["name"],
+            "followers": {"totalCount": 37},
+            "organizations": {"pages": pages},
+        },
+    })
+
+
 def _write_profile_payload(payload_dir, identity_user, repo_nodes,
                            contribution_calendar, all_prs, issue_nodes):
     profile_repositories = {
@@ -340,6 +371,7 @@ def _write_payloads(payload_dir, repo_heads):
     calendar_days, contribution_calendar = _write_calendar_payload(payload_dir)
     _write_profile_payload(payload_dir, identity_user, repo_nodes,
                            contribution_calendar, all_prs, issue_nodes)
+    _write_profile_orgs_payload(payload_dir, identity_user)
     totals = _write_totals_payload(payload_dir, repo_heads)
     _write_json(payload_dir / "manifest.json", {
         "login": USER,
@@ -448,7 +480,7 @@ def main(argv=None):
     print(f"mirror repositories: {len(heads)}")
     for repo, head in sorted(heads.items()):
         print(f"{repo} {head}")
-    print("payloads: 8 JSON files")
+    print("payloads: 9 JSON files")
     print("caches: complete profile and impact caches")
     return 0
 

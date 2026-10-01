@@ -80,7 +80,8 @@ def _dispatch_totals(compact, payload_dir):
     return _json_bytes({"data": data})
 
 
-def _dispatch_pull_requests(compact, variables, payload_dir):
+def _pull_requests_page(compact, variables, payload_dir):
+    """The pullRequests connection page this query asks for."""
     payload = _read_json(payload_dir, "pull-requests.json")
     state_match = re.search(r"states\s*:\s*\[([^\]]+)\]", compact)
     states = set()
@@ -88,25 +89,39 @@ def _dispatch_pull_requests(compact, variables, payload_dir):
         states = {state.strip() for state in
                   state_match.group(1).split(",") if state.strip()}
     if states == {"MERGED"}:
-        connection = payload["merged_page"]
-    else:
-        key = "live_pages" if "MERGED" not in states else "all_pages"
-        pages = payload[key]
-        cursor = variables.get("cursor")
-        page_index = 0 if cursor is None else 1
-        if page_index >= len(pages):
-            raise RuntimeError(f"unknown offline PR cursor: {cursor!r}")
-        connection = pages[page_index]
-    return _json_bytes({"data": {"user": {"pullRequests": connection}}})
+        return payload["merged_page"]
+    key = "live_pages" if "MERGED" not in states else "all_pages"
+    return _page_for_cursor(payload[key], variables.get("cursor"), "PR")
 
 
-def _dispatch_issues(variables, payload_dir):
-    pages = _read_json(payload_dir, "issues.json")["pages"]
-    cursor = variables.get("cursor")
+def _page_for_cursor(pages, cursor, what):
+    """The connection page `cursor` asks for: no cursor is page one, and an
+    unrecognised one raises rather than serving something the renderer would
+    merge as if it were the page it asked for."""
     page_index = 0 if cursor is None else 1
     if page_index >= len(pages):
-        raise RuntimeError(f"unknown offline issue cursor: {cursor!r}")
-    return _json_bytes({"data": {"user": {"issues": pages[page_index]}}})
+        raise RuntimeError(f"unknown offline {what} cursor: {cursor!r}")
+    return pages[page_index]
+
+
+def _issues_page(variables, payload_dir):
+    """The issues connection page this query asks for."""
+    pages = _read_json(payload_dir, "issues.json")["pages"]
+    return _page_for_cursor(pages, variables.get("cursor"), "issue")
+
+
+def _dispatch_profile_orgs(variables, payload_dir):
+    """ORG_QUERY: the account's own fields plus a paged org connection.
+
+    Its own payload, because identity.json models the identity query and
+    carries no followers — which this query selects.
+    """
+    payload = _read_json(payload_dir, "profile-orgs.json")
+    pages = payload["user"]["organizations"]["pages"]
+    connection = _page_for_cursor(pages, variables.get("cursor"),
+                                  "profile org")
+    return _json_bytes({"data": {"user": {
+        **payload["user"], "organizations": connection}}})
 
 
 def _graphql_dispatch(request, parsed_url, payload_dir):
@@ -118,16 +133,27 @@ def _graphql_dispatch(request, parsed_url, payload_dir):
     if "repositories(" in compact:
         profile = _read_json(payload_dir, "profile-core.json")
         return _json_bytes({"data": profile})
+    if "followers" in compact and "repositories" not in compact:
+        # ORG_QUERY: the profile's own fields and the org connection, with no
+        # repository connection beside them. That absence is what keeps this
+        # branch off REPO_QUERY and off the single combined profile query the
+        # baseline release still sends.
+        return _dispatch_profile_orgs(variables, payload_dir)
     if ("databaseId" in compact or
             ("organizations" in compact and "repositories" not in compact) or
             ("viewer" in compact and "login" in compact)):
         return _json_bytes({"data": _read_json(payload_dir, "identity.json")})
     if "contributionCalendar" in compact:
         return _json_bytes({"data": _read_json(payload_dir, "calendar.json")})
-    if "pullRequests(" in compact:
-        return _dispatch_pull_requests(compact, variables, payload_dir)
-    if "issues(" in compact:
-        return _dispatch_issues(variables, payload_dir)
+    if "pullRequests(" in compact or "issues(" in compact:
+        # Both are a single page of a paged connection; only the page differs.
+        if "pullRequests(" in compact:
+            field = "pullRequests"
+            connection = _pull_requests_page(compact, variables, payload_dir)
+        else:
+            field = "issues"
+            connection = _issues_page(variables, payload_dir)
+        return _json_bytes({"data": {"user": {field: connection}}})
     raise RuntimeError("unmatched offline GraphQL fixture query")
 
 
