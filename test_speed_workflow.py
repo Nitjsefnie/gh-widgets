@@ -583,7 +583,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         """
         head = root / "head"
         head.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(REPO_ROOT / "scripts", head / "scripts")
+        shutil.copytree(REPO_ROOT / "scripts", head / "scripts",
+                        copy_function=shutil.copy2)
         (head / "test_one.py").write_text(
             "import unittest\n\n\n"
             "class TestOne(unittest.TestCase):\n"
