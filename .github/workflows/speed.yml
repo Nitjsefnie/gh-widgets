@@ -331,6 +331,7 @@ jobs:
         # tests.yml owns pass/fail. But a counter measured over a suite that
         # did not run is not comparable, and the step below says so, which is
         # why a non-zero code is reported here rather than swallowed.
+        working-directory: head
         env:
           GH_COUNTER_METRIC: cpu_time
         run: |

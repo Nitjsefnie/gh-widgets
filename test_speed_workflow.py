@@ -570,6 +570,102 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn(f"Metric: **{self.UNIT_METRIC}**",
                       self._execute_compare(root)[1])
 
+    def _real_checkout(self, root):
+        """A workspace whose only repository is a REAL checkout at head/.
+
+        The whole tree, not just the Python: the suite reads VERSION and
+        several other non-.py files, and a partial checkout makes it fail in
+        ways that look like a gate defect. Copied rather than linked, because
+        `e2e_bench.py` refuses a work root inside the checkout and a symlink
+        would satisfy that check without the checkout being there.
+        """
+        head = root / "head"
+        head.mkdir(parents=True, exist_ok=True)
+        skip = {".git", "__pycache__", ".worktrees", ".superpowers",
+                "coverage.json", "widgets"}
+        for item in sorted(REPO_ROOT.iterdir()):
+            if item.name in skip:
+                continue
+            if item.is_dir():
+                shutil.copytree(item, head / item.name,
+                                ignore=shutil.ignore_patterns(
+                                    "__pycache__", "*.pyc"))
+            elif item.is_file():
+                shutil.copyfile(item, head / item.name)
+        return head
+
+    def test_every_repository_step_declares_the_working_directory(self):
+        """The complete enumeration, not a spot check.
+
+        Four defects on this branch were a path resolved against the wrong
+        root. Three were caught by asserting on a step's text; this one was
+        not, because the assertion was on the WRONG step — the other six were
+        checked and this one was overlooked. A spot check that passes while
+        one step is left behind is worse than none, so this enumerates.
+        """
+        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        steps = []
+        name = None
+        working_dir = False
+        body = []
+        for line in lines:
+            if line.startswith("      - name: "):
+                if name:
+                    steps.append((name, working_dir, "\n".join(body)))
+                name = line.split(": ", 1)[1]
+                working_dir = False
+                body = []
+                continue
+            if line.startswith("      - ") and name:
+                steps.append((name, working_dir, "\n".join(body)))
+                name = None
+                continue
+            if name is None:
+                continue
+            if line.startswith("        working-directory:"):
+                working_dir = True
+            if line.startswith("        run:") or body:
+                body.append(line)
+        if name:
+            steps.append((name, working_dir, "\n".join(body)))
+
+        touching = [n for n, w, b in steps
+                    if "python3 scripts/" in b or "\ngit " in b]
+        self.assertGreaterEqual(len(touching), 6, touching)
+        for step in touching:
+            with self.subTest(step=step):
+                self.assertIn(
+                    step, [n for n, w, _ in steps if w],
+                    f"{step!r} invokes repository code and does not declare "
+                    "working-directory: head, so its paths resolve against "
+                    "the workspace one level above the checkout")
+
+    def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
+        """The step executed, and its output proved to land where it must.
+
+        The push that introduced the path convention failed here: the step
+        declared the convention's `working-directory` on five steps and left
+        it off the sixth, so discovery ran one level above the checkout, found
+        no tests, and the counter measured interpreter startup. Text could not
+        have caught it — only running the step and finding its JUnit where the
+        next step looks for it.
+        """
+        root = self._temp_root("ghw-speed-unit-step-exec-")
+        self._real_checkout(root)
+        declared, working_dir, block = self.steps.step_run(
+            "Measure the unit suite")
+        self.assertEqual(working_dir, "head")
+        env = self.steps.env_for(declared, root)
+        env.update({"GH_COUNTER_METRIC": "cpu_time", "ROUNDS": "1"})
+        reports = Path(env["REPORTS"])
+        completed = self.steps.bash(block, root, working_dir, env)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout[-2000:] + completed.stderr[-2000:])
+        written = sorted(p.name for p in reports.glob("unit-*.xml"))
+        self.assertEqual(written, ["unit-1.xml"],
+                         "the step must write its JUnit into $REPORTS, where "
+                         "the Compare step looks for it")
+
     def test_the_compare_step_FINDS_the_baseline_in_the_checkout(self):
         """The defect that made four dispatch runs green for the wrong reason.
 
