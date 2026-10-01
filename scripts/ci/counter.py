@@ -16,9 +16,10 @@ at all.
 
 IT IS NOT DETERMINISTIC, AND THE GATE IS WEAKER FOR IT. That is a real cost
 and it is named rather than buried: measured on this box, the same program
-measured repeatedly spreads 22.2% over six runs (unit suite) and 19.5-72.9%
-over eight runs (the three renderer workloads, the short ones worst because
-fixed overhead and co-tenant load dominate a brief measurement). A quiet
+measured repeatedly spreads 21.3% over six runs (unit suite) and 10.8%, 35.2%
+and 47.3% over eight runs each (the three renderer workloads, the brief ones
+among the noisiest because fixed overhead and co-tenant load dominate a short
+measurement). A quiet
 dedicated cell spreads far less — 7.6% min-to-max for one workload, run
 36812285024 — but even there the budget has to be looser than a
 deterministic counter would need. The budgets in the committed baseline are

@@ -68,30 +68,34 @@ name: speed
 # expensive, rather than assuming nobody thought of them.
 #
 # ONE BUDGET PER POPULATION, BECAUSE THEIR SPREADS DIFFER BY AN ORDER OF
-# MAGNITUDE. Measured here: the unit suite spread 22.2% min-to-max over six
-# runs (27.434 / 27.988 / 28.920 / 30.210 / 32.044 / 33.521), while over
-# eight runs each the renderer workloads spread 19.5% (bench.render-impact,
-# 3.4578-4.1315), 54.1% (bench.render, 0.1179-0.1817) and 72.9%
-# (bench.render-responsiveness, 0.1103-0.1907). The short workloads are the
-# WORST, not the best, which is the opposite of what was expected when this
-# budget was chosen: fixed overhead and a co-tenant's load dominate a
-# measurement this brief. So the renderer half does not get a tight budget
-# for free — it needs a loose one for a different reason than the suite needs
-# a loose one, and one global `tolerance` could not have expressed that. Each
+# MAGNITUDE. Measured on this box against this tree, and re-measured after the
+# rebase onto main — which moved them, because main's renderer work changed
+# what these workloads actually do. Unit suite, six runs: 36.026 / 37.051 /
+# 38.823 / 42.145 / 43.017 / 43.687 CPU seconds, 21.3% min-to-max. Renderer
+# workloads, eight runs each: bench.render 0.1251-0.1843 (47.3%),
+# bench.render-impact 3.3450-3.7062 (10.8%), bench.render-responsiveness
+# 0.1277-0.1726 (35.2%). The SHORT workloads are the noisiest in two of the
+# three cases, which is the opposite of what was expected when these budgets
+# were chosen: fixed overhead and a co-tenant's load dominate a brief
+# measurement, so a 0.1 s workload's relative spread says more about the box
+# than about the program. So the renderer half does not get a tight budget for
+# free — it needs a loose one, for a different reason than the suite needs a
+# loose one, and one global `tolerance` could not have expressed that. Each
 # population therefore carries its own `metric` and `tolerance` in
 # speed-baseline.json, and each comparison names the population it judges.
 #
-# DERIVING THOSE BUDGETS: AT LEAST TWICE THE SPREAD MEASURED ON THE CELL THAT
-# WILL READ THE BASELINE, and re-derived there — never carried from here. This
-# box is shared, so its numbers are an upper bound: a budget sized from 22.2%
-# would be 0.45, and from 72.9% above 1.4, which is not a gate at all. On a
-# quiet dedicated cell the same kind of workload spread 7.6% min-to-max (run
-# 36812285024), and 0.25 — roughly three times that — would be honest there.
-# Whoever derives the baseline on the runner measures both populations again
-# first; if the runner's spreads come anywhere near this box's, the honest
-# conclusion is that CPU seconds cannot gate per entry on that cell, and the
-# baseline's `basis` must say so rather than record a number that looks like
-# a gate.
+# THOSE FIGURES ARE A SHARED-BOX ARTEFACT AND MUST NOT BE CARRIED. This box
+# has a co-tenant; the runner does not. The rule written here is therefore not
+# a number but a procedure: a budget must be AT LEAST TWICE THE SPREAD
+# MEASURED ON THE CELL THAT WILL READ THE BASELINE, and re-derived there.
+# From this box's numbers that would be 0.45 for the suite and above 0.7 for
+# bench.render — the second is not a gate at all. On a quiet dedicated cell
+# the same kind of workload spread 7.6% min-to-max (run 36812285024), where
+# 0.25 is honest. Whoever derives the baseline on the runner measures both
+# populations again first; if the runner's spreads come anywhere near this
+# box's, the honest conclusion is that CPU seconds cannot gate per entry on
+# that cell, and the baseline's `basis` must say so rather than record a
+# number that looks like a gate.
 #
 # ROUNDS stays 2, for two reasons that are not the same reason. --selfcheck
 # compares SVG bytes across head rounds and needs at least two, and that
