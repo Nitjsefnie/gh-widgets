@@ -85,7 +85,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     UNIT_POPULATION = "unit-suite"
     RENDERER_POPULATION = "renderer-workloads"
     UNIT_METRIC = "cpu_time"
-    RENDERER_METRIC = "syscalls"
+    RENDERER_METRIC = "cpu_time"
     WORKLOADS = (("bench.render", 1000.0, 2.0),
                  ("bench.render-impact", 200.0, 1.0),
                  ("bench.render-responsiveness", 50.0, 0.5))
@@ -152,7 +152,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def _write_tree(self, root, unit_counter=10.0, workload_counter=None,
                     omit_renderer=None, metric=RENDERER_METRIC, wall=None,
-                    baseline=True, population=True, tolerance=0.05,
+                    baseline=True, population=True, tolerance=0.25,
                     unit_metric=UNIT_METRIC):
         """The tree speed.yml's Compare step expects, entirely synthetic."""
         head = root / "head"
@@ -204,7 +204,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         shutil.copyfile(source, destination)
         return destination
 
-    def _write_baseline(self, root, metric=RENDERER_METRIC, tolerance=0.05,
+    def _write_baseline(self, root, metric=RENDERER_METRIC, tolerance=0.25,
                         wall=None, population=True,
                         unit_metric=UNIT_METRIC, unit_tolerance=0.25,
                         unit_wall=None):
@@ -277,16 +277,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self._write_tree(root, **tree)
         return root
 
-    def _execute_probe(self, root, tracer_script):
-        """Run the REAL probe step with a chosen `strace` first on PATH."""
-        bindir = root / "fakebin"
-        bindir.mkdir(exist_ok=True)
-        tracer = bindir / "strace"
-        tracer.write_text(tracer_script, encoding="utf-8")
-        tracer.chmod(0o755)
+    def _execute_probe(self, root):
+        """Run the REAL probe step out of the YAML and read what it exported."""
         env = {
             **os.environ,
-            "PATH": f"{bindir}:{os.environ['PATH']}",
             "GITHUB_OUTPUT": str(root / "output.txt"),
             "GITHUB_ENV": str(root / "env.txt"),
         }
@@ -297,63 +291,74 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             cwd=root, env=env, capture_output=True, text=True, check=False)
         return completed, (root / "output.txt").read_text(encoding="utf-8")
 
-    WORKING_STRACE = ("#!/usr/bin/env python3\n"
-                      "import sys\n"
-                      "a = sys.argv[1:]\n"
-                      "open(a[a.index('-o') + 1], 'w').write("
-                      "'100.00    0.000010           1       870          89 "
-                      "total\\n')\n")
-    BROKEN_STRACE = ("#!/usr/bin/env python3\n"
-                     "import sys\n"
-                     "sys.stderr.write('strace: Operation not permitted\\n')\n"
-                     "sys.exit(1)\n")
-
     # -- the probe -----------------------------------------------------------
 
-    def test_probe_picks_syscalls_when_the_tracer_really_counts(self):
-        root = self._run_with_tree("ghw-speed-probe-syscalls-")
-        completed, output = self._execute_probe(root, self.WORKING_STRACE)
-
-        self.assertEqual(completed.returncode, 0,
-                         completed.stdout + completed.stderr)
-        self.assertIn("metric=syscalls", output)
-
-    def test_probe_falls_back_to_cpu_time_when_the_tracer_cannot_trace(self):
-        # strace IS on PATH here and still traces nothing — the shape of a
-        # cell whose kernel forbids it. A probe that only checked for the
-        # binary would pick syscalls and every comparison downstream would be
-        # nonsense, with nothing anywhere recording that it was.
-        root = self._run_with_tree("ghw-speed-probe-cputime-")
-        completed, output = self._execute_probe(root, self.BROKEN_STRACE)
+    def test_probe_records_the_instrument_and_the_kernel_settings(self):
+        # There is one instrument, so the step chooses nothing. What it
+        # exists for is the RECORD of why, and a reader who sees CPU seconds
+        # has to be able to see that the deterministic alternatives were
+        # measured rather than assumed away.
+        root = self._run_with_tree("ghw-speed-probe-")
+        completed, output = self._execute_probe(root)
 
         self.assertEqual(completed.returncode, 0,
                          completed.stdout + completed.stderr)
         self.assertIn("metric=cpu_time", output)
-        self.assertNotIn("metric=syscalls", output)
-        # The reader has to be able to judge the fallback, which means the
-        # reason has to say what forbade it.
         self.assertIn("metric_reason=", output)
+        self.assertIn("perf_event_paranoid=", output)
         self.assertIn("ptrace_scope=", output)
+
+    def test_both_measurement_steps_pin_the_instrument(self):
+        # Pinned rather than inherited: the instrument a population is judged
+        # by should be visible in the workflow, not buried in a fallback
+        # chain inside counter.py.
+        for step in ("Measure the unit suite", "Run renderer workloads"):
+            with self.subTest(step=step):
+                self.assertIn("GH_COUNTER_METRIC: cpu_time",
+                              self._run_block_env(step))
+
+    @staticmethod
+    def _run_block_env(step_name):
+        """The `env:` mapping of one named step, as text."""
+        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        start = lines.index(f"      - name: {step_name}")
+        block = []
+        for line in lines[start:]:
+            if line.startswith("      - ") and line is not lines[start]:
+                break
+            block.append(line)
+        return "\n".join(block)
+
+    def test_no_step_takes_its_instrument_from_the_probe_output(self):
+        # The instrument is pinned literally in both measurement steps, so a
+        # $GITHUB_ENV left behind by an older revision — exporting the
+        # instrument this gate no longer has — cannot reach counter.py at
+        # all. The probe step's output is still recorded in the job summary,
+        # but nothing consumes it as a contract.
+        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        self.assertNotIn("GH_COUNTER_METRIC: ${{", text)
+        self.assertIn("id: probe", text)
 
     # -- refusals ------------------------------------------------------------
 
-    def test_metric_mismatch_is_exit_two_not_a_comparison(self):
-        root = self._run_with_tree("ghw-speed-metric-mismatch-",
-                                   baseline=True)
-        # The renderer population's baseline says syscalls; re-measure the
-        # renderer reports in CPU seconds, which is the collision a single
-        # document-wide `metric` could not have expressed.
+    def test_a_population_measured_under_another_instrument_refuses(self):
+        # The instrument is one now, so this cannot happen by accident today.
+        # It is here for the next instrument, and it is why every baseline
+        # entry carries its metric name rather than leaving it to a reader's
+        # memory: a count measured under one instrument and compared against
+        # a baseline recorded under another is a category error that reads
+        # as a spectacular speedup or a catastrophic regression, and neither
+        # reading would be true.
+        root = self._run_with_tree("ghw-speed-metric-mismatch-")
         for round_number in (1, 2):
             self._write_report(
                 root / "reports" / f"bench-head-{round_number}.xml", "e2e",
                 [(name, value) for name, value, _ in self.WORKLOADS],
-                "cpu_time")
+                "syscalls")
         completed, summary = self._execute_compare(root)
 
         self.assertEqual(completed.returncode, 1,
                          completed.stdout + completed.stderr)
-        # Nothing was compared for the family whose instrument moved: the
-        # refusal names both metrics rather than dividing one by the other.
         self.assertIn("COULD NOT COMPARE", summary)
         self.assertIn("metric mismatch", summary)
         self.assertIn("cpu_time", summary)
