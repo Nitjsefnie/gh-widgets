@@ -112,8 +112,9 @@ The workflow files in `.github/workflows/` are:
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
-- `coverage-ratchet.yml` — measures coverage on `main`, raises the committed
-  floor in `coverage-floor.json`, and never lowers it.
+- `coverage-ratchet.yml` — measures coverage on `main` and announces when
+  measured coverage exceeds the committed floor. The floor only moves
+  through a pull request.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
 - `targeted-blame-audit.yml` — contribution-counting correctness audit.
@@ -140,12 +141,15 @@ pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
 workflows, so leaving them out reported coverage for a smaller program than
 the one that ships. The floor lives in `coverage-floor.json` at the repository
-root: committed data rather than a literal in a workflow, raised automatically
-on `main` by `coverage-ratchet.yml` whenever coverage climbs, and never
-lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a smaller
-number than it read. Raise coverage by writing tests; never by editing the
-floor. One consequence worth knowing before you add a source module: the gate
-deliberately judges coverage without comparing file counts, so `tests.yml` stays
+root as committed data. When measured coverage exceeds it,
+`coverage-ratchet.yml` announces the climbable floor with an annotation and step
+summary. Raising it is a deliberate pull request: download the
+`coverage-floor-candidate` artifact, replace `coverage-floor.json`, and open a
+pull request, or run `scripts/ci/coverage_ratchet.py raise` locally. The floor
+is never lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a
+smaller number than it read. Raise coverage by writing tests; never by editing
+the floor. One consequence worth knowing before you add a source module: the
+gate deliberately judges coverage without comparing file counts, so `tests.yml` stays
 green on your pull request, and the file-count check fires only after merge, on
 `main` — where it blocks every release until someone re-derives the floor.
 
