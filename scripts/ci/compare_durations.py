@@ -500,10 +500,15 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         "**The gate this is: a step-change detector, not a regression "
         "detector.** The baseline holds the range each entry was observed "
         "over, so a head value has to clear the worst machine observed "
-        "before it fails. That catches a doubled workload or an accidental "
-        "quadratic. It will NOT catch a 20% regression, and this repository "
-        "should not be told otherwise by the phrase \"load-invariant "
-        "counter\".",
+        "**The gate this is: a step-change detector, not a regression "
+        "detector.** The baseline holds the range each entry was observed "
+        "over, so a head value has to clear the worst machine observed "
+        "before it fails — and on this cell that range is wide enough that "
+        "it does NOT catch a doubling of any entry, let alone a 20% "
+        "regression. It catches a gross step change. Do not read the phrase "
+        "\"load-invariant counter\" as \"a sharp budget\": it means the "
+        "machine's load does not reach the number, not that the number is "
+        "sensitive.",
         "",
         "_No elapsed time appears in this report, deliberately: a "
         "multi-tenant runner makes a duration a measure of the machine. It "

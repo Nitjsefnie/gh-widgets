@@ -16,10 +16,11 @@ name: speed
 # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
 # counts and syscall counts are both deterministic and both would have been
 # strictly better instruments; neither survived measurement on the cell that
-# will read this baseline. What ships is a STEP-CHANGE DETECTOR, not a
-# sensitive gate: it catches a doubled workload and will not catch a 20%
-# regression. That is a real cost, and it is named as one here, in
-# counter.py's docstring, in the comparator's METRIC_NOTES and in the
+# will read this baseline. What ships is a STEP-CHANGE DETECTOR and not a
+# very sensitive one: it catches a gross step change and the gross wall
+# smoke bound. It will not catch a 20% regression anywhere, and it does not
+# catch a doubling either. That is a real cost, and it is named as one here,
+# in counter.py's docstring, in the comparator's METRIC_NOTES and in the
 # envelope section below, and in every report this job writes.
 #
 # THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured on
@@ -125,9 +126,13 @@ name: speed
 # instead of to a neighbour's quiet-window 13.3%.
 #
 # WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
-# on NO ENTRY. The suite's ceiling is 34.2 against a doubled fastest run of
-# 32.7; the renderers miss by 0.113/0.144, 2.038/2.305 and 0.120/0.140.
-# That is the rule applied to this tree's own measurement, not a rounding
+# on NO ENTRY — every one of these is `observed maximum x (1 + tolerance)`
+# against `2 x observed minimum`, recomputed by test_baseline.py from
+# speed-baseline.json rather than written here, because a transcribed
+# figure in this file has already been wrong twice. At the tolerances this
+# baseline actually ships, that is the suite missing by a fraction of a
+# second and all three renderer workloads missing by a wider margin. That
+# is the rule applied to this tree's own measurement, not a rounding
 # artefact. Going tighter would mean going below each entry's own observed
 # spread — a ceiling the fastest machine already clears, which fires on
 # ordinary pool variation. A gate that cries wolf is deader than one with a
