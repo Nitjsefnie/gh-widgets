@@ -103,9 +103,11 @@ name: speed
 # instrument is usable at all, and its price is stated here rather than left
 # to be discovered by someone who assumed otherwise.
 #
-# The numbers above are recorded in speed-baseline.json's `basis` next to the
-# envelope they produced, so the next person sees the shape of the cell
-# instead of spending a morning deriving it.
+# The numbers above describe the cell, and they were taken BEFORE the module
+# split, so they characterise the CELL and not this tree's program — which is
+# the distinction that matters, and the reason the baseline file is absent
+# rather than stale. Re-derive on the runner and this section is rewritten
+# with the new figures; the shapes will be the same and the numbers will not.
 #
 # THE GROSS WALL SMOKE GATE IS ARMED, AND IT IS NOT A WALL BUDGET. Wall time
 # spread 52-63% min-to-max across the same dispatches (bench.render
@@ -145,15 +147,24 @@ name: speed
 # entry went up — otherwise a commit could raise the ceiling it is measured
 # against in the same push, and the gate would be switched off from inside.
 #
-# IF THE BASELINE IS EVER DELETED. The comparator then prints what it
-# measured and exits 0 — the same shape as the "no release exists yet" path
-# this file always had — with the measured entries in the envelope shape at
-# `n: 1`, which the validator REFUSES on purpose. A baseline from one dispatch
-# records what one machine did once and calls it a worst case, so the refusal
-# is the intended behaviour: re-run the job several times on this cell and
-# build the envelope from those. A green gate with an EMPTY summary is the
-# thing this repository keeps failing reviews over, so that path is not
-# silent — but it is not an invitation to paste the first result in.
+# THERE IS NO COMMITTED BASELINE RIGHT NOW, AND THAT IS DELIBERATE. The last
+# one was derived from six dispatches of d051020, against a
+# ghwidgets_common.py that the module split (ecd77b5) took apart — and a
+# split changes what the renderers import and therefore what they cost. Those
+# envelopes are a measurement of a DIFFERENT PROGRAM, so shipping them would
+# compare this tree against numbers that do not describe it: the same error
+# this job exists to stop committing, in the very file the job reads.
+# speed-baseline.json is therefore absent, and the comparator takes its
+# missing-baseline path.
+#
+# THAT PATH IS NOT A NO-OP, AND IT IS NOT A GREEN THAT MEANS NOTHING. It
+# exits 0, because no data is not a regression, and it prints the measured
+# entries in the envelope shape with an `n: 1` block the validator REFUSES on
+# purpose — a baseline from one dispatch records what one machine did once
+# and calls it a worst case. The step summary is never empty, because a green
+# gate with an empty summary is what this repository keeps failing reviews
+# over. What the path cannot do is gate, and that is the honest state of the
+# job until a runner dispatch produces a real baseline.
 #
 # WHICH CONTROLS SURVIVED, AND WHY.
 #   * The offline fixtures and pinned inputs are untouched: a measurement of

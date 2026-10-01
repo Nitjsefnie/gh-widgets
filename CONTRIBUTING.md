@@ -113,26 +113,20 @@ The workflow files in `.github/workflows/` are:
 - `audit.yml` — dependency vulnerability checks.
 - `codeql.yml` — security analysis.
 - `actionlint.yml` — workflow syntax and security checks.
-  each renderer workload, and compares them against the committed baseline
-  in `speed-baseline.json`, which only ever ratchets down.
+- `speed.yml` — counts **CPU seconds** for each renderer workload and for
+  the unit suite, on pinned offline fixtures, and compares each against a
+  committed baseline in `speed-baseline.json` that only ever ratchets down.
+  CPU seconds rather than a deterministic instruction or syscall count,
+  because neither survives measurement on the cell that reads the baseline:
+  one is refused by the kernel's `perf_event_paranoid`, the other costs
+  12.8× the work it measures. The gate is therefore a **step-change
+  detector, not a regression detector** — it catches a doubled workload and
+  will not catch a 20 % regression. There is no committed baseline at the
+  moment: the last one measured a renderer tree that the module split has
+  since changed, so the job runs its missing-baseline path until a runner
+  dispatch produces a real one.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
   of paths (issue #89); branch protection requires it instead of the path-filtered gates.
-  seconds** for the unit suite, and compares each against its own population
-  in the committed baseline `speed-baseline.json`, which only ever ratchets
-  down. One instrument per population, not one per job: tracing the suite
-  costs about 3.2× its untraced wall time, and the baseline carries a
-  `metric` and a `tolerance` per population because one pair of keys could
-  only ever be right for one of them.
-- `speed.yml` — counts **CPU seconds** for each renderer workload and for the
-  unit suite, and compares each against its own population in the committed
-  baseline `speed-baseline.json`, which only ever ratchets down. CPU seconds
-  rather than a deterministic instruction or syscall count, because neither
-  of those survives measurement on the cell that reads the baseline: one is
-  refused by the kernel's `perf_event_paranoid`, the other costs 12.8× the
-  workload it measures. The gate is therefore a gross-regression net, not a
-  sensitive gate, and the baseline carries a `metric` and a `tolerance` per
-  population because their measured spreads differ by an order of magnitude.
-  of paths; branch protection requires it instead of the path-filtered gates.
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
   measured coverage exceeds the committed floor. The floor only moves
@@ -180,8 +174,10 @@ has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
 work this commit does in CPU seconds — per renderer workload and for the
 unit suite, on pinned offline fixtures — and fails when a committed,
-down-only baseline is exceeded; elapsed time survives only as a gross smoke
-check that reports no number), `release` (tags `v<VERSION>` once every gate a `VERSION` push
+down-only baseline is exceeded; with no baseline committed it reports what
+it measured and exits 0, because no data is not a regression; elapsed time
+survives only as a gross smoke check that reports no number), `release`
+(tags `v<VERSION>` once every gate a `VERSION` push
 schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
 `aggregate` —
 has both *reported* and passed; a gate that never reports stops the release
