@@ -24,6 +24,21 @@ VERSION_PATH = REPO_ROOT / "VERSION"
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
+def assert_no_path_ignored(test, proc, what):
+    """Fail unless check-ignore reported its successful negative outcome.
+
+    Exit 1 is the only status that means "no given path is ignored": 0
+    means something matched, and any other status means the command failed
+    and evaluated no rules at all — an error must fail the control, not
+    pass it.
+    """
+    if proc.returncode != 1:
+        test.fail(
+            f"{what}: expected exit 1 (no path ignored), got "
+            f"{proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+
+
 def load_common(path=REPO_ROOT / "ghwidgets_common.py"):
     """Load the shared module by explicit path.
 
@@ -64,9 +79,8 @@ class VersionFileTests(unittest.TestCase):
         # tree's rules instead of trusting the index; only then can this probe
         # fail if .gitignore stops naming VERSION back.
         proc = subprocess.run(["git", "check-ignore", "-q", "--no-index", "VERSION"],
-                              cwd=REPO_ROOT, check=False)
-        self.assertNotEqual(proc.returncode, 0,
-                            ".gitignore hides VERSION from git")
+                              cwd=REPO_ROOT, check=False, capture_output=True)
+        assert_no_path_ignored(self, proc, ".gitignore hides VERSION from git")
 
     def test_no_tracked_file_is_ignored(self):
         # The deny-by-default .gitignore must name back every tracked file.
@@ -78,9 +92,18 @@ class VersionFileTests(unittest.TestCase):
                                "-z", "--stdin"], cwd=REPO_ROOT,
                               input=tracked.stdout, check=False,
                               capture_output=True)
-        self.assertNotEqual(proc.returncode, 0,
-                            "one or more tracked files are ignored by .gitignore")
-        self.assertEqual(proc.stdout, b"")
+        assert_no_path_ignored(
+            self, proc, "one or more tracked files are ignored by .gitignore")
+
+    def test_control_rejects_an_execution_error(self):
+        # An operational error (bad option, broken git) exits nonzero-but-not-1
+        # with the rules unevaluated. The control must fail on that, not read
+        # it as "nothing is ignored" — demonstrated with 129, git's usage-error
+        # status, without needing a real broken git.
+        error = subprocess.CompletedProcess([], 129, stdout=b"",
+                                            stderr=b"error: unknown option")
+        with self.assertRaises(AssertionError):
+            assert_no_path_ignored(self, error, "mutated probe")
 
 
 class RepoVersionConstantTests(unittest.TestCase):
