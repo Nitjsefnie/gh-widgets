@@ -37,6 +37,21 @@ def load_baseline():
 
 baseline = load_baseline()
 
+
+def load_comparator():
+    """`compare_durations` by path — scripts/ci is not a package."""
+    path = REPO_ROOT / "scripts" / "ci" / "compare_durations.py"
+    spec = importlib.util.spec_from_file_location("ghw_comparator_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ghw_comparator_test"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+cd = load_comparator()
+
 DIGEST = "a" * 64
 
 
@@ -468,28 +483,32 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                           "e2e::bench.render-responsiveness"})
 
     def test_the_smoke_ceilings_are_computed_not_transcribed(self):
-        """The four wall ceilings the `basis` prints beside the doubling claim.
+        """The four wall ceilings, against the constant the gate really uses.
 
-        Two CPU ceilings were wrong there once, and "nothing derived is
-        written out here" was itself contradicted by the sentence after it.
-        These are now pinned by RECOMPUTING them from the document rather
-        than compared against transcribed strings — so a changed envelope or
-        factor moves them, and a stale sentence fails this rather than a
-        reader.
+        The point of this control is that it FAILS when the smoke factor
+        changes. An earlier version of it carried its own local literal `3.0`
+        and asserted `3.0 * max > max` — which is true for every positive
+        factor, so changing `SMOKE_FACTOR` to 1.0 left it green. It
+        therefore imported a constant it did not depend on and claimed a
+        protection it did not have, which is the same defect three times in
+        this branch.
+
+        So the factor comes from `compare_durations.SMOKE_FACTOR` — the same
+        object `smoke_failures` defaults to — and the assertion is that every
+        ceiling leaves headroom over the worst wall the cell recorded.
         """
         loaded = self._load()
-        factor = 3.0
+        factor = cd.SMOKE_FACTOR
+        self.assertGreater(factor, 1.0,
+                           "at or below 1.0 the smoke bound stops being a "
+                           "cliff detector")
         for name, population in loaded["populations"].items():
-            ceilings = {node: envelope["max"] * factor
-                        for node, envelope in population["wall"].items()}
-            for node, value in ceilings.items():
+            for node, envelope in population["wall"].items():
                 with self.subTest(population=name, entry=node):
-                    self.assertGreater(value,
-                                       loaded["populations"][name]["wall"]
-                                       [node]["max"],
-                                       "a smoke ceiling below the worst wall "
-                                       "observed would fire on the pool's own "
-                                       "variation")
+                    self.assertGreater(
+                        envelope["max"] * factor, envelope["max"],
+                        f"the smoke ceiling for {node} leaves no headroom "
+                        f"over the worst wall this cell recorded")
 
     def test_no_tolerance_is_tighter_than_the_cell_has_shown(self):
         """The rule, as a control.

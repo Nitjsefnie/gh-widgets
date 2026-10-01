@@ -120,9 +120,9 @@ The workflow files in `.github/workflows/` are:
   because neither survives measurement on the cell that reads the baseline:
   one is refused by the kernel's `perf_event_paranoid`, the other costs
   12.8× the work it measures. The gate is therefore a **step-change
-  detector, not a regression detector** — it catches a doubled unit suite
-  and none of the three doubled renderer workloads, and it will not catch a
-  20 % regression anywhere. The baseline records an observed **range** per entry rather than
+  detector, not a regression detector** — it catches a gross step change
+  and the gross wall smoke bound; it will not catch a 20 % regression
+  anywhere, and it does not catch a doubling either. The baseline records an observed **range** per entry rather than
   a single number, because these counters are not deterministic and a budget
   wide enough to cover their spread would be a gate that cannot fire.
 - `aggregate.yml` — reports on every pull request and push to `main`, regardless
