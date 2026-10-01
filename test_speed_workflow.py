@@ -27,12 +27,10 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
-from speed_workflow_steps import WORKFLOWS, StepRunner  # noqa: E402
+from bench_platform import REQUIRES_BENCH
+from speed_workflow_steps import WORKFLOWS, StepRunner
 
 REPO_ROOT = Path(__file__).resolve().parent
-
-
-from bench_platform import REQUIRES_BENCH  # noqa: E402
 
 
 def envelope(value, samples=6):
@@ -525,6 +523,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          completed.stdout + completed.stderr)
         self.assertIn("not a range", summary)
 
+    @REQUIRES_BENCH
     def test_the_gate_is_measured_against_the_recorded_maximum(self):
         """The head clears `max x (1 + tolerance)`, not `min x (...)`.
 
@@ -885,6 +884,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("every workload is an allowed removal",
                       completed.stderr)
 
+    @REQUIRES_BENCH
     def test_a_baseline_without_a_population_is_refused(self):
         # One document carries several contracts. Guessing which one this run
         # is being held to is the accommodation the gate exists to refuse.

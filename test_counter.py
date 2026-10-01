@@ -80,6 +80,7 @@ class TestPlatformLimits(unittest.TestCase):
         self.assertIsNone(module.resource)
         self.assertEqual(module.METRICS, (module.CPU_METRIC,))
 
+    @REQUIRES_BENCH
     def test_measuring_without_resource_refuses_rather_than_guessing(self):
         # A silent fallback would return a number that measures something
         # else. This asserts the refusal names both the platform and the
@@ -159,6 +160,7 @@ class TestCwdIsHonoured(unittest.TestCase):
     is the only place the two can be told apart.
     """
 
+    @REQUIRES_BENCH
     def test_the_flag_changes_where_the_command_runs(self):
         listing = "import os; print(sorted(os.listdir('.')))"
         with tempfile.TemporaryDirectory(prefix="ghw-cwd-") as td:
@@ -211,6 +213,7 @@ class TestTheRemovedInstrument(unittest.TestCase):
                 counter.choose_metric()
         self.assertIn("syscalls", str(caught.exception))
 
+    @REQUIRES_BENCH
     def test_the_refusal_survives_the_public_measure_call(self):
         with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
             with self.assertRaises(counter.CounterError):
@@ -236,6 +239,9 @@ class TestTheBenchPredicate(unittest.TestCase):
     a test file where a tired reader might widen it.
     """
 
+    @unittest.skipUnless(counter.bench_is_runnable(),
+                         "this platform cannot run the harness, so there is "
+                         "nothing for the predicate to be true about")
     def test_the_predicate_is_true_where_the_harness_can_run(self):
         self.assertTrue(
             counter.bench_is_runnable(),
@@ -243,21 +249,30 @@ class TestTheBenchPredicate(unittest.TestCase):
             "say so; a false here would skip every guarded control and turn "
             "CI green with nothing checked")
 
+    def test_the_predicate_is_false_where_it_cannot_run(self):
+        # The other direction, so the control is not satisfied on a machine
+        # where the facility is absent by declaring the facility absent.
+        with mock.patch.object(counter, "resource", None):
+            self.assertFalse(counter.bench_is_runnable())
+
     def test_the_predicate_tracks_the_facility_the_instrument_needs(self):
         # Same answer as the instrument's own guard, not a parallel one that
         # can drift from it.
         with mock.patch.object(counter, "resource", None):
             self.assertFalse(counter.bench_is_runnable())
 
-    def test_the_shell_predicate_is_true_where_bash_exists(self):
-        # Same anti-switch control for the SECOND predicate. A false here on
-        # a machine with bash would skip every step-fragment control and CI
-        # would go green with the workflow's own shell unexercised.
+    def test_the_shell_predicate_is_true_where_bash_works(self):
+        # Same anti-switch control for the SECOND predicate, and its GUARD was
+        # wrong the first time: it keyed on `shutil.which("bash")`, which is
+        # NOT the same question. On a Windows runner `bash` is on PATH — it is
+        # the WSL shim — and it does not work. Keying on "is bash present"
+        # therefore failed this control on exactly the machine where the
+        # predicate is doing its job. It now keys on the predicate itself,
+        # which is the question the control is about.
         import speed_workflow_steps  # pylint: disable=import-outside-toplevel
-        import shutil as _shutil
-        if _shutil.which("bash") is not None:
+        if speed_workflow_steps.shell_is_posix():
             self.assertTrue(speed_workflow_steps.shell_is_posix(),
-                            "bash is on PATH here, so shell_is_posix() must "
+                            "a working bash is here, so shell_is_posix() must "
                             "say so; a false would skip every control that "
                             "executes a workflow step body")
 
@@ -265,8 +280,8 @@ class TestTheBenchPredicate(unittest.TestCase):
         # They answer different things and are guarded separately. Folding
         # them together would make this branch's narrower guard mean
         # something broader than it says.
-        import speed_workflow_steps  # pylint: disable=import-outside-toplevel
         import bench_platform  # pylint: disable=import-outside-toplevel
+        import speed_workflow_steps  # pylint: disable=import-outside-toplevel
         with mock.patch.object(counter, "resource", None):
             # No instrument, and the shell question is untouched: that is
             # what "different question" means here.
