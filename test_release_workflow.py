@@ -16,6 +16,12 @@ in one case and say less.
 
 Stdlib unittest, matching the rest of this repo's suite.
 """
+# Issue #79's cases took this module past pylint's 1000-line ceiling. The
+# checks they buy are the ones that need the `gh` stub below to exist, and
+# the stub cannot be shared with another module without inventing the
+# cross-module helper convention this file deliberately has none of. Split
+# when the module next grows; do not split to satisfy a counter.
+# pylint: disable=too-many-lines
 import json
 import re
 import os
@@ -104,8 +110,8 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     #   create.log           each `gh release create` invocation, verbatim
     #
     # Handing the --jq program to a real jq rather than pre-filtering the
-    # fixture is deliberate: "release / release" has to be excluded by the
-    # expression the workflow ships, not by this file's guess at it.
+    # fixture is deliberate: what the workflow ships has to decide what the
+    # stub answers, not this file's guess at it.
     #
     # The stub FAILS on anything it does not model, flags included: an
     # unknown invocation falls through to a non-zero exit, the check-runs
@@ -226,10 +232,66 @@ exit 1
         stub.write_text(self.GH_STUB, encoding="utf-8")
         stub.chmod(0o755)
 
+    @staticmethod
+    def _job_block(text, job):
+        """The lines of one `jobs:` entry, up to the next sibling job."""
+        lines = text.splitlines()
+        start = next(index for index, line in enumerate(lines)
+                     if line.rstrip() == f"  {job}:")
+        body = []
+        for line in lines[start + 1:]:
+            if line.startswith("  ") and not line.startswith("   "):
+                break
+            body.append(line)
+        return body
+
+    @classmethod
+    def _own_check_name(cls):
+        """The check-run name GitHub gives this workflow's own job.
+
+        Read out of the workflow rather than written here, so a rename of the
+        job follows the tests instead of silently leaving them asserting a
+        name nothing reports. The check-runs API reports a job's own
+        `name:` when it has one and its job id when it does not — verified
+        live against this repository, where `measure` arrives as
+        `coverage-ratchet`, `analyze` as `analyze (python)`, and the jobs with
+        no override as themselves. There is no `workflow / job` form; the
+        fixture that used to use one was wrong about the API, not the code
+        under test.
+
+        The two shapes that would break an exact match — a `name:` override
+        and a matrix `strategy:` — are refused here rather than passed over,
+        because every caller that matches on this name needs it to be exact.
+        """
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        try:
+            body = text.split("\njobs:\n", 1)[1]
+        except IndexError:
+            raise AssertionError("release.yml has no jobs: block") from None
+        jobs = re.findall(r"(?m)^  ([a-z][a-z-]*):$", body)
+        if len(jobs) != 1:
+            raise AssertionError(
+                f"release.yml declares {len(jobs)} jobs ({jobs}); the wait "
+                "step's own check run is no longer a single name")
+        job = jobs[0]
+        job_block = "\n".join(cls._job_block(text, job))
+        override = re.search(r"(?m)^ {4}name:\s*(\S.*)$", job_block)
+        if override:
+            raise AssertionError(
+                f"release.yml's job {job} renames itself to "
+                f"{override.group(1)!r}; ${{{{ github.job }}}} would no "
+                "longer be the name its check runs report")
+        if re.search(r"(?m)^ {4,6}strategy:", job_block):
+            raise AssertionError(
+                f"release.yml's job {job} became a matrix, so its check runs "
+                f"report as {job!r} (…) rather than {job!r} and the exact "
+                "match in the wait step needs the decorated form too")
+        return job
+
     def _env(self, **overrides):
         env = dict(os.environ)
         for name in ("POLL_INTERVAL_SECONDS", "WAIT_DEADLINE_SECONDS",
-                     "WAIVE", "GITHUB_STEP_SUMMARY"):
+                     "WAIVE", "GITHUB_STEP_SUMMARY", "SELF"):
             env.pop(name, None)
         env.update({
             "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
@@ -239,6 +301,10 @@ exit 1
             "TAG": self.TAG,
             "WAIVE": "",
             "GITHUB_STEP_SUMMARY": str(self.root / "summary.md"),
+            # What the workflow's `${{ github.job }}` renders to, read out
+            # of the workflow rather than typed here — see where SELF is
+            # pinned, in the gates class.
+            "SELF": self._own_check_name(),
         })
         env.update(overrides)
         return env
@@ -316,13 +382,15 @@ Issue #34 — the wait step must not release on a subset of the gates.
 Every case runs the shipped `run:` block against a stubbed `gh`; the
 last four read the workflow as text, so they run on every OS.
     """
+    # pylint: disable=too-many-public-methods
 
     # --- #34: the manifest wait -----------------------------------------
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"),
                          "the gh stub runs the workflow's own --jq program, "
-                         "which is how 'release / release' is proven ignored")
+                         "which is how the workflow's own --jq program is "
+                         "proven to be what reads these check runs")
     def test_every_manifest_gate_present_and_passing_releases(self):
         self._write_runs(self.ALL_GREEN)
         done = self._execute("Wait for the other gates on this commit")
@@ -567,16 +635,50 @@ last four read the workflow as text, so they run on every OS.
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_this_jobs_own_check_run_is_never_waited_on(self):
-        # Excluded by the workflow's --jq expression, not by this file.
-        self._write_runs(
-            [("in_progress", "", "release / release"),
-             ("in_progress", "", "release / release (waived)")]
-            + self.ALL_GREEN)
+        # Excluded by the workflow's own exclusion, matched against the name
+        # GitHub really reports for this job — which `_own_check_name` reads
+        # out of the workflow rather than this file guessing it.
+        own = self._own_check_name()
+        self._write_runs([("in_progress", "", own)] + self.ALL_GREEN)
         done = self._execute("Wait for the other gates on this commit",
                              **self.NO_WAIT)
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("release /", done.stdout)
+        self.assertNotIn(own, done.stdout)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "see above")
+    def test_a_check_sharing_this_jobs_name_prefix_is_not_excluded(self):
+        # Issue #79, and the regression for it: the exclusion used to be
+        # `startswith("release")`, so a gate named `release-notes-lint` left
+        # the evidence entirely — the release waited on nothing, saw nothing
+        # wrong, and shipped. Only this job's own check run may be excluded,
+        # and it is matched exactly. Both directions are driven: a red one is
+        # refused, and a running one is waited for rather than ignored.
+        own = self._own_check_name()
+        for other in (f"{own}-notes-lint", f"{own}-notes-lint (lint)"):
+            with self.subTest(check_run=other):
+                self.setUp()
+                self._write_runs([("completed", "failure", other)]
+                                 + self.ALL_GREEN)
+                done = self._execute("Wait for the other gates on this commit")
+
+                self.assertEqual(done.returncode, 1,
+                                 done.stdout + done.stderr)
+                self.assertIn("did not pass", done.stderr)
+                self.assertIn(other, done.stderr)
+
+                self.setUp()
+                self._write_runs([("in_progress", "", other)]
+                                 + self.ALL_GREEN)
+                done = self._execute("Wait for the other gates on this commit",
+                                     **self.GIVE_UP)
+                out = done.stdout + done.stderr
+
+                self.assertEqual(done.returncode, 1, out)
+                self.assertIn("still running", done.stdout)
+                self.assertNotIn("did not pass", out)
+                self.assertNotIn("did not reach", out)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -769,18 +871,21 @@ last four read the workflow as text, so they run on every OS.
             with self.subTest(step=step):
                 self.assertNotIn("inputs.", self._run_block(step))
 
-    @staticmethod
-    def _job_block(text, job):
-        """The lines of one `jobs:` entry, up to the next sibling job."""
-        lines = text.splitlines()
-        start = next(index for index, line in enumerate(lines)
-                     if line.rstrip() == f"  {job}:")
-        body = []
-        for line in lines[start + 1:]:
-            if line.startswith("  ") and not line.startswith("   "):
-                break
-            body.append(line)
-        return body
+    def test_the_self_exclusion_names_the_job_instead_of_a_prefix(self):
+        # Issue #79's actual fix, as text: the excluded name is this job's
+        # own, taken from the workflow context, so there is no second
+        # literal anywhere to drift and no other gate can be dropped by
+        # sharing a prefix with it.
+        text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        own = self._own_check_name()
+        block = self._run_block("Wait for the other gates on this commit")
+
+        self.assertIn("SELF: ${{ github.job }}", text)
+        self.assertIn('-v self="$SELF"', block)
+        self.assertNotIn(f'self="{own}"', block)
+        # `startswith("release")` was the bug, not the general shape of the
+        # word, so it is spelled out rather than derived from `own`.
+        self.assertNotIn("startswith", block)
 
     @staticmethod
     def _push_block(text):
