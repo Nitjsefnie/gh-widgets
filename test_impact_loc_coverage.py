@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -148,8 +149,8 @@ class TestCloneLaunchCoverage(unittest.TestCase):
                 mock.patch.object(impact_loc, "_stop_clone_processes") as stop, \
                 mock.patch.object(impact_loc.os, "_exit") as exit_process:
             impact_loc._handle_scratch_signal(signal.SIGINT, None)
+            self.assertFalse(impact_loc._CLONE_SHUTDOWN)
 
-        self.assertFalse(impact_loc._CLONE_SHUTDOWN)
         stop.assert_not_called()
         exit_process.assert_not_called()
 
@@ -223,15 +224,27 @@ class TestScratchCoverage(unittest.TestCase):
         path = self.tmp / "disappearing-readonly-entry"
         path.write_text("fixture", encoding="utf-8")
         permission_error = PermissionError("read-only")
+        real_unlink = os.unlink
 
-        def remove_before_retry(_path, *_args, **_kwargs):
-            path.unlink()
+        def remove_before_retry(retry_path, *_args, **_kwargs):
+            self.assertEqual(retry_path, path)
+            real_unlink(retry_path)
+
+        def retry_missing_path(retry_path):
+            self.assertEqual(retry_path, path)
+            self.assertFalse(retry_path.exists())
+            return real_unlink(retry_path)
 
         with mock.patch.object(impact_loc.os, "chmod",
-                               side_effect=remove_before_retry):
+                               side_effect=remove_before_retry) as chmod, \
+                mock.patch.object(impact_loc.os, "unlink",
+                                  side_effect=retry_missing_path) as retry_unlink:
             impact_loc._retry_readonly_scratch_removal(
-                os.unlink, path,
+                retry_unlink, path,
                 (PermissionError, permission_error, None))
+            chmod.assert_called_once_with(
+                path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+            retry_unlink.assert_called_once_with(path)
 
         self.assertFalse(path.exists())
 
