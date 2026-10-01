@@ -88,10 +88,21 @@ ways by two tools compares unequal forever, and the resulting refusal would
 be indistinguishable from a real population change. The collector is a
 COLLECTION pass, not a test run.
 
+WHY THERE IS A --cwd FLAG. It exists because of a defect this file could
+not have caused on its own and could not have prevented: the unit-suite
+measurement ran `python3 -m unittest discover` from the workflow's working
+directory, which is the PARENT of the checkout, so discovery found no tests,
+exited 5, and the counter dutifully measured 0.05 CPU seconds of interpreter
+startup. The step immediately before it had collected 724 node ids from the
+checkout, so one job collected a 724-test population and measured none of it.
+The instrument did its job; the question it was asked was the wrong one.
+Naming the directory the command runs in makes that question explicit
+rather than implicit in a shell's cwd, and a test now covers it.
+
 CLI:
 
     counter.py --probe
-    counter.py --junit-file <path> --name <node-id> -- <cmd> [args...]
+    counter.py --junit-file <path> --name <node-id> --cwd <dir> -- <cmd> ...
 """
 from __future__ import annotations
 
@@ -420,6 +431,12 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--timeout", type=float, default=None,
                         help="seconds before the child's process group is "
                              "killed (default: none)")
+    parser.add_argument("--cwd", type=Path, default=None, metavar="DIR",
+                        help="directory to run the command in. Stated "
+                             "explicitly rather than left to the caller's "
+                             "working directory: a discovery command run one "
+                             "level above the checkout silently measures "
+                             "nothing, and reports no error while doing it")
     parser.add_argument("command", nargs=argparse.REMAINDER,
                         help="-- <command> [args...]")
     args = parser.parse_args(argv)
@@ -436,7 +453,7 @@ def main(argv: Optional[list] = None) -> int:
         parser.error("--junit-file and --name are both required")
 
     try:
-        measurement = measure(command, timeout=args.timeout)
+        measurement = measure(command, cwd=args.cwd, timeout=args.timeout)
     except CounterError as exc:
         print(f"counter: {exc}", file=sys.stderr)
         return 2
