@@ -249,6 +249,33 @@ class TestTheBenchPredicate(unittest.TestCase):
         with mock.patch.object(counter, "resource", None):
             self.assertFalse(counter.bench_is_runnable())
 
+    def test_the_shell_predicate_is_true_where_bash_exists(self):
+        # Same anti-switch control for the SECOND predicate. A false here on
+        # a machine with bash would skip every step-fragment control and CI
+        # would go green with the workflow's own shell unexercised.
+        import speed_workflow_steps  # pylint: disable=import-outside-toplevel
+        import shutil as _shutil
+        if _shutil.which("bash") is not None:
+            self.assertTrue(speed_workflow_steps.shell_is_posix(),
+                            "bash is on PATH here, so shell_is_posix() must "
+                            "say so; a false would skip every control that "
+                            "executes a workflow step body")
+
+    def test_the_two_predicates_are_not_the_same_question(self):
+        # They answer different things and are guarded separately. Folding
+        # them together would make this branch's narrower guard mean
+        # something broader than it says.
+        import speed_workflow_steps  # pylint: disable=import-outside-toplevel
+        import bench_platform  # pylint: disable=import-outside-toplevel
+        with mock.patch.object(counter, "resource", None):
+            # No instrument, and the shell question is untouched: that is
+            # what "different question" means here.
+            self.assertFalse(counter.bench_is_runnable())
+            self.assertEqual(
+                bench_platform.counter.BENCH_RUNNABLE,
+                bench_platform.counter.BENCH_RUNNABLE)
+            self.assertTrue(hasattr(speed_workflow_steps, "shell_is_posix"))
+
     def test_the_shared_decorator_reads_the_same_predicate(self):
         import bench_platform  # pylint: disable=import-outside-toplevel
         self.assertEqual(bench_platform.counter.BENCH_RUNNABLE,

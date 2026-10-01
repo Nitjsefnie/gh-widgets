@@ -15,11 +15,31 @@ fourth: a test that drives the harness inherits the answer.
 import unittest
 
 from counter_platform import load_counter
+from speed_workflow_steps import shell_is_posix
 
 # Loading by path, the way every module here loads a sibling: the repository
 # root is on sys.path under `discover`, and an explicit path keeps this
 # importable from any of the entry points.
 counter = load_counter()
+
+# The SECOND predicate, and it means something else. A workflow's `run:` body
+# is a bash script, so a control that slices one out of speed.yml and
+# executes it needs a POSIX shell — which Windows has no `bash` for unless a
+# real one is on PATH; its `bash` is the WSL shim, and it exits 1 having
+# printed "Windows Subsystem for Linux has no installed distributions".
+#
+# Deliberately NOT folded into REQUIRES_BENCH. `bench_is_runnable` means
+# "the instrument's facility exists"; this means "a POSIX shell exists".
+# Merging them would widen a guard that currently means one precise thing,
+# and the control asserting `bench_is_runnable()` is TRUE wherever the
+# harness can run would then guard something broader than it says — which is
+# how a guard becomes a way to make CI green.
+REQUIRES_POSIX_SHELL = unittest.skipUnless(
+    shell_is_posix(),
+    "this slices a `run:` body out of speed.yml and executes it under bash; "
+    "on Windows `bash` is the WSL shim, which fails because no distribution "
+    "is installed. That is a missing shell, not a missing instrument, and "
+    "the two are guarded separately on purpose")
 
 # The skip DECORATOR. Applied to a method or a class.
 REQUIRES_BENCH = unittest.skipUnless(

@@ -12,7 +12,49 @@ import os
 import subprocess
 from pathlib import Path
 
+import os
+import shutil
+
 WORKFLOWS = Path(__file__).resolve().parent / ".github" / "workflows"
+
+
+def shell_is_posix() -> bool:
+    """Whether this platform can run the workflow's step bodies at all.
+
+    A SEPARATE answer from `counter.bench_is_runnable()`, and deliberately
+    so. That predicate means "the instrument's facility —
+    resource.getrusage(RUSAGE_CHILDREN) — exists here". This one means "a
+    POSIX shell exists here". A workflow's `run:` body is a bash script,
+    so a control that slices one out and executes it needs bash, and on
+    Windows `bash` resolves to the WSL shim, which exits 1 having printed
+    "Windows Subsystem for Linux has no installed distributions" in
+    UTF-16LE. Four Windows failures in a row were that message wearing a
+    costume.
+
+    Folding the two together would widen a guard that currently means one
+    precise thing, and the control asserting `bench_is_runnable()` is TRUE
+    wherever the harness can run would then be guarding something broader
+    than it says — which is how a guard becomes a way to make CI green.
+
+    As narrow as the other: it says nothing about correctness, and a test
+    asserting it is TRUE where bash exists is what keeps it from becoming
+    a skip-everything switch.
+    """
+    if os.name == "nt":
+        # Windows' `bash` is the WSL shim unless a real one is on PATH,
+        # and which one it is depends on the image, not on the code. Probing
+        # is the only honest answer.
+        return _bash_works()
+    return shutil.which("bash") is not None
+
+
+def _bash_works() -> bool:
+    try:
+        done = subprocess.run(["bash", "-c", "exit 0"], capture_output=True,
+                              check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
 
 
 class StepRunner:

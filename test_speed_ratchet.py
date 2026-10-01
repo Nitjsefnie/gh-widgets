@@ -23,6 +23,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from bench_platform import REQUIRES_POSIX_SHELL
 from speed_workflow_steps import StepRunner
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -155,6 +156,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
 
     # -- the STEP's derivation, executed ------------------------------------
 
+    @REQUIRES_POSIX_SHELL
     def test_the_ratchet_step_declares_every_retired_workload(self):
         """N3's workflow half, which was broken for a whole review round.
 
@@ -184,6 +186,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
                     "reports it still present and leaves the workload with "
                     "no route to retirement")
 
+    @REQUIRES_POSIX_SHELL
     def test_nothing_is_declared_when_the_harness_still_lists_everything(self):
         """The other direction, so the check cannot simply always declare."""
         self.assertEqual(self._declared_removals(list(WORKLOAD_NODES)), [])
