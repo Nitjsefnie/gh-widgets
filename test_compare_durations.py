@@ -1,10 +1,8 @@
 """Tests for the test-speed comparator.
 
-Written with pytest, unlike the rest of this repo's stdlib-unittest suite,
-because the thing under test is itself only used by speed.yml — which runs
-pytest as its timing harness. `python3 -m unittest discover` skips this
-file (it defines no TestCase), which is correct: it is not part of the
-suite the project ships.
+This file is part of the stdlib unittest suite so its gate's own tests run in
+the gate that measures coverage. pytest still collects these TestCases for
+speed.yml's timing harness; it can also emit --junitxml, which unittest cannot.
 
 The comparator is a gate, so its own failure modes matter more than most
 code here: a false red teaches people to ignore it, and a false green
@@ -14,11 +12,13 @@ testcases — plus the arithmetic.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
+import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -59,181 +59,173 @@ def write_junit(path: Path, cases: dict, not_passed: dict | None = None) -> Path
     return path
 
 
-def test_node_id_joins_class_and_name(tmp_path):
-    report = write_junit(tmp_path / "r.xml", {"tests.test_a::test_one": 1.0})
-    assert set(cd.parse_junit(report)) == {"tests.test_a::test_one"}
+class TestComparator(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp_path = Path(tmp.name)
 
+    def test_node_id_joins_class_and_name(self):
+        report = write_junit(self.tmp_path / "r.xml", {"tests.test_a::test_one": 1.0})
+        self.assertEqual(set(cd.parse_junit(report)), {"tests.test_a::test_one"})
 
-def test_non_passing_cases_are_excluded(tmp_path):
-    report = write_junit(
-        tmp_path / "r.xml",
-        {"m::ok": 1.0, "m::bad": 9.0, "m::skip": 9.0},
-        not_passed={"m::bad": "failure", "m::skip": "skipped"},
-    )
-    # A failure can be fast or slow for reasons unrelated to speed; a skip
-    # is not a measurement at all.
-    assert set(cd.parse_junit(report)) == {"m::ok"}
+    def test_non_passing_cases_are_excluded(self):
+        report = write_junit(
+            self.tmp_path / "r.xml",
+            {"m::ok": 1.0, "m::bad": 9.0, "m::skip": 9.0},
+            not_passed={"m::bad": "failure", "m::skip": "skipped"},
+        )
+        # A failure can be fast or slow for reasons unrelated to speed; a skip
+        # is not a measurement at all.
+        self.assertEqual(set(cd.parse_junit(report)), {"m::ok"})
 
+    def test_rounds_fold_to_the_minimum(self):
+        a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.00})
+        b = write_junit(self.tmp_path / "b.xml", {"m::t": 3.00})
+        # The minimum estimates the floor; the mean would track the noise.
+        self.assertEqual(cd.fold_rounds([str(a), str(b)]), {"m::t": 1.00})
 
-def test_rounds_fold_to_the_minimum(tmp_path):
-    a = write_junit(tmp_path / "a.xml", {"m::t": 1.00})
-    b = write_junit(tmp_path / "b.xml", {"m::t": 3.00})
-    # The minimum estimates the floor; the mean would track the noise.
-    assert cd.fold_rounds([str(a), str(b)]) == {"m::t": 1.00}
+    def test_a_test_missing_from_one_round_is_dropped(self):
+        a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
+        b = write_junit(self.tmp_path / "b.xml", {"m::t": 1.0})
+        self.assertEqual(set(cd.fold_rounds([str(a), str(b)])), {"m::t"})
 
+    def test_added_tests_cannot_trip_the_gate(self):
+        """The whole reason this compares an intersection."""
+        base = {"m::a": 1.0, "m::b": 1.0}
+        head = {"m::a": 1.0, "m::b": 1.0, "m::brand_new": 50.0}
 
-def test_a_test_missing_from_one_round_is_dropped(tmp_path):
-    a = write_junit(tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
-    b = write_junit(tmp_path / "b.xml", {"m::t": 1.0})
-    assert set(cd.fold_rounds([str(a), str(b)])) == {"m::t"}
+        result = cd.compare(base, head)
 
+        self.assertAlmostEqual(result["ratio"], 1.0)
+        self.assertEqual(result["head_only"], ["m::brand_new"])
 
-def test_added_tests_cannot_trip_the_gate():
-    """The whole reason this compares an intersection."""
-    base = {"m::a": 1.0, "m::b": 1.0}
-    head = {"m::a": 1.0, "m::b": 1.0, "m::brand_new": 50.0}
+    def test_removed_tests_cannot_hide_a_regression(self):
+        base = {"m::a": 1.0, "m::slow_one_being_deleted": 100.0}
+        head = {"m::a": 2.0}
 
-    result = cd.compare(base, head)
+        result = cd.compare(base, head)
 
-    assert result["ratio"] == pytest.approx(1.0)
-    assert result["head_only"] == ["m::brand_new"]
+        # Total wall time fell from 101s to 2s; the shared test still doubled.
+        self.assertAlmostEqual(result["ratio"], 2.0)
+        self.assertEqual(result["base_only"], ["m::slow_one_being_deleted"])
 
+    def test_ratio_is_over_the_shared_population_only(self):
+        base = {"m::a": 2.0, "m::b": 8.0}
+        head = {"m::a": 3.0, "m::b": 9.0}
 
-def test_removed_tests_cannot_hide_a_regression():
-    base = {"m::a": 1.0, "m::slow_one_being_deleted": 100.0}
-    head = {"m::a": 2.0}
+        self.assertAlmostEqual(cd.compare(base, head)["ratio"], 12.0 / 10.0)
 
-    result = cd.compare(base, head)
+    def test_no_shared_tests_is_an_error_not_a_pass(self):
+        with self.assertRaisesRegex(cd.ComparisonError, "share no passing test"):
+            cd.compare({"m::a": 1.0}, {"m::z": 1.0})
 
-    # Total wall time fell from 101s to 2s; the shared test still doubled.
-    assert result["ratio"] == pytest.approx(2.0)
-    assert result["base_only"] == ["m::slow_one_being_deleted"]
+    def test_zero_baseline_is_an_error_not_a_division_by_zero(self):
+        with self.assertRaisesRegex(cd.ComparisonError, "baseline total is zero"):
+            cd.compare({"m::a": 0.0}, {"m::a": 1.0})
 
+    def test_empty_report_is_an_error(self):
+        report = write_junit(self.tmp_path / "r.xml", {})
+        with self.assertRaisesRegex(cd.ComparisonError, "no passing testcases"):
+            cd.parse_junit(report)
 
-def test_ratio_is_over_the_shared_population_only():
-    base = {"m::a": 2.0, "m::b": 8.0}
-    head = {"m::a": 3.0, "m::b": 9.0}
+    def test_unparseable_report_is_an_error(self):
+        bad = self.tmp_path / "bad.xml"
+        bad.write_text("<testsuites", encoding="utf-8")
+        with self.assertRaisesRegex(cd.ComparisonError, "not parseable"):
+            cd.parse_junit(bad)
 
-    assert cd.compare(base, head)["ratio"] == pytest.approx(12.0 / 10.0)
+    def test_sub_50ms_tests_stay_out_of_the_table_but_count_in_the_total(self):
+        base = {"m::tiny": 0.002, "m::real": 1.0}
+        head = {"m::tiny": 0.008, "m::real": 1.0}
 
+        result = cd.compare(base, head)
 
-def test_no_shared_tests_is_an_error_not_a_pass():
-    with pytest.raises(cd.ComparisonError, match="share no passing test"):
-        cd.compare({"m::a": 1.0}, {"m::z": 1.0})
+        # 4x on a 2 ms test is noise and would bury genuine entries.
+        self.assertEqual([row[2] for row in result["per_test"]], ["m::real"])
+        # ...but it is still in the totals, where it belongs.
+        self.assertAlmostEqual(result["head_total"], 1.008)
 
+    def test_render_marks_a_regression_and_names_the_budget(self):
+        result = cd.compare({"m::a": 1.0}, {"m::a": 2.0})
 
-def test_zero_baseline_is_an_error_not_a_division_by_zero():
-    with pytest.raises(cd.ComparisonError, match="baseline total is zero"):
-        cd.compare({"m::a": 0.0}, {"m::a": 1.0})
+        text = cd.render(result, 0.30, "v1.2.3")
 
+        self.assertIn("REGRESSION", text)
+        self.assertIn("+100.0%", text)
+        self.assertIn("v1.2.3", text)
 
-def test_empty_report_is_an_error(tmp_path):
-    report = write_junit(tmp_path / "r.xml", {})
-    with pytest.raises(cd.ComparisonError, match="no passing testcases"):
-        cd.parse_junit(report)
+    def test_render_marks_an_acceptable_change(self):
+        result = cd.compare({"m::a": 1.0}, {"m::a": 1.10})
 
+        text = cd.render(result, 0.30, "v1.2.3")
 
-def test_unparseable_report_is_an_error(tmp_path):
-    bad = tmp_path / "bad.xml"
-    bad.write_text("<testsuites", encoding="utf-8")
-    with pytest.raises(cd.ComparisonError, match="not parseable"):
-        cd.parse_junit(bad)
+        self.assertIn("within budget", text)
+        self.assertNotIn("REGRESSION", text)
 
+    def test_render_disclaims_the_per_test_table(self):
+        """The table misleads without this, and that is measured, not assumed.
 
-def test_sub_50ms_tests_stay_out_of_the_table_but_count_in_the_total():
-    base = {"m::tiny": 0.002, "m::real": 1.0}
-    head = {"m::tiny": 0.008, "m::real": 1.0}
+        Two runs of identical code on one machine moved individual tests by up
+        to +370% while the total moved 1.7%. A reader who takes a row as a
+        regression is reading noise.
+        """
+        result = cd.compare({"m::a": 1.0, "m::b": 1.0}, {"m::a": 1.0, "m::b": 1.4})
 
-    result = cd.compare(base, head)
+        text = cd.render(result, 0.30, "v1.0.0")
 
-    # 4x on a 2 ms test is noise and would bury genuine entries.
-    assert [row[2] for row in result["per_test"]] == ["m::real"]
-    # ...but it is still in the totals, where it belongs.
-    assert result["head_total"] == pytest.approx(1.008)
+        self.assertIn("not a regression", text.lower())
+        self.assertIn("<details>", text)
+        self.assertIn("</details>", text)
 
+    def test_render_survives_a_result_with_no_movers(self):
+        result = cd.compare({"m::a": 1.0}, {"m::a": 1.0})
 
-def test_render_marks_a_regression_and_names_the_budget():
-    result = cd.compare({"m::a": 1.0}, {"m::a": 2.0})
+        text = cd.render(result, 0.30, "v0.1.0")
 
-    text = cd.render(result, 0.30, "v1.2.3")
+        self.assertNotIn("| Test |", text)
+        self.assertIn("within budget", text)
 
-    assert "REGRESSION" in text
-    assert "+100.0%" in text
-    assert "v1.2.3" in text
+    def test_main_exits_1_over_budget_and_0_under(self):
+        base = write_junit(self.tmp_path / "base.xml", {"m::a": 1.0})
+        slow = write_junit(self.tmp_path / "slow.xml", {"m::a": 2.0})
+        fine = write_junit(self.tmp_path / "fine.xml", {"m::a": 1.05})
+        summary = self.tmp_path / "summary.md"
 
+        argv = sys.argv
+        try:
+            sys.argv = ["compare_durations.py", "--base", str(base),
+                        "--head", str(slow), "--max-regression", "0.30",
+                        "--summary-file", str(summary)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cd.main(), 1)
 
-def test_render_marks_an_acceptable_change():
-    result = cd.compare({"m::a": 1.0}, {"m::a": 1.10})
+            sys.argv = ["compare_durations.py", "--base", str(base),
+                        "--head", str(fine), "--max-regression", "0.30"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cd.main(), 0)
+        finally:
+            sys.argv = argv
 
-    text = cd.render(result, 0.30, "v1.2.3")
+        # The report reaches the summary file even on the failing run — a red
+        # gate with no detail is one nobody can act on.
+        self.assertIn("REGRESSION", summary.read_text(encoding="utf-8"))
 
-    assert "within budget" in text
-    assert "REGRESSION" not in text
+    def test_main_exits_2_when_it_cannot_compare(self):
+        base = write_junit(self.tmp_path / "base.xml", {"m::a": 1.0})
+        other = write_junit(self.tmp_path / "other.xml", {"m::z": 1.0})
 
-
-def test_render_disclaims_the_per_test_table():
-    """The table misleads without this, and that is measured, not assumed.
-
-    Two runs of identical code on one machine moved individual tests by up
-    to +370% while the total moved 1.7%. A reader who takes a row as a
-    regression is reading noise.
-    """
-    result = cd.compare({"m::a": 1.0, "m::b": 1.0}, {"m::a": 1.0, "m::b": 1.4})
-
-    text = cd.render(result, 0.30, "v1.0.0")
-
-    assert "not a regression" in text.lower()
-    assert "<details>" in text and "</details>" in text
-
-
-def test_render_survives_a_result_with_no_movers():
-    result = cd.compare({"m::a": 1.0}, {"m::a": 1.0})
-
-    text = cd.render(result, 0.30, "v0.1.0")
-
-    assert "| Test |" not in text
-    assert "within budget" in text
-
-
-def test_main_exits_1_over_budget_and_0_under(tmp_path, capsys):
-    base = write_junit(tmp_path / "base.xml", {"m::a": 1.0})
-    slow = write_junit(tmp_path / "slow.xml", {"m::a": 2.0})
-    fine = write_junit(tmp_path / "fine.xml", {"m::a": 1.05})
-    summary = tmp_path / "summary.md"
-
-    argv = sys.argv
-    try:
-        sys.argv = ["compare_durations.py", "--base", str(base),
-                    "--head", str(slow), "--max-regression", "0.30",
-                    "--summary-file", str(summary)]
-        assert cd.main() == 1
-
-        sys.argv = ["compare_durations.py", "--base", str(base),
-                    "--head", str(fine), "--max-regression", "0.30"]
-        assert cd.main() == 0
-    finally:
-        sys.argv = argv
-
-    capsys.readouterr()
-    # The report reaches the summary file even on the failing run — a red
-    # gate with no detail is one nobody can act on.
-    assert "REGRESSION" in summary.read_text(encoding="utf-8")
-
-
-def test_main_exits_2_when_it_cannot_compare(tmp_path):
-    base = write_junit(tmp_path / "base.xml", {"m::a": 1.0})
-    other = write_junit(tmp_path / "other.xml", {"m::z": 1.0})
-
-    argv = sys.argv
-    try:
-        sys.argv = ["compare_durations.py", "--base", str(base),
-                    "--head", str(other)]
-        # 2, not 1: "could not compare" is a different thing from "slower",
-        # and a workflow that conflates them reports a restructure as a
-        # performance regression.
-        assert cd.main() == 2
-    finally:
-        sys.argv = argv
+        argv = sys.argv
+        try:
+            sys.argv = ["compare_durations.py", "--base", str(base),
+                        "--head", str(other)]
+            # 2, not 1: "could not compare" is a different thing from "slower",
+            # and a workflow that conflates them reports a restructure as a
+            # performance regression.
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cd.main(), 2)
+        finally:
+            sys.argv = argv
 
 
 # The closed-population gate (issue #36).
@@ -250,158 +242,154 @@ def verify(scans, base_folded, require=(), allow=()):
                                 list(require), list(allow))
 
 
-def test_no_flags_leaves_removals_permissive(tmp_path):
-    """The unit-suite comparison must keep behaving exactly as before."""
-    scans = [cd.scan_junit(write_junit(
-        tmp_path / "h.xml", {"m::a": 1.0, "m::gone": 9.0}))]
+class TestVerifyPopulation(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp_path = Path(tmp.name)
 
-    # No exception: the base-only name is reported and excluded, not fatal.
-    verify(scans, {"m::a": 1.0, "m::gone": 9.0})
+    def test_no_flags_leaves_removals_permissive(self):
+        """The unit-suite comparison must keep behaving exactly as before."""
+        scans = [cd.scan_junit(write_junit(
+            self.tmp_path / "h.xml", {"m::a": 1.0, "m::gone": 9.0}))]
 
+        # No exception: the base-only name is reported and excluded, not fatal.
+        verify(scans, {"m::a": 1.0, "m::gone": 9.0})
 
-def test_required_name_absent_from_head_is_an_error(tmp_path):
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::gone": 2.0})
-    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(head)]
+    def test_required_name_absent_from_head_is_an_error(self):
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::gone": 2.0})
+        head = write_junit(self.tmp_path / "head.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(head)]
 
-    with pytest.raises(cd.ComparisonError) as excinfo:
-        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::gone"])
+        with self.assertRaises(cd.ComparisonError) as excinfo:
+            verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::gone"])
 
-    message = str(excinfo.value)
-    # Both the required-name and the closed-set view of the same fact, so
-    # the reader does not have to know which check caught it.
-    assert "e2e::gone" in message
-    assert "absent from all 1 head report(s)" in message
+        message = str(excinfo.exception)
+        # Both the required-name and the closed-set view of the same fact, so
+        # the reader does not have to know which check caught it.
+        self.assertIn("e2e::gone", message)
+        self.assertIn("absent from all 1 head report(s)", message)
 
+    def test_required_name_skipped_in_one_round_is_an_error(self):
+        """Skipping is a different fault from absence, and is reported so."""
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
+        r1 = write_junit(self.tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        r2 = write_junit(self.tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
+                         not_passed={"e2e::b": "skipped"})
+        scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
 
-def test_required_name_skipped_in_one_round_is_an_error(tmp_path):
-    """Skipping is a different fault from absence, and is reported so."""
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
-    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
-                     not_passed={"e2e::b": "skipped"})
-    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+        with self.assertRaises(cd.ComparisonError) as excinfo:
+            verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
 
-    with pytest.raises(cd.ComparisonError) as excinfo:
+        message = str(excinfo.exception)
+        self.assertIn("e2e::b", message)
+        # Present in both rounds, so the diagnosis must not say "absent".
+        self.assertIn("present in all 2 head report(s) but did not pass in round(s) 2",
+                      message)
+
+    def test_required_name_missing_from_one_round_only_names_that_round(self):
+        """The mixed branch: absent somewhere, not-passing somewhere else.
+
+        A required name present-and-passing in round 1 and absent from round 2 is
+        a real failure, and the sentence must not also claim round 1 failed —
+        that was a false observation about a passing round, which is exactly the
+        kind of thing a gate message must not say.
+        """
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
+        r1 = write_junit(self.tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        r2 = write_junit(self.tmp_path / "r2.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+        with self.assertRaises(cd.ComparisonError) as excinfo:
+            verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+
+        message = str(excinfo.exception)
+        self.assertIn("absent from head round(s) 2", message)
+        # Round 1 passed, so no clause may mention it failing.
+        self.assertNotIn("did not pass", message)
+
+    def test_required_name_absent_and_skipped_names_both_rounds(self):
+        """One round absent, one round skipped: each is reported as itself."""
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
+        r1 = write_junit(self.tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
+                         not_passed={"e2e::b": "skipped"})
+        r2 = write_junit(self.tmp_path / "r2.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
+        with self.assertRaises(cd.ComparisonError) as excinfo:
+            verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+
+        message = str(excinfo.exception)
+        self.assertIn("absent from head round(s) 2", message)
+        self.assertIn("did not pass in round(s) 1", message)
+
+    def test_required_name_present_and_passing_is_not_an_error(self):
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
+        r1 = write_junit(self.tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        r2 = write_junit(self.tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 3.0})
+        scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+
         verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
 
-    message = str(excinfo.value)
-    assert "e2e::b" in message
-    # Present in both rounds, so the diagnosis must not say "absent".
-    assert "present in all 2 head report(s) but did not pass in round(s) 2" \
-        in message
+    def test_baseline_only_removal_is_an_error_in_closed_set_mode(self):
+        """The deleted-testcase variant: nothing in the head report says skip."""
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        head = write_junit(self.tmp_path / "head.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(head)]
 
+        with self.assertRaises(cd.ComparisonError) as excinfo:
+            verify(scans, cd.fold_rounds([base]), ["e2e::a"])
 
-def test_required_name_missing_from_one_round_only_names_that_round(tmp_path):
-    """The mixed branch: absent somewhere, not-passing somewhere else.
+        message = str(excinfo.exception)
+        self.assertIn("e2e::b", message)
+        self.assertIn("--allow-removal", message)
 
-    A required name present-and-passing in round 1 and absent from round 2 is
-    a real failure, and the sentence must not also claim round 1 failed —
-    that was a false observation about a passing round, which is exactly the
-    kind of thing a gate message must not say.
-    """
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
-    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+    def test_declared_removal_is_accepted(self):
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        head = write_junit(self.tmp_path / "head.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(head)]
 
-    with pytest.raises(cd.ComparisonError) as excinfo:
-        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+        verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::b"])
 
-    message = str(excinfo.value)
-    assert "absent from head round(s) 2" in message
-    # Round 1 passed, so no clause may mention it failing.
-    assert "did not pass" not in message
+    def test_allow_removal_alone_still_closes_the_set(self):
+        """Either flag turns on closed-set mode; that is what the docs say."""
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        head = write_junit(self.tmp_path / "head.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(head)]
 
+        with self.assertRaisesRegex(cd.ComparisonError, "e2e::b"):
+            verify(scans, cd.fold_rounds([base]), allow=["e2e::a"])
 
-def test_required_name_absent_and_skipped_names_both_rounds(tmp_path):
-    """One round absent, one round skipped: each is reported as itself."""
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
-    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0},
-                     not_passed={"e2e::b": "skipped"})
-    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+    def test_require_and_allow_the_same_name_is_a_contradiction(self):
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
+        scans = [cd.scan_junit(write_junit(self.tmp_path / "h.xml", {"e2e::a": 1.0}))]
 
-    with pytest.raises(cd.ComparisonError) as excinfo:
-        verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
+        with self.assertRaisesRegex(cd.ComparisonError, "both required and allowed"):
+            verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::a"])
 
-    message = str(excinfo.value)
-    assert "absent from head round(s) 2" in message
-    assert "did not pass in round(s) 1" in message
+    def test_fold_scans_rejects_an_empty_list(self):
+        """An IndexError here would exit 1, which this file reserves for slower."""
+        with self.assertRaisesRegex(cd.ComparisonError, "no JUnit reports given"):
+            cd.fold_scans([])
 
+    def test_main_writes_a_comparison_error_to_the_summary_file(self):
+        """A red gate with an empty job summary is one nobody can act on."""
+        base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
+        head = write_junit(self.tmp_path / "head.xml", {"e2e::a": 1.0})
+        summary = self.tmp_path / "summary.md"
 
-def test_required_name_present_and_passing_is_not_an_error(tmp_path):
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
-    r1 = write_junit(tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    r2 = write_junit(tmp_path / "r2.xml", {"e2e::a": 1.0, "e2e::b": 3.0})
-    scans = [cd.scan_junit(r1), cd.scan_junit(r2)]
+        argv = sys.argv
+        try:
+            sys.argv = ["compare_durations.py", "--base", str(base),
+                        "--head", str(head), "--require-test", "e2e::a",
+                        "--base-label", "v1.2.3",
+                        "--summary-file", str(summary)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cd.main(), 2)
+        finally:
+            sys.argv = argv
 
-    verify(scans, cd.fold_rounds([base]), ["e2e::a", "e2e::b"])
-
-
-def test_baseline_only_removal_is_an_error_in_closed_set_mode(tmp_path):
-    """The deleted-testcase variant: nothing in the head report says skip."""
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(head)]
-
-    with pytest.raises(cd.ComparisonError) as excinfo:
-        verify(scans, cd.fold_rounds([base]), ["e2e::a"])
-
-    message = str(excinfo.value)
-    assert "e2e::b" in message
-    assert "--allow-removal" in message
-
-
-def test_declared_removal_is_accepted(tmp_path):
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(head)]
-
-    verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::b"])
-
-
-def test_allow_removal_alone_still_closes_the_set(tmp_path):
-    """Either flag turns on closed-set mode; that is what the docs say."""
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(head)]
-
-    with pytest.raises(cd.ComparisonError, match="e2e::b"):
-        verify(scans, cd.fold_rounds([base]), allow=["e2e::a"])
-
-
-def test_require_and_allow_the_same_name_is_a_contradiction(tmp_path):
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0})
-    scans = [cd.scan_junit(write_junit(tmp_path / "h.xml", {"e2e::a": 1.0}))]
-
-    with pytest.raises(cd.ComparisonError, match="both required and allowed"):
-        verify(scans, cd.fold_rounds([base]), ["e2e::a"], ["e2e::a"])
-
-
-def test_fold_scans_rejects_an_empty_list():
-    """An IndexError here would exit 1, which this file reserves for slower."""
-    with pytest.raises(cd.ComparisonError, match="no JUnit reports given"):
-        cd.fold_scans([])
-
-
-def test_main_writes_a_comparison_error_to_the_summary_file(tmp_path):
-    """A red gate with an empty job summary is one nobody can act on."""
-    base = write_junit(tmp_path / "base.xml", {"e2e::a": 1.0, "e2e::b": 2.0})
-    head = write_junit(tmp_path / "head.xml", {"e2e::a": 1.0})
-    summary = tmp_path / "summary.md"
-
-    argv = sys.argv
-    try:
-        sys.argv = ["compare_durations.py", "--base", str(base),
-                    "--head", str(head), "--require-test", "e2e::a",
-                    "--base-label", "v1.2.3",
-                    "--summary-file", str(summary)]
-        assert cd.main() == 2
-    finally:
-        sys.argv = argv
-
-    text = summary.read_text(encoding="utf-8")
-    assert "COULD NOT COMPARE" in text
-    assert "v1.2.3" in text
-    assert "e2e::b" in text
+        text = summary.read_text(encoding="utf-8")
+        self.assertIn("COULD NOT COMPARE", text)
+        self.assertIn("v1.2.3", text)
+        self.assertIn("e2e::b", text)
