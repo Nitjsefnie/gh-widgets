@@ -15,6 +15,8 @@ from contextlib import contextmanager, redirect_stdout
 from unittest import mock
 from pathlib import Path
 
+import impact_clone
+
 
 spec = importlib.util.spec_from_file_location(
     "render_impact_loc_tests", Path(__file__).with_name("render-impact.py"))
@@ -23,6 +25,18 @@ if spec is None or spec.loader is None:
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
 impact_loc = getattr(render_impact, "_LOC_MODULE")
+
+
+class CloneModuleExports(unittest.TestCase):
+    def test_clone_names_are_reexports_of_impact_clone(self):
+        for name in (
+                "load_repo_pins", "checkout_pin", "clone_repo",
+                "clone_lookahead", "register_scratch_dir",
+                "remove_scratch_dir", "install_scratch_signal_handlers",
+                "scavenge_scratch_dirs", "prefetched_clones"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(impact_loc, name),
+                              getattr(impact_clone, name))
 
 
 def git(*args, cwd):
@@ -245,28 +259,31 @@ class TestScratchLifecycle(unittest.TestCase):
             "import importlib.util\n"
             "import os\n"
             "import subprocess\n"
+            "import sys\n"
             "import tempfile\n"
             "import threading\n"
             "import time\n"
             "from pathlib import Path\n"
             f"render_path = Path({str(Path(__file__).with_name('render-impact.py'))!r})\n"
+            "sys.path.insert(0, str(render_path.parent))\n"
             "spec = importlib.util.spec_from_file_location('signal_renderer', "
             "render_path)\n"
             "renderer = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(renderer)\n"
             "loc = renderer._LOC_MODULE\n"
-            "real_handler = loc._handle_scratch_signal\n"
+            "clone = importlib.import_module('impact_clone')\n"
+            "real_handler = clone._handle_scratch_signal\n"
             "def observed_handler(signum, frame):\n"
             "    Path(os.environ['SIGNAL_DIR'], str(signum)).write_text('seen')\n"
             "    real_handler(signum, frame)\n"
             "    Path(os.environ['SIGNAL_DIR'], str(signum) + '-done').write_text('done')\n"
-            "loc._handle_scratch_signal = observed_handler\n"
-            "wait_for_launches = getattr(loc, '_wait_for_clone_launches', None)\n"
+            "clone._handle_scratch_signal = observed_handler\n"
+            "wait_for_launches = getattr(clone, '_wait_for_clone_launches', None)\n"
             "if wait_for_launches is not None:\n"
             "    def observed_wait():\n"
             "        Path(os.environ['HANDLER_WAIT_FILE']).write_text('waiting')\n"
             "        wait_for_launches()\n"
-            "    loc._wait_for_clone_launches = observed_wait\n"
+            "    clone._wait_for_clone_launches = observed_wait\n"
             "loc.install_scratch_signal_handlers()\n"
             "real_popen = subprocess.Popen\n"
             "def paused_popen(*args, **kwargs):\n"
@@ -334,11 +351,11 @@ class TestScratchLifecycle(unittest.TestCase):
         renderer.communicate(timeout=5)
 
     def test_new_scratch_is_registered_until_removed(self):
-        with mock.patch.object(impact_loc, "clone_repo", return_value=0.0):
+        with mock.patch.object(impact_clone, "clone_repo", return_value=0.0):
             gen = impact_loc.prefetched_clones(self.moved(), depth=1)
             try:
                 _repo, _totals, scratch, _clone, _wait, _error = next(gen)
-                registry = getattr(impact_loc, "_SCRATCH_DIRS", set())
+                registry = getattr(impact_clone, "_SCRATCH_DIRS", set())
                 self.assertIn(scratch, registry)
                 remover = getattr(impact_loc, "remove_scratch_dir", None)
                 if remover is None:
@@ -421,13 +438,13 @@ class TestScratchLifecycle(unittest.TestCase):
         def fake_exit(code):
             raise SystemExit(code)
 
-        with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
+        with mock.patch.object(impact_clone, "_SCRATCH_DIRS", registry,
                                create=True), \
-                mock.patch.object(impact_loc, "_CLONE_SHUTDOWN", False,
+                mock.patch.object(impact_clone, "_CLONE_SHUTDOWN", False,
                                   create=True), \
-                mock.patch.object(impact_loc, "_SIGNAL_CLEANUP_CLAIMS",
-                                  impact_loc.itertools.count(), create=True), \
-                mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED",
+                mock.patch.object(impact_clone, "_SIGNAL_CLEANUP_CLAIMS",
+                                  impact_clone.itertools.count(), create=True), \
+                mock.patch.object(impact_clone, "_SIGNAL_HANDLERS_INSTALLED",
                                   False, create=True), \
                 mock.patch("signal.signal") as register, \
                 mock.patch.object(impact_loc.os, "_exit",
@@ -448,7 +465,7 @@ class TestScratchLifecycle(unittest.TestCase):
         exit_process.assert_called_once_with(128 + signal.SIGTERM)
 
     def test_signal_handlers_are_not_installed_from_a_worker_thread(self):
-        with mock.patch.object(impact_loc, "_SIGNAL_HANDLERS_INSTALLED",
+        with mock.patch.object(impact_clone, "_SIGNAL_HANDLERS_INSTALLED",
                                False, create=True), \
                 mock.patch("signal.signal") as register:
             worker = threading.Thread(
@@ -498,8 +515,10 @@ class TestScratchLifecycle(unittest.TestCase):
         driver = self.tmp / "renderer.py"
         driver.write_text(
             "import importlib.util\n"
+            "import sys\n"
             "from pathlib import Path\n"
             f"path = Path({str(Path(__file__).with_name('render-impact.py'))!r})\n"
+            "sys.path.insert(0, str(path.parent))\n"
             "spec = importlib.util.spec_from_file_location('signal_renderer', path)\n"
             "renderer = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(renderer)\n"
@@ -592,9 +611,9 @@ class TestScratchLifecycle(unittest.TestCase):
         os.utime(inflight, (old_time, old_time))
         registry = {inflight}
 
-        with mock.patch.object(impact_loc, "_SCRATCH_DIRS", registry,
+        with mock.patch.object(impact_clone, "_SCRATCH_DIRS", registry,
                                create=True), \
-                mock.patch.object(impact_loc.tempfile, "gettempdir",
+                mock.patch.object(impact_clone.tempfile, "gettempdir",
                                   return_value=str(scratch_root)), \
                 mock.patch.dict(os.environ,
                                 {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
@@ -650,9 +669,9 @@ class TestScratchLifecycle(unittest.TestCase):
                 if ready != "READY\n":
                     self.fail(f"scratch owner did not become ready: "
                               f"{owner_stderr.read()}")
-                with mock.patch.object(impact_loc, "_SCRATCH_DIRS", set(),
+                with mock.patch.object(impact_clone, "_SCRATCH_DIRS", set(),
                                        create=True), \
-                        mock.patch.object(impact_loc.tempfile, "gettempdir",
+                        mock.patch.object(impact_clone.tempfile, "gettempdir",
                                           return_value=str(scratch_root)), \
                         mock.patch.dict(
                             os.environ, {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
@@ -663,9 +682,9 @@ class TestScratchLifecycle(unittest.TestCase):
                 owner_stdin.write("release\n")
                 owner_stdin.flush()
                 self.assertEqual(owner.wait(timeout=5), 0)
-                with mock.patch.object(impact_loc, "_SCRATCH_DIRS", set(),
+                with mock.patch.object(impact_clone, "_SCRATCH_DIRS", set(),
                                        create=True), \
-                        mock.patch.object(impact_loc.tempfile, "gettempdir",
+                        mock.patch.object(impact_clone.tempfile, "gettempdir",
                                           return_value=str(scratch_root)), \
                         mock.patch.dict(
                             os.environ,

@@ -29,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import impact_clone
+
 
 spec = importlib.util.spec_from_file_location(
     "render_impact", Path(__file__).with_name("render-impact.py"))
@@ -924,9 +926,9 @@ class TestCheckoutPin(unittest.TestCase):
 
     def test_clone_repo_honours_the_pin(self):
         seen = {}
-        with mock.patch.object(self.loc, "checkout_pin",
+        with mock.patch.object(impact_clone, "checkout_pin",
                                side_effect=lambda d, h: seen.update(head=h)):
-            with mock.patch.object(self.loc, "_run_clone_command",
+            with mock.patch.object(impact_clone, "_run_clone_command",
                                    return_value=subprocess.CompletedProcess(
                                        [], 0)):
                 self.loc.clone_repo("o/r", "main", self.tmp, head="pinned")

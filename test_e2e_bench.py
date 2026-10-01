@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+import impact_clone
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 BENCH_DIR = REPO_ROOT / "scripts" / "bench"
@@ -217,7 +219,7 @@ class TestCloneSourceMirror(unittest.TestCase):
                 if mirror_state != "unset":
                     os.environ["CLONE_SOURCE_DIR"] = str(root)
                 with mock.patch.object(
-                        self.loc, "_run_clone_command",
+                        impact_clone, "_run_clone_command",
                         return_value=subprocess.CompletedProcess([], 0)) as run:
                     self.loc.clone_repo("outside/project", "main", dest)
                     command = run.call_args.args[0]
