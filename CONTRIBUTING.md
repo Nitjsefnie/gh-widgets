@@ -160,6 +160,11 @@ rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
 measurement workflows that were already here.
 
+The measured Ubuntu/Python 3.13 cell in `tests.yml` installs the pinned
+Nitjsefnie-OSC/git-fame build and requires its pin checks; if the binary is
+missing, those checks fail instead of skipping. Other matrix cells skip those
+environment-conditional checks when git-fame is absent.
+
 **Release = edit `VERSION`.** One bare semver line at the repo root, no
 leading `v`. `REPO_VERSION` in `ghwidgets_common.py` reads it — and note
 it is NOT `COMMON_VERSION`, which is the interface-compatibility marker
