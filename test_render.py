@@ -17,6 +17,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
@@ -208,6 +209,14 @@ def complete_cache():
     }
 
 
+def repo_node(stars=0, forks=0, edges=()):
+    """One repositories-connection node. `edges` is (size, name, color)."""
+    return {"stargazerCount": stars, "forkCount": forks,
+            "languages": {"edges": [
+                {"size": size, "node": {"name": name, "color": color}}
+                for size, name, color in edges]}}
+
+
 def weeks_of(days):
     """A one-week contributionCalendar payload from a date -> count map."""
     return [{"contributionDays": [
@@ -224,6 +233,21 @@ class FakeAPI:
         self.pr_pages = []        # one nodes list per pullRequests call
         self.issues = []
         self.fail = False
+        self.org_pages = []       # one nodes list per organizations call
+        self.repo_pages = []      # one nodes list per repositories call
+        # repositories.totalCount when the fixture scripts its own pages;
+        # None means "whatever this page happens to hold".
+        self.repo_total: Optional[int] = None
+
+    def page_info(self, pages_left):
+        """pageInfo for a scripted page: `pages_left` further pages are queued.
+
+        The cursor is derived from the remaining depth, so two consecutive
+        pages of one connection never hand back the same cursor.
+        """
+        if not pages_left:
+            return {"hasNextPage": False, "endCursor": None}
+        return {"hasNextPage": True, "endCursor": f"cursor-{pages_left}"}
 
     def __call__(self, token, query, variables=None, retries=3):
         if self.fail:
@@ -254,6 +278,25 @@ class FakeAPI:
                 "contributionCalendar": {
                     "totalContributions": sum(days.values()),
                     "weeks": weeks_of(days)}}}}
+        if "organizations" in query:
+            nodes = self.org_pages.pop(0) if self.org_pages else []
+            return {"user": {"login": "me", "name": "Me",
+                             "followers": {"totalCount": 5},
+                             "organizations": {
+                                 "pageInfo": self.page_info(len(self.org_pages)),
+                                 "nodes": nodes}}}
+        if "repositories" in query:
+            if self.repo_pages:
+                nodes = self.repo_pages.pop(0)
+            else:
+                nodes = json.loads(json.dumps(
+                    CORE_USER["repositories"]["nodes"]))
+            total = (self.repo_total if self.repo_total is not None
+                     else len(nodes))
+            return {"user": {"repositories": {
+                "totalCount": total,
+                "pageInfo": self.page_info(len(self.repo_pages)),
+                "nodes": nodes}}}
         return {"user": json.loads(json.dumps(CORE_USER))}  # fresh copy per call
 
 
@@ -478,6 +521,119 @@ class FallbackNaming(unittest.TestCase):
         line, _out = self.fallback_line("fetch_issues", RuntimeError())
         self.assertIn("fetch_issues", line)
         self.assertIn("RuntimeError", line)
+
+
+class ProfilePagination(unittest.TestCase):
+    """The profile connections are paged, not truncated at their first 100.
+
+    Everything derived from `user` — stars, forks, languages, and above all
+    the insider set that decides whether a PR is the account's own work — was
+    silently capped at the first page while `repositories.totalCount` was not.
+    """
+
+    LANG = (500, "Python", "#3572A5")
+
+    def paged_api(self):
+        api = FakeAPI()
+        api.repo_pages = [[repo_node(1, 1) for _ in range(100)],
+                          [repo_node(7, 3, [self.LANG])]]
+        api.repo_total = 101
+        api.org_pages = [[{"login": "first-org"}], [{"login": "late-org"}]]
+        api.full_calendar = recent_days(3)
+        return api
+
+    def fetched(self, api, **kwargs):
+        with mock.patch.object(render, "gql", api):
+            user, _days = render.fetch("t", "me", **kwargs)
+        return user
+
+    def test_aggregates_cover_every_repository_page(self):
+        user = self.fetched(self.paged_api())
+        self.assertEqual(user["repositories"]["totalCount"], 101)
+        self.assertEqual(len(user["repositories"]["nodes"]), 101)
+        _, summary = render.build_svgs(
+            render.THEMES["tokyonight"], user, [], [])
+        self.assertEqual(summary[0], 107)  # 100×1 stars + the 101st's 7
+        self.assertEqual(summary[1], 103)  # 100×1 forks + the 101st's 3
+
+    def test_a_language_only_on_the_last_page_is_aggregated(self):
+        user = self.fetched(self.paged_api())
+        languages = render.aggregate_languages(
+            user["repositories"]["nodes"])
+        self.assertEqual(languages[0][0], "Python")
+        self.assertEqual(languages[0][1], 500)
+
+    def test_every_organization_reaches_the_insider_set(self):
+        user = self.fetched(self.paged_api())
+        self.assertEqual(
+            [o["login"] for o in user["organizations"]["nodes"]],
+            ["first-org", "late-org"])
+        pr = {"merged": True,
+              "repository": {"nameWithOwner": "late-org/thing",
+                             "isPrivate": False,
+                             "owner": {"login": "late-org"}}}
+        # The membership arrived on page 2, so this is the account's own
+        # work — the truncation classified it external and under-reported it.
+        self.assertEqual(render.external_counts(user, [pr], []).pr_opened, 0)
+
+    def test_a_genuinely_external_repo_is_still_external(self):
+        # Paging in more organizations must not widen the insider set beyond
+        # the ones actually returned.
+        user = self.fetched(self.paged_api())
+        self.assertEqual(
+            render.external_counts(user, [PR_NODE], []).pr_opened, 1)
+
+    def test_a_single_page_account_makes_one_call_per_connection(self):
+        api = self.paged_api()
+        self.fetched(api)
+        org_calls = [q for q, _ in api.calls if "organizations" in q]
+        repo_calls = [q for q, _ in api.calls if "repositories" in q]
+        self.assertEqual(len(org_calls), 2)   # two scripted pages
+        self.assertEqual(len(repo_calls), 2)
+
+    def test_the_page_bound_raises_instead_of_truncating(self):
+        api = FakeAPI()
+        api.org_pages = [[{"login": "only-org"}]]
+        api.repo_pages = [[repo_node()], [repo_node()], [repo_node()]]
+        with self.assertRaises(render.common.PaginationLimitError) as raised:
+            self.fetched(api, max_pages=2)
+        self.assertIn("repositories", str(raised.exception))
+        self.assertIn("2", str(raised.exception))
+
+    def test_a_connection_without_pageinfo_raises(self):
+        # No pageInfo means the end of the connection cannot be established;
+        # returning what arrived would be exactly the silent truncation this
+        # replaces.
+        def gql_fn(_token, query, variables=None, **_kwargs):
+            if "repositories" in query:
+                return {"user": {"repositories": {
+                    "totalCount": 101, "nodes": [repo_node()]}}}
+            if "contributionCalendar" in query:
+                return {"user": {"contributionsCollection": {
+                    "contributionCalendar": {"totalContributions": 0,
+                                             "weeks": calendar([0])}}}}
+            return {"user": {"login": "me", "name": "Me",
+                             "followers": {"totalCount": 5},
+                             "organizations": {
+                                 "pageInfo": {"hasNextPage": False,
+                                              "endCursor": None},
+                                 "nodes": []}}}
+        with mock.patch.object(render, "gql", gql_fn):
+            with self.assertRaises(render.common.PaginationLimitError) as raised:
+                render.fetch("t", "me")
+        self.assertIn("repositories", str(raised.exception))
+        self.assertIn("pageInfo", str(raised.exception))
+
+    def test_the_cached_user_keeps_its_shape(self):
+        # The cache stores `user` verbatim; dropping pageInfo keeps it
+        # byte-compatible with what older builds wrote and with what the
+        # renderers read.
+        user = self.fetched(self.paged_api())
+        for connection in ("repositories", "organizations"):
+            self.assertNotIn("pageInfo", user[connection])
+        self.assertIn("totalCount", user["repositories"])
+        self.assertEqual(
+            set(user["repositories"]), {"totalCount", "nodes"})
 
 
 class PullRequestCache(unittest.TestCase):
