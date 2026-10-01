@@ -60,11 +60,27 @@ class VersionFileTests(unittest.TestCase):
     def test_git_can_see_it(self):
         # The deny-by-default .gitignore names files back one at a time. A
         # VERSION git cannot see would let release.yml tag a version the
-        # repo never records.
-        proc = subprocess.run(["git", "check-ignore", "-q", "VERSION"],
+        # repo never records. --no-index makes check-ignore test the working
+        # tree's rules instead of trusting the index; only then can this probe
+        # fail if .gitignore stops naming VERSION back.
+        proc = subprocess.run(["git", "check-ignore", "-q", "--no-index", "VERSION"],
                               cwd=REPO_ROOT, check=False)
         self.assertNotEqual(proc.returncode, 0,
                             ".gitignore hides VERSION from git")
+
+    def test_no_tracked_file_is_ignored(self):
+        # The deny-by-default .gitignore must name back every tracked file.
+        # This one closed-set claim covers every named-back path, not VERSION
+        # alone; SECURITY.md is another at-risk path named by the issue.
+        tracked = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT,
+                                 check=True, capture_output=True)
+        proc = subprocess.run(["git", "check-ignore", "-q", "--no-index",
+                               "-z", "--stdin"], cwd=REPO_ROOT,
+                              input=tracked.stdout, check=False,
+                              capture_output=True)
+        self.assertNotEqual(proc.returncode, 0,
+                            "one or more tracked files are ignored by .gitignore")
+        self.assertEqual(proc.stdout, b"")
 
 
 class RepoVersionConstantTests(unittest.TestCase):
