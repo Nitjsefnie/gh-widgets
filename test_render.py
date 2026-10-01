@@ -463,9 +463,9 @@ class FallbackNaming(unittest.TestCase):
     PHASES = ("fetch", "fetch_pull_requests", "fetch_issues")
     BOOM = "GraphQL errors: SERVICE_UNAVAILABLE"
 
-    def fallback_line(self, phase, error):
+    def fallback_run(self, phase, error):
         """Run main() with `phase` failing against a complete cache, and
-        return (the fallback line, the output directory)."""
+        return (everything it printed, the output directory)."""
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
@@ -476,9 +476,6 @@ class FallbackNaming(unittest.TestCase):
             with mock.patch.object(render, phase, side_effect=error), \
                     redirect_stdout(buf):
                 run_main(api, out, cache_file)
-            lines = [line for line in buf.getvalue().splitlines()
-                     if line.startswith("fetch failed")]
-            self.assertEqual(len(lines), 1)
             # The durability contract is unchanged: cards written, cache
             # timestamp untouched, and main() returned rather than raising
             # (a non-zero exit comes from the __main__ wrapper).
@@ -487,7 +484,20 @@ class FallbackNaming(unittest.TestCase):
                 self.assertTrue((out / name).exists())
             self.assertEqual(render.load_cache(cache_file)["fetched_at"],
                              "2026-07-20T06:00:00+00:00")
-            return lines[0], out
+            return buf.getvalue(), out
+
+    def fallback_line(self, phase, error):
+        """The run's one fallback line, out of everything it printed.
+
+        Counted over the whole output: the matched line cannot contain a
+        newline by construction, so the one-line property is asserted where it
+        can fail — see the collapsed-message test.
+        """
+        text, out = self.fallback_run(phase, error)
+        matched = [line for line in text.splitlines()
+                   if line.startswith("fetch failed")]
+        self.assertEqual(len(matched), 1)
+        return matched[0], out
 
     def test_each_phase_names_itself_and_its_error(self):
         for phase in self.PHASES:
@@ -512,15 +522,34 @@ class FallbackNaming(unittest.TestCase):
     def test_the_line_is_still_one_line_without_a_traceback(self):
         # A multi-line error text (a JSON body, a wrapped traceback) must not
         # turn the summary into a journal the operator has to reassemble.
-        line, _out = self.fallback_line(
+        # Asserted over the WHOLE output: uncollapsed, "line two" and "line
+        # three" would be lines of their own, which no assertion confined to
+        # the matched line can see.
+        text, out = self.fallback_run(
             "fetch", RuntimeError("boom:\n  line two\n  line three"))
-        self.assertNotIn("\n", line)
-        self.assertIn("line three", line)
+        self.assertIn("boom: line two line three", text)
+        matched = [line for line in text.splitlines()
+                   if line.startswith("fetch failed")]
+        self.assertEqual(len(matched), 1)
+        self.assertIn("line three", matched[0].replace(str(out), "<out>"))
 
     def test_an_exception_with_no_message_still_names_its_type(self):
         line, _out = self.fallback_line("fetch_issues", RuntimeError())
         self.assertIn("fetch_issues", line)
         self.assertIn("RuntimeError", line)
+
+    def test_a_terminal_escape_in_the_error_is_stripped(self):
+        # This line is the first place these renderers put server-supplied
+        # text into a journal, and a terminal acts on ESC: an ANSI clear or an
+        # OSC title set here rewrites the operator's screen. The same control
+        # characters xml_escape strips for SVG text.
+        line, _out = self.fallback_line(
+            "fetch", RuntimeError("GraphQL errors: [\x1b[2J\x1b[H pwned "
+                                  "\x1b]0;hijacked\x07]"))
+        self.assertNotIn("\x1b", line)
+        self.assertNotIn("\x07", line)
+        self.assertIn("pwned", line)
+        self.assertIn("hijacked", line)
 
 
 class ProfilePagination(unittest.TestCase):
@@ -623,6 +652,65 @@ class ProfilePagination(unittest.TestCase):
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
         self.assertIn("pageInfo", str(raised.exception))
+
+    def stalling_gql(self, repos_pages, limit=10):
+        """A gql that serves `repos_pages` — one repositories connection per
+        entry, the last one repeated forever — and answers organizations and
+        the calendar from their first page.
+
+        The call limit is not decoration: with a stall guard deleted the walk
+        never ends, and an unbounded fake would hang the suite instead of
+        failing it. Returns (gql_fn, the cursors it was asked for).
+        """
+        pages = list(repos_pages)
+        cursors = []
+
+        def gql_fn(_token, query, variables=None, **_kwargs):
+            if "contributionCalendar" in query:
+                return {"user": {"contributionsCollection": {
+                    "contributionCalendar": {"totalContributions": 0,
+                                             "weeks": calendar([0])}}}}
+            if "organizations" in query:
+                return {"user": {"login": "me", "name": "Me",
+                                 "followers": {"totalCount": 5},
+                                 "organizations": {
+                                     "pageInfo": {"hasNextPage": False,
+                                                  "endCursor": None},
+                                     "nodes": []}}}
+            cursors.append((variables or {}).get("cursor"))
+            if len(cursors) > limit:
+                raise AssertionError(
+                    f"the repositories walk did not stop after {limit} pages")
+            return {"user": {"repositories": {
+                "totalCount": 101,
+                **pages[min(len(cursors) - 1, len(pages) - 1)]}}}
+        return gql_fn, cursors
+
+    def test_a_repeating_end_cursor_raises(self):
+        # The server keeps saying "there is another page" and keeps handing
+        # back a cursor already used. Walking it would never end.
+        gql_fn, cursors = self.stalling_gql([
+            {"pageInfo": {"hasNextPage": True, "endCursor": "LOOP"},
+             "nodes": [repo_node()]}])
+        with mock.patch.object(render, "gql", gql_fn):
+            with self.assertRaises(render.common.PaginationLimitError) as raised:
+                render.fetch("t", "me")
+        self.assertIn("repositories", str(raised.exception))
+        self.assertIn("LOOP", str(raised.exception))
+        self.assertEqual(cursors, [None, "LOOP"])
+
+    def test_has_next_page_without_an_end_cursor_raises(self):
+        # hasNextPage=true and no cursor to continue from: the walk cannot
+        # continue and cannot prove it reached the end.
+        gql_fn, cursors = self.stalling_gql([
+            {"pageInfo": {"hasNextPage": True, "endCursor": None},
+             "nodes": [repo_node()]}])
+        with mock.patch.object(render, "gql", gql_fn):
+            with self.assertRaises(render.common.PaginationLimitError) as raised:
+                render.fetch("t", "me")
+        self.assertIn("repositories", str(raised.exception))
+        self.assertIn("endCursor is missing", str(raised.exception))
+        self.assertEqual(cursors, [None])
 
     def test_the_cached_user_keeps_its_shape(self):
         # The cache stores `user` verbatim; dropping pageInfo keeps it
