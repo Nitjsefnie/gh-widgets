@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""The coverage ratchet: a committed floor, raised automatically, never lowered.
+"""The coverage ratchet: a committed floor raised by pull request, never lowered.
 
 The gate used to be a hand-edited `--fail-under=81` literal with a comment
 telling the next human to raise it by hand, which is a ratchet nobody ratchets:
 it rots until it is either removed or quietly ignored. Here the floor is
-committed DATA (coverage-floor.json), it only ever moves up, and the movement
-is made by CI rather than by a person remembering.
+committed DATA (coverage-floor.json), it only ever moves up, and CI measures
+and announces when it can climb. A deliberate pull request moves the floor.
 
 TWO SUBCOMMANDS, ONE MEASUREMENT. Both take the file `python -m coverage json`
 writes, so neither this script nor its tests ever shells out to coverage:
@@ -18,10 +18,13 @@ is a pass, anything less is a red naming the two numbers and nothing more. It
 states the OBSERVATION, because the diagnosis belongs to whoever reads the red
 and a gate that guesses reads as a gate that is wrong.
 
-`raise` is what the ratchet workflow runs on main: floor := measured, but ONLY
-when measured is strictly above the floor already committed. There is no branch
-anywhere in this file that writes a smaller number than it read, so the one
-direction a ratchet must never move cannot be reached by adding a flag.
+`raise` produces a candidate floor file for a pull request: floor := measured,
+but ONLY when measured is strictly above the floor already committed. The main
+workflow runs it against a copy of the committed file and uploads the candidate
+as `coverage-floor-candidate`; a person reviews and commits the floor change.
+There is no branch anywhere in this file that writes a smaller number than it
+read, so the one direction a ratchet must never move cannot be reached by
+adding a flag.
 
 It also refuses outright when the measurement covers a different NUMBER OF
 FILES than the committed record does. A percentage is a ratio, so adding one
