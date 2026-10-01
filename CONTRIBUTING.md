@@ -137,7 +137,8 @@ The workflow files in `.github/workflows/` are:
 - `gitfame-resync-memory.yml` — resync memory measurements.
 - `gitfame-pool-probe.yml` — worker-pool measurements.
 
-These checks can run locally:
+These checks can run locally — **on ONE platform, whatever platform that
+is**, and that is the whole of what they cover:
 
 ```sh
 python3 -m unittest discover -v                                  # tests
@@ -151,6 +152,25 @@ pyright                                                          # types
 pip-audit -r requirements-dev.txt -r requirements-test.txt       # audit
 actionlint .github/workflows/*.yml && zizmor .github/workflows/  # actionlint
 ```
+
+**THOSE COMMANDS ARE NOT WHAT DECIDES WHETHER A CHANGE IS MERGEABLE.**
+`tests.yml` runs the suite across an OS × Python matrix —
+windows-latest, macos-latest and ubuntu-latest on 3.10 and 3.13 — and a
+green run of everything above on one machine says nothing about the other
+five. A POSIX-only import, a `/proc` read, a path separator, a `case` in a
+shell script: all four shipped past a fully green local checklist in this
+repository's history, because the checklist does not run them.
+
+Run one cell locally if you can — a Linux-only dependency does not stop
+`python3 -m unittest discover` exercising a suite that also has to import on
+Windows, and `python3 -m unittest test_the_thing` is usually enough to see
+an import error the full run only reports as a mass failure. What you cannot
+do locally is the reverse: nothing above exercises a POSIX-only import on a
+platform that has none, and nothing above runs a shell script under bash on
+Windows at all. **So if your change touches anything platform-shaped —
+imports, `/proc`, `/dev`, signals, file modes, shell in a workflow — open the
+pull request and let the matrix decide.** That costs a reader nothing and it
+is the only instruction here that has no local substitute.
 
 `pip install -r requirements-dev.txt -r requirements-test.txt` gets the
 pinned toolchain. The coverage population is **every shipped source family**,
