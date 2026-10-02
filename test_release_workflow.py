@@ -765,7 +765,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # VERSION push does not schedule, and this one, which cannot wait
         # on itself. Hoisted so the completeness check below and the
         # per-file checks agree on one literal rather than two copies.
-        excluded = {"actionlint.yml", "claim.yml", "pr-gate.yml",
+        excluded = {"claim.yml", "pr-gate.yml",
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
                     "gitfame-resync-memory.yml", "release.yml"}
 
@@ -805,18 +805,12 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self.assertNotIn("paths:", "\n".join(push))
                 self.assertNotIn("VERSION", "\n".join(push))
 
-        for workflow_file in excluded - {"actionlint.yml", "release.yml"}:
+        for workflow_file in excluded - {"release.yml"}:
             with self.subTest(excluded=workflow_file):
                 self.assertEqual(
                     self._push_block((WORKFLOWS / workflow_file).read_text(
                         encoding="utf-8")),
                     [], f"{workflow_file} gained a push trigger")
-        # actionlint does listen to push, but only to workflow files.
-        actionlint_push = self._push_block(
-            (WORKFLOWS / "actionlint.yml").read_text(encoding="utf-8"))
-        self.assertNotIn("paths-ignore:", "\n".join(actionlint_push))
-        self.assertNotIn("VERSION", "\n".join(actionlint_push))
-
         # COMPLETENESS. Every workflow in the directory is either a manifest
         # entry or a named exclusion — nothing else. Without this, a new
         # push-triggered gate is invisible to the manifest AND to this

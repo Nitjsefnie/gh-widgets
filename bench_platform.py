@@ -23,7 +23,8 @@ from speed_workflow_steps import shell_is_posix
 counter = load_counter()
 
 # The SECOND predicate, and it means something else. A workflow's `run:` body
-# is a bash script, so a control that slices one out of speed.yml and
+# is a bash script, so a control that slices one out of the tests.yml speed
+# job and
 # executes it needs a POSIX shell — which Windows has no `bash` for unless a
 # real one is on PATH; its `bash` is the WSL shim, and it exits 1 having
 # printed "Windows Subsystem for Linux has no installed distributions".
@@ -36,7 +37,7 @@ counter = load_counter()
 # how a guard becomes a way to make CI green.
 REQUIRES_POSIX_SHELL = unittest.skipUnless(
     shell_is_posix(),
-    "this slices a `run:` body out of speed.yml and executes it under bash; "
+    "this slices a `run:` body out of the tests.yml speed job and executes it under bash; "
     "on Windows `bash` is the WSL shim, which fails because no distribution "
     "is installed. That is a missing shell, not a missing instrument, and "
     "the two are guarded separately on purpose")

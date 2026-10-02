@@ -11,7 +11,8 @@ duration, and none of that is the code being measured. The maintainer ruling
 behind issue #81 is that paired wall-clock A/B is not a valid magnitude
 ANYWHERE — not on a shared box, and not in one job on a CI runner. The scale
 of that movement is not asserted from memory here: it is measured, and the
-figures are in speed.yml's header and in the committed baseline's `basis`.
+figures are in the speed job's header in tests.yml and in the committed
+baseline's `basis`.
 So the quantity compared here is one runner load cannot move, and elapsed
 time survives only as a gross smoke check reported as a verdict with no
 number attached. That ruling is also why there is no base checkout any more:
@@ -21,7 +22,8 @@ WHY ONE TOLERANCE PER POPULATION, NOT ONE PER DOCUMENT. Both populations
 are measured in CPU seconds, but their budgets are derived from their own
 measured spreads, and one number for both is a number chosen for whichever
 instrument is not in use. The committed figures are in the baseline's
-`basis` and the rule is in speed.yml's header: the tolerance is the
+`basis` and the rule is in the speed job's header in tests.yml: the tolerance
+is the
 population's own observed spread, because the gate compares a per-run MINIMUM
 against a recorded MAXIMUM, so the machine's whole observed range is conceded
 for free and the tolerance only has to cover a head landing on a machine worse
@@ -34,7 +36,7 @@ WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of
 the same quantity. CPU seconds are not deterministic, so this is what
 separates a real change from one unlucky run. The spreads behind that
-decision are in speed.yml's header, measured per cell.
+decision are in the speed job's header in tests.yml, measured per cell.
 
 WHY THE CLOSED POPULATION IS OPTIONAL. The intersection is deliberately
 permissive: adding or removing a test cannot move the number, which is right

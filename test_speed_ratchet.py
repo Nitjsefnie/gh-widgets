@@ -8,7 +8,8 @@ that is measured against it, or blocks the legitimate work of retiring a
 workload.
 
 Every case here builds two documents and asks the real comparator, or runs
-the real step's own derivation fragment sliced out of `speed.yml`. The
+the real step's own derivation fragment sliced out of the `speed` job in
+`tests.yml`. The
 fragment is sliced rather than reimplemented because a reimplementation is
 exactly what let a prefix bug survive two review rounds: `e2e::bench.render`
 is a prefix of the other two ids, and a reimplementation that tested the
@@ -194,7 +195,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
     def _declared_removals(self, listing):
         """The STEP's own derivation fragment, run against a fixed listing.
 
-        Sliced out of `speed.yml` between the line that reads
+        Sliced out of the `speed` job in `tests.yml` between the line that reads
         `--list-workloads` and the step's announcement of what it derived,
         with only the harness's answer substituted. `$(...)` emits one id per
         line and `grep -x` matches whole lines, so the substitution is

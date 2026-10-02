@@ -1,4 +1,4 @@
-"""Tests for the counter that replaced wall-clock durations in speed.yml.
+"""Tests for the counter used by the speed job in tests.yml.
 
 The whole point of scripts/ci/counter.py is that it measures something runner
 load cannot move, so these tests are mostly about the ways it could lie:

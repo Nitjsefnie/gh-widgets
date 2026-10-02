@@ -11,8 +11,9 @@
 #   the committed floor out of coverage-floor.json.
 #
 #   pytest — NEITHER a timing harness NOR a suite dependency any more, and
-#   both of those were true until this file was rewritten. It was speed.yml's
-#   timing harness, which collected these same TestCases and emitted
+#   both of those were true until this file was rewritten. It was the
+#   timing harness in the speed job in tests.yml, which collected these same
+#   TestCases and emitted
 #   --junitxml; that job now counts CPU seconds with
 #   scripts/ci/counter.py and writes its own JUnit, so nothing in CI asks
 #   pytest for anything. It was imported by test_compare_counters.py, which

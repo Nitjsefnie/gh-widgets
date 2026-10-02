@@ -481,7 +481,8 @@ class TestHarness(unittest.TestCase):
     def test_missing_renderer_is_still_skipped_on_the_base_side(self):
         """The asymmetry is deliberate, and this is what pins it.
 
-        speed.yml runs HEAD's harness against the baseline release too, so a
+        The speed job in tests.yml runs HEAD's harness against the committed
+        baseline too, so a
         renderer added after that release has no base script — a
         new-since-baseline workload, not a missing one. Failing here too
         would redden the gate on every commit that adds a renderer.

@@ -7,58 +7,68 @@ name: tests
 # - the suite runs across the OS × Python matrix below, not just one
 #   environment (issue #6).
 # - no services and no network (gql_fn is injected): the suite is stdlib
-#   unittest. pytest is neither a suite dependency nor a CI tool any more: it
-#   was speed.yml's timing harness, and that job counts CPU seconds now. The
-#   pinned requirement remains available to local pytest runs.
+#   unittest. pytest is neither a suite dependency nor a CI tool any more:
+#   it was the speed job's timing harness, and that job counts CPU seconds
+#   now. The pinned requirement remains available to local pytest runs.
+#
+# The changes job owns path applicability, so workflow triggers stay
+# unfiltered by paths. Push is unfiltered by branch so working branches
+# without an open pull request still receive CI.
 
 on:
   push:
-    # Deny-list rather than an allow-list: a new top-level code directory
-    # would silently stop being tested under an allow-list, whereas an
-    # unlisted path here just runs CI needlessly.
-    paths-ignore:
-      - '**/*.md'
-      - 'PRESENTATION.txt'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
-
-  # Read-only by construction: the pull_request event's token is
-  # read-only on a fork, and the checkout below already runs with
-  # persist-credentials: false. Same deny-list as push.
-  #
-  # push stays unfiltered by branch ON PURPOSE: it is the CI for the
-  # default branch and for working branches worked without a PR, while
-  # pull_request is the pre-merge gate. A same-repository branch with an
-  # open PR therefore runs BOTH events — deliberate redundancy, not
-  # duplication to deduplicate: they answer different questions (does
-  # this branch tip pass / would this merge pass), and the concurrency
-  # key below is the ref, so neither run cancels the other.
+    # Deliberately no branch or path filter: changes classifies paths,
+    # and branches without a pull request still receive CI.
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'PRESENTATION.txt'
-      - 'docs/**'
-      - 'examples/**'
-      - 'LICENSE'
-      - '.gitignore'
+    # Read-only by construction: pull_request tokens are read-only on a
+    # fork, and every checkout below disables persisted credentials.
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '12 4 * * *'
+    - cron: '47 3 * * 3'
+  workflow_dispatch:
 
-# Least privilege: this job only reads the tree. Without an explicit
-# block it inherits the repository default, which can be read/write
-# for the whole token.
 permissions:
   contents: read
 
 concurrency:
-  # A newer revision for the same ref — a push, or a new PR head — cancels
-  # the in-flight run: nothing is learned from CI for a commit that is
-  # already history.
   group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
+  changes:
+    outputs:
+      tests: ${{ steps.detect.outputs.tests }}
+      lint: ${{ steps.detect.outputs.lint }}
+      types: ${{ steps.detect.outputs.types }}
+      audit: ${{ steps.detect.outputs.audit }}
+      speed: ${{ steps.detect.outputs.speed }}
+      codeql: ${{ steps.detect.outputs.codeql }}
+      actionlint: ${{ steps.detect.outputs.actionlint }}
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Detect applicable gates
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python3 scripts/ci/changes_detect.py
+
   unittest:
+    needs: changes
+    if: needs.changes.outputs.tests == 'run'
     runs-on: ${{ matrix.os }}
 
     defaults:
@@ -181,3 +191,1055 @@ jobs:
         # whenever coverage climbs, and there is no code path that lowers it.
         # So this step only ever asks the question; it never answers it.
         run: python scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
+
+  lint:
+    # Lint gate (issue #5): pylint + pycodestyle. Style is deliberately NOT
+    # enforced (line-too-long off, max-line-length 10000) — this gate exists
+    # for real defects, not formatting opinions. import-error and
+    # no-name-in-module stay disabled in pylint on purpose: pyright (the
+    # `types` workflow) is the one tool that owns unresolved-import reporting.
+    # Separate job from tests so a lint failure is distinguishable from a
+    # test failure at a glance.
+
+    needs: changes
+    if: needs.changes.outputs.lint == 'run'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          # There is no requirements.txt here (runtime is pure stdlib), so
+          # the cache must be keyed off the dev pins explicitly or
+          # setup-python fails the job looking for one.
+          cache-dependency-path: requirements-*.txt
+
+      - name: Install linters
+        id: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: pylint
+        run: git ls-files '*.py' | xargs pylint
+
+      - name: pycodestyle
+        # Runs even when pylint is red, so one push reports both gates —
+        # but not when the install itself failed.
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: git ls-files '*.py' | xargs pycodestyle
+
+  pyright:
+    # Type gate (issue #5): pyright at `basic` — strict on an existing
+    # codebase produces noise that gets ignored, which is worse than no
+    # check. Config is checked in (pyrightconfig.json) so CI and every editor
+    # use the same settings. The code is pure stdlib, so no runtime
+    # dependencies need installing for imports to resolve.
+
+    needs: changes
+    if: needs.changes.outputs.types == 'run'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          # There is no requirements.txt here (runtime is pure stdlib), so
+          # the cache must be keyed off the dev pins explicitly or
+          # setup-python fails the job looking for one.
+          cache-dependency-path: requirements-*.txt
+
+      - name: Install pyright
+        run: |
+          python -m pip install --upgrade pip
+          # The suite is stdlib unittest; its imports come from neither
+          # requirements-dev.txt nor requirements-test.txt.
+          # Pyright includes "." and uses the exclusions in pyrightconfig.json.
+          # Install both complete pinned requirements files so their third-party
+          # tools are available for this check.
+          pip install -r requirements-dev.txt -r requirements-test.txt
+
+      - name: pyright
+        run: pyright
+
+  pip-audit:
+    # Dependency vulnerability gate: pip-audit resolves each requirements file
+    # to its full transitive tree and checks every resolved version against the
+    # PyPI advisory database and OSV.
+    #
+    # There is NO backend/requirements.txt here: the runtime is pure stdlib,
+    # with zero third-party imports. So this gate covers the toolchain — the
+    # lint, type-check and coverage pins — which is a smaller surface than the
+    # sibling repos have but not an empty one: those tools run in CI with the
+    # repository token, and a compromised one is a supply-chain problem even
+    # though it never ships.
+    #
+    # Resolution is still the point rather than reading the pinned lines: a
+    # linter drags in a dependency tree of its own, and that is where an
+    # advisory lands.
+    #
+    # WHY THE CRON IS THE IMPORTANT TRIGGER. Every other gate in this repo
+    # answers "did this commit break something", so push is the natural trigger.
+    # This one answers "is a version we froze months ago still safe", and that
+    # answer changes when a stranger publishes an advisory, with no commit here
+    # to hang it on. A push-only audit would report clean forever on an
+    # abandoned branch. The push trigger is the lesser half: it catches a bad
+    # pin at the moment it is introduced, while the diff is on screen. The
+    # pull_request trigger (issue #8) gives the same catch to a contributor's
+    # proposed pin change, before it merges.
+    #
+    # This gate FAILS the build rather than filing an advisory, which is the
+    # same stance as lint and types: a red gate that a human must look at beats
+    # a notification that accumulates unread. When a fix genuinely is not
+    # available yet, add the advisory to --ignore-vuln below WITH a comment
+    # saying why and what would clear it — never silence the whole gate.
+
+    needs: changes
+    if: needs.changes.outputs.audit == 'run'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this workflow pushes. Leaving the job token in
+          # .git/config lets any later step — or anything a dependency
+          # pulls in — reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          # There is no requirements.txt or pyproject.toml here (the runtime
+          # is pure stdlib), so setup-python's pip cache has nothing to key
+          # on by default and FAILS THE JOB looking for one. Point it at the
+          # pins that do exist. The glob covers requirements-test.txt too,
+          # so a change to the coverage pins invalidates the cache as well.
+          cache-dependency-path: requirements-*.txt
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.10.1
+
+      - name: Audit dependencies
+        # Both requirements files in one invocation so a package
+        # constrained by two of them is resolved once, consistently — the
+        # same way an install would see it.
+        #
+        # No --ignore-vuln entries at present. Each one added here must
+        # carry a comment naming the advisory, why it is not fixable, and
+        # what would let it be removed.
+        #
+        # THE RETRY IS NARROW ON PURPOSE. pip-audit resolves against PyPI
+        # and the advisory database over the network, and a reset
+        # connection produces the same exit status as a real finding. A
+        # blanket `retry 3` would therefore re-run a genuine vulnerability
+        # three times before reporting it, and — worse — a gate that goes
+        # red for reasons unrelated to its subject is one people learn to
+        # ignore. So this retries ONLY when the output carries a transport
+        # error, and reports anything else immediately and verbatim.
+        run: |
+          for attempt in 1 2 3; do
+            if pip-audit \
+                 --progress-spinner off \
+                 --requirement requirements-dev.txt \
+                 --requirement requirements-test.txt \
+                 > audit.out 2>&1; then
+              cat audit.out
+              exit 0
+            fi
+
+            if grep -qiE 'connection (aborted|reset|error)|read timed out|temporary failure in name resolution' audit.out; then
+              echo "attempt $attempt: transport failure talking to PyPI, retrying"
+              tail -n 5 audit.out
+              sleep $(( attempt * 15 ))
+              continue
+            fi
+
+            echo "pip-audit reported findings:" >&2
+            cat audit.out >&2
+            exit 1
+          done
+
+          echo "pip-audit could not reach PyPI after 3 attempts:" >&2
+          cat audit.out >&2
+          exit 1
+
+  speed:
+    # Did this commit get more expensive than the committed baseline says?
+    #
+    # WHAT IS JUDGED. Not elapsed time. `scripts/ci/counter.py` measures a
+    # load-invariant COUNTER for the unit suite and for each renderer workload,
+    # and this job compares them against speed-baseline.json.
+    #
+    # ONE INSTRUMENT FOR BOTH POPULATIONS: CPU SECONDS, from
+    # `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
+    # time, so steal time — the thing that makes a duration on a shared runner
+    # meaningless — is excluded, which is what makes it valid under the ruling
+    # behind issue #81.
+    #
+    # READ THIS BEFORE THE NUMBERS BELOW, BECAUSE IT CHANGES WHAT THEY ARE WORTH:
+    # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
+    # counts and syscall counts are both deterministic and both would have been
+    # strictly better instruments; neither survived measurement on the cell that
+    # will read this baseline. What ships is a STEP-CHANGE DETECTOR and not a
+    # very sensitive one: it catches a gross step change and the gross wall
+    # smoke bound. It will not catch a 20% regression anywhere, and it does not
+    # catch a doubling either. That is a real cost, and it is named as one here,
+    # in counter.py's docstring, in the comparator's METRIC_NOTES and in the
+    # envelope section below, and in every report this job writes.
+    #
+    # THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured on
+    # this cell — ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure — not
+    # assumed, so the next reader can re-run them rather than take this file's
+    # word for it:
+    #
+    #   36811152307  Instruction counts: perf_event_paranoid is 4, `perf` IS
+    #                installed, and `perf stat -e instructions` still exits 255
+    #                with "Access to performance monitoring and observability
+    #                operations is limited." Unavailable.
+    #   36812466498  Syscall counts: `strace -f -c` works here (ptrace_scope is 1,
+    #                which restricts tracing to your own descendants — and
+    #                strace IS the parent of what it traces, so it is inside the
+    #                restriction). It is exactly deterministic: three runs of one
+    #                workload gave the same total every time (870 calls, 89
+    #                errors) while that report's own `% time` column swung
+    #                between 17.34% and 48.84%. DETERMINISTIC, AND NOT
+    #                AFFORDABLE: 0.24-0.25s against 0.19s untraced on that small
+    #                workload, and over the real renderer workloads 64830 /
+    #                68057 / 75870 ms per bench round against 5053 / 5684 /
+    #                6215 ms untraced — 12.8x, landing almost entirely on
+    #                render-impact.py, which shells out to git (237727-238180
+    #                syscalls at 63.7-74.6 wall seconds traced, while render.py at
+    #                2007 syscalls and render-responsiveness.py at 1927 are
+    #                seconds each). Over the renderer workloads that is 12.8x per
+    #                bench round, on a workload set the gate exists to measure.
+    #
+    # The standing rule that leaves: an instrument the cell cannot use does not
+    # belong in the gate, and neither does one that costs more than the thing it
+    # measures. Both were tried. Both lost on numbers.
+    #
+    # WHY WALL TIME IS NOT A MAGNITUDE. A GitHub-hosted runner is a multi-tenant
+    # VM. Steal time, a neighbouring container, a different core and a different
+    # CPU model all move an elapsed duration, and none of that is the code being
+    # measured. The maintainer ruling behind issue #81 is stronger than that:
+    # paired wall-clock A/B is not a valid magnitude ANYWHERE — not on a shared
+    # box, and not in one job on a CI runner — so this job no longer checks out
+    # the last release to get "the same runner", because the same runner was
+    # never the thing that made the number mean anything.
+    #
+    # The probe step below still runs, and still prints the two kernel settings
+    # that decide whether a deterministic counter is possible at all —
+    # perf_event_paranoid and yama ptrace_scope. A reader who sees CPU seconds in
+    # use can then see that the alternatives were measured and unavailable or too
+    # expensive, rather than assuming nobody thought of them.
+    #
+    # THE BASELINE IS AN OBSERVED ENVELOPE, NOT A NUMBER. Each entry in
+    # speed-baseline.json records the RANGE it was actually seen over — a min, a
+    # max, and how many observations — and the gate fails only when a head value
+    # exceeds `observed maximum x (1 + tolerance)`. The ratchet acts on that
+    # recorded maximum, so an improvement lowers the ceiling and a regression has
+    # to clear the worst machine actually seen.
+    #
+    # WHY AN ENVELOPE, AND WHY THE TOLERANCES ARE THIS WIDE. CPU seconds exclude
+    # steal, so a co-tenant does not reach them — that is what makes them a
+    # magnitude where elapsed time is not. They are still hardware-dependent: a
+    # faster or narrower core runs the same instructions in fewer CPU seconds,
+    # and the pool spans instance types. FOUR windows on this cell, the renderer
+    # workloads shipping IDENTICAL CODE at every one of them:
+    #
+    #   window 1  07:46-07:56Z  at 3c30eca  4 runs
+    #   window 2  10:15-10:24Z  at 4c003c6  4 runs
+    #   window 3  10:35-10:47Z  at 94e8a78  5 runs
+    #   window 4  2026-10-01    at 0f767ce  3 runs
+    #
+    #   entry                         window 1        window 2        window 3        window 4
+    #   counter::unit-suite            16.593-23.203   22.852-24.544   21.657-24.360   16.333-23.603
+    #   e2e::bench.render               0.056- 0.084     0.080- 0.087     0.079- 0.084     0.057- 0.082
+    #   e2e::bench.render-impact        1.019- 1.351     1.332- 1.404     1.045- 1.355     0.956- 1.346
+    #   e2e::bench.render-responsiveness 0.060- 0.080     0.078- 0.086     0.078- 0.082     0.059- 0.080
+    #
+    # THE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the
+    # state of the pool during the window. Windows 2 and 3 were quiet; windows 1
+    # and 4 were not, on the same cell, the same image and the same programs —
+    # window 4's suite spans 16.333 against a body around 22-23.6, the same shape
+    # as window 1. A tolerance derived from the quiet windows alone would have
+    # been far too tight, and a quiet window is not a measurement of the cell.
+    # THAT IS WHY NOTHING HERE IS DERIVED FROM THE MOST RECENT RUNS.
+    #
+    # The renderer envelopes span all four windows: no renderer and no WORKLOADS
+    # entry has changed since 3c30eca, so all sixteen dispatches measure one
+    # program. The SUITE's envelope is window 4 alone, because each earlier
+    # window measured a tree with a different number of collected tests — 770,
+    # 777, 780, 784 — and the renderer's justification for unioning does not
+    # transfer to a different program. Its 44.5% is this suite's own figure,
+    # and its tolerance is the rule's answer to it: 0.45.
+    #
+    # THE WIDTH IS A STRUCTURAL ARGUMENT, NOT AN EMPIRICAL ONE. This gate compares
+    # a per-run MINIMUM against a recorded MAXIMUM, so its false-red risk comes
+    # from the head landing HIGH. Folding the observed spread in as one fraction
+    # covers the LOW tail too, which this gate cannot be hurt by. The rule is
+    # conservative by construction: it measures in one direction and protects in
+    # the other, and that is the right side to err on for a gate whose failure
+    # mode is a red on main that teaches people to ignore it.
+    #
+    # What the data does NOT support, and this header previously claimed, is
+    # that a tolerance was needed to stop the suite false-reding on a busy run.
+    # Window 1's 39.8% is a LOW-tail artefact — one run at 16.6 against a body
+    # of 22.2-23.2 — so it was one fast machine, not a busy pool. That claim
+    # is withdrawn. The suite's tolerance MOVED from 0.40 to 0.45, and the
+    # reason is not slack: it is the rule applied to this tree's own 44.5%
+    # instead of to a neighbour's quiet-window 13.3%.
+    #
+    # WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
+    # on NO ENTRY — every one of these is `observed maximum x (1 + tolerance)`
+    # against `2 x observed minimum`, recomputed by test_baseline.py from
+    # speed-baseline.json rather than written here, because a transcribed
+    # figure in this file has already been wrong twice. At the tolerances this
+    # baseline actually ships, that is the suite missing by a fraction of a
+    # second and all three renderer workloads missing by a wider margin. That
+    # is the rule applied to this tree's own measurement, not a rounding
+    # artefact. Going tighter would mean going below each entry's own observed
+    # spread — a ceiling the fastest machine already clears, which fires on
+    # ordinary pool variation. A gate that cries wolf is deader than one with a
+    # documented blind spot, so nothing here is tuned. The gate catches a gross
+    # step change and the gross wall smoke bound; it will not catch a 20%
+    # regression anywhere, and now not a doubling either. Read "load-invariant
+    # counter" as "a quantity the machine's load does not reach", not as "a sharp
+    # budget". No ceiling is written here: test_baseline.py recomputes every
+    # one, CPU and wall, from the document.
+    #
+    # ROUNDS stays 2, and for two reasons that are not the same reason.
+    # --selfcheck compares SVG bytes across head rounds and needs at least two,
+    # and that control is byte-identity, not timing, so nothing about the
+    # instrument could have weakened it. Separately, the minimum across rounds is
+    # the least-noisy observation of the same work.
+    #
+    # THE COMMITTED BASELINE RECORDS MEASURED_COMMIT 0f767ce, the head its
+    # window-4 dispatches ran against, and its `population` digest is computed
+    # from the node ids THIS tree collects. The renderer envelopes describe this
+    # tree exactly; the suite's do too, because window 4 measured it.
+    #
+    # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
+    # comparison point reviewable. The previous shape ran the last release and
+    # this commit side by side in one job; the ruling above says that bought
+    # nothing, so the release lookup and the second checkout are gone.
+    #
+    # WHY THE BASELINE ONLY RATCHETS DOWN. The comparator refuses a head counter
+    # above baseline x (1 + tolerance) per entry. Separately, the last step
+    # diffs the committed baseline against the MERGE BASE's copy and fails if any
+    # entry went up — otherwise a commit could raise the ceiling it is measured
+    # against in the same push, and the gate would be switched off from inside.
+    #
+    # THE BASELINE IS COMMITTED, AND IT IS NOT YET ABOUT THIS PROGRAM. It records
+    # four dispatches of 3c30eca — runs 36832215161, 36832519319, 36832824918 and
+    # 36833056763, between 07:46Z and 07:56Z — recomputed from their artifacts.
+    # It was ABSENT for one commit, and the reason is the most useful thing in
+    # this file: the previous baseline was measured at d051020, against a
+    # ghwidgets_common.py that the module split (ecd77b5) took apart, and a split
+    # changes what the renderers import and therefore what they cost. Those
+    # envelopes were a measurement of a DIFFERENT PROGRAM, so they were deleted
+    # rather than carried. Re-derive, never carry, sometimes means removing a
+    # document that describes a program this tree is not.
+    #
+    # The population digests DO describe this tree, and they are checked on the
+    # box by test_baseline.py before anything reaches a runner: adding a test
+    # invalidates them, so a commit that does fails the suite in under a second
+    # rather than a dispatch minutes later.
+    #
+    # The document's measured_commit is the REMOTE head the dispatches resolved
+    # `--ref issue-81-82` against, which is not this branch's current head. That
+    # is not staleness: the document records a measurement and names the tree it
+    # was taken from.
+    #
+    # WHICH CONTROLS SURVIVED, AND WHY.
+    #   * The offline fixtures and pinned inputs are untouched: a measurement of
+    #     a live API is not reproducible, so the same fixtures still build the
+    #     same work every round.
+    #   * The closed-set check (--require-test / --allow-removal) stays, and
+    #     still has to. A gate that measures fewer renderers than it advertises
+    #     is decorative, whatever quantity it is comparing.
+    #   * --selfcheck still runs on the last head round, and still compares SVG
+    #     BYTES across head rounds. That control is byte-identity, not timing, so
+    #     the counter change cannot have weakened it.
+    #   * A failing suite run is NOT a speed verdict — tests.yml owns that. But a
+    #     counter measured over a suite that failed is not comparable either, so
+    #     the run's exit code is deliberately ignored here and the comparator's
+    #     refusal (exit 2, which the step turns into a red exactly as the old
+    #     contract did) is what reports it. The step summary says why nothing
+    #     was compared, because a red box with an empty summary is a red nobody
+    #     can act on.
+    #
+    # THIS JOB INSTALLS NOTHING. That is not an oversight left over from when it
+    # installed pytest as a timing harness; it is the end state. The harness went
+    # when the counter took over, and the install outlived it only because
+    # `unittest discover` imports every test_*.py module it collects and
+    # test_compare_counters.py still imported pytest at module level. That file
+    # is now stdlib unittest like everything else, so both reasons are gone. The
+    # measurement below runs on a bare interpreter, which is also why the
+    # suite's own coverage and lint toolchain cannot be in this job's path.
+
+    needs: changes
+    if: needs.changes.outputs.speed == 'run'
+    runs-on: ubuntu-latest
+
+    env:
+      # NOT THE THRESHOLD. The budget that decides the gate is the per-entry
+      # `tolerance` inside each population of speed-baseline.json, and it is
+      # re-derived whenever the cell or the instrument changes. This one
+      # bounds the TOTAL across the shared population — a second, weaker net
+      # for a case where every entry is under its own tolerance but the sum
+      # has drifted. Named TOTAL_BUDGET rather than MAX_REGRESSION so nobody
+      # reads an env var as the gate's threshold when it is not.
+      TOTAL_BUDGET: "0.30"
+      ROUNDS: "2"
+
+      # ONE CONVENTION FOR PATHS IN THIS FILE, because three defects in this
+      # branch were all the same mistake: a path resolved against the wrong
+      # root, in a step that then reported success. The unit suite measured
+      # 0.05 CPU seconds because discovery ran one level above the checkout.
+      # The ratchet could not execute because its git commands did. And four
+      # dispatch runs said "No baseline to compare against" while a baseline
+      # sat in the tree, unread, because --baseline was repository-relative
+      # and the step's working directory was its PARENT. Three greens, one
+      # class.
+      #
+      # So: THE CHECKOUT IS THE WORKING DIRECTORY. Every step that touches
+      # the repository declares `working-directory: head` and therefore uses
+      # repository-relative paths throughout, including BASELINE below.
+      # NOTHING A STEP WRITES GOES INSIDE THE CHECKOUT: reports and scratch
+      # use $REPORTS or $RUNNER_TEMP, which are absolute and named as such.
+      # There are exactly two roots in this file and they are named here.
+      BASELINE: speed-baseline.json
+      REPO: ${{ github.workspace }}/head
+      REPORTS: ${{ github.workspace }}/reports
+
+    steps:
+      - name: Check out this commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # No install step, and that is the point: this job needs nothing but
+      # the standard library. It used to install pytest as a timing harness,
+      # and then kept the install after the harness went because
+      # `unittest discover` imports every test module it collects and
+      # test_compare_counters.py imported pytest at module level. Both
+      # reasons are gone — the counter writes the JUnit itself, and that
+      # test file is now stdlib unittest like everything else — so the
+      # measurement runs on a bare interpreter.
+
+      - name: Probe the counter instrument
+        id: probe
+        # Once per job. There is one instrument, so nothing is being chosen
+        # here — what this step exists for is the RECORD of why. It prints
+        # perf_event_paranoid and yama ptrace_scope, the two kernel settings
+        # that decide whether a deterministic counter is possible at all, so
+        # a reader who sees CPU seconds in use can see the alternatives were
+        # measured rather than assumed away.
+        working-directory: head
+        run: |
+          python3 scripts/ci/counter.py --probe > "$RUNNER_TEMP/probe.env"
+          cat "$RUNNER_TEMP/probe.env"
+          grep -E '^(metric|metric_reason|perf_event_paranoid|ptrace_scope)=' \
+            "$RUNNER_TEMP/probe.env" >> "$GITHUB_OUTPUT"
+
+      - name: Build renderer fixtures
+        env:
+          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+        working-directory: head
+        run: |
+          python3 scripts/bench/fixture_setup.py \
+            --root "$GH_BENCH_FIXTURE_ROOT"
+
+      - name: Measure the unit suite
+        # One CPU-second measurement of the whole suite per round, emitted as
+        # one JUnit suite each.
+        #
+        # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
+        # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
+        # exits 5, and the counter faithfully measures 0.05 CPU seconds of
+        # interpreter startup. That is exactly what three CI runs did: the
+        # step before this one had collected 724 node ids from the checkout,
+        # so the job collected a 724-test population and measured none of it,
+        # and a baseline derived from that would have been derived from a
+        # population it never actually ran. The reports are written to
+        # $GITHUB_WORKSPACE too, so that naming the cwd can never also move
+        # where this step's own output lands.
+        #
+        # The suite's exit code is deliberately NOT this job's verdict:
+        # tests.yml owns pass/fail. But a counter measured over a suite that
+        # did not run is not comparable, and the step below says so, which is
+        # why a non-zero code is reported here rather than swallowed.
+        working-directory: head
+        env:
+          GH_COUNTER_METRIC: cpu_time
+        run: |
+          mkdir -p "$REPORTS"
+          for round in $(seq 1 "$ROUNDS"); do
+            echo "::group::unit suite round $round"
+            status=0
+            python3 scripts/ci/counter.py \
+              --junit-file "$REPORTS/unit-$round.xml" \
+              --name 'counter::unit-suite' \
+              --cwd "$REPO" \
+              --timeout 3600 \
+              -- python3 -m unittest discover || status=$?
+            echo "unit suite round $round exited $status" \
+                 "(tests.yml owns that verdict)"
+            echo "::endgroup::"
+          done
+
+          missing=0
+          for round in $(seq 1 "$ROUNDS"); do
+            f="$REPORTS/unit-$round.xml"
+            if [ ! -s "$f" ]; then
+              echo "MISSING or empty: $f" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "A suite produced no JUnit report — it did not run at all," >&2
+            echo "which is a setup failure, not a counter result." >&2
+            exit 1
+          fi
+          ls -la "$REPORTS/"
+
+      - name: Collect the unit-test population
+        # A collection pass, not a test run: discovery imports the test
+        # modules and builds the suite without executing it. The comparator
+        # digests these node ids and refuses if the population is not the
+        # one the baseline was measured over — a counter total over a
+        # different set of tests is not a regression, and it is not a pass
+        # either.
+        working-directory: head
+        run: |
+          mkdir -p "$REPORTS"
+          python3 scripts/ci/compare_counters.py \
+            --print-population . > "$REPORTS/unit-population.txt"
+          wc -l "$REPORTS/unit-population.txt"
+
+      - name: Run renderer workloads
+        env:
+          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+          # Explicit, rather than relying on the default, so the instrument
+          # this population is judged by is visible in the workflow rather
+          # than buried in counter.py's fallback chain.
+          GH_COUNTER_METRIC: cpu_time
+        working-directory: head
+        run: |
+          mkdir -p "$REPORTS"
+          for round in $(seq 1 "$ROUNDS"); do
+            echo "::group::renderer round $round"
+            selfcheck=()
+            if [ "$round" -eq "$ROUNDS" ]; then
+              selfcheck=(--selfcheck)
+            fi
+            python3 scripts/bench/e2e_bench.py \
+              --side head \
+              --repo-root . \
+              --round "$round" \
+              --junit-file "$REPORTS/bench-head-$round.xml" \
+              --work-root "$RUNNER_TEMP/gh7-bench" \
+              "${selfcheck[@]}"
+            echo "::endgroup::"
+          done
+          ls -la "$REPORTS/"
+
+      - name: Compare
+        env:
+          # The exemption list for a workload the harness STILL lists but
+          # which must not be compared: a comma-separated set of workload
+          # node ids. Naming one drops it from the required list, so the
+          # closed-set check will not demand it.
+          #
+          # LEAVING THIS EMPTY IS THE CORRECT DEFAULT, and the ordinary way
+          # to retire a renderer workload is NOT to use this variable: drop
+          # the workload from WORKLOADS instead. Then the harness measures
+          # neither side, the closed-set check has nothing unexplained to
+          # complain about, and no exemption is needed at all.
+          #
+          # IT IS NOT A WAY TO PAPER OVER A DELETED RENDERER. Keeping the
+          # workload in WORKLOADS while deleting its renderer script reds at
+          # the "Run renderer workloads" step instead, because the harness
+          # now fails a missing renderer on the head side — long before this
+          # comparison runs. So a name here only has an effect on a workload
+          # the harness still lists but which is no longer present in the
+          # head reports; anything weaker than that has already failed at the
+          # bench step.
+          #
+          # Every name added weakens the gate for every later commit, so it
+          # belongs in the same commit as the change that motivates it.
+          ALLOWED_WORKLOAD_REMOVALS: ""
+        # The comparator comes from the HEAD checkout, so an improvement to
+        # the comparison itself takes effect on the commit that makes it
+        # rather than one baseline re-derivation later.
+        #
+        # working-directory: head IS LOAD-BEARING HERE, and for a reason worth
+        # reading twice. `$BASELINE` is repository-relative, so a step running
+        # in the WORKSPACE resolves it against the workspace and silently
+        # finds nothing: the job then reports "No baseline to compare
+        # against" — a legitimate GREEN — while a baseline sits unread in the
+        # tree. Four dispatch runs did exactly that. The gate reported success
+        # while measuring nothing, which is the decorative gate this issue was
+        # filed to remove. Every step that touches the repository therefore
+        # declares this, and one test executes the block with a checkout at
+        # head/ and a baseline in it and fails if the verdict is not rendered.
+        working-directory: head
+        run: |
+          # The unit suite first. Its membership changes by design, so the
+          # comparison stays permissive — but the population digest above
+          # still has to match, or the two sides were not asked the same
+          # question.
+          if python3 scripts/ci/compare_counters.py \
+            --baseline "$BASELINE" \
+            --population unit-suite \
+            --head "$REPORTS/unit-1.xml" "$REPORTS/unit-2.xml" \
+            --population-file "$REPORTS/unit-population.txt" \
+            --max-regression "$TOTAL_BUDGET" \
+            --base-label 'the committed baseline, unit suite' \
+            --summary-file "$GITHUB_STEP_SUMMARY"; then
+            unit_status=0
+          else
+            unit_status=$?
+          fi
+
+          # Renderer workloads keep their own closed-set gate.
+          #
+          # Unlike the unit suite, this population is CLOSED. Unit tests come
+          # and go by design, so an added or removed test must not turn the
+          # gate red; but the renderer workload set IS what this half of the
+          # gate exists to measure, and a shipped renderer that vanished from
+          # the head reports would otherwise leave it comparing one fewer
+          # program and still reporting a pass.
+          #
+          # The allowed removals are parsed FIRST, because the harness
+          # still lists a retired workload and a name that is both required
+          # and allowed to disappear is a contradiction the comparator
+          # rejects. So a declared removal also drops out of the required
+          # list — which is what "deliberately no longer measured" means.
+          removals=()
+          allowed=()
+          if [ -n "${ALLOWED_WORKLOAD_REMOVALS:-}" ]; then
+            IFS=',' read -ra allowed <<< "$ALLOWED_WORKLOAD_REMOVALS"
+            for name in "${allowed[@]}"; do
+              # `if`, not `[ -n ... ] && append`: under bash -e a false test
+              # as the last command in the loop body becomes the loop's own
+              # status, so a trailing empty element would abort the step on
+              # an otherwise successful parse of the list.
+              if [ -n "$name" ]; then
+                removals+=(--allow-removal "$name")
+              fi
+            done
+          fi
+
+          workloads=()
+          # The required list is read from the harness rather than written
+          # out here, so adding a workload to WORKLOADS cannot drift out of
+          # the gate.
+          #
+          # It is read into a VARIABLE, not straight out of a process
+          # substitution, because bash -e cannot see a process substitution's
+          # exit status. An empty listing there leaves no --require-test at
+          # all, which is precisely issue 36's false green: the gate compares
+          # the survivors and reports a pass. So the status is checked, and
+          # then the emptiness is checked — a producer that dies and a
+          # producer that legitimately prints nothing look identical from
+          # stdout alone, and both must refuse rather than degrade.
+          if ! listing=$(python3 scripts/bench/e2e_bench.py --list-workloads); then
+            echo "::error::the workload listing failed; the renderer gate would measure an undeclared population" >&2
+            exit 1
+          fi
+          if [ -z "$listing" ]; then
+            echo "::error::the workload listing is empty; the renderer gate would measure an undeclared population" >&2
+            exit 1
+          fi
+          while IFS= read -r name; do
+            required=1
+            for skip in "${allowed[@]}"; do
+              if [ "$name" = "$skip" ]; then
+                required=0
+                break
+              fi
+            done
+            if [ "$required" -ne 0 ]; then
+              workloads+=(--require-test "$name")
+            fi
+          done <<< "$listing"
+
+          # The second way to switch this gate off is to exempt everything
+          # from it. Naming all three workloads as allowed removals would
+          # leave an empty required list and no diagnostic, which is the same
+          # false green by another route, so it is refused here rather than
+          # left to be discovered as a green job summary.
+          if [ "${#workloads[@]}" -eq 0 ]; then
+            echo "::error::every workload is an allowed removal, so the renderer gate compares nothing; if that is intended, retire the workloads from WORKLOADS instead" >&2
+            exit 1
+          fi
+
+          # The renderer population's digest has to be CHECKED, not merely
+          # stored: the baseline records the digest of the workload node ids
+          # it was measured over, and this is the id list that digest is
+          # about. Written from the same $listing the required names come
+          # from, so the two cannot disagree.
+          printf '%s\n' "$listing" > "$REPORTS/renderer-population.txt"
+
+          # shellcheck disable=SC2046
+          if python3 scripts/ci/compare_counters.py \
+            --baseline "$BASELINE" \
+            --population renderer-workloads \
+            --head $(ls "$REPORTS"/bench-head-*.xml) \
+            --population-file "$REPORTS/renderer-population.txt" \
+            --max-regression "$TOTAL_BUDGET" \
+            --base-label 'the committed baseline, renderer workloads' \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            "${workloads[@]}" "${removals[@]}"; then
+            renderer_status=0
+          else
+            renderer_status=$?
+          fi
+
+          if [ "$unit_status" -ne 0 ] || [ "$renderer_status" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: The committed baseline only ratchets down
+        # The comparator refuses a head counter above its baseline, but
+        # nothing there stops a commit from EDITING the baseline upwards in
+        # the same push. This step judges the baseline against the BASE
+        # BRANCH TIP's copy of it, so raising the ceiling you are measured
+        # against is itself a red.
+        #
+        # working-directory: head IS LOAD-BEARING. actions/checkout put the
+        # repository at head/, so a step with no working-directory runs one
+        # level above the only repository on the box and every git command
+        # here dies with "not a git repository" — reproduced, rc 128. This
+        # step is gated to pull_request and every dispatch used as evidence
+        # was a workflow_dispatch, so nothing had ever executed it, and a
+        # text assertion over a wrong working directory cannot fail. The
+        # test suite now EXECUTES this block against a real checkout at
+        # head/ instead.
+        #
+        # NOT base.sha. That field is the base commit at PR open or last
+        # sync, and a synchronize does not refresh it, so it trails the base
+        # tip — which is exactly the direction that is wrong here, because a
+        # trailing commit carries an OLDER and therefore LOOSER baseline for
+        # the comparison to be lenient about. The base REF is fetched instead
+        # and its tip resolved from FETCH_HEAD at the moment the step runs.
+        #
+        # Skipped on a push to main: there is no base branch for that event,
+        # and a ratchet step that silently judged the wrong base would be
+        # worse than one that does not run.
+        if: ${{ github.event_name == 'pull_request' }}
+        # The repository is at head/, so every git command in this step has
+        # to run there. See the comment above.
+        working-directory: head
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          # A setup failure and a legitimate "there is nothing to ratchet
+          # against" must not look alike. The first guard below was written
+          # for the second and, written first, swallowed the first: with the
+          # working directory wrong, `git fetch` fails, the message printed,
+          # and the step exited ZERO. A control that cannot find the
+          # repository must go red, not green — a step that reports success
+          # without having run anything is the shape this whole job exists to
+          # avoid, and it is exactly what the first version of this step did.
+          if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            echo "::error::no git repository in $(pwd); actions/checkout put" \
+                 "the checkout in head/, so this step must declare" \
+                 "working-directory: head" >&2
+            exit 1
+          fi
+          if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
+            echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
+                 "deleted?). There is nothing to ratchet against."
+            exit 0
+          fi
+          base_tip="$(git rev-parse FETCH_HEAD)"
+          echo "Base branch tip: $base_tip"
+          if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
+            echo "No $BASELINE at the base tip, so there is nothing to" \
+                 "ratchet against."
+            exit 0
+          fi
+          git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+
+          # DECLARED REMOVALS, DERIVED FROM THE HARNESS. Retiring a renderer
+          # workload means dropping it from WORKLOADS and removing its entry
+          # from the baseline in the same commit, and a ratchet that refuses
+          # every deletion blocks that documented route while a shipped test
+          # asserts it works. So a removal is declared here, from what
+          # --list-workloads no longer emits — and the comparator REFUSES a
+          # declared removal that is still recorded, which is the other half
+          # of the trade: deleting an entry without dropping the workload
+          # leaves a stale entry that compare() would silently intersect
+          # away.
+          #
+          # Only the renderer population is eligible. The unit suite is
+          # governed by its population digest instead, and no listing here
+          # can vouch for it.
+          #
+          # `grep -qxF`, not a glob. `e2e::bench.render` is a PREFIX of
+          # `e2e::bench.render-impact` and of `e2e::bench.render-responsiveness`,
+          # so `case "$listing" in *"$node"*)` found a retired bench.render
+          # still "present" and left it undeclared — which left one of the
+          # three workloads with no green route to retirement, the whole way a
+          # second review after N3 was fixed. `-x` matches whole lines and
+          # `-F` treats the pattern as text, so only the exact id counts.
+          listing="$(python3 scripts/bench/e2e_bench.py --list-workloads)"
+          removals=()
+          for node in $(python3 -c 'import json,sys; \
+              print(" ".join(json.load(open(sys.argv[1]))["populations"] \
+              ["renderer-workloads"]["entries"]))' \
+              "$RUNNER_TEMP/base-baseline.json"); do
+            if ! printf '%s\n' "$listing" | grep -qxF "$node"; then
+              removals+=(--ratchet-allow-removal \
+                         "renderer-workloads:entries:$node")
+            fi
+          done
+          if [ "${#removals[@]}" -ne 0 ]; then
+            echo "Declared workload removals: ${removals[*]}"
+          fi
+
+          python3 scripts/ci/compare_counters.py \
+            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
+            "${removals[@]}"
+
+      - name: Upload JUnit reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: speed-junit-reports
+          path: |
+            ${{ github.workspace }}/reports/
+            ${{ runner.temp }}/gh7-bench/**/outputs/**
+          if-no-files-found: warn
+
+  analyze:
+    # Static security analysis (advanced setup, not the repo-settings "default
+    # setup" — the config lives here so it is reviewable in a diff like every
+    # other gate). Free on this public repository; findings land in the
+    # Security tab rather than turning the build red, so a new query shipping
+    # upstream cannot block an unrelated push.
+    #
+    # TRIGGERS. push scans every branch; the default-branch push is what files
+    # the alerts that persist in the Security tab. The weekly cron re-applies
+    # new query packs to code that has not changed since it shipped. The
+    # pull_request trigger (issue #8) gives a contributor head read-only
+    # pre-merge results: on that event `analyze` reports its findings as
+    # checks and annotations on the pull request itself, against exactly the
+    # tree it analysed — the checkout takes the event's own SHA, so what is
+    # analysed and what is reported on are the same commit under every
+    # trigger. (An earlier draft of this comment described a
+    # pull_request_review design the suite never shipped.)
+    #
+    # The weekly cron is not redundant with push: CodeQL's query packs are
+    # updated continuously, and a new query only ever runs against code that
+    # has changed since it shipped. Without the cron, a rule published today
+    # would never be applied to a file last touched last year.
+
+    needs: changes
+    if: needs.changes.outputs.codeql == 'run'
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Writing the analysis results is the whole point; everything else
+      # stays read-only. The scope holds on pull_request runs too, where
+      # the upload is what files the PR's checks and annotations. GitHub
+      # downgrades it to read for FORK PRs — the untrusted case — so a
+      # fork head cannot write anything with it; a same-repository PR
+      # runs with the trust of its author, who already has write. The PR
+      # gate is therefore not literally read-only; what is guaranteed is
+      # that an untrusted head gets no write.
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      # Only one language here — this repo has no JS at all. The matrix
+      # stays a matrix so adding one later is a one-line change rather
+      # than a restructure.
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No `ref:` here, unlike the other workflows: CodeQL must analyse
+          # exactly the commit it will file alerts against, which is the
+          # event's own SHA.
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # `security-extended` over the default `security` pack: these scripts
+          # hold a GitHub token, shell out to git, parse untrusted API
+          # responses and write files under a cache root — which is what
+          # the extra precision-medium queries are good at.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - docs
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+
+  actionlint:
+    # The gate on the gates. Everything else in .github/workflows is unreviewed
+    # code that runs with a repository token, and a mistake in it fails in ways
+    # the other gates structurally cannot catch: a workflow with a typo in an
+    # `if:` expression does not go red, it silently stops running.
+    #
+    # Two tools, because they answer different questions:
+    #
+    #   actionlint — is this workflow WELL-FORMED? Schema, expression syntax,
+    #   context availability (`github.event.review` on a push event),
+    #   `runs-on` labels, and shellcheck over every `run:` block, which is where
+    #   most real bugs live. It found `for i in $(seq 1 30)` with an unused `i`
+    #   in tests.yml on its first run here.
+    #
+    #   zizmor — is this workflow SAFE? Script injection through `${{ }}` in a
+    #   `run:` block, over-broad `permissions:`, credential persistence after
+    #   checkout, unpinned action references. Its first run flagged 39 findings,
+    #   14 of them high: every action was tag-pinned rather than hash-pinned,
+    #   every checkout left the job token in .git/config, and no workflow
+    #   declared permissions at all.
+    #
+    # Both tools are pinned. actionlint is verified by checksum rather than
+    # trusted from the release page, because a linter that runs before every
+    # other gate is a supply-chain position worth defending.
+    #
+    # Suppressions belong at the offending line as a `# zizmor: ignore[rule]`
+    # comment WITH a justification, never as a raised
+    # --min-severity here: a threshold silences the next finding too, and the
+    # next one is the one nobody has thought about yet.
+
+    needs: changes
+    if: needs.changes.outputs.actionlint == 'run'
+    runs-on: ubuntu-latest
+
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      # sha256 of actionlint_1.7.12_linux_amd64.tar.gz, from the release's
+      # own checksums file. Bump both together.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          # There is no requirements.txt or pyproject.toml here (the runtime
+          # is pure stdlib), so setup-python's pip cache has nothing to key
+          # on by default and FAILS THE JOB looking for one. Point it at the
+          # pins that do exist. The glob covers requirements-test.txt too,
+          # so a change to the coverage pins invalidates the cache as well.
+          cache-dependency-path: requirements-*.txt
+
+      - name: Install actionlint
+        # Downloaded and checksum-verified rather than piped from the
+        # install script: `curl | bash` would make this job trust whatever
+        # that URL serves at run time.
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          ./actionlint --version
+
+      - name: Install zizmor
+        id: install_zizmor
+        run: |
+          python -m pip install --upgrade pip
+          pip install zizmor==1.29.0
+
+      - name: actionlint
+        id: actionlint
+        run: ./actionlint -color .github/workflows/*.yml
+
+      - name: zizmor
+        # Runs even when actionlint is red, so one push reports both gates —
+        # the same pattern the lint job uses for pylint/pycodestyle. Not when
+        # the install itself failed, which would report a tool bug as a
+        # clean audit.
+        if: ${{ !cancelled() && steps.install_zizmor.outcome == 'success' }}
+        env:
+          # Enables the online audits (resolving action refs, checking for
+          # known-vulnerable action versions). Read-only, and this workflow
+          # declares contents: read.
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --no-progress .github/workflows/
+
+  aggregate:
+    # The required check always reports on pull requests and main pushes,
+    # including commits where every path-filtered gate is not applicable.
+    # The push condition keeps a PR branch from producing a second
+    # aggregate verdict on the same head SHA (issues #89 and #91).
+    # release.yml waits on this check, so release is deliberately absent
+    # from the needs graph.
+    if: ${{ always() && (github.event_name == 'pull_request'
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'push'
+            && github.ref == 'refs/heads/main')) }}
+    needs: [changes, unittest, lint, pyright, pip-audit, speed, analyze, actionlint]
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Aggregate CI gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: python3 scripts/ci/aggregate_gate.py

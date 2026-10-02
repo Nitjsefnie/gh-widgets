@@ -9,6 +9,7 @@ These helpers are shared by the two test modules that need that, and are not
 a test module themselves — `unittest discover` collects `test_*.py` only.
 """
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -60,15 +61,29 @@ class StepRunner:
 
     def job_env(self):
         """`jobs.<id>.env`, the mappings every step inherits."""
-        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
-        job = lines.index("  speed:")
-        start = next(i for i in range(job, len(lines))
-                     if lines[i] == "    env:")
+        lines = self.job_lines()
+        start = next(i for i, line in enumerate(lines)
+                     if line == "    env:")
         return self._env_map(lines[start + 1:], "      ")
+
+    @staticmethod
+    def job_lines():
+        """The speed job, extracted from the consolidated tests workflow."""
+        lines = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8").splitlines()
+        start = lines.index("  speed:")
+        end = next((index for index in range(start + 1, len(lines))
+                    if re.fullmatch(r"  [A-Za-z0-9_-]+:", lines[index])),
+                   len(lines))
+        return lines[start:end]
+
+    @classmethod
+    def job_text(cls):
+        """Text of the speed job, including its job-level rationale."""
+        return "\n".join(cls.job_lines()) + "\n"
 
     def step_text(self, step_name):
         """One named step's YAML, from its name to the next step."""
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        text = self.job_text()
         start = text.index(f"      - name: {step_name}")
         end = text.index("\n      - ", start + 10)
         return text[start:end]
@@ -80,7 +95,7 @@ class StepRunner:
         `working-directory` is its cwd; a test that executes the body without
         both is executing a different command from the one that ships.
         """
-        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        lines = self.job_lines()
         start = lines.index(f"      - name: {step_name}")
         block = []
         for line in lines[start:]:

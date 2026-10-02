@@ -122,7 +122,8 @@ def _read_repo_version() -> str:
     DISTINCT FROM COMMON_VERSION above, which is an interface-compatibility
     marker between this module and the renderers that load it. This one
     names a release: .github/workflows/release.yml tags when the file
-    changes, and speed.yml benchmarks against the release it names.
+    changes, and the speed job in tests.yml benchmarks against the release it
+    names.
 
     Returns "unknown" when the file is not there, which is the NORMAL case
     in a deploy: install.sh copies the scripts to /usr/local/bin/ without
