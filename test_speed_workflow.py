@@ -18,12 +18,14 @@ unread in the tree. Each of those is now a test that EXECUTES the step.
 import contextlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 
@@ -31,6 +33,28 @@ from bench_platform import REQUIRES_BENCH
 from speed_workflow_steps import WORKFLOWS, StepRunner
 
 REPO_ROOT = Path(__file__).resolve().parent
+STEP_EXEC_SENTINEL = "GHW_SPEED_UNIT_STEP_EXEC_ACTIVE"
+
+
+def _arm_step_exec_env(env):
+    """Arm the measured suite environment and refuse recursive step-exec.
+
+    Before 2298013, the fixture copied the full repository into ``head/``.
+    Its inner ``unittest discover`` then ran the real suite, including this
+    module's step-exec test, which built another checkout and recursively
+    launched the suite. 2298013 closed that route as a side effect of a cost
+    fix; this guard keeps re-entry loud if the fixture grows back into a full
+    copy. It is separate from ``REQUIRES_BENCH``: that decorator is a platform
+    guard for the CPU measurement facility, while this prevents recursive
+    test execution. The refusal unit tripwire below checks the re-entry
+    predicate directly.
+    """
+    if STEP_EXEC_SENTINEL in os.environ:
+        raise AssertionError(
+            "step-exec cascade guard tripped: "
+            f"{STEP_EXEC_SENTINEL} is already set; the measured unit-suite "
+            "discover re-entered this step-exec control")
+    env[STEP_EXEC_SENTINEL] = "1"
 
 
 def envelope(value, samples=6):
@@ -587,6 +611,13 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         size of the population does not bear on that. Running the whole suite
         here instead would have made the control the most expensive thing in
         the suite, on a box where a leaked run can outlive its own test.
+        Before 2298013 this fixture copied the full repository, so the
+        measured inner discover ran the real suite including this module's
+        step-exec test, which built another checkout and recursively ran the
+        suite. 2298013 closed that route as a side effect of a cost fix. The
+        population pin below catches a test module leaking back into `head/`;
+        the environment re-entry guard is separate from `REQUIRES_BENCH`,
+        which only guards whether the platform supports CPU measurement.
         """
         head = root / "head"
         head.mkdir(parents=True, exist_ok=True)
@@ -672,6 +703,45 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     "working-directory: head, so its paths resolve against "
                     "the workspace one level above the checkout")
 
+    def test_step_exec_env_guard_refuses_reentry_without_arming(self):
+        env = {}
+        with patch.dict(os.environ,
+                        {STEP_EXEC_SENTINEL: "1"}):
+            with self.assertRaisesRegex(
+                    AssertionError, STEP_EXEC_SENTINEL):
+                _arm_step_exec_env(env)
+        self.assertNotIn(STEP_EXEC_SENTINEL, env)
+
+    def test_small_checkout_pins_unit_discovery_population(self):
+        root = self._temp_root("ghw-speed-unit-population-pin-")
+        self._small_checkout(root)
+        counter = self._install_counter(root / "head")
+        self.assertEqual(
+            set(counter.collect_node_ids(root / "head")),
+            {"test_one.TestOne.test_a"})
+
+    @REQUIRES_BENCH
+    def test_step_exec_sentinel_reaches_measured_unit_suite(self):
+        root = self._temp_root("ghw-speed-unit-step-sentinel-")
+        head = self._small_checkout(root)
+        (head / "test_step_exec_probe.py").write_text(
+            "import os\n"
+            "import unittest\n\n\n"
+            "class TestStepExecProbe(unittest.TestCase):\n"
+            "    def test_sentinel_is_in_the_measured_process(self):\n"
+            "        self.assertEqual(\n"
+            "            os.environ.get(\"GHW_SPEED_UNIT_STEP_EXEC_ACTIVE\"),\n"
+            "            \"1\")\n", encoding="utf-8")
+        declared, working_dir, block = self.steps.step_run(
+            "Measure the unit suite")
+        self.assertEqual(working_dir, "head")
+        env = self.steps.env_for(declared, root)
+        env.update({"GH_COUNTER_METRIC": "cpu_time", "ROUNDS": "1"})
+        _arm_step_exec_env(env)
+        completed = self.steps.bash(block, root, working_dir, env)
+        self.assertEqual(completed.returncode, 0,
+                         completed.stdout[-2000:] + completed.stderr[-2000:])
+
     @REQUIRES_BENCH
     def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
         """The step executed, and its output proved to land where it must.
@@ -690,6 +760,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
         env.update({"GH_COUNTER_METRIC": "cpu_time", "ROUNDS": "1"})
+        _arm_step_exec_env(env)
         reports = Path(env["REPORTS"])
         completed = self.steps.bash(block, root, working_dir, env)
         self.assertEqual(completed.returncode, 0,
@@ -714,6 +785,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
         env.update({"GH_COUNTER_METRIC": "cpu_time", "ROUNDS": "1"})
+        _arm_step_exec_env(env)
         broken = self.steps.bash(block, root, None, env)
         self.assertNotEqual(broken.returncode, 0)
         written = sorted(p.name for p in Path(env["REPORTS"]).glob("unit-*.xml"))
@@ -837,7 +909,6 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn('TOTAL_BUDGET: "0.30"', text)
         self.assertIn("NOT THE THRESHOLD", text)
 
-    @REQUIRES_BENCH
     @REQUIRES_BENCH
     def test_workload_listing_that_fails_stops_the_compare_step(self):
         """A producer that dies must not silently empty the required list.
