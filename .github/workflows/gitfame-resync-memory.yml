@@ -48,7 +48,7 @@ on:
       new_ref:
         description: "Fork ref installed as the `new` arm"
         required: false
-        default: "parallel-blame"
+        default: "perf-blame"
       blame_method:
         description: >-
           targeted (default in the renderer), fame (the git-fame reference),
