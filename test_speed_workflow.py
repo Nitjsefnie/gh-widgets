@@ -704,13 +704,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     "the workspace one level above the checkout")
 
     def test_step_exec_env_guard_refuses_reentry_without_arming(self):
-        env = {}
-        with patch.dict(os.environ,
-                        {STEP_EXEC_SENTINEL: "1"}):
-            with self.assertRaisesRegex(
-                    AssertionError, STEP_EXEC_SENTINEL):
-                _arm_step_exec_env(env)
-        self.assertNotIn(STEP_EXEC_SENTINEL, env)
+        for value in ("1", ""):
+            with self.subTest(value=value):
+                env = {}
+                with patch.dict(os.environ, {STEP_EXEC_SENTINEL: value}):
+                    with self.assertRaisesRegex(
+                            AssertionError, STEP_EXEC_SENTINEL):
+                        _arm_step_exec_env(env)
+                self.assertNotIn(STEP_EXEC_SENTINEL, env)
 
     def test_small_checkout_pins_unit_discovery_population(self):
         root = self._temp_root("ghw-speed-unit-population-pin-")
@@ -742,8 +743,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(completed.returncode, 0,
                          completed.stdout[-2000:] + completed.stderr[-2000:])
         report = ET.parse(Path(env["REPORTS"]) / "unit-1.xml").getroot()
+        failure = report.find(".//failure")
         self.assertEqual(report.get("failures"), "0",
-                         "the measured probe test must pass")
+                         failure.text if failure is not None
+                         else "the measured probe test must pass")
         self.assertIn("Ran 2 tests", completed.stdout + completed.stderr)
 
     @REQUIRES_BENCH
