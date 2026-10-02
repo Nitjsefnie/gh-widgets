@@ -51,7 +51,7 @@ class ExtraOrganizationStats(unittest.TestCase):
             out = Path(td) / "out"
             stdout, stderr = run_main_capturing_output(
                 api, out, Path(td) / "cache.json")
-            svg = (out / "stats.svg").read_text()
+            svg = (out / "stats.svg").read_text(encoding="utf-8")
 
         self.assertIn("wrote ", stdout)
         self.assertEqual(stderr, "")
@@ -190,7 +190,8 @@ class ExtraOrganizationStats(unittest.TestCase):
 
             stdout, stderr = run_main_capturing_output(
                 api, out, cache_file, extra_orgs="Example")
-            desc = self.stats_desc((out / "stats.svg").read_text())
+            desc = self.stats_desc(
+                (out / "stats.svg").read_text(encoding="utf-8"))
 
             self.assertIn("fetch failed at fetch: simulated fetch failure",
                           stdout)
