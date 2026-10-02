@@ -140,14 +140,37 @@ class NeedsClassificationTests(unittest.TestCase):
             ag.decide(needs, _applicability())
 
 
-class SupersessionTests(unittest.TestCase):
+class CancelledRunMixin:
+    def _cancelled_speed(self, mine, *candidates):
+        run_id = str(mine["id"])
+        own_path = f"repos/owner/repo/actions/runs/{run_id}"
+        branch = mine["head_branch"]
+        list_path = (
+            "repos/owner/repo/actions/workflows/tests.yml/runs"
+            f"?branch={branch}&per_page=100")
+        transport = FakeTransport(responses={
+            own_path: mine, list_path: [mine, *candidates],
+        })
+        needs = _all_success()
+        needs["speed"]["result"] = "cancelled"
+        results = ag.evaluate(
+            needs, _applicability(), repository="owner/repo", run_id=run_id,
+            branch=branch, transport=transport)
+        return results, transport
+
+
+class SupersessionTests(CancelledRunMixin, unittest.TestCase):
     def setUp(self):
         self.mine = _run(1, "2026-09-07T10:00:00Z")
         self.newer = _run(2, "2026-09-07T10:05:00Z")
 
     def test_only_a_strictly_newer_same_workflow_same_pr_run_supersedes(self):
-        self.assertIs(ag.superseding_run(
-            self.mine, [self.mine, self.newer], "feature"), self.newer)
+        proof = ag.superseding_run(
+            self.mine, [self.mine, self.newer], "feature")
+        self.assertIsNotNone(proof)
+        assert proof is not None
+        self.assertIs(proof.run, self.newer)
+        self.assertFalse(proof.degraded)
         other_pr = _run(3, "2026-09-07T10:06:00Z",
                         pull_requests=[{"number": 43}])
         other_repository = _run(
@@ -160,8 +183,10 @@ class SupersessionTests(unittest.TestCase):
 
     def test_equal_start_times_use_run_id_as_the_tie_breaker(self):
         tied = _run(2, "2026-09-07T10:00:00Z")
-        self.assertIs(ag.superseding_run(
-            self.mine, [self.mine, tied], "feature"), tied)
+        proof = ag.superseding_run(self.mine, [self.mine, tied], "feature")
+        self.assertIsNotNone(proof)
+        assert proof is not None
+        self.assertIs(proof.run, tied)
         self.assertIsNone(ag.superseding_run(
             tied, [self.mine, tied], "feature"))
 
@@ -169,8 +194,10 @@ class SupersessionTests(unittest.TestCase):
         mine = _run(1, None, status="in_progress",
                     created_at="2026-09-07T10:00:00Z")
         newer = _run(2, None, created_at="2026-09-07T10:05:00Z")
-        self.assertIs(ag.superseding_run(mine, [mine, newer], "feature"),
-                      newer)
+        proof = ag.superseding_run(mine, [mine, newer], "feature")
+        self.assertIsNotNone(proof)
+        assert proof is not None
+        self.assertIs(proof.run, newer)
 
     def test_current_run_without_valid_time_cannot_be_proven_superseded(self):
         older = _run(19, "2026-09-07T09:00:00Z")
@@ -186,8 +213,10 @@ class SupersessionTests(unittest.TestCase):
         later = _run(3, "2026-09-07T13:00:00")
         self.assertIsNone(ag.superseding_run(
             mine, [mine, earlier], "feature"))
-        self.assertIs(ag.superseding_run(
-            mine, [mine, later], "feature"), later)
+        proof = ag.superseding_run(mine, [mine, later], "feature")
+        self.assertIsNotNone(proof)
+        assert proof is not None
+        self.assertIs(proof.run, later)
         malformed = _run(4, "not-a-time", created_at="2026-09-07T15:00:00Z")
         self.assertIsNone(ag.superseding_run(
             later, [later, malformed], "feature"))
@@ -198,6 +227,17 @@ class SupersessionTests(unittest.TestCase):
                                [self.newer], "feature")
         with self.assertRaises(ag.QueryError):
             ag.superseding_run(self.mine, [self.newer], "other")
+
+    def test_push_run_is_never_returned_as_superseded(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", event="push")
+        newer = _run(2, "2026-09-07T10:05:00Z")
+        self.assertIsNone(ag.superseding_run(mine, [newer], "feature"))
+
+    def test_dispatch_run_is_never_returned_as_superseded(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", event="workflow_dispatch",
+                    pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z")
+        self.assertIsNone(ag.superseding_run(mine, [newer], "feature"))
 
     def test_cancelled_need_is_proven_by_the_tests_workflow_runs_api(self):
         own_path = "repos/owner/repo/actions/runs/1"
@@ -221,44 +261,6 @@ class SupersessionTests(unittest.TestCase):
         self.assertIn("run 2", result["speed"].detail)
         self.assertEqual(transport.calls, [
             (own_path, False, True), (list_path, True, True)])
-
-    def _cancelled_speed(self, mine, *candidates):
-        own_path = "repos/owner/repo/actions/runs/1"
-        branch = mine["head_branch"]
-        list_path = (
-            "repos/owner/repo/actions/workflows/tests.yml/runs"
-            f"?branch={branch}&per_page=100")
-        transport = FakeTransport(responses={
-            own_path: mine, list_path: [mine, *candidates],
-        })
-        needs = _all_success()
-        needs["speed"]["result"] = "cancelled"
-        results = ag.evaluate(
-            needs, _applicability(), repository="owner/repo", run_id="1",
-            branch=branch, transport=transport)
-        return results, transport
-
-    def test_newer_same_branch_run_from_another_head_repository_is_deliberate(self):
-        mine = _run(1, "2026-09-07T10:00:00Z",
-                    pull_requests=[{"number": 42}])
-        newer = _run(
-            2, "2026-09-07T10:05:00Z",
-            head_repository={"id": 101, "full_name": "other/repo"},
-            pull_requests=[{"number": 42}])
-        results, _ = self._cancelled_speed(mine, newer)
-        self.assertEqual(results["speed"].verdict, ag.FAILED)
-        self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
-
-    def test_newer_run_with_a_different_pr_number_is_deliberate(self):
-        mine = _run(1, "2026-09-07T10:00:00Z",
-                    pull_requests=[{"number": 42}])
-        newer = _run(2, "2026-09-07T10:05:00Z",
-                     pull_requests=[{"number": 43}])
-        results, _ = self._cancelled_speed(mine, newer)
-        self.assertEqual(results["speed"].verdict, ag.FAILED)
-        self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
 
     def test_pr_run_is_not_superseded_by_same_pr_push_run(self):
         mine = _run(1, "2026-09-07T10:00:00Z",
@@ -290,27 +292,6 @@ class SupersessionTests(unittest.TestCase):
         self.assertEqual(ag.exit_code(results), 1)
         self.assertEqual(transport.calls,
                          [("repos/owner/repo/actions/runs/1", False, True)])
-
-    def test_unattributed_fork_pr_uses_degraded_same_repo_branch_proof(self):
-        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
-        newer = _run(2, "2026-09-07T10:05:00Z", pull_requests=[])
-        results, _ = self._cancelled_speed(mine, newer)
-        self.assertEqual(results["speed"].verdict, ag.SUPERSEDED)
-        self.assertIn("proof degraded", results["speed"].detail)
-        self.assertIn("same head repository and head branch",
-                      results["speed"].detail)
-        self.assertIn("two PRs from one fork branch are indistinguishable",
-                      results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 0)
-
-    def test_unattributed_fork_pr_requires_the_same_branch(self):
-        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
-        newer = _run(2, "2026-09-07T10:05:00Z", branch="other",
-                     pull_requests=[])
-        results, _ = self._cancelled_speed(mine, newer)
-        self.assertEqual(results["speed"].verdict, ag.FAILED)
-        self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
 
     def test_newer_pull_request_run_does_not_supersede_cancelled_push(self):
         own_path = "repos/owner/repo/actions/runs/1"
@@ -366,6 +347,68 @@ class SupersessionTests(unittest.TestCase):
         self.assertEqual({row.verdict for row in result.values()},
                          {ag.PASSED})
         self.assertEqual(transport.calls, [])
+
+
+class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
+    def test_newer_same_branch_run_from_another_head_repository_is_deliberate(self):
+        mine = _run(1, "2026-09-07T10:00:00Z",
+                    pull_requests=[{"number": 42}])
+        newer = _run(
+            2, "2026-09-07T10:05:00Z",
+            head_repository={"id": 101, "full_name": "other/repo"},
+            pull_requests=[{"number": 42}])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+
+    def test_newer_run_with_a_different_pr_number_is_deliberate(self):
+        mine = _run(1, "2026-09-07T10:00:00Z",
+                    pull_requests=[{"number": 42}])
+        newer = _run(2, "2026-09-07T10:05:00Z",
+                     pull_requests=[{"number": 43}])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+
+    def test_unattributed_fork_pr_uses_degraded_same_repo_branch_proof(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z", pull_requests=[])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.SUPERSEDED)
+        self.assertIn("proof degraded", results["speed"].detail)
+        self.assertIn("same head repository and head branch",
+                      results["speed"].detail)
+        self.assertIn("two PRs from one fork branch are indistinguishable",
+                      results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 0)
+
+    def test_missing_association_on_either_run_uses_degraded_fallback(self):
+        attributed = _run(1, "2026-09-07T10:00:00Z",
+                          pull_requests=[{"number": 42}])
+        unattributed = _run(2, "2026-09-07T10:05:00Z", pull_requests=[])
+        results, _ = self._cancelled_speed(attributed, unattributed)
+        self.assertEqual(results["speed"].verdict, ag.SUPERSEDED)
+        self.assertIn("proof degraded", results["speed"].detail)
+
+        unattributed_mine = _run(
+            3, "2026-09-07T10:00:00Z", pull_requests=[])
+        attributed_newer = _run(
+            4, "2026-09-07T10:05:00Z", pull_requests=[{"number": 42}])
+        results, _ = self._cancelled_speed(
+            unattributed_mine, attributed_newer)
+        self.assertEqual(results["speed"].verdict, ag.SUPERSEDED)
+        self.assertIn("proof degraded", results["speed"].detail)
+
+    def test_unattributed_fork_pr_requires_the_same_branch(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z", branch="other",
+                     pull_requests=[])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
 
 
 class AggregateSummaryTests(unittest.TestCase):

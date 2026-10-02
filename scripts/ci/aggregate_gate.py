@@ -60,6 +60,14 @@ class Result:
     detail: str
 
 
+@dataclass(frozen=True)
+class SupersessionProof:
+    """A newer run and whether attribution relied on the fork fallback."""
+
+    run: dict[str, Any]
+    degraded: bool
+
+
 def allowed_results(name: str) -> frozenset[str]:
     """The changes selector must succeed; gates may be skipped by design."""
     return frozenset({"success"}) if name in STRICT else ALLOWED
@@ -152,22 +160,20 @@ def _head_repository_identity(run: dict[str, Any]) -> tuple[str, int | str] | No
 
 def _same_pr_domain(run: dict[str, Any], *, workflow: str, branch: str,
                     repository: tuple[str, int | str],
-                    pr_numbers: set[int] | None) -> bool:
+                    pr_numbers: set[int] | None) -> tuple[bool, bool]:
     """Check whether a candidate shares the current PR's concurrency key."""
     if (run.get("event") != "pull_request"
             or _workflow_of(run) != workflow
             or _head_repository_identity(run) != repository):
-        return False
+        return False, False
     candidate_numbers = _pull_request_numbers(run)
-    if pr_numbers is None:
-        return candidate_numbers is None and run.get("head_branch") == branch
-    if candidate_numbers is None:
-        return False
-    return any(_attributable(run, number) for number in pr_numbers)
+    if pr_numbers is None or candidate_numbers is None:
+        return run.get("head_branch") == branch, True
+    return any(_attributable(run, number) for number in pr_numbers), False
 
 
 def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
-                    branch: str) -> dict[str, Any] | None:
+                    branch: str) -> SupersessionProof | None:
     """Find a newer run that shares this PR's actual concurrency domain."""
     event = mine.get("event")
     if not isinstance(event, str) or not event:
@@ -188,17 +194,18 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     mine_key = _started_key(mine)
     if mine_key is None:
         raise QueryError("current workflow run has no valid start or creation time")
-    newer: list[tuple[tuple[datetime, int], dict[str, Any]]] = []
+    newer: list[tuple[tuple[datetime, int], SupersessionProof]] = []
     for run in runs:
         if not isinstance(run, dict):
             raise QueryError("workflow run list has a malformed item")
-        if not _same_pr_domain(
-                run, workflow=workflow, branch=branch,
-                repository=repository, pr_numbers=pr_numbers):
+        shares_domain, degraded = _same_pr_domain(
+            run, workflow=workflow, branch=branch, repository=repository,
+            pr_numbers=pr_numbers)
+        if not shares_domain:
             continue
         run_key = _started_key(run)
         if run_key is not None and run_key > mine_key:
-            newer.append((run_key, run))
+            newer.append((run_key, SupersessionProof(run, degraded)))
     if not newer:
         return None
     return max(newer, key=lambda item: item[0])[1]
@@ -206,7 +213,7 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
 
 def _gate_result(gate: str, job: str, result: Any, required: str, *,
                  hard_jobs: set[str], cancelled_jobs: set[str],
-                 superseded_by: dict[str, Any] | None) -> Result:
+                 superseded_by: SupersessionProof | None) -> Result:
     if job in cancelled_jobs:
         if superseded_by is None:
             row = Result(
@@ -214,10 +221,11 @@ def _gate_result(gate: str, job: str, result: Any, required: str, *,
                 f"no qualifying same-PR successor proves auto-cancellation; "
                 f"deliberate cancel: {job}=cancelled")
         else:
+            run = superseded_by.run
             detail = (
-                f"superseded by run {_run_id(superseded_by)} "
-                f"({superseded_by.get('html_url') or '?'})")
-            if not superseded_by.get("pull_requests"):
+                f"superseded by run {_run_id(run)} "
+                f"({run.get('html_url') or '?'})")
+            if superseded_by.degraded:
                 detail += (
                     "; proof degraded: pull_requests association absent; "
                     "same head repository and head branch matched; two PRs "
@@ -251,7 +259,7 @@ def _api(transport: cd.Transport, path: str, *,
 
 
 def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
-                      branch: str) -> dict[str, Any] | None:
+                      branch: str) -> SupersessionProof | None:
     if REPOSITORY.fullmatch(repository) is None:
         raise QueryError("missing or invalid REPOSITORY for supersession query")
     if not RUN_ID.fullmatch(run_id) or int(run_id) < 1:
@@ -275,7 +283,7 @@ def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
 
 
 def decide(needs: dict[str, Any], applicability: dict[str, str], *,
-           superseded_by: dict[str, Any] | None = None) -> dict[str, Result]:
+           superseded_by: SupersessionProof | None = None) -> dict[str, Result]:
     """Classify needs and cross-check their terminal state against paths."""
     if not isinstance(needs, dict):
         raise AggregationError("NEEDS_JSON must be an object")
