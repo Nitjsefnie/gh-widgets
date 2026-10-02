@@ -110,7 +110,7 @@ def _run_id(run: dict[str, Any]) -> int:
 
 def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
                     branch: str) -> dict[str, Any] | None:
-    """Find a strictly newer run of the same workflow on the same branch."""
+    """Find a strictly newer run in the same workflow, event, and branch."""
     if not isinstance(branch, str) or not branch:
         raise QueryError("supersession query has no head branch")
     if mine.get("head_branch") != branch:
@@ -118,6 +118,9 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     workflow = _workflow_of(mine)
     if workflow is None:
         raise QueryError("current run has no workflow identity")
+    event = mine.get("event")
+    if not isinstance(event, str) or not event:
+        raise QueryError("current run has no event identity")
     mine_key = _started_key(mine)
     if mine_key is None:
         raise QueryError("current workflow run has no valid start or creation time")
@@ -125,7 +128,9 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     for run in runs:
         if not isinstance(run, dict):
             raise QueryError("workflow run list has a malformed item")
-        if run.get("head_branch") != branch or _workflow_of(run) != workflow:
+        if (run.get("head_branch") != branch
+                or _workflow_of(run) != workflow
+                or run.get("event") != event):
             continue
         run_key = _started_key(run)
         if run_key is not None and run_key > mine_key:
