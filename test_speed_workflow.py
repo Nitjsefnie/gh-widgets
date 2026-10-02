@@ -741,6 +741,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         completed = self.steps.bash(block, root, working_dir, env)
         self.assertEqual(completed.returncode, 0,
                          completed.stdout[-2000:] + completed.stderr[-2000:])
+        report = ET.parse(Path(env["REPORTS"]) / "unit-1.xml").getroot()
+        self.assertEqual(report.get("failures"), "0",
+                         "the measured probe test must pass")
+        self.assertIn("Ran 2 tests", completed.stdout + completed.stderr)
 
     @REQUIRES_BENCH
     def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
