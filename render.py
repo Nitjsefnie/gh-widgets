@@ -48,6 +48,7 @@ from calendar import monthrange
 from collections import namedtuple
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 
 def _load_common():
@@ -228,6 +229,42 @@ query($login: String!, $cursor: String) {
 PROFILE_MAX_PAGES = 50
 
 
+def _next_pagination_cursor(
+        field, cursor, pages, max_pages, seen_cursors,
+        page_info: Optional[dict] = None, before_request=False):
+    """Apply the shared page bound and cursor checks for a connection.
+
+    Called with ``before_request=True`` before each request to enforce the
+    page limit, and with a response's pageInfo to validate and record its
+    cursor. ``field`` contains the connection context used in any error.
+    """
+    if before_request:
+        if max_pages is not None and pages >= max_pages:
+            raise common.PaginationLimitError(
+                f"{field} pagination limit {max_pages} reached after cursor "
+                f"{cursor!r}")
+        return None
+
+    if page_info is None or "hasNextPage" not in page_info:
+        raise common.PaginationLimitError(
+            f"{field} pagination missing pageInfo or hasNextPage after "
+            f"cursor {cursor!r}")
+    if not page_info.get("hasNextPage"):
+        return None
+
+    next_cursor = page_info.get("endCursor")
+    if not next_cursor:
+        raise common.PaginationLimitError(
+            f"{field} pagination stalled after cursor {cursor!r}: "
+            "hasNextPage=true but endCursor is missing")
+    if next_cursor in seen_cursors:
+        raise common.PaginationLimitError(
+            f"{field} pagination stalled after cursor {cursor!r}: "
+            f"endCursor {next_cursor!r} repeats an earlier cursor")
+    seen_cursors.add(next_cursor)
+    return next_cursor
+
+
 def page_profile_connection(token, query, field, login, max_pages):
     """Walk one paginated ``user`` connection to its last page.
 
@@ -247,10 +284,9 @@ def page_profile_connection(token, query, field, login, max_pages):
     seen_cursors = {None}
     pages = 0
     while True:
-        if max_pages is not None and pages >= max_pages:
-            raise common.PaginationLimitError(
-                f"{field} pagination limit {max_pages} reached after cursor "
-                f"{cursor!r}")
+        _next_pagination_cursor(
+            field, cursor, pages, max_pages, seen_cursors,
+            before_request=True)
         user = gql(token, query, {"login": login, "cursor": cursor})["user"]
         pages += 1
         connection = user.get(field) or {}
@@ -260,22 +296,10 @@ def page_profile_connection(token, query, field, login, max_pages):
                            if k != "pageInfo"}
         nodes.extend(connection.get("nodes") or [])
         page_info = connection.get("pageInfo")
-        if page_info is None or "hasNextPage" not in page_info:
-            raise common.PaginationLimitError(
-                f"{field} pagination missing pageInfo or hasNextPage after "
-                f"cursor {cursor!r}")
-        if not page_info.get("hasNextPage"):
+        next_cursor = _next_pagination_cursor(
+            field, cursor, pages, max_pages, seen_cursors, page_info)
+        if next_cursor is None:
             break
-        next_cursor = page_info.get("endCursor")
-        if not next_cursor:
-            raise common.PaginationLimitError(
-                f"{field} pagination stalled after cursor {cursor!r}: "
-                "hasNextPage=true but endCursor is missing")
-        if next_cursor in seen_cursors:
-            raise common.PaginationLimitError(
-                f"{field} pagination stalled after cursor {cursor!r}: "
-                f"endCursor {next_cursor!r} repeats an earlier cursor")
-        seen_cursors.add(next_cursor)
         cursor = next_cursor
     head[field]["nodes"] = nodes
     return head, head[field]
@@ -294,11 +318,11 @@ def page_organization_repositories(
     cursor = None
     seen_cursors = {None}
     pages = 0
+    field = f"organization {login!r} repositories"
     while True:
-        if max_pages is not None and pages >= max_pages:
-            raise common.PaginationLimitError(
-                f"organization {login!r} repositories pagination limit "
-                f"{max_pages} reached after cursor {cursor!r}")
+        _next_pagination_cursor(
+            field, cursor, pages, max_pages, seen_cursors,
+            before_request=True)
         response = gql(token, ORG_REPO_QUERY,
                        {"login": login, "cursor": cursor})
         organization = response.get("organization")
@@ -311,24 +335,10 @@ def page_organization_repositories(
             head = {k: v for k, v in connection.items() if k != "pageInfo"}
         nodes.extend(connection.get("nodes") or [])
         page_info = connection.get("pageInfo")
-        if page_info is None or "hasNextPage" not in page_info:
-            raise common.PaginationLimitError(
-                f"organization {login!r} repositories pagination missing "
-                f"pageInfo or hasNextPage after cursor {cursor!r}")
-        if not page_info.get("hasNextPage"):
+        next_cursor = _next_pagination_cursor(
+            field, cursor, pages, max_pages, seen_cursors, page_info)
+        if next_cursor is None:
             break
-        next_cursor = page_info.get("endCursor")
-        if not next_cursor:
-            raise common.PaginationLimitError(
-                f"organization {login!r} repositories pagination stalled "
-                f"after cursor {cursor!r}: hasNextPage=true but endCursor "
-                "is missing")
-        if next_cursor in seen_cursors:
-            raise common.PaginationLimitError(
-                f"organization {login!r} repositories pagination stalled "
-                f"after cursor {cursor!r}: endCursor {next_cursor!r} "
-                "repeats an earlier cursor")
-        seen_cursors.add(next_cursor)
         cursor = next_cursor
     head["nodes"] = nodes
     return head

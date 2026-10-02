@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Optional
 from unittest import mock
@@ -346,6 +346,15 @@ def run_main(api, out_dir, cache_file, extra_orgs=""):
         render.main()
 
 
+def run_main_capturing_output(api, out_dir, cache_file, extra_orgs=""):
+    """Run main and return its stdout and stderr without leaking test logs."""
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        run_main(api, out_dir, cache_file, extra_orgs)
+    return stdout.getvalue(), stderr.getvalue()
+
+
 def recent_days(n):
     """date -> count for the n days ending today (UTC)."""
     today = datetime.datetime.now(datetime.timezone.utc).date()
@@ -479,7 +488,10 @@ class DurabilityFallback(unittest.TestCase):
             # main() returning normally (not propagating the fetch error) is
             # the exit-0 path; the __main__ wrapper only exits non-zero when
             # an exception escapes.
-            run_main(api, out, cache_file)
+            stdout, stderr = run_main_capturing_output(api, out, cache_file)
+            self.assertIn("fetch failed at fetch: simulated fetch failure",
+                          stdout)
+            self.assertEqual(stderr, "")
             for name in ("stats.svg", "streak.svg", "languages.svg", "external.svg"):
                 svg = (out / name).read_text()
                 self.assertIn("cached data from 2026-07-20T06:00:00+00:00", svg)
@@ -866,7 +878,11 @@ class ForksReceived(unittest.TestCase):
             api.full_calendar = recent_days(3)
             api.extra_org_pages["Example"] = [[repo_node(5, 3)]]
             api.extra_org_totals["Example"] = 1
-            run_main(api, out, cache_file, extra_orgs=" Example ")
+            stdout, stderr = run_main_capturing_output(
+                api, out, cache_file, extra_orgs=" Example ")
+            self.assertIn("wrote ", stdout)
+            self.assertIn("(stars=8 forks=5", stdout)
+            self.assertEqual(stderr, "")
 
             calendar_vars = [v for q, v in api.calls
                              if "contributionCalendar" in q]
