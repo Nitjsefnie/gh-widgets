@@ -330,6 +330,39 @@ class TestScratchLifecycle(unittest.TestCase):
         }
         return driver, env, paths
 
+    def run_fake_git_with_clock(self, lifetime):
+        """Execute the generated shim with a monotonic clock that advances on sleep."""
+        _driver, env, paths = self.make_paused_clone_renderer()
+        env["GHW_FAKE_GIT_MAX_LIFE"] = str(lifetime)
+        fake_git = paths["bin_dir"] / "git"
+        expected = [
+            "-c", "pack.threads=1", "-c", "pack.windowMemory=32m",
+            "clone", "--single-branch", str(paths["mirror"])]
+        destination = paths["scratch_root"] / "impact-fame-clock"
+
+        class FakeClock:
+            def __init__(self):
+                self.now = 0.0
+                self.sleeps = []
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.sleeps.append((self.now, seconds))
+                self.now += seconds
+
+        clock = FakeClock()
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(
+                    sys, "argv", ["git", *expected, str(destination)]), \
+                mock.patch.object(time, "monotonic",
+                                  side_effect=clock.monotonic), \
+                mock.patch.object(time, "sleep", side_effect=clock.sleep):
+            exec(compile(fake_git.read_text(encoding="utf-8"),
+                         str(fake_git), "exec"), {"__name__": "__main__"})
+        return clock
+
     @staticmethod
     def wait_for_file(path, timeout=5):
         deadline = time.monotonic() + timeout
@@ -529,6 +562,20 @@ class TestScratchLifecycle(unittest.TestCase):
                     renderer, child_pid, paths, 128 + signal.SIGTERM)
             finally:
                 self.stop_test_processes(renderer, child_pid, paths["release"])
+
+    def test_fake_git_shim_stays_alive_inside_configured_lifetime(self):
+        clock = self.run_fake_git_with_clock(lifetime=4)
+
+        self.assertTrue(
+            any(start < 4 for start, _seconds in clock.sleeps),
+            "fake git shim exited before sleeping inside its configured lifetime")
+
+    def test_fake_git_shim_exits_at_configured_lifetime(self):
+        clock = self.run_fake_git_with_clock(lifetime=4)
+
+        self.assertEqual(
+            clock.now, 4,
+            "fake git shim did not exit when its configured lifetime elapsed")
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX signal delivery")
     def test_renderer_signal_stops_clone_writer_before_removing_scratch(self):
