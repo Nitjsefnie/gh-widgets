@@ -199,8 +199,9 @@ class TestConsolidatedCiControls(unittest.TestCase):
             with self.subTest(filename=filename):
                 path = WORKFLOWS / filename
                 self.assertTrue(path.is_file(), f"missing schedule owner {filename}")
-                block = _job_blocks(path.read_text(encoding="utf-8")).get(job)
-                self.assertIsNotNone(block, f"missing job {job} in {filename}")
+                blocks = _job_blocks(path.read_text(encoding="utf-8"))
+                self.assertIn(job, blocks, f"missing job {job} in {filename}")
+                block = blocks[job]
                 self.assertNotRegex(block, r"(?m)^    if:")
 
     def test_tests_concurrency_cancels_only_pr_and_non_main_pushes(self):
