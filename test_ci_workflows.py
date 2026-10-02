@@ -244,7 +244,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
                 self.assertEqual(_steps_block(self.jobs[job]),
                                  _steps_block(owner))
 
-    def test_tests_concurrency_uses_pr_or_sha_scoped_group(self):
+    def test_tests_concurrency_uses_per_pr_or_per_run_group(self):
         block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",
                           self.workflow)
         assert block is not None
@@ -255,7 +255,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
             " ".join(group.group(1).split()),
             "github.event_name == 'pull_request' && "
             "format('tests-pr-{0}', github.event.pull_request.number) || "
-            "format('tests-push-{0}', github.sha)")
+            "github.run_id")
 
     def test_tests_cancel_in_progress_only_for_pull_requests(self):
         block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",

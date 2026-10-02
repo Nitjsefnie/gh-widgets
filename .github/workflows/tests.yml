@@ -29,13 +29,15 @@ permissions:
   contents: read
 
 concurrency:
+  # Two refs can point at one SHA (for example a branch and a tag), so a
+  # per-SHA group can evict the other ref's pending run.
   # A pull_request run supersedes its own PR's predecessor (the superseded
-  # head SHA is dead history). Push and dispatch runs are independent — a
-  # per-SHA group can neither queue behind nor cancel another run, so a
-  # docs-only push can never evict or cancel a code run's verdicts.
+  # head SHA is dead history). Every other run is keyed by its own run id:
+  # a group nothing else can ever hold, so a run can neither queue behind,
+  # be evicted by, nor cancel another run — whatever refs point at its SHA.
   group: ${{ github.event_name == 'pull_request'
       && format('tests-pr-{0}', github.event.pull_request.number)
-      || format('tests-push-{0}', github.sha) }}
+      || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
