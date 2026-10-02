@@ -19,10 +19,10 @@ from scripts.ci import changes_detect as cd
 
 
 WORKFLOW = ".github/workflows/tests.yml"
+WORKFLOW_FILE = Path(WORKFLOW).name
 STRICT = frozenset({"changes"})
 ALLOWED = frozenset({"success", "skipped"})
 CANCELLED = "cancelled"
-OLDEST = datetime.min.replace(tzinfo=timezone.utc)
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 RUN_ID = re.compile(r"[0-9]+\Z")
 
@@ -86,15 +86,15 @@ def _workflow_of(run: dict[str, Any]) -> Any:
     return run.get("workflow_id") or run.get("path")
 
 
-def _started_key(run: dict[str, Any]) -> tuple[datetime, int]:
-    """Use the start time, with run id breaking equal-time ties."""
+def _started_key(run: dict[str, Any]) -> tuple[datetime, int] | None:
+    """Use a valid start/create time, with run id breaking equal-time ties."""
     text = run.get("run_started_at") or run.get("created_at")
-    stamp = OLDEST
-    if text:
-        try:
-            stamp = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
-        except ValueError:
-            stamp = OLDEST
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return stamp, _run_id(run)
@@ -119,15 +119,20 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     if workflow is None:
         raise QueryError("current run has no workflow identity")
     mine_key = _started_key(mine)
-    newer = []
+    if mine_key is None:
+        raise QueryError("current workflow run has no valid start or creation time")
+    newer: list[tuple[tuple[datetime, int], dict[str, Any]]] = []
     for run in runs:
         if not isinstance(run, dict):
             raise QueryError("workflow run list has a malformed item")
-        if (run.get("head_branch") == branch
-                and _workflow_of(run) == workflow
-                and _started_key(run) > mine_key):
-            newer.append(run)
-    return max(newer, key=_started_key, default=None)
+        if run.get("head_branch") != branch or _workflow_of(run) != workflow:
+            continue
+        run_key = _started_key(run)
+        if run_key is not None and run_key > mine_key:
+            newer.append((run_key, run))
+    if not newer:
+        return None
+    return max(newer, key=lambda item: item[0])[1]
 
 
 def _gate_result(gate: str, job: str, result: Any, required: str, *,
@@ -180,7 +185,7 @@ def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
     if not isinstance(mine, dict) or _run_id(mine) != int(run_id):
         raise QueryError("current workflow run response is missing or malformed")
     list_path = (
-        f"repos/{repository}/actions/workflows/{WORKFLOW}/runs"
+        f"repos/{repository}/actions/workflows/{WORKFLOW_FILE}/runs"
         f"?branch={quote(branch, safe='')}&per_page=100")
     runs = _api(transport, list_path, paginate=True)
     if not isinstance(runs, list):

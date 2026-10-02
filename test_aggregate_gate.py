@@ -164,6 +164,14 @@ class SupersessionTests(unittest.TestCase):
         self.assertIs(ag.superseding_run(mine, [mine, newer], "feature"),
                       newer)
 
+    def test_current_run_without_valid_time_cannot_be_proven_superseded(self):
+        older = _run(19, "2026-09-07T09:00:00Z")
+        for started in (None, "not-a-time"):
+            with self.subTest(started=started):
+                mine = _run(20, started)
+                with self.assertRaises(ag.QueryError):
+                    ag.superseding_run(mine, [older], "feature")
+
     def test_naive_and_malformed_times_are_handled_conservatively(self):
         mine = _run(1, "2026-09-07T10:00:00", status="in_progress")
         earlier = _run(2, "2026-09-07T11:00:00+02:00")
@@ -186,7 +194,7 @@ class SupersessionTests(unittest.TestCase):
     def test_cancelled_need_is_proven_by_the_tests_workflow_runs_api(self):
         own_path = "repos/owner/repo/actions/runs/1"
         list_path = (
-            "repos/owner/repo/actions/workflows/.github/workflows/tests.yml/runs"
+            "repos/owner/repo/actions/workflows/tests.yml/runs"
             "?branch=feature%2Fx&per_page=100")
         mine = _run(1, "2026-09-07T10:00:00Z", branch="feature/x")
         newer = _run(2, "2026-09-07T10:05:00Z", branch="feature/x")
@@ -207,7 +215,7 @@ class SupersessionTests(unittest.TestCase):
     def test_deliberate_cancel_fails_and_does_not_fail_other_gate_rows(self):
         own_path = "repos/owner/repo/actions/runs/1"
         list_path = (
-            "repos/owner/repo/actions/workflows/.github/workflows/tests.yml/runs"
+            "repos/owner/repo/actions/workflows/tests.yml/runs"
             "?branch=feature&per_page=100")
         mine = _run(1, "2026-09-07T10:00:00Z")
         transport = FakeTransport(responses={
