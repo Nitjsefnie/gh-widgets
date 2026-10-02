@@ -359,8 +359,11 @@ class TestScratchLifecycle(unittest.TestCase):
                 mock.patch.object(time, "monotonic",
                                   side_effect=clock.monotonic), \
                 mock.patch.object(time, "sleep", side_effect=clock.sleep):
-            exec(compile(fake_git.read_text(encoding="utf-8"),
-                         str(fake_git), "exec"), {"__name__": "__main__"})
+            # Executing the generated shim under this clock is the only deterministic lifetime-boundary pin.
+            exec(  # pylint: disable=exec-used
+                compile(fake_git.read_text(encoding="utf-8"),
+                        str(fake_git), "exec"),
+                {"__name__": "__main__"})
         return clock
 
     @staticmethod
