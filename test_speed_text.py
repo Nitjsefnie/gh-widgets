@@ -1,4 +1,4 @@
-"""speed.yml's shape, asserted as text rather than executed.
+"""The tests.yml speed job's shape, asserted as text rather than executed.
 
     python3 -m unittest discover -v
 
@@ -10,16 +10,13 @@ in `test_speed_workflow.py`; `test_speed_ratchet.py` holds the ones that
 drive the ratchet.
 """
 import unittest
-from pathlib import Path
-
-WORKFLOWS = Path(__file__).resolve().parent / ".github" / "workflows"
-SPEED_YML = WORKFLOWS / "speed.yml"
+from speed_workflow_steps import StepRunner
 
 
 class TestTheWorkflowText(unittest.TestCase):
     def _run_block(self, step_name):
         """One named step's `run:` body, as the file spells it."""
-        lines = SPEED_YML.read_text().splitlines()
+        lines = StepRunner.job_lines()
         start = lines.index(f"      - name: {step_name}")
         run_line = next(index for index in range(start + 1, len(lines))
                         if lines[index].startswith("        run: |"))
@@ -35,7 +32,7 @@ class TestTheWorkflowText(unittest.TestCase):
 
     def _step_text(self, step_name):
         """One named step's YAML, from its name to the next step."""
-        text = SPEED_YML.read_text(encoding="utf-8")
+        text = StepRunner.job_text()
         start = text.index(f"      - name: {step_name}")
         return text[start:text.index("\n      - ", start + 10)]
 
@@ -53,7 +50,7 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertNotIn("--side base", block)
 
     def test_the_ratchet_step_is_declared_against_the_base_ref(self):
-        text = SPEED_YML.read_text(encoding="utf-8")
+        text = StepRunner.job_text()
         step = self._step_text("The committed baseline only ratchets down")
         # `base.sha` trails the base tip and does not refresh on synchronize,
         # so the comparison would be made against an OLDER, looser baseline —
@@ -70,7 +67,7 @@ class TestTheWorkflowText(unittest.TestCase):
         # The whole point of issue #81: the comparison point is committed
         # data now, so a tag lookup here would be a leftover argument for a
         # method this gate no longer uses.
-        text = SPEED_YML.read_text(encoding="utf-8")
+        text = StepRunner.job_text()
         self.assertNotIn("releases/latest", text)
         self.assertNotIn("--base-label \"$BASE_TAG\"", text)
 

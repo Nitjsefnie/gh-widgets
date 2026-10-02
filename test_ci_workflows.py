@@ -32,6 +32,36 @@ DOCUMENTED_PIN = re.compile(r"git\+https://github\.com/Nitjsefnie-OSC/"
                             r"git-fame@([0-9a-f]{40})")
 
 
+def _job_blocks(text):
+    """Map workflow job ids to their complete YAML text blocks."""
+    lines = text.splitlines()
+    start = lines.index("jobs:") + 1
+    blocks = {}
+    index = start
+    while index < len(lines):
+        match = re.fullmatch(r"  ([a-z][a-z0-9_-]*):", lines[index])
+        if not match:
+            index += 1
+            continue
+        job_start = index
+        job = match.group(1)
+        index += 1
+        while (index < len(lines)
+               and not re.fullmatch(r"  [a-z][a-z0-9_-]*:", lines[index])):
+            index += 1
+        blocks[job] = "\n".join(lines[job_start:index]) + "\n"
+    return blocks
+
+
+def _trigger_block(text):
+    """Return just the workflow-level trigger mappings."""
+    lines = text.splitlines()
+    start = lines.index("on:")
+    end = next(index for index in range(start + 1, len(lines))
+               if lines[index] in {"permissions:", "concurrency:", "jobs:"})
+    return "\n".join(lines[start:end])
+
+
 class TestCodeqlPins(unittest.TestCase):
     """Every github/codeql-action step must run the same release."""
 
@@ -62,6 +92,82 @@ class TestGitFameForkPin(unittest.TestCase):
                 for sha in FORK_PIN.findall(path.read_text())}
         self.assertTrue(arms, "no FORK_PIN found in any workflow")
         self.assertEqual({sha for _, sha in arms}, documented, arms)
+
+
+class TestConsolidatedCiControls(unittest.TestCase):
+    """Controls for the needs-based aggregate and path selector."""
+
+    def setUp(self):
+        self.workflow_path = WORKFLOWS / "tests.yml"
+        self.workflow = self.workflow_path.read_text(encoding="utf-8")
+        self.jobs = _job_blocks(self.workflow)
+        self.aggregate = self.jobs.get("aggregate", "")
+        self.scripts = REPO_ROOT / "scripts" / "ci"
+
+    def test_consolidated_workflow_is_needs_based(self):
+        self.assertIn("name: tests", self.workflow)
+        needs = re.search(r"(?m)^    needs:\s*\[([^]]+)\]$",
+                          self.aggregate)
+        self.assertIsNotNone(needs)
+        self.assertEqual(
+            {name.strip() for name in needs.group(1).split(",")},
+            {"changes", "unittest", "lint", "pyright", "pip-audit",
+             "speed", "analyze", "actionlint"})
+        trigger = _trigger_block(self.workflow)
+        self.assertNotRegex(trigger, r"(?m)^\s+paths(?:-ignore)?:")
+        self.assertFalse((self.scripts / "aggregate_gates.py").exists())
+
+    def test_aggregate_has_no_polling_and_short_timeout(self):
+        self.assertNotRegex(self.aggregate.lower(), r"\b(?:sleep|poll(?:ing)?)\b")
+        timeout = re.search(r"(?m)^    timeout-minutes:\s*(\d+)\s*$",
+                            self.aggregate)
+        self.assertIsNotNone(timeout)
+        self.assertLessEqual(int(timeout.group(1)), 5)
+        self.assertFalse((self.scripts / "aggregate_gates.py").exists())
+        self.assertNotIn("evaluate_gates",
+                         (self.scripts / "aggregate_gate.py").read_text(
+                             encoding="utf-8"))
+
+    def test_aggregate_reports_pushes_only_on_main(self):
+        condition = re.search(r"(?m)^    if:\s*\$\{\{(.*?)\}\}\s*$",
+                              self.aggregate, re.DOTALL)
+        self.assertIsNotNone(condition)
+        normalized = " ".join(condition.group(1).split())
+        self.assertEqual(
+            normalized,
+            "always() && (github.event_name == 'pull_request' || "
+            "github.event_name == 'workflow_dispatch' || "
+            "(github.event_name == 'push' && "
+            "github.ref == 'refs/heads/main'))")
+
+    def test_policy_timestamp_filter_is_absent(self):
+        forbidden = ("created_after", "GATE_POLICY_UPDATED_AT", "updated_at")
+        sources = list(WORKFLOWS.glob("*.yml")) + [
+            self.scripts / "aggregate_gate.py",
+            self.scripts / "changes_detect.py",
+        ]
+        for path in sources:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                with self.subTest(path=path.name, token=token):
+                    self.assertNotIn(token, text)
+
+    def test_changes_gates_match_consolidated_job_conditions(self):
+        from scripts.ci import changes_detect
+
+        workflow_gates = {}
+        for job, block in self.jobs.items():
+            match = re.search(
+                r"(?m)^    if:\s*needs\.changes\.outputs\."
+                r"([a-z][a-z0-9_-]*)\s*==\s*'run'\s*$", block)
+            if match:
+                gate = match.group(1)
+                self.assertNotIn(gate, workflow_gates.values())
+                workflow_gates[job] = gate
+        self.assertEqual(set(workflow_gates.values()),
+                         set(changes_detect.GATES))
 
 
 if __name__ == "__main__":

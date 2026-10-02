@@ -1,8 +1,8 @@
 """The root VERSION file and the REPO_VERSION constant that reads it.
 
 VERSION is the input to the release machinery: .github/workflows/release.yml
-tags when it changes, and speed.yml benchmarks HEAD against the release it
-names. Both read the file with `cat`, so its SHAPE matters as much as its
+tags when it changes, and the speed job in tests.yml benchmarks HEAD against
+the release it names. Both read the file with `cat`, so its SHAPE matters as much as its
 content — a stray second line or a leading `v` would produce a malformed tag.
 
 Stdlib unittest, matching the rest of this repo's suite.

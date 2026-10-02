@@ -2,7 +2,7 @@ name: release
 
 # Cuts a GitHub release when, and only when, the root VERSION file changes
 # on the default branch. The version is the input to one thing: the tag
-# people install by. It used to be two — speed.yml used to benchmark HEAD
+# people install by. It used to be two — the speed job used to benchmark HEAD
 # against the latest release, and now measures HEAD alone against the
 # committed counter baseline in speed-baseline.json, which no release
 # feeds.
@@ -165,9 +165,9 @@ jobs:
         # manifest below has REPORTED and passed.
         #
         # The manifest is the point (issue #34). Polling whatever happened
-        # to have reported cannot tell "all six gates are green" from
-        # "lint.yml was renamed, or a path filter swallowed this commit,
-        # and five gates are green" — the bar quietly shrinks instead of
+        # to have reported cannot tell "all gates are green" from
+        # "a required job was renamed, or a gate silently skipped this
+        # commit" — the bar quietly shrinks instead of
         # the release being stopped. Since a tag is the artefact that
         # cannot be taken back, a gate that went missing has to stop the
         # release, which is the opposite of what the old poll did.
@@ -176,9 +176,9 @@ jobs:
         # under. Four of them report exactly the job name; `unittest` is a
         # six-leg matrix, so GitHub appends " (os, python)"; and codeql
         # renames its own job to "analyze (python)". All six of them
-        # trigger on a push that touches VERSION, because none of their
-        # paths-ignore lists mentions it. Deliberately absent, and each for
-        # a reason that a VERSION push would not change: actionlint.yml
+        # trigger on a push that touches VERSION, because tests.yml has an
+        # unfiltered push trigger. Deliberately absent, and each for a
+        # reason that a VERSION push would not change: the actionlint job
         # (allow-lists .github/workflows/**), claim.yml (issue_comment),
         # pr-gate.yml (pull_request_target), and targeted-blame-audit.yml
         # plus the two gitfame-* measurements (schedule or dispatch only).
@@ -212,14 +212,14 @@ jobs:
         # just the first.
         run: |
           manifest=(
-            lint        # lint.yml, job `lint`
-            pyright     # types.yml, job `pyright`
-            speed       # speed.yml, job `speed`
-            pip-audit   # audit.yml, job `pip-audit`
-            analyze     # codeql.yml, job `analyze`
+            lint        # tests.yml, job `lint`
+            pyright     # tests.yml, job `pyright`
+            speed       # tests.yml, job `speed`
+            pip-audit   # tests.yml, job `pip-audit`
+            analyze     # tests.yml, job `analyze`
             unittest    # tests.yml, job `unittest` (six-leg matrix)
             coverage-ratchet  # coverage-ratchet.yml, job `measure` (renames its check run to `coverage-ratchet`)
-            aggregate   # aggregate.yml, job `aggregate`
+            aggregate   # tests.yml, job `aggregate`
           )
           # The only way out of the manifest is to say so out loud. A
           # dispatch can waive; a push has no inputs, so a push-triggered

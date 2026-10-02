@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What did that command cost, in a quantity runner load cannot move?
 
-THE QUESTION THIS FILE ANSWERS. speed.yml used to decide pass/fail from
+THE QUESTION THIS FILE ANSWERS. The speed job used to decide pass/fail from
 wall-clock durations taken on a GitHub-hosted runner, which is a multi-tenant
 VM: steal time, a neighbour, a different CPU model. The maintainer ruling
 behind issue #81 is that paired wall-clock A/B is not a valid magnitude

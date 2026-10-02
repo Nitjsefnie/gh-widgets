@@ -92,7 +92,7 @@ branch, add a case that pins its output; SVG regressions are invisible
 until someone looks at a broken README.
 
 **`unittest discover` is the runner and stays the runner**, and pytest has
-nothing left to do here. It was `speed.yml`'s timing harness, collecting
+nothing left to do here. It was the `speed` job in `tests.yml`, collecting
 these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
 that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
 own JUnit. It was also imported by `test_compare_counters.py`, which
@@ -105,28 +105,29 @@ the documented command.
 
 ## CI
 
-The workflow files in `.github/workflows/` are:
+The consolidated `tests.yml` workflow owns the path-aware CI gates:
+unit tests and coverage, Python style and lint checks, Python type checks,
+dependency vulnerability checks, security analysis, workflow syntax and
+security checks, and the speed job. The speed job counts **CPU seconds** for
+each renderer workload and for the unit suite, on pinned offline fixtures,
+and compares each against a committed baseline in `speed-baseline.json` that
+only ever ratchets down. CPU seconds rather than a deterministic instruction
+or syscall count, because neither survives measurement on the cell that reads
+the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
+costs 12.8× the work it measures. The gate is therefore a **step-change
+detector, not a regression detector** — it catches a gross step change and
+the gross wall smoke bound; it will not catch a 20 % regression anywhere,
+and it does not catch a doubling either. The baseline records an observed
+**range** per entry rather than a single number, because these counters are
+not deterministic and a budget wide enough to cover their spread would be a
+gate that cannot fire.
+The aggregate job in `tests.yml` reports on every pull request and push to
+`main`, regardless of changed paths (issue #89); branch protection requires
+it instead of the path-filtered gates. The `changes` job decides which gates
+apply to each change.
 
-- `tests.yml` — unit tests and coverage.
-- `lint.yml` — Python style and lint checks.
-- `types.yml` — Python type checks.
-- `audit.yml` — dependency vulnerability checks.
-- `codeql.yml` — security analysis.
-- `actionlint.yml` — workflow syntax and security checks.
-- `speed.yml` — counts **CPU seconds** for each renderer workload and for
-  the unit suite, on pinned offline fixtures, and compares each against a
-  committed baseline in `speed-baseline.json` that only ever ratchets down.
-  CPU seconds rather than a deterministic instruction or syscall count,
-  because neither survives measurement on the cell that reads the baseline:
-  one is refused by the kernel's `perf_event_paranoid`, the other costs
-  12.8× the work it measures. The gate is therefore a **step-change
-  detector, not a regression detector** — it catches a gross step change
-  and the gross wall smoke bound; it will not catch a 20 % regression
-  anywhere, and it does not catch a doubling either. The baseline records an observed **range** per entry rather than
-  a single number, because these counters are not deterministic and a budget
-  wide enough to cover their spread would be a gate that cannot fire.
-- `aggregate.yml` — reports on every pull request and push to `main`, regardless
-  of paths (issue #89); branch protection requires it instead of the path-filtered gates.
+The other workflow files in `.github/workflows/` are:
+
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
   measured coverage exceeds the committed floor. The floor only moves

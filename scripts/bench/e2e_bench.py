@@ -253,7 +253,7 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
         # decorative. Fail loudly instead.
         #
         # BASE: retained for comparing a checkout against another — a
-        # rollback rehearsal, a local before/after. speed.yml no longer
+        # rollback rehearsal, a local before/after. The tests.yml speed job no longer
         # drives it: the gate measures HEAD alone against the committed
         # baseline document, and there is no base checkout to run it against.
         # The asymmetry stays because it is still the right answer for a

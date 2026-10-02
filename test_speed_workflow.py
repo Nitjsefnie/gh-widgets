@@ -1,4 +1,4 @@
-"""Invariants over speed.yml, driven by executing its own step scripts.
+"""Invariants over the tests.yml speed job, driven by its own step scripts.
 
     python3 -m unittest discover -v
 
@@ -82,12 +82,12 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     # pylint: disable=too-many-public-methods
     steps = StepRunner()
 
-    workflow = WORKFLOWS / "speed.yml"
+    workflow = WORKFLOWS / "tests.yml"
 
     UNIT_NODE = "counter::unit-suite"
     # The two populations the workflow compares, and the instrument each is
     # held to. These names are the baseline's keys, so they are spelled the
-    # same in speed.yml, here and in the document itself.
+    # same in the tests.yml speed job, here and in the document itself.
     UNIT_POPULATION = "unit-suite"
     RENDERER_POPULATION = "renderer-workloads"
     UNIT_METRIC = "cpu_time"
@@ -102,7 +102,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     @staticmethod
     def _run_block(step_name):
-        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        lines = StepRunner.job_lines()
         step_line = f"      - name: {step_name}"
         start = lines.index(step_line)
         run_line = next(index for index in range(start + 1, len(lines))
@@ -160,7 +160,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                     omit_renderer=None, metric=RENDERER_METRIC, wall=None,
                     baseline=True, population=True, tolerance=0.25,
                     unit_metric=UNIT_METRIC):
-        """The tree speed.yml's Compare step expects, entirely synthetic."""
+        """The tree the speed job's Compare step expects, entirely synthetic."""
         head = root / "head"
         for relative in ("scripts/ci/compare_counters.py",
                          "scripts/ci/counter.py",
@@ -183,7 +183,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def _write_reports(self, reports, unit_counter, workload_counter,
                        omit_renderer, metric, wall, unit_metric=UNIT_METRIC):
-        """Two rounds of both report families, as speed.yml produces them.
+        """Two rounds of both report families, as the speed job produces them.
 
         `omit_renderer` drops one workload from the renderer reports, which is
         the shape issue #36 is about: a gate that keeps measuring one fewer
@@ -632,7 +632,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "        self.assertTrue(True)\n", encoding="utf-8")
         return head
 
-    # Every step that runs something, by name. A step added to speed.yml must
+    # Every step that runs something, by name. A step added to the speed job must
     # be added here too, or this enumeration silently stops covering the file.
     REPOSITORY_STEPS = (
         "Probe the counter instrument",
@@ -646,7 +646,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def _steps(self):
         """(name, declares-working-directory, body) for every step."""
-        lines = (WORKFLOWS / "speed.yml").read_text().splitlines()
+        lines = self.steps.job_lines()
         steps = []
         name = None
         working_dir = False
@@ -692,7 +692,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         steps = dict((n, (w, b)) for n, w, b in self._steps())
         running = {n for n, (w, b) in steps.items() if "run:" in b}
         self.assertEqual(running, set(self.REPOSITORY_STEPS),
-                         "speed.yml's running steps and REPOSITORY_STEPS have "
+                         "the speed job's running steps and REPOSITORY_STEPS have "
                          f"drifted: only in the file {sorted(running - set(self.REPOSITORY_STEPS))}, "
                          f"only in the list {sorted(set(self.REPOSITORY_STEPS) - running)}. "
                          "A step added or removed must be reflected here or "
@@ -913,7 +913,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_the_total_budget_is_not_named_like_the_threshold(self):
         """`tolerance` in the baseline is the gate. An env var reading as
         "the maximum" would be read as the threshold and is not."""
-        text = (WORKFLOWS / "speed.yml").read_text(encoding="utf-8")
+        text = self.steps.job_text()
         self.assertNotIn("      MAX_REGRESSION:", text)
         self.assertIn('TOTAL_BUDGET: "0.30"', text)
         self.assertIn("NOT THE THRESHOLD", text)
