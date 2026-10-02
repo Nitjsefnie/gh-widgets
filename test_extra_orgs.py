@@ -15,7 +15,7 @@ FakeAPI = fixtures.FakeAPI
 complete_cache = fixtures.complete_cache
 recent_days = fixtures.recent_days
 repo_node = fixtures.repo_node
-run_main = fixtures.run_main
+run_main_capturing_output = fixtures.run_main_capturing_output
 
 
 class ExtraOrganizationStats(unittest.TestCase):
@@ -35,16 +35,29 @@ class ExtraOrganizationStats(unittest.TestCase):
             raise AssertionError("stats card is missing its accessible description")
         return desc.text
 
+    def visible_stat_values(self, svg):
+        root = ET.fromstring(svg)
+        rows = {"115": "", "138": "", "161": ""}
+        for text in root.iter(f"{{{self.SVG_NS}}}text"):
+            y = text.get("y")
+            if text.get("x") == "200" and y in rows:
+                rows[y] = text.text or ""
+        return rows["115"], rows["138"], rows["161"]
+
     def test_empty_default_preserves_stats_svg_bytes_and_skips_org_queries(self):
         with tempfile.TemporaryDirectory() as td:
             api = FakeAPI()
             api.full_calendar = recent_days(3)
             out = Path(td) / "out"
-            run_main(api, out, Path(td) / "cache.json")
+            stdout, stderr = run_main_capturing_output(
+                api, out, Path(td) / "cache.json")
             svg = (out / "stats.svg").read_text()
 
+        self.assertIn("wrote ", stdout)
+        self.assertEqual(stderr, "")
         self.assertFalse(any("organization(login:" in query
                              for query, _variables in api.calls))
+        self.assertEqual(self.visible_stat_values(svg), ("1", "3", "2"))
         self.assertEqual(
             hashlib.sha256(svg.encode("utf-8")).hexdigest(),
             "2b03f88dc52a4c89a50c7f8964620c7156478befdf918fb1773918eb72547256")
@@ -61,6 +74,8 @@ class ExtraOrganizationStats(unittest.TestCase):
         svgs, summary = render.build_svgs(self.C, user, [], [])
         desc = self.stats_desc(svgs["stats.svg"])
 
+        self.assertEqual(self.visible_stat_values(svgs["stats.svg"]),
+                         ("4", "16", "8"))
         self.assertIn("public repositories: 4", desc)
         self.assertIn("stars received: 16", desc)
         self.assertIn("forks received: 8", desc)
@@ -173,9 +188,13 @@ class ExtraOrganizationStats(unittest.TestCase):
             api = FakeAPI()
             api.fail = True
 
-            run_main(api, out, cache_file, extra_orgs="Example")
+            stdout, stderr = run_main_capturing_output(
+                api, out, cache_file, extra_orgs="Example")
             desc = self.stats_desc((out / "stats.svg").read_text())
 
+            self.assertIn("fetch failed at fetch: simulated fetch failure",
+                          stdout)
+            self.assertEqual(stderr, "")
             self.assertIn("public repositories: 3", desc)
             self.assertIn("stars received: 10", desc)
             self.assertIn("forks received: 5", desc)
