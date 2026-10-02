@@ -475,8 +475,9 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # code and say so differently, so both are driven.
         for conclusion in ("failure", "cancelled", "timed_out",
                            "action_required", "startup_failure"):
-            for check_run, message in (("speed", "did not reach"),
-                                       ("some-other-gate", "did not pass")):
+            for check_run, message in (
+                    ("speed", "did not reach"),
+                    ("some-other-gate", "did not pass")):
                 with self.subTest(check_run=check_run,
                                   conclusion=conclusion):
                     self.setUp()
@@ -502,7 +503,9 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 ("speed", "skipped", 1),
                 ("speed", "neutral", 1),
                 ("other-gate", "skipped", 0),
-                ("other-gate", "neutral", 0)):
+                ("other-gate", "neutral", 0),
+                ("pip-audit / pip-audit", "success", 0),
+                ("analyze / analyze (python)", "success", 0)):
             with self.subTest(check_run=check_run, conclusion=conclusion):
                 self.setUp()
                 base = (self._without("speed")
@@ -518,6 +521,17 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     self.assertIn("Every expected gate reported", done.stdout)
                 else:
                     self.assertIn("did not reach", done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "see above")
+    def test_failed_called_workflow_job_is_an_incidental_failure(self):
+        self._write_runs(self.ALL_GREEN + [
+            ("completed", "failure", "pip-audit / pip-audit")])
+        done = self._execute("Wait for the other gates on this commit")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("did not pass", done.stderr)
+        self.assertIn("pip-audit / pip-audit", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -765,7 +779,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # VERSION push does not schedule, and this one, which cannot wait
         # on itself. Hoisted so the completeness check below and the
         # per-file checks agree on one literal rather than two copies.
-        excluded = {"claim.yml", "pr-gate.yml",
+        excluded = {"claim.yml", "pr-gate.yml", "audit.yml", "codeql.yml",
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
                     "gitfame-resync-memory.yml", "release.yml"}
 
@@ -807,10 +821,13 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
         for workflow_file in excluded - {"release.yml"}:
             with self.subTest(excluded=workflow_file):
-                self.assertEqual(
-                    self._push_block((WORKFLOWS / workflow_file).read_text(
-                        encoding="utf-8")),
-                    [], f"{workflow_file} gained a push trigger")
+                path = WORKFLOWS / workflow_file
+                self.assertTrue(path.is_file(), f"missing excluded {workflow_file}")
+                text_wf = path.read_text(encoding="utf-8")
+                self.assertEqual(self._push_block(text_wf), [],
+                                 f"{workflow_file} gained a push trigger")
+                self.assertEqual(self._pull_request_block(text_wf), [],
+                                 f"{workflow_file} gained a pull_request trigger")
         # COMPLETENESS. Every workflow in the directory is either a manifest
         # entry or a named exclusion — nothing else. Without this, a new
         # push-triggered gate is invisible to the manifest AND to this
@@ -878,6 +895,26 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         for line in body:
             if line.startswith("  ") and not line.startswith("   "):
                 inside = line.rstrip() == "  push:"
+                continue
+            if inside and line.strip():
+                block.append(line)
+        return block
+
+    @staticmethod
+    def _pull_request_block(text):
+        """The lines under `on: pull_request:` — empty when absent."""
+        lines = text.splitlines()
+        start = next(index for index, line in enumerate(lines)
+                     if line.startswith("on:"))
+        body = []
+        for line in lines[start + 1:]:
+            if line.strip() and not line[0].isspace():
+                break
+            body.append(line)
+        block, inside = [], False
+        for line in body:
+            if line.startswith("  ") and not line.startswith("   "):
+                inside = line.rstrip() == "  pull_request:"
                 continue
             if inside and line.strip():
                 block.append(line)
