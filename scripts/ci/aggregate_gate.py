@@ -108,9 +108,72 @@ def _run_id(run: dict[str, Any]) -> int:
     return identifier
 
 
+def _pull_request_numbers(run: dict[str, Any]) -> set[int] | None:
+    """Read the run API's PR associations, or return None when omitted."""
+    associations = run.get("pull_requests", [])
+    if not isinstance(associations, list):
+        raise QueryError("workflow run pull_requests is not a list")
+    numbers: set[int] = set()
+    for association in associations:
+        if not isinstance(association, dict):
+            raise QueryError("workflow run has a malformed pull_requests entry")
+        number = association.get("number")
+        if (not isinstance(number, int) or isinstance(number, bool)
+                or number < 1):
+            raise QueryError(
+                "workflow run pull_requests entry has no valid integer number")
+        numbers.add(number)
+    return numbers if numbers else None
+
+
+def _attributable(run: dict[str, Any], pr_number: int) -> bool:
+    """Port the former aggregate's association-number membership check."""
+    numbers = _pull_request_numbers(run)
+    if numbers is None:
+        return True
+    known_numbers: set[int] = set(numbers)
+    return pr_number in known_numbers
+
+
+def _head_repository_identity(run: dict[str, Any]) -> tuple[str, int | str] | None:
+    """Return a stable identity for the run's source repository when present."""
+    repository = run.get("head_repository")
+    if not isinstance(repository, dict):
+        return None
+    identifier = repository.get("id")
+    if (isinstance(identifier, int) and not isinstance(identifier, bool)
+            and identifier > 0):
+        return "id", identifier
+    full_name = repository.get("full_name")
+    if isinstance(full_name, str) and full_name.strip():
+        return "full_name", full_name.casefold()
+    return None
+
+
+def _same_pr_domain(run: dict[str, Any], *, workflow: str, branch: str,
+                    repository: tuple[str, int | str],
+                    pr_numbers: set[int] | None) -> bool:
+    """Check whether a candidate shares the current PR's concurrency key."""
+    if (run.get("event") != "pull_request"
+            or _workflow_of(run) != workflow
+            or _head_repository_identity(run) != repository):
+        return False
+    candidate_numbers = _pull_request_numbers(run)
+    if pr_numbers is None:
+        return candidate_numbers is None and run.get("head_branch") == branch
+    if candidate_numbers is None:
+        return False
+    return any(_attributable(run, number) for number in pr_numbers)
+
+
 def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
                     branch: str) -> dict[str, Any] | None:
-    """Find a strictly newer run in the same workflow, event, and branch."""
+    """Find a newer run that shares this PR's actual concurrency domain."""
+    event = mine.get("event")
+    if not isinstance(event, str) or not event:
+        raise QueryError("current run has no event identity")
+    if event != "pull_request":
+        return None
     if not isinstance(branch, str) or not branch:
         raise QueryError("supersession query has no head branch")
     if mine.get("head_branch") != branch:
@@ -118,9 +181,10 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     workflow = _workflow_of(mine)
     if workflow is None:
         raise QueryError("current run has no workflow identity")
-    event = mine.get("event")
-    if not isinstance(event, str) or not event:
-        raise QueryError("current run has no event identity")
+    repository = _head_repository_identity(mine)
+    if repository is None:
+        return None
+    pr_numbers = _pull_request_numbers(mine)
     mine_key = _started_key(mine)
     if mine_key is None:
         raise QueryError("current workflow run has no valid start or creation time")
@@ -128,9 +192,9 @@ def superseding_run(mine: dict[str, Any], runs: list[dict[str, Any]],
     for run in runs:
         if not isinstance(run, dict):
             raise QueryError("workflow run list has a malformed item")
-        if (run.get("head_branch") != branch
-                or _workflow_of(run) != workflow
-                or run.get("event") != event):
+        if not _same_pr_domain(
+                run, workflow=workflow, branch=branch,
+                repository=repository, pr_numbers=pr_numbers):
             continue
         run_key = _started_key(run)
         if run_key is not None and run_key > mine_key:
@@ -147,13 +211,20 @@ def _gate_result(gate: str, job: str, result: Any, required: str, *,
         if superseded_by is None:
             row = Result(
                 FAILED,
-                f"no newer run of {WORKFLOW} exists; deliberate cancel: "
-                f"{job}=cancelled")
+                f"no qualifying same-PR successor proves auto-cancellation; "
+                f"deliberate cancel: {job}=cancelled")
         else:
-            row = Result(
-                SUPERSEDED,
+            detail = (
                 f"superseded by run {_run_id(superseded_by)} "
                 f"({superseded_by.get('html_url') or '?'})")
+            if not superseded_by.get("pull_requests"):
+                detail += (
+                    "; proof degraded: pull_requests association absent; "
+                    "same head repository and head branch matched; two PRs "
+                    "from one fork branch are indistinguishable in the runs API")
+            row = Result(
+                SUPERSEDED,
+                detail)
     elif job in hard_jobs:
         row = Result(FAILED, f"{job} has unknown or failing result {result!r}")
     elif result == "skipped" and required == "run":
@@ -189,6 +260,11 @@ def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
     mine = _api(transport, own_path)
     if not isinstance(mine, dict) or _run_id(mine) != int(run_id):
         raise QueryError("current workflow run response is missing or malformed")
+    event = mine.get("event")
+    if event in {"push", "workflow_dispatch"}:
+        return None
+    if event != "pull_request":
+        raise QueryError("current workflow run has no supported event identity")
     list_path = (
         f"repos/{repository}/actions/workflows/{WORKFLOW_FILE}/runs"
         f"?branch={quote(branch, safe='')}&per_page=100")

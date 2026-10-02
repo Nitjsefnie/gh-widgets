@@ -35,7 +35,9 @@ def _run(identifier, started, workflow=11, branch="feature", **fields):
         "run_started_at": started,
         "workflow_id": workflow,
         "head_branch": branch,
-        "event": "push",
+        "head_repository": {"id": 100, "full_name": "contrib/repo"},
+        "pull_requests": [{"number": 42}],
+        "event": "pull_request",
         "html_url": f"https://github.com/owner/repo/actions/runs/{identifier}",
     }
     run.update(fields)
@@ -143,13 +145,18 @@ class SupersessionTests(unittest.TestCase):
         self.mine = _run(1, "2026-09-07T10:00:00Z")
         self.newer = _run(2, "2026-09-07T10:05:00Z")
 
-    def test_only_a_strictly_newer_same_workflow_same_branch_run_supersedes(self):
+    def test_only_a_strictly_newer_same_workflow_same_pr_run_supersedes(self):
         self.assertIs(ag.superseding_run(
             self.mine, [self.mine, self.newer], "feature"), self.newer)
-        other_branch = _run(3, "2026-09-07T10:06:00Z", branch="other")
+        other_pr = _run(3, "2026-09-07T10:06:00Z",
+                        pull_requests=[{"number": 43}])
+        other_repository = _run(
+            4, "2026-09-07T10:07:00Z",
+            head_repository={"id": 101, "full_name": "other/repo"})
         other_workflow = _run(4, "2026-09-07T10:07:00Z", workflow=12)
         self.assertIsNone(ag.superseding_run(
-            self.mine, [self.mine, other_branch, other_workflow], "feature"))
+            self.mine, [self.mine, other_pr, other_repository,
+                        other_workflow], "feature"))
 
     def test_equal_start_times_use_run_id_as_the_tie_breaker(self):
         tied = _run(2, "2026-09-07T10:00:00Z")
@@ -197,8 +204,10 @@ class SupersessionTests(unittest.TestCase):
         list_path = (
             "repos/owner/repo/actions/workflows/tests.yml/runs"
             "?branch=feature%2Fx&per_page=100")
-        mine = _run(1, "2026-09-07T10:00:00Z", branch="feature/x")
-        newer = _run(2, "2026-09-07T10:05:00Z", branch="feature/x")
+        mine = _run(1, "2026-09-07T10:00:00Z", branch="feature/x",
+                    pull_requests=[{"number": 42}])
+        newer = _run(2, "2026-09-07T10:05:00Z", branch="feature/x",
+                     pull_requests=[{"number": 42}])
         transport = FakeTransport(responses={
             own_path: mine,
             list_path: [mine, newer],
@@ -212,6 +221,96 @@ class SupersessionTests(unittest.TestCase):
         self.assertIn("run 2", result["speed"].detail)
         self.assertEqual(transport.calls, [
             (own_path, False, True), (list_path, True, True)])
+
+    def _cancelled_speed(self, mine, *candidates):
+        own_path = "repos/owner/repo/actions/runs/1"
+        branch = mine["head_branch"]
+        list_path = (
+            "repos/owner/repo/actions/workflows/tests.yml/runs"
+            f"?branch={branch}&per_page=100")
+        transport = FakeTransport(responses={
+            own_path: mine, list_path: [mine, *candidates],
+        })
+        needs = _all_success()
+        needs["speed"]["result"] = "cancelled"
+        results = ag.evaluate(
+            needs, _applicability(), repository="owner/repo", run_id="1",
+            branch=branch, transport=transport)
+        return results, transport
+
+    def test_newer_same_branch_run_from_another_head_repository_is_deliberate(self):
+        mine = _run(1, "2026-09-07T10:00:00Z",
+                    pull_requests=[{"number": 42}])
+        newer = _run(
+            2, "2026-09-07T10:05:00Z",
+            head_repository={"id": 101, "full_name": "other/repo"},
+            pull_requests=[{"number": 42}])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+
+    def test_newer_run_with_a_different_pr_number_is_deliberate(self):
+        mine = _run(1, "2026-09-07T10:00:00Z",
+                    pull_requests=[{"number": 42}])
+        newer = _run(2, "2026-09-07T10:05:00Z",
+                     pull_requests=[{"number": 43}])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+
+    def test_pr_run_is_not_superseded_by_same_pr_push_run(self):
+        mine = _run(1, "2026-09-07T10:00:00Z",
+                    pull_requests=[{"number": 42}])
+        newer = _run(2, "2026-09-07T10:05:00Z", event="push",
+                     pull_requests=[{"number": 42}])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertEqual(ag.exit_code(results), 1)
+
+    def test_push_cancellation_is_never_excused_by_a_newer_pr_run(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", event="push")
+        newer = _run(2, "2026-09-07T10:05:00Z")
+        results, transport = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(transport.calls,
+                         [("repos/owner/repo/actions/runs/1", False, True)])
+
+    def test_dispatch_cancellation_is_never_excused_by_a_newer_dispatch(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", event="workflow_dispatch",
+                    pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z",
+                     event="workflow_dispatch", pull_requests=[])
+        results, transport = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(transport.calls,
+                         [("repos/owner/repo/actions/runs/1", False, True)])
+
+    def test_unattributed_fork_pr_uses_degraded_same_repo_branch_proof(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z", pull_requests=[])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.SUPERSEDED)
+        self.assertIn("proof degraded", results["speed"].detail)
+        self.assertIn("same head repository and head branch",
+                      results["speed"].detail)
+        self.assertIn("two PRs from one fork branch are indistinguishable",
+                      results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 0)
+
+    def test_unattributed_fork_pr_requires_the_same_branch(self):
+        mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
+        newer = _run(2, "2026-09-07T10:05:00Z", branch="other",
+                     pull_requests=[])
+        results, _ = self._cancelled_speed(mine, newer)
+        self.assertEqual(results["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", results["speed"].detail)
+        self.assertEqual(ag.exit_code(results), 1)
 
     def test_newer_pull_request_run_does_not_supersede_cancelled_push(self):
         own_path = "repos/owner/repo/actions/runs/1"
