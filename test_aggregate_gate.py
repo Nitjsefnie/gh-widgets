@@ -35,6 +35,7 @@ def _run(identifier, started, workflow=11, branch="feature", **fields):
         "run_started_at": started,
         "workflow_id": workflow,
         "head_branch": branch,
+        "event": "push",
         "html_url": f"https://github.com/owner/repo/actions/runs/{identifier}",
     }
     run.update(fields)
@@ -211,6 +212,25 @@ class SupersessionTests(unittest.TestCase):
         self.assertIn("run 2", result["speed"].detail)
         self.assertEqual(transport.calls, [
             (own_path, False, True), (list_path, True, True)])
+
+    def test_newer_pull_request_run_does_not_supersede_cancelled_push(self):
+        own_path = "repos/owner/repo/actions/runs/1"
+        list_path = (
+            "repos/owner/repo/actions/workflows/tests.yml/runs"
+            "?branch=feature&per_page=100")
+        mine = _run(1, "2026-09-07T10:00:00Z", event="push")
+        newer = _run(2, "2026-09-07T10:05:00Z", event="pull_request")
+        transport = FakeTransport(responses={
+            own_path: mine, list_path: [mine, newer],
+        })
+        needs = _all_success()
+        needs["speed"]["result"] = "cancelled"
+        result = ag.evaluate(
+            needs, _applicability(), repository="owner/repo", run_id="1",
+            branch="feature", transport=transport)
+        self.assertEqual(result["speed"].verdict, ag.FAILED)
+        self.assertIn("deliberate", result["speed"].detail)
+        self.assertEqual(ag.exit_code(result), 1)
 
     def test_deliberate_cancel_fails_and_does_not_fail_other_gate_rows(self):
         own_path = "repos/owner/repo/actions/runs/1"
