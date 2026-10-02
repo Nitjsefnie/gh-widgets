@@ -3,7 +3,7 @@
 # The test runner is stdlib unittest — no test dependency to declare.
 autoflake==2.4.0
 autopep8==2.3.2
-isort==9.0.1
+isort==9.0.2
 pycodestyle==2.15.0
 pylint==4.1.1
 pyright==1.1.414
