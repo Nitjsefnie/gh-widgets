@@ -108,7 +108,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
         self.assertIn("name: tests", self.workflow)
         needs = re.search(r"(?m)^    needs:\s*\[([^]]+)\]$",
                           self.aggregate)
-        self.assertIsNotNone(needs)
+        assert needs is not None
         self.assertEqual(
             {name.strip() for name in needs.group(1).split(",")},
             {"changes", "unittest", "lint", "pyright", "pip-audit",
@@ -121,7 +121,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
         self.assertNotRegex(self.aggregate.lower(), r"\b(?:sleep|poll(?:ing)?)\b")
         timeout = re.search(r"(?m)^    timeout-minutes:\s*(\d+)\s*$",
                             self.aggregate)
-        self.assertIsNotNone(timeout)
+        assert timeout is not None
         self.assertLessEqual(int(timeout.group(1)), 5)
         self.assertFalse((self.scripts / "aggregate_gates.py").exists())
         self.assertNotIn("evaluate_gates",
@@ -131,7 +131,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
     def test_aggregate_reports_pushes_only_on_main(self):
         condition = re.search(r"(?m)^    if:\s*\$\{\{(.*?)\}\}\s*$",
                               self.aggregate, re.DOTALL)
-        self.assertIsNotNone(condition)
+        assert condition is not None
         normalized = " ".join(condition.group(1).split())
         self.assertEqual(
             normalized,
@@ -155,7 +155,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
                     self.assertNotIn(token, text)
 
     def test_changes_gates_match_consolidated_job_conditions(self):
-        from scripts.ci import changes_detect
+        from scripts.ci import changes_detect  # pylint: disable=import-outside-toplevel
 
         workflow_gates = {}
         for job, block in self.jobs.items():
