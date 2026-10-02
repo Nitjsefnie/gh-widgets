@@ -15,6 +15,8 @@ Configuration (env vars or CLI flags, in that order of precedence):
   GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
               is NOT needed: nothing here reads the account's email.
               (can also be read from a file via --token-file or GH_TOKEN_FILE)
+  GH_EXTRA_ORGS optional, comma-separated organization logins whose public
+               repos add to stats; empty by default
   OUT_DIR     where to write the SVGs (default: ./widgets)
   CACHE_FILE  JSON cache of immutable data (default: /var/lib/gh-widgets/cache.json)
   THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
@@ -91,9 +93,9 @@ base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 CacheFallback = common.CacheFallback
 
-# v2: the core query gained forkCount; a v1 cache has no fork data, so it
-# must be discarded and refetched rather than trusted.
-CACHE_VERSION = 2
+# v3: the cached user payload gains extra-organization stats; v2 caches must
+# be discarded and refetched rather than trusted.
+CACHE_VERSION = 3
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
 
 
@@ -204,10 +206,25 @@ query($login: String!, $cursor: String) {
 }
 """
 
+# Extra organization repositories contribute to stats only. They use the same
+# public, non-fork filter as the user's own repositories and omit languages so
+# they cannot change the languages card.
+ORG_REPO_QUERY = """
+query($login: String!, $cursor: String) {
+  organization(login: $login) {
+    repositories(first: 100, after: $cursor, isFork: false, privacy: PUBLIC) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { stargazerCount forkCount }
+    }
+  }
+}
+"""
+
 # A runaway guard, the same bound fetch_pull_requests and fetch_issues use:
-# 50 pages of 100 is 5000 repositories (or 5000 memberships), past any real
-# account. Reaching it raises rather than returning a partial profile,
-# because a truncated profile under-reports the account's own work silently.
+# 50 pages of 100 is 5000 repositories (or memberships), past any real
+# account or named organization. Reaching it raises rather than returning a
+# partial profile, because truncation silently under-reports the account.
 PROFILE_MAX_PAGES = 50
 
 
@@ -264,6 +281,93 @@ def page_profile_connection(token, query, field, login, max_pages):
     return head, head[field]
 
 
+def page_organization_repositories(
+        token, login, max_pages=PROFILE_MAX_PAGES):
+    """Return every public, non-fork repository in one named organization.
+
+    The organization connection uses the same pagination safety checks as the
+    user profile connections. A missing organization is an error so an
+    inaccessible configured login cannot silently undercount the card.
+    """
+    nodes = []
+    head = None
+    cursor = None
+    seen_cursors = {None}
+    pages = 0
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise common.PaginationLimitError(
+                f"organization {login!r} repositories pagination limit "
+                f"{max_pages} reached after cursor {cursor!r}")
+        response = gql(token, ORG_REPO_QUERY,
+                       {"login": login, "cursor": cursor})
+        organization = response.get("organization")
+        if organization is None:
+            raise RuntimeError(
+                f"organization {login!r} was not returned by GitHub")
+        connection = organization.get("repositories") or {}
+        pages += 1
+        if head is None:
+            head = {k: v for k, v in connection.items() if k != "pageInfo"}
+        nodes.extend(connection.get("nodes") or [])
+        page_info = connection.get("pageInfo")
+        if page_info is None or "hasNextPage" not in page_info:
+            raise common.PaginationLimitError(
+                f"organization {login!r} repositories pagination missing "
+                f"pageInfo or hasNextPage after cursor {cursor!r}")
+        if not page_info.get("hasNextPage"):
+            break
+        next_cursor = page_info.get("endCursor")
+        if not next_cursor:
+            raise common.PaginationLimitError(
+                f"organization {login!r} repositories pagination stalled "
+                f"after cursor {cursor!r}: hasNextPage=true but endCursor "
+                "is missing")
+        if next_cursor in seen_cursors:
+            raise common.PaginationLimitError(
+                f"organization {login!r} repositories pagination stalled "
+                f"after cursor {cursor!r}: endCursor {next_cursor!r} "
+                "repeats an earlier cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    head["nodes"] = nodes
+    return head
+
+
+def extra_org_logins():
+    """Read GH_EXTRA_ORGS, preserving first spelling and order on dedupe."""
+    logins = []
+    seen = set()
+    for login in common.env_list("GH_EXTRA_ORGS"):
+        key = login.casefold()
+        if key not in seen:
+            seen.add(key)
+            logins.append(login)
+    return logins
+
+
+def fetch_extra_org_stats(token, org_logins,
+                          max_pages=PROFILE_MAX_PAGES):
+    """Fetch the public repository count, stars, and forks for each org."""
+    total_count = 0
+    total_stars = 0
+    total_forks = 0
+    for org_login in org_logins:
+        repositories = page_organization_repositories(
+            token, org_login, max_pages)
+        total_count += repositories["totalCount"]
+        total_stars += sum(repo["stargazerCount"]
+                           for repo in repositories["nodes"])
+        total_forks += sum(repo["forkCount"]
+                           for repo in repositories["nodes"])
+    return {
+        "orgs": org_logins,
+        "totalCount": total_count,
+        "totalStars": total_stars,
+        "totalForks": total_forks,
+    }
+
+
 def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # The repos×languages core and the contribution calendar are fetched
     # separately: GitHub's GraphQL node-limit estimator started rejecting
@@ -291,6 +395,8 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     _, repos = page_profile_connection(
         token, REPO_QUERY, "repositories", login, max_pages)
     user["repositories"] = repos
+    user["extraOrgStats"] = fetch_extra_org_stats(
+        token, extra_org_logins(), max_pages)
     now = datetime.now(timezone.utc)
     q_window = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
@@ -439,7 +545,8 @@ def aggregate_languages(repos):
                   key=lambda x: -x[1])
 
 
-def render_stats(C, user, total_stars, total_forks, year_contribs):
+def render_stats(C, user, total_repos, total_stars, total_forks,
+                 year_contribs, orgs_counted=False):
     name = user.get("name") or user["login"]
     body = f"""
   <text x="20" y="34" fill="{C['blue']}" font-size="16" font-weight="600">{xml_escape(name)}</text>
@@ -449,7 +556,7 @@ def render_stats(C, user, total_stars, total_forks, year_contribs):
     <text x="20"  y="92"  fill="{C['dim']}">followers</text>
     <text x="200" y="92"  fill="{C['gold']}" font-weight="500">{user['followers']['totalCount']}</text>
     <text x="20"  y="115" fill="{C['dim']}">public repos</text>
-    <text x="200" y="115" fill="{C['gold']}" font-weight="500">{user['repositories']['totalCount']}</text>
+    <text x="200" y="115" fill="{C['gold']}" font-weight="500">{total_repos}</text>
     <text x="20"  y="138" fill="{C['dim']}">stars received</text>
     <text x="200" y="138" fill="{C['gold']}" font-weight="500">{total_stars}</text>
     <text x="20"  y="161" fill="{C['dim']}">forks received</text>
@@ -458,9 +565,12 @@ def render_stats(C, user, total_stars, total_forks, year_contribs):
     <text x="200" y="184" fill="{C['gold']}" font-weight="500">{year_contribs:,}</text>
   </g>"""
     desc = (f"Followers: {user['followers']['totalCount']}; public repositories: "
-            f"{user['repositories']['totalCount']}; stars received: "
+            f"{total_repos}; stars received: "
             f"{total_stars}; forks received: {total_forks}; contributions "
             f"in the last year: {year_contribs:,}.")
+    if orgs_counted:
+        desc += (" Followers count the account only; organization followers "
+                 "are not included.")
     return base_card(C, 420, 203, body, card="stats", title="GitHub stats",
                      desc=desc)
 
@@ -659,15 +769,23 @@ def external_counts(user, prs, issues):
 def build_svgs(C, user, prs, issues):
     """Render the four cards. Returns (svgs, summary), where summary carries
     the figures the final log line reports."""
-    total_stars = sum(r["stargazerCount"] for r in user["repositories"]["nodes"])
-    total_forks = sum(r["forkCount"] for r in user["repositories"]["nodes"])
+    extra_org_stats = user.get("extraOrgStats") or {}
+    total_repos = (user["repositories"]["totalCount"]
+                   + extra_org_stats.get("totalCount", 0))
+    total_stars = (sum(r["stargazerCount"]
+                       for r in user["repositories"]["nodes"])
+                   + extra_org_stats.get("totalStars", 0))
+    total_forks = (sum(r["forkCount"] for r in user["repositories"]["nodes"])
+                   + extra_org_stats.get("totalForks", 0))
     cal = user["contributionsCollection"]["contributionCalendar"]
     year_contribs = cal["totalContributions"]
     current, longest = compute_streak(cal["weeks"])
     langs = aggregate_languages(user["repositories"]["nodes"])
     ext = external_counts(user, prs, issues)
     svgs = {
-        "stats.svg": render_stats(C, user, total_stars, total_forks, year_contribs),
+        "stats.svg": render_stats(
+            C, user, total_repos, total_stars, total_forks, year_contribs,
+            bool(extra_org_stats.get("orgs"))),
         "streak.svg": render_streak(C, current, longest, year_contribs),
         "languages.svg": render_languages(C, langs),
         "external.svg": render_external(C, *ext),

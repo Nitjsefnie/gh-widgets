@@ -235,6 +235,9 @@ class FakeAPI:
         self.fail = False
         self.org_pages = []       # one nodes list per organizations call
         self.repo_pages = []      # one nodes list per repositories call
+        self.extra_org_pages = {}  # org login -> repository pages
+        self.extra_org_totals = {}  # org login -> repositories.totalCount
+        self.extra_org_errors = set()
         # repositories.totalCount when the fixture scripts its own pages;
         # None means "whatever this page happens to hold".
         self.repo_total: Optional[int] = None
@@ -249,64 +252,97 @@ class FakeAPI:
             return {"hasNextPage": False, "endCursor": None}
         return {"hasNextPage": True, "endCursor": f"cursor-{pages_left}"}
 
+    def _pull_requests(self, _variables):
+        nodes = self.pr_pages.pop(0) if self.pr_pages else []
+        return {"user": {"pullRequests": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": nodes}}}
+
+    def _issues(self, _variables):
+        return {"user": {"issues": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": self.issues}}}
+
+    def _calendar(self, variables):
+        days = self.full_calendar
+        if "from" in variables:
+            frm = datetime.datetime.fromisoformat(variables["from"])
+            to = datetime.datetime.fromisoformat(variables["to"])
+            days = {d: c for d, c in days.items()
+                    if frm <= datetime.datetime.fromisoformat(d)
+                    .replace(tzinfo=datetime.timezone.utc) < to}
+        self.served.append(sorted(days))
+        return {"user": {"contributionsCollection": {
+            "contributionCalendar": {
+                "totalContributions": sum(days.values()),
+                "weeks": weeks_of(days)}}}}
+
+    def _user_organizations(self, _variables):
+        nodes = self.org_pages.pop(0) if self.org_pages else []
+        return {"user": {"login": "me", "name": "Me",
+                         "followers": {"totalCount": 5},
+                         "organizations": {
+                             "pageInfo": self.page_info(len(self.org_pages)),
+                             "nodes": nodes}}}
+
+    def _organization_repositories(self, variables):
+        login = variables["login"]
+        if login in self.extra_org_errors:
+            return {"organization": None}
+        pages = self.extra_org_pages.setdefault(login, [])
+        page = pages.pop(0) if pages else []
+        total = self.extra_org_totals.get(login, len(page))
+        if isinstance(page, dict):
+            connection = dict(page)
+            connection.setdefault("totalCount", total)
+        else:
+            connection = {
+                "totalCount": total,
+                "pageInfo": self.page_info(len(pages)),
+                "nodes": page,
+            }
+        return {"organization": {"repositories": connection}}
+
+    def _user_repositories(self, _variables):
+        if self.repo_pages:
+            nodes = self.repo_pages.pop(0)
+        else:
+            nodes = json.loads(json.dumps(
+                CORE_USER["repositories"]["nodes"]))
+        total = (self.repo_total if self.repo_total is not None
+                 else len(nodes))
+        return {"user": {"repositories": {
+            "totalCount": total,
+            "pageInfo": self.page_info(len(self.repo_pages)),
+            "nodes": nodes}}}
+
     def __call__(self, token, query, variables=None, retries=3):
         if self.fail:
             raise RuntimeError("simulated fetch failure")
         variables = variables or {}
         self.calls.append((query, variables))
-        if "pullRequests" in query:
-            nodes = self.pr_pages.pop(0) if self.pr_pages else []
-            return {"user": {"pullRequests": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": nodes}}}
-        if "issues" in query:
-            return {"user": {"issues": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": self.issues}}}
-        if "contributionCalendar" in query:
-            days = self.full_calendar
-            if "from" in variables:
-                # Serve the slice the real API would: half-open [from, to),
-                # matching "to: only contributions made before this time".
-                frm = datetime.datetime.fromisoformat(variables["from"])
-                to = datetime.datetime.fromisoformat(variables["to"])
-                days = {d: c for d, c in days.items()
-                        if frm <= datetime.datetime.fromisoformat(d)
-                        .replace(tzinfo=datetime.timezone.utc) < to}
-            self.served.append(sorted(days))
-            return {"user": {"contributionsCollection": {
-                "contributionCalendar": {
-                    "totalContributions": sum(days.values()),
-                    "weeks": weeks_of(days)}}}}
-        if "organizations" in query:
-            nodes = self.org_pages.pop(0) if self.org_pages else []
-            return {"user": {"login": "me", "name": "Me",
-                             "followers": {"totalCount": 5},
-                             "organizations": {
-                                 "pageInfo": self.page_info(len(self.org_pages)),
-                                 "nodes": nodes}}}
-        if "repositories" in query:
-            if self.repo_pages:
-                nodes = self.repo_pages.pop(0)
-            else:
-                nodes = json.loads(json.dumps(
-                    CORE_USER["repositories"]["nodes"]))
-            total = (self.repo_total if self.repo_total is not None
-                     else len(nodes))
-            return {"user": {"repositories": {
-                "totalCount": total,
-                "pageInfo": self.page_info(len(self.repo_pages)),
-                "nodes": nodes}}}
-        return {"user": json.loads(json.dumps(CORE_USER))}  # fresh copy per call
+        routes = (
+            ("pullRequests", self._pull_requests),
+            ("issues", self._issues),
+            ("contributionCalendar", self._calendar),
+            ("organizations", self._user_organizations),
+            ("organization(login:", self._organization_repositories),
+            ("repositories", self._user_repositories),
+        )
+        for marker, handler in routes:
+            if marker in query:
+                return handler(variables)
+        return {"user": json.loads(json.dumps(CORE_USER))}
 
 
-def run_main(api, out_dir, cache_file):
+def run_main(api, out_dir, cache_file, extra_orgs=""):
     """Invoke render.main() against the fake API with argv/env patched in."""
     argv = ["render.py", "--user", "me", "--token", "fake",
             "--theme", "tokyonight", "--out-dir", str(out_dir)]
     with mock.patch.object(render, "gql", api), \
             mock.patch.object(sys, "argv", argv), \
-            mock.patch.dict(os.environ, {"CACHE_FILE": str(cache_file)}):
+            mock.patch.dict(os.environ, {"CACHE_FILE": str(cache_file),
+                                         "GH_EXTRA_ORGS": extra_orgs}):
         render.main()
 
 
@@ -332,6 +368,12 @@ class CacheFile(unittest.TestCase):
             f.write_text(json.dumps({"version": render.CACHE_VERSION + 1}))
             self.assertEqual(render.load_cache(f), {})
 
+    def test_v2_cache_is_discarded(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "cache.json"
+            f.write_text(json.dumps({"version": 2}))
+            self.assertEqual(render.load_cache(f), {})
+
     def test_missing_file_is_not_an_error(self):
         self.assertEqual(render.load_cache("/nonexistent/dir/cache.json"), {})
 
@@ -349,7 +391,8 @@ class WindowedCalendar(unittest.TestCase):
         all_days = recent_days(365)
         api = FakeAPI()
         api.full_calendar = all_days
-        with mock.patch.object(render, "gql", api):
+        with mock.patch.object(render, "gql", api), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             _, cold_days = render.fetch("t", "me")
 
         self.assertEqual(cold_days, all_days)
@@ -371,7 +414,8 @@ class WindowedCalendar(unittest.TestCase):
         all_days = recent_days(366)  # reaches the prune cutoff date itself
         api = FakeAPI()
         api.full_calendar = all_days
-        with mock.patch.object(render, "gql", api):
+        with mock.patch.object(render, "gql", api), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             render.fetch("t", "me")
 
         served = api.served  # one sorted date list per calendar call
@@ -400,7 +444,8 @@ class WindowedCalendar(unittest.TestCase):
 
         api = FakeAPI()
         api.full_calendar = all_days
-        with mock.patch.object(render, "gql", api):
+        with mock.patch.object(render, "gql", api), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             user_cold, cold_days = render.fetch("t", "me")
             api.calls.clear()
             user_warm, warm_days = render.fetch("t", "me", cached)
@@ -572,7 +617,8 @@ class ProfilePagination(unittest.TestCase):
         return api
 
     def fetched(self, api, **kwargs):
-        with mock.patch.object(render, "gql", api):
+        with mock.patch.object(render, "gql", api), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             user, _days = render.fetch("t", "me", **kwargs)
         return user
 
@@ -647,7 +693,8 @@ class ProfilePagination(unittest.TestCase):
                                  "pageInfo": {"hasNextPage": False,
                                               "endCursor": None},
                                  "nodes": []}}}
-        with mock.patch.object(render, "gql", gql_fn):
+        with mock.patch.object(render, "gql", gql_fn), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -692,7 +739,8 @@ class ProfilePagination(unittest.TestCase):
         gql_fn, cursors = self.stalling_gql([
             {"pageInfo": {"hasNextPage": True, "endCursor": "LOOP"},
              "nodes": [repo_node()]}])
-        with mock.patch.object(render, "gql", gql_fn):
+        with mock.patch.object(render, "gql", gql_fn), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -705,7 +753,8 @@ class ProfilePagination(unittest.TestCase):
         gql_fn, cursors = self.stalling_gql([
             {"pageInfo": {"hasNextPage": True, "endCursor": None},
              "nodes": [repo_node()]}])
-        with mock.patch.object(render, "gql", gql_fn):
+        with mock.patch.object(render, "gql", gql_fn), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -789,7 +838,8 @@ class ForksReceived(unittest.TestCase):
         # forked, private, or not-owned repo never reaches the sum because it
         # is never in `nodes`. The same filters feed stars and public repos.
         api = FakeAPI()
-        with mock.patch.object(render, "gql", api):
+        with mock.patch.object(render, "gql", api), \
+                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
             render.fetch("t", "me", {})
         core = next(q for q, _ in api.calls if "repositories" in q)
         self.assertIn("forkCount", core)
@@ -797,36 +847,42 @@ class ForksReceived(unittest.TestCase):
         self.assertIn("isFork: false", core)
         self.assertIn("privacy: PUBLIC", core)
 
-    def test_pre_forkcount_cache_is_discarded_and_refetched(self):
-        # A cache written before forkCount existed (previous schema version)
-        # must not render a made-up 0: the version bump discards it, so the
-        # run does a cold refetch (12 monthly calendar windows) and renders
-        # the real fetched figure.
+    def test_v2_cache_is_discarded_and_refetched(self):
+        # A v2 cache predates the extra-org stats in the cached user payload.
+        # It must be discarded and fully refetched rather than trusted.
         with tempfile.TemporaryDirectory() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             stale = {
-                "version": render.CACHE_VERSION - 1,
+                "version": 2,
                 "fetched_at": "2026-07-20T06:00:00+00:00",
                 "user": json.loads(json.dumps(CORE_USER)),
                 "calendar_days": recent_days(3),
                 "prs": {}, "issues": [],
             }
-            del stale["user"]["repositories"]["nodes"][0]["forkCount"]
             cache_file.write_text(json.dumps(stale))
 
             api = FakeAPI()
             api.full_calendar = recent_days(3)
-            run_main(api, out, cache_file)
+            api.extra_org_pages["Example"] = [[repo_node(5, 3)]]
+            api.extra_org_totals["Example"] = 1
+            run_main(api, out, cache_file, extra_orgs=" Example ")
 
             calendar_vars = [v for q, v in api.calls
                              if "contributionCalendar" in q]
             self.assertEqual(len(calendar_vars), 12)  # cold backfill, not warm
             svg = (out / "stats.svg").read_text()
             self.assertIn("forks received", svg)
-            self.assertIn(">2</text>", svg)  # CORE_USER's forkCount, refetched
+            self.assertIn("public repositories: 2", svg)
+            self.assertIn("stars received: 8", svg)
+            self.assertIn("forks received: 5", svg)
+            self.assertIn("organization followers are not included", svg)
             self.assertEqual(render.load_cache(cache_file)["version"],
                              render.CACHE_VERSION)
+            self.assertEqual(
+                render.load_cache(cache_file)["user"]["extraOrgStats"],
+                {"orgs": ["Example"], "totalCount": 1,
+                 "totalStars": 5, "totalForks": 3})
 
 
 class CorruptCache(unittest.TestCase):
@@ -864,7 +920,8 @@ class SvgInputEscaping(unittest.TestCase):
         user = json.loads(json.dumps(CORE_USER))
         user["login"] = "octo\x01<img src=x>"
 
-        svg = render.render_stats(self.C, user, 0, 0, 0)
+        svg = render.render_stats(
+            self.C, user, user["repositories"]["totalCount"], 0, 0, 0)
         root = ET.fromstring(svg)
 
         self.assertIn("@octo&lt;img src=x&gt;", svg)
@@ -896,7 +953,8 @@ class SvgInputEscaping(unittest.TestCase):
         user = json.loads(json.dumps(CORE_USER))
         user["name"] = "A\x01B\x1f"
 
-        root = ET.fromstring(render.render_stats(self.C, user, 0, 0, 0))
+        root = ET.fromstring(render.render_stats(
+            self.C, user, user["repositories"]["totalCount"], 0, 0, 0))
         texts = root.findall(f".//{{{self.SVG_NS}}}text")
 
         self.assertEqual(texts[0].text, "AB")
