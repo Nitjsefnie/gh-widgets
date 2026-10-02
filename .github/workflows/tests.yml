@@ -23,9 +23,6 @@ on:
     # Read-only by construction: pull_request tokens are read-only on a
     # fork, and every checkout below disables persisted credentials.
     types: [opened, synchronize, reopened]
-  schedule:
-    - cron: '12 4 * * *'
-    - cron: '47 3 * * 3'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +30,9 @@ permissions:
 
 concurrency:
   group: tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request'
+      || (github.event_name == 'push'
+          && github.ref != 'refs/heads/main') }}
 
 jobs:
   changes:
@@ -279,109 +278,11 @@ jobs:
         run: pyright
 
   pip-audit:
-    # Dependency vulnerability gate: pip-audit resolves each requirements file
-    # to its full transitive tree and checks every resolved version against the
-    # PyPI advisory database and OSV.
-    #
-    # There is NO backend/requirements.txt here: the runtime is pure stdlib,
-    # with zero third-party imports. So this gate covers the toolchain — the
-    # lint, type-check and coverage pins — which is a smaller surface than the
-    # sibling repos have but not an empty one: those tools run in CI with the
-    # repository token, and a compromised one is a supply-chain problem even
-    # though it never ships.
-    #
-    # Resolution is still the point rather than reading the pinned lines: a
-    # linter drags in a dependency tree of its own, and that is where an
-    # advisory lands.
-    #
-    # WHY THE CRON IS THE IMPORTANT TRIGGER. Every other gate in this repo
-    # answers "did this commit break something", so push is the natural trigger.
-    # This one answers "is a version we froze months ago still safe", and that
-    # answer changes when a stranger publishes an advisory, with no commit here
-    # to hang it on. A push-only audit would report clean forever on an
-    # abandoned branch. The push trigger is the lesser half: it catches a bad
-    # pin at the moment it is introduced, while the diff is on screen. The
-    # pull_request trigger (issue #8) gives the same catch to a contributor's
-    # proposed pin change, before it merges.
-    #
-    # This gate FAILS the build rather than filing an advisory, which is the
-    # same stance as lint and types: a red gate that a human must look at beats
-    # a notification that accumulates unread. When a fix genuinely is not
-    # available yet, add the advisory to --ignore-vuln below WITH a comment
-    # saying why and what would clear it — never silence the whole gate.
-
     needs: changes
     if: needs.changes.outputs.audit == 'run'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Nothing in this workflow pushes. Leaving the job token in
-          # .git/config lets any later step — or anything a dependency
-          # pulls in — reuse it.
-          persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          # There is no requirements.txt or pyproject.toml here (the runtime
-          # is pure stdlib), so setup-python's pip cache has nothing to key
-          # on by default and FAILS THE JOB looking for one. Point it at the
-          # pins that do exist. The glob covers requirements-test.txt too,
-          # so a change to the coverage pins invalidates the cache as well.
-          cache-dependency-path: requirements-*.txt
-
-      - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit==2.10.1
-
-      - name: Audit dependencies
-        # Both requirements files in one invocation so a package
-        # constrained by two of them is resolved once, consistently — the
-        # same way an install would see it.
-        #
-        # No --ignore-vuln entries at present. Each one added here must
-        # carry a comment naming the advisory, why it is not fixable, and
-        # what would let it be removed.
-        #
-        # THE RETRY IS NARROW ON PURPOSE. pip-audit resolves against PyPI
-        # and the advisory database over the network, and a reset
-        # connection produces the same exit status as a real finding. A
-        # blanket `retry 3` would therefore re-run a genuine vulnerability
-        # three times before reporting it, and — worse — a gate that goes
-        # red for reasons unrelated to its subject is one people learn to
-        # ignore. So this retries ONLY when the output carries a transport
-        # error, and reports anything else immediately and verbatim.
-        run: |
-          for attempt in 1 2 3; do
-            if pip-audit \
-                 --progress-spinner off \
-                 --requirement requirements-dev.txt \
-                 --requirement requirements-test.txt \
-                 > audit.out 2>&1; then
-              cat audit.out
-              exit 0
-            fi
-
-            if grep -qiE 'connection (aborted|reset|error)|read timed out|temporary failure in name resolution' audit.out; then
-              echo "attempt $attempt: transport failure talking to PyPI, retrying"
-              tail -n 5 audit.out
-              sleep $(( attempt * 15 ))
-              continue
-            fi
-
-            echo "pip-audit reported findings:" >&2
-            cat audit.out >&2
-            exit 1
-          done
-
-          echo "pip-audit could not reach PyPI after 3 attempts:" >&2
-          cat audit.out >&2
-          exit 1
-
+    uses: ./.github/workflows/audit.yml
+    permissions:
+      contents: read
   speed:
     # Did this commit get more expensive than the committed baseline says?
     #
@@ -1040,83 +941,13 @@ jobs:
           if-no-files-found: warn
 
   analyze:
-    # Static security analysis (advanced setup, not the repo-settings "default
-    # setup" — the config lives here so it is reviewable in a diff like every
-    # other gate). Free on this public repository; findings land in the
-    # Security tab rather than turning the build red, so a new query shipping
-    # upstream cannot block an unrelated push.
-    #
-    # TRIGGERS. push scans every branch; the default-branch push is what files
-    # the alerts that persist in the Security tab. The weekly cron re-applies
-    # new query packs to code that has not changed since it shipped. The
-    # pull_request trigger (issue #8) gives a contributor head read-only
-    # pre-merge results: on that event `analyze` reports its findings as
-    # checks and annotations on the pull request itself, against exactly the
-    # tree it analysed — the checkout takes the event's own SHA, so what is
-    # analysed and what is reported on are the same commit under every
-    # trigger. (An earlier draft of this comment described a
-    # pull_request_review design the suite never shipped.)
-    #
-    # The weekly cron is not redundant with push: CodeQL's query packs are
-    # updated continuously, and a new query only ever runs against code that
-    # has changed since it shipped. Without the cron, a rule published today
-    # would never be applied to a file last touched last year.
-
     needs: changes
     if: needs.changes.outputs.codeql == 'run'
-    name: analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
-
+    uses: ./.github/workflows/codeql.yml
     permissions:
-      # Writing the analysis results is the whole point; everything else
-      # stays read-only. The scope holds on pull_request runs too, where
-      # the upload is what files the PR's checks and annotations. GitHub
-      # downgrades it to read for FORK PRs — the untrusted case — so a
-      # fork head cannot write anything with it; a same-repository PR
-      # runs with the trust of its author, who already has write. The PR
-      # gate is therefore not literally read-only; what is guaranteed is
-      # that an untrusted head gets no write.
       security-events: write
       actions: read
       contents: read
-
-    strategy:
-      # Only one language here — this repo has no JS at all. The matrix
-      # stays a matrix so adding one later is a one-line change rather
-      # than a restructure.
-      fail-fast: false
-      matrix:
-        include:
-          - language: python
-            build-mode: none
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # No `ref:` here, unlike the other workflows: CodeQL must analyse
-          # exactly the commit it will file alerts against, which is the
-          # event's own SHA.
-          persist-credentials: false
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          # `security-extended` over the default `security` pack: these scripts
-          # hold a GitHub token, shell out to git, parse untrusted API
-          # responses and write files under a cache root — which is what
-          # the extra precision-medium queries are good at.
-          queries: security-extended
-          config: |
-            paths-ignore:
-              - docs
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          category: /language:${{ matrix.language }}
-
   actionlint:
     # The gate on the gates. Everything else in .github/workflows is unreviewed
     # code that runs with a repository token, and a mistake in it fails in ways

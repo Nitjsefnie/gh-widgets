@@ -169,6 +169,55 @@ class TestConsolidatedCiControls(unittest.TestCase):
         self.assertEqual(set(workflow_gates.values()),
                          set(changes_detect.GATES))
 
+    def test_schedule_crons_have_separate_unconditional_owners(self):
+        trigger = _trigger_block(self.workflow)
+        events = re.findall(r"(?m)^  ([a-z_]+):\s*$", trigger)
+        self.assertEqual(events, ["push", "pull_request", "workflow_dispatch"])
+
+        owners = (("audit.yml", "12 4 * * *", "pip-audit"),
+                  ("codeql.yml", "47 3 * * 3", "analyze"))
+        workflow_files = list(WORKFLOWS.glob("*.yml"))
+        for filename, cron, job in owners:
+            with self.subTest(filename=filename):
+                count = sum(path.read_text(encoding="utf-8").count(
+                    f"cron: '{cron}'") for path in workflow_files)
+                self.assertEqual(count, 1, f"{cron} occurs {count} times")
+                path = WORKFLOWS / filename
+                self.assertTrue(path.is_file(), f"missing schedule owner {filename}")
+                text = path.read_text(encoding="utf-8")
+                owner_trigger = _trigger_block(text)
+                owner_events = re.findall(
+                    r"(?m)^  ([a-z_]+):\s*$", owner_trigger)
+                self.assertEqual(
+                    owner_events, ["schedule", "workflow_dispatch", "workflow_call"])
+                self.assertIn(f"cron: '{cron}'", owner_trigger)
+                self.assertIn(job, _job_blocks(text))
+
+    def test_scheduled_gate_jobs_have_no_job_condition(self):
+        for filename, job in (("audit.yml", "pip-audit"),
+                              ("codeql.yml", "analyze")):
+            with self.subTest(filename=filename):
+                path = WORKFLOWS / filename
+                self.assertTrue(path.is_file(), f"missing schedule owner {filename}")
+                block = _job_blocks(path.read_text(encoding="utf-8")).get(job)
+                self.assertIsNotNone(block, f"missing job {job} in {filename}")
+                self.assertNotRegex(block, r"(?m)^    if:")
+
+    def test_tests_concurrency_cancels_only_pr_and_non_main_pushes(self):
+        block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",
+                          self.workflow)
+        assert block is not None
+        cancel = re.search(
+            r"(?ms)^  cancel-in-progress:\s*\$\{\{(.*?)\}\}\s*$",
+            block.group(1))
+        assert cancel is not None
+        expression = " ".join(cancel.group(1).split())
+        self.assertEqual(
+            expression,
+            "github.event_name == 'pull_request' || "
+            "(github.event_name == 'push' && "
+            "github.ref != 'refs/heads/main')")
+
 
 if __name__ == "__main__":
     unittest.main()
