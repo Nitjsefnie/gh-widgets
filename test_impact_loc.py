@@ -218,7 +218,14 @@ class TestScratchLifecycle(unittest.TestCase):
         return [("outside/project", {"branch": "main", "head": "h1"})]
 
     def make_paused_clone_renderer(self):
-        """Build an offline renderer whose clone spawn waits for a release."""
+        """Build a renderer with a release-gated, deadline-bounded clone.
+
+        An interrupted run on 2026-10-01 left its fake git shim sleeping for
+        about 27 hours after the worktree seat ended, so its test-finally
+        cleanup died with the seat. The 600-second shim deadline is the
+        last-resort defense when the harness itself is SIGKILLed; in-process
+        cleanup cannot run in that case.
+        """
         paths = {
             "scratch_root": self.tmp / "scratch",
             "mirror_root": self.tmp / "mirrors",
@@ -249,8 +256,12 @@ class TestScratchLifecycle(unittest.TestCase):
             "'impact-fame-')):\n"
             "    sys.stderr.write('unexpected fake git argv: %r\\n' % args)\n"
             "    sys.exit(97)\n"
-            "while True:\n"
-            "    time.sleep(1)\n",
+            "deadline = time.monotonic() + float(os.environ.get("
+            "'GHW_FAKE_GIT_MAX_LIFE', '600'))\n"
+            "remaining = deadline - time.monotonic()\n"
+            "while remaining > 0:\n"
+            "    time.sleep(min(1, remaining))\n"
+            "    remaining = deadline - time.monotonic()\n",
             encoding="utf-8")
         fake_git.chmod(0o755)
 
@@ -295,6 +306,7 @@ class TestScratchLifecycle(unittest.TestCase):
             "            encoding='utf-8')\n"
             "        os.replace(completed, boundary)\n"
             "        while not Path(os.environ['SPAWN_RELEASE_FILE']).exists():\n"
+            "            proc.poll()\n"
             "            time.sleep(0.01)\n"
             "    return proc\n"
             "subprocess.Popen = paused_popen\n"
@@ -314,6 +326,7 @@ class TestScratchLifecycle(unittest.TestCase):
             "SPAWN_RELEASE_FILE": str(paths["release"]),
             "SCRATCH_PATH_FILE": str(paths["scratch_path"]),
             "HANDLER_WAIT_FILE": str(paths["wait_path"]),
+            "GHW_FAKE_GIT_MAX_LIFE": "600",
         }
         return driver, env, paths
 
@@ -337,8 +350,12 @@ class TestScratchLifecycle(unittest.TestCase):
         self.assertEqual(list(paths["scratch_root"].glob("impact-fame-*")), [])
 
     @staticmethod
-    def stop_test_processes(renderer, child_pid, release):
+    def stop_test_processes(renderer, child_pid, release, boundary=None):
         release.touch()
+        if child_pid is None and boundary is not None and boundary.exists():
+            boundary_lines = boundary.read_text(encoding="utf-8").splitlines()
+            if len(boundary_lines) > 1:
+                child_pid = int(boundary_lines[1])
         if child_pid is not None:
             try:
                 os.killpg(child_pid, signal.SIGKILL)
@@ -346,7 +363,7 @@ class TestScratchLifecycle(unittest.TestCase):
                 pass
         if renderer.poll() is None:
             renderer.kill()
-        renderer.communicate(timeout=5)
+            renderer.communicate(timeout=5)
 
     def test_new_scratch_is_registered_until_removed(self):
         with mock.patch.object(impact_clone, "clone_repo", return_value=0.0):
@@ -475,6 +492,45 @@ class TestScratchLifecycle(unittest.TestCase):
         register.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX signal delivery")
+    def test_paused_clone_shim_exits_after_configured_lifetime(self):
+        driver, env, paths = self.make_paused_clone_renderer()
+        env["GHW_FAKE_GIT_MAX_LIFE"] = "1"
+        shim_source = (paths["bin_dir"] / "git").read_text(encoding="utf-8")
+
+        with subprocess.Popen(
+                [sys.executable, str(driver)], env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+                start_new_session=True) as renderer:
+            child_pid = None
+            self.addCleanup(
+                self.stop_test_processes, renderer, None, paths["release"],
+                paths["boundary"])
+            try:
+                self.assertTrue(self.wait_for_file(paths["boundary"]))
+                child_pid = int(paths["boundary"].read_text().splitlines()[1])
+                deadline = time.monotonic() + 4
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(child_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.02)
+                else:
+                    self.fail("fake git child remained alive past its deadline")
+
+                self.assertIn(
+                    "float(os.environ.get('GHW_FAKE_GIT_MAX_LIFE', '600'))",
+                    shim_source)
+                os.kill(renderer.pid, signal.SIGTERM)
+                self.assertTrue(self.wait_for_file(
+                    paths["signals"] / str(int(signal.SIGTERM))))
+                paths["release"].touch()
+                self.assert_renderer_and_clone_stopped(
+                    renderer, child_pid, paths, 128 + signal.SIGTERM)
+            finally:
+                self.stop_test_processes(renderer, child_pid, paths["release"])
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX signal delivery")
     def test_renderer_signal_stops_clone_writer_before_removing_scratch(self):
         scratch_root = self.tmp / "scratch"
         scratch_root.mkdir()
@@ -553,6 +609,9 @@ class TestScratchLifecycle(unittest.TestCase):
                 stderr=subprocess.PIPE, text=True,
                 start_new_session=True) as renderer:
             child_pid = None
+            self.addCleanup(
+                self.stop_test_processes, renderer, None, paths["release"],
+                paths["boundary"])
             try:
                 self.assertTrue(self.wait_for_file(paths["boundary"]))
                 boundary = paths["boundary"].read_text().splitlines()
@@ -575,6 +634,9 @@ class TestScratchLifecycle(unittest.TestCase):
                 stderr=subprocess.PIPE, text=True,
                 start_new_session=True) as renderer:
             child_pid = None
+            self.addCleanup(
+                self.stop_test_processes, renderer, None, paths["release"],
+                paths["boundary"])
             try:
                 self.assertTrue(self.wait_for_file(paths["boundary"]))
                 child_pid = int(paths["boundary"].read_text().splitlines()[1])
