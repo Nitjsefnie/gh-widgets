@@ -166,13 +166,18 @@ class ClassificationTests(unittest.TestCase):
             self.assertEqual(result[name], "run")
         self.assertEqual(result["actionlint"], "skip")
 
-    def test_codeql_ignores_its_complete_eight_path_set(self):
-        self.assertEqual(len(cd.CODEQL_IGNORES), 8)
-        for path in ("README.md", "PRESENTATION.txt", "docs/a.md",
-                     "examples/example.py", ".claude/settings.json",
-                     "LICENSE", "NOTICE", ".gitignore"):
+    def test_codeql_keeps_its_seven_paths_and_runs_on_presentation_only(self):
+        expected = ("**/*.md", "docs/**", "examples/**", ".claude/**",
+                    "LICENSE", "NOTICE", ".gitignore")
+        self.assertEqual(cd.CODEQL_IGNORES, expected)
+        self.assertIn("PRESENTATION.txt", cd.CODE_IGNORES)
+        self.assertNotIn("PRESENTATION.txt", cd.CODEQL_IGNORES)
+        for path in ("README.md", "docs/a.md", "examples/example.py",
+                     ".claude/settings.json", "LICENSE", "NOTICE",
+                     ".gitignore"):
             with self.subTest(path=path):
                 self.assertEqual(cd.classify({path})["codeql"], "skip")
+        self.assertEqual(cd.classify({"PRESENTATION.txt"})["codeql"], "run")
 
     def test_cap_runs_all_gates_when_path_data_is_truncated(self):
         result = cd.classify({"README.md"}, capped=True)
@@ -202,6 +207,29 @@ class ClassificationTests(unittest.TestCase):
             payload={})
         self.assertEqual(set(result.values()), {"run"})
         self.assertEqual(transport.calls, [])
+
+    def test_tag_pushes_run_every_gate_before_classifying_paths(self):
+        after = "a" * 40
+        cases = (
+            ("0" * 40, "main", {"status": "identical", "files": []}),
+            ("b" * 40, "b" * 40,
+             {"status": "ahead", "files": [{"filename": "README.md"}]}),
+        )
+        expected = {name: "run" for name in (
+            "tests", "lint", "types", "audit", "speed", "codeql",
+            "actionlint")}
+        for before, comparison_base, response in cases:
+            with self.subTest(before=before[:8], status=response["status"]):
+                path = (f"repos/owner/repo/compare/{comparison_base}..."
+                        f"{after}")
+                transport = FakeTransport(responses={path: response})
+                result = cd.classify_event(
+                    "push", transport=transport, repository="owner/repo",
+                    payload={"ref": "refs/tags/v1.0", "before": before,
+                             "after": after},
+                    sha=after, default_branch="main")
+                self.assertEqual(result, expected)
+                self.assertEqual(transport.calls, [])
 
 
 class AcquisitionTests(unittest.TestCase):
@@ -395,6 +423,34 @@ class FailClosedTests(unittest.TestCase):
 
 
 class ReportingTests(unittest.TestCase):
+    def test_tag_push_explains_run_everywhere_in_gate_outputs(self):
+        with tempfile.TemporaryDirectory(prefix="ghw-tag-push-") as temp:
+            event_path = Path(temp) / "event.json"
+            event_path.write_text(json.dumps({
+                "ref": "refs/tags/v1.0", "before": "0" * 40,
+                "after": "a" * 40,
+            }), encoding="utf-8")
+            compare = "repos/owner/repo/compare/main..." + "a" * 40
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                status = cd.main(environ={
+                    "EVENT_NAME": "push",
+                    "EVENT_PATH": str(event_path),
+                    "REPOSITORY": "owner/repo",
+                    "HEAD_SHA": "a" * 40,
+                    "DEFAULT_BRANCH": "main",
+                }, transport=FakeTransport(responses={
+                    compare: {"status": "identical", "files": []},
+                }))
+            self.assertEqual(status, 0)
+            lines = stdout.getvalue().splitlines()
+            for gate in ("tests", "lint", "types", "audit", "speed",
+                         "codeql", "actionlint"):
+                self.assertIn(
+                    f"{gate}: run — tag push refs/tags/v1.0 runs all seven gates",
+                    lines)
+                self.assertIn(f"{gate}=run", lines)
+
     def test_dispatch_and_schedule_print_a_reason_for_each_gate(self):
         dispatch = io.StringIO()
         with contextlib.redirect_stdout(dispatch):
