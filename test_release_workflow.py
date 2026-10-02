@@ -76,9 +76,8 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
 
     # The whole manifest, matrix legs and all, as the check-runs API
     # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
-    # bare name; `analyze` never does (codeql renames its own job to
-    # "analyze (python)") and `unittest` never does (a six-leg matrix), so
-    # the "name (" form of the match is load-bearing in every case here.
+    # bare name; `analyze` and `unittest` rename themselves to matrix names,
+    # so the "name (" form of the match is load-bearing in every case here.
     ALL_GREEN = [
         ("completed", "success", "lint"),
         ("completed", "success", "pyright"),
@@ -503,9 +502,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 ("speed", "skipped", 1),
                 ("speed", "neutral", 1),
                 ("other-gate", "skipped", 0),
-                ("other-gate", "neutral", 0),
-                ("pip-audit / pip-audit", "success", 0),
-                ("analyze / analyze (python)", "success", 0)):
+                ("other-gate", "neutral", 0)):
             with self.subTest(check_run=check_run, conclusion=conclusion):
                 self.setUp()
                 base = (self._without("speed")
@@ -521,17 +518,6 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     self.assertIn("Every expected gate reported", done.stdout)
                 else:
                     self.assertIn("did not reach", done.stderr)
-
-    @requires_bash
-    @unittest.skipUnless(shutil.which("jq"), "see above")
-    def test_failed_called_workflow_job_is_an_incidental_failure(self):
-        self._write_runs(self.ALL_GREEN + [
-            ("completed", "failure", "pip-audit / pip-audit")])
-        done = self._execute("Wait for the other gates on this commit")
-
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("did not pass", done.stderr)
-        self.assertIn("pip-audit / pip-audit", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")

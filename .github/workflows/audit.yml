@@ -35,7 +35,6 @@ on:
   schedule:
     - cron: '12 4 * * *'
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
