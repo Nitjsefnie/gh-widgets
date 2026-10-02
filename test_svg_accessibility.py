@@ -51,7 +51,7 @@ class CardAccessibility(unittest.TestCase):
             "repositories": {"totalCount": 4},
         }
         self.assert_accessible_card(
-            render.render_stats(colors, user, 5, 6, 1234),
+            render.render_stats(colors, user, 4, 5, 6, 1234),
             "stats", "GitHub stats",
             "Followers: 12; public repositories: 4; stars received: 5; "
             "forks received: 6; contributions in the last year: 1,234.")

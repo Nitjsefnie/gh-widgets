@@ -82,13 +82,15 @@ organisation needs no config change. Ownership of a line is decided by exact
 match against the account's GitHub noreply addresses, not by pattern-matching
 a name.
 
-Two escape hatches, both **additive** — neither can remove something the API
-reported, because a stale override is exactly the drift this replaced:
+The two identity overrides are **additive** — neither can remove something
+the API reported. `GH_EXTRA_ORGS` separately adds public organization repos to
+the stats card.
 
 | Variable | Use it for |
 |---|---|
 | `GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
 | `GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
+| `GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; private repos are filtered out. |
 
 ## Tuning the impact score (`render-impact.py`)
 

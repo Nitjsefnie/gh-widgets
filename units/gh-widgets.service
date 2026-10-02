@@ -35,6 +35,8 @@ Environment=THEME=tokyonight
 # blame pass silently under-counts. Read by fetch_identity, which impact and
 # responsiveness both call; render.py does not call it and is unaffected.
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+# render.py reads this; private organization repos never reach the SVG.
+Environment=GH_EXTRA_ORGS=
 Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
 StateDirectory=gh-widgets
 # systemd resets this directory's mode at each start, so declare it here.
