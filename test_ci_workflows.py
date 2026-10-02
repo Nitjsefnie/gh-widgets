@@ -62,6 +62,21 @@ def _trigger_block(text):
     return "\n".join(lines[start:end])
 
 
+def _steps_block(job_block):
+    """Keep the complete steps block, excluding only its outer blank lines."""
+    lines = job_block.splitlines()
+    try:
+        start = lines.index("    steps:")
+    except ValueError:
+        return []
+    steps = lines[start:]
+    while steps and not steps[0].strip():
+        steps.pop(0)
+    while steps and not steps[-1].strip():
+        steps.pop()
+    return steps
+
+
 class TestCodeqlPins(unittest.TestCase):
     """Every github/codeql-action step must run the same release."""
 
@@ -189,7 +204,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
                 owner_events = re.findall(
                     r"(?m)^  ([a-z_]+):\s*$", owner_trigger)
                 self.assertEqual(
-                    owner_events, ["schedule", "workflow_dispatch", "workflow_call"])
+                    owner_events, ["schedule", "workflow_dispatch"])
                 self.assertIn(f"cron: '{cron}'", owner_trigger)
                 self.assertIn(job, _job_blocks(text))
 
@@ -203,8 +218,46 @@ class TestConsolidatedCiControls(unittest.TestCase):
                 self.assertIn(job, blocks, f"missing job {job} in {filename}")
                 block = blocks[job]
                 self.assertNotRegex(block, r"(?m)^    if:")
+                self.assertNotRegex(block, r"(?m)^    needs:")
 
-    def test_tests_concurrency_cancels_only_pr_and_non_main_pushes(self):
+    def test_release_manifest_jobs_are_real_tests_workflow_producers(self):
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        manifest_jobs = re.findall(
+            r"(?m)^ {12}([a-z][a-z-]*)\s+# tests\.yml, job `([a-z][a-z-]*)`",
+            release)
+        self.assertTrue(manifest_jobs, "release manifest has no tests.yml jobs")
+        for gate, job in manifest_jobs:
+            with self.subTest(gate=gate, job=job):
+                self.assertIn(job, self.jobs)
+                block = self.jobs[job]
+                self.assertRegex(block, r"(?m)^    runs-on:")
+                self.assertNotRegex(
+                    block, r"(?m)^    uses:\s*\./\.github/workflows/")
+
+    def test_schedule_and_tests_job_steps_are_identical(self):
+        copies = (("audit.yml", "pip-audit"),
+                  ("codeql.yml", "analyze"))
+        for filename, job in copies:
+            with self.subTest(filename=filename, job=job):
+                owner = _job_blocks(
+                    (WORKFLOWS / filename).read_text(encoding="utf-8"))[job]
+                self.assertEqual(_steps_block(self.jobs[job]),
+                                 _steps_block(owner))
+
+    def test_tests_concurrency_uses_pr_or_sha_scoped_group(self):
+        block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",
+                          self.workflow)
+        assert block is not None
+        group = re.search(
+            r"(?ms)^  group:\s*\$\{\{(.*?)\}\}\s*$", block.group(1))
+        assert group is not None
+        self.assertEqual(
+            " ".join(group.group(1).split()),
+            "github.event_name == 'pull_request' && "
+            "format('tests-pr-{0}', github.event.pull_request.number) || "
+            "format('tests-push-{0}', github.sha)")
+
+    def test_tests_cancel_in_progress_only_for_pull_requests(self):
         block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",
                           self.workflow)
         assert block is not None
@@ -212,12 +265,8 @@ class TestConsolidatedCiControls(unittest.TestCase):
             r"(?ms)^  cancel-in-progress:\s*\$\{\{(.*?)\}\}\s*$",
             block.group(1))
         assert cancel is not None
-        expression = " ".join(cancel.group(1).split())
-        self.assertEqual(
-            expression,
-            "github.event_name == 'pull_request' || "
-            "(github.event_name == 'push' && "
-            "github.ref != 'refs/heads/main')")
+        self.assertEqual(" ".join(cancel.group(1).split()),
+                         "github.event_name == 'pull_request'")
 
 
 if __name__ == "__main__":

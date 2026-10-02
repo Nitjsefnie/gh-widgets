@@ -29,7 +29,6 @@ on:
     # queue for a long time.
     - cron: '47 3 * * 3'
   workflow_dispatch:
-  workflow_call:
 
 concurrency:
   group: codeql-${{ github.ref }}
