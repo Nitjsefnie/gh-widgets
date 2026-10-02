@@ -26,7 +26,10 @@ CODE_IGNORES = (
     "**/*.md", "PRESENTATION.txt", "docs/**", "examples/**", "LICENSE",
     ".gitignore",
 )
-CODEQL_IGNORES = CODE_IGNORES + (".claude/**", "NOTICE")
+CODEQL_IGNORES = (
+    "**/*.md", "docs/**", "examples/**", ".claude/**", "LICENSE",
+    "NOTICE", ".gitignore",
+)
 GATES = {
     "tests": ("deny", CODE_IGNORES),
     "lint": ("deny", CODE_IGNORES),
@@ -226,10 +229,18 @@ def _compare_files(transport: Transport, repository: str, before: str,
     return _filenames(files), len(files) >= 300
 
 
+def _tag_ref(payload: dict) -> str | None:
+    ref = payload.get("ref")
+    return (ref if isinstance(ref, str) and ref.startswith("refs/tags/")
+            else None)
+
+
 def classify_event(event: str, *, transport: Transport, repository: str,
                    payload: dict, schedule: str = "", sha: str = "",
                    pr_number: str = "", default_branch: str = "") -> dict[str, str]:
     """Classify one Actions event using its changed paths or schedule."""
+    if event == "push" and _tag_ref(payload):
+        return {name: "run" for name in GATES}
     if event == "workflow_dispatch":
         return {name: "run" for name in GATES}
     if event == "schedule":
@@ -293,17 +304,25 @@ def _detect(environment: dict[str, str],
     event = environment.get("EVENT_NAME", "")
     changed = None
     capped = False
+    fallback = ""
     try:
         repository = environment.get("REPOSITORY", "")
         payload = _payload(event, environment.get("EVENT_PATH", ""))
         api = transport or GhTransport(environment)
         if event in {"push", "pull_request"}:
-            changed, capped = changed_files(
-                api, repository, event=event, sha=environment.get("HEAD_SHA", ""),
-                pr_number=environment.get("PR_NUMBER", ""),
-                default_branch=environment.get("DEFAULT_BRANCH", ""),
-                payload=payload)
-            decisions = classify(changed, capped=capped)
+            tag_ref = _tag_ref(payload) if event == "push" else None
+            if tag_ref:
+                decisions = classify_event(
+                    event, transport=api, repository=repository, payload=payload)
+                fallback = f"tag push {tag_ref} runs all seven gates"
+            else:
+                changed, capped = changed_files(
+                    api, repository, event=event,
+                    sha=environment.get("HEAD_SHA", ""),
+                    pr_number=environment.get("PR_NUMBER", ""),
+                    default_branch=environment.get("DEFAULT_BRANCH", ""),
+                    payload=payload)
+                decisions = classify(changed, capped=capped)
         else:
             decisions = classify_event(
                 event, transport=api, repository=repository, payload=payload,
@@ -314,8 +333,6 @@ def _detect(environment: dict[str, str],
     except Exception as exc:  # pylint: disable=broad-exception-caught
         decisions, fallback = _all_run(
             f"changed-path detection failed ({exc}); running every gate")
-    else:
-        fallback = ""
     return event, decisions, changed, capped, fallback
 
 
