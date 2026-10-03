@@ -2,8 +2,10 @@
 # --require-hashes by the "Install zizmor" step in tests.yml's actionlint job.
 # A version pin alone still installs whatever artifact the index serves for
 # that version; these sha256 hashes make the install the same bytes on every
-# run. zizmor declares no runtime dependencies of its own beyond PyYAML, so
-# PyYAML is the whole transitive closure and every artifact it ships is listed.
+# run. PyYAML is a separately pinned toolchain package carried beside zizmor;
+# it is used by the claim repo's YAML-consuming lint step, not required at
+# runtime by zizmor. Its hash below covers the current CPython 3.13 x86_64
+# manylinux wheel used by this workflow, not every artifact PyYAML publishes.
 #
 # Dependabot's pip entry (directory: "/" in .github/dependabot.yml) watches
 # root requirements*.txt, so a bump arrives as a pull request rewriting the

@@ -42,10 +42,14 @@ permissions:
   contents: read
 
 concurrency:
-  # Dispatch-only measurements contend for the same machine's memory and CPU.
-  # Runs queue because cancelling would lose the in-flight measurement.
+  # These dispatch-only measurements run on separate hosted VMs. This group
+  # protects measurement retention, not machine contention.
+  # cancel-in-progress: false preserves in-flight measurements; queue: max
+  # prevents a dispatch from being silently dropped (the default replaces
+  # older pending runs).
   group: gitfame-pool-probe-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   probe:

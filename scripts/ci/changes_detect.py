@@ -38,7 +38,8 @@ GATES = {
     "speed": ("deny", CODE_IGNORES),
     "codeql": ("deny", CODEQL_IGNORES),
     "actionlint": (
-        "allow", (".github/workflows/**", ".github/dependabot.yml")),
+        "allow", (".github/workflows/**", ".github/dependabot.yml",
+                  "requirements-zizmor.txt")),
 }
 ALL_GATES = tuple(GATES)
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -274,7 +275,8 @@ def _reason(event: str, gate: str, decision: str, *, changed: set[str] | None,
     elif capped:
         reason = "changed-file response reached the 300-file cap; running all gates"
     elif decision == "skip" and gate == "actionlint":
-        reason = "no changed path matches .github/workflows/** or .github/dependabot.yml"
+        reason = ("no changed path matches .github/workflows/**, "
+                  ".github/dependabot.yml, or requirements-zizmor.txt")
     elif decision == "skip":
         reason = "every changed path is denied by this gate's path rules"
     else:
