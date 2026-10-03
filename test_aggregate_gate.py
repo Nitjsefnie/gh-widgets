@@ -523,22 +523,6 @@ class SecretScanTests(unittest.TestCase):
         self.assertIn("gitleaks", row)
         self.assertIn("concluded failure", row)
 
-    def test_malformed_paginated_job_page_fails_closed_through_transport(self):
-        responses = [
-            subprocess.CompletedProcess(
-                ["gh"], 0,
-                json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
-            subprocess.CompletedProcess(
-                ["gh"], 0,
-                json.dumps([{"jobs": [_secret_job()]}, {"jobs": {}}]), ""),
-        ]
-        timer = FakeClock()
-        with mock.patch.object(cd.subprocess, "run", side_effect=responses):
-            result = ag.require_secret_scan(
-                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
-                clock=timer.clock, sleep=timer.sleep)
-        self.assertEqual(result.verdict, ag.FAILED)
-        self.assertIn("malformed paginated jobs collection", result.detail)
 
     def test_failed_run_summary_does_not_override_a_successful_gitleaks_job(self):
         run = _secret_run(7, "2026-09-07T11:00:00Z", conclusion="failure")
@@ -684,6 +668,116 @@ class SecretScanTests(unittest.TestCase):
                 label = "no conclusion" if conclusion is None else conclusion
                 self.assertIn(f"concluded {label}", result.detail)
 
+    def test_queries_pin_head_sha_pagination_and_the_jobs_path(self):
+        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [self.secret_run],
+            jobs_path: [_secret_job()],
+        })
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertEqual(transport.calls, [
+            (SECRETS_RUNS_PATH, True, True),
+            (jobs_path, True, True),
+        ])
+
+    def test_gh_argv_queries_the_head_sha_with_no_cache_and_pagination(self):
+        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+        responses = [
+            subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
+            subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps([{"jobs": [_secret_job()]}]), ""),
+        ]
+        with mock.patch.object(cd.subprocess, "run", side_effect=responses) as gh:
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        argv = gh.call_args_list[0].args[0]
+        self.assertEqual(argv, [
+            "gh", "api", "--method", "GET",
+            "-H", "Accept: application/vnd.github+json",
+            "-H", "Cache-Control: no-cache",
+            "--paginate", "--slurp", SECRETS_RUNS_PATH,
+        ])
+        self.assertEqual(gh.call_args_list[1].args[0][-1], jobs_path)
+
+    def test_transport_error_fails_closed_with_a_query_message(self):
+        transport = FakeTransport(error=OSError("connection unavailable"))
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("could not read", result.detail)
+        self.assertIn("connection unavailable", result.detail)
+
+    def test_nonzero_gh_exit_and_rate_limit_fail_closed(self):
+        error = subprocess.CalledProcessError(
+            1, ["gh"], stderr="API rate limit exceeded")
+        with mock.patch.object(cd.subprocess, "run", side_effect=error):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("rate limit", result.detail)
+
+    def test_unparseable_api_body_fails_closed_with_its_own_message(self):
+        malformed = subprocess.CompletedProcess(["gh"], 0, "not JSON", "")
+        with mock.patch.object(cd.subprocess, "run", return_value=malformed):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("could not read", result.detail)
+        self.assertIn("JSON", result.detail)
+
+    def test_workflow_dispatch_without_a_scan_fails_after_the_bound(self):
+        transport = FakeTransport({SECRETS_RUNS_PATH: []})
+        timer = FakeClock()
+        stdout = io.StringIO()
+        with mock.patch.object(ag.time, "monotonic", timer.clock), \
+                mock.patch.object(ag.time, "sleep", timer.sleep), \
+                contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 1)
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| secrets |"))
+        self.assertIn("FAILED", row)
+        self.assertIn("no secrets.yml run", row)
+
+
+class SecretScanTransportControls(unittest.TestCase):
+    def setUp(self):
+        self.secret_run = _secret_run(7, "2026-09-07T11:00:00Z")
+
+    def test_malformed_paginated_job_page_fails_closed_through_transport(self):
+        responses = [
+            subprocess.CompletedProcess(
+                ["gh"], 0,
+                json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
+            subprocess.CompletedProcess(
+                ["gh"], 0,
+                json.dumps([{"jobs": [_secret_job()]}, {"jobs": {}}]), ""),
+        ]
+        timer = FakeClock()
+        with mock.patch.object(cd.subprocess, "run", side_effect=responses):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("malformed paginated jobs collection", result.detail)
+
+
+class SecretScanTimingTests(unittest.TestCase):
+    def setUp(self):
+        self.secret_run = _secret_run(7, "2026-09-07T11:00:00Z")
+        self.jobs_path = (
+            "repos/owner/repo/actions/runs/7/jobs?per_page=100")
+
     def test_deadline_accepts_a_success_inside_and_rejects_one_outside(self):
         inside_clock = FakeClock([239.0])
         inside_transport = FakeTransport({
@@ -800,88 +894,6 @@ class SecretScanTests(unittest.TestCase):
             clock=lambda: next(samples), sleep=lambda _seconds: None)
         self.assertEqual(result.verdict, ag.FAILED)
         self.assertEqual(transport.calls, [])
-
-    def test_queries_pin_head_sha_pagination_and_the_jobs_path(self):
-        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
-        transport = FakeTransport({
-            SECRETS_RUNS_PATH: [self.secret_run],
-            jobs_path: [_secret_job()],
-        })
-        result = ag.require_secret_scan(
-            "owner/repo", HEAD_SHA, 30, transport,
-            clock=FakeClock().clock, sleep=FakeClock().sleep)
-        self.assertEqual(result.verdict, ag.PASSED)
-        self.assertEqual(transport.calls, [
-            (SECRETS_RUNS_PATH, True, True),
-            (jobs_path, True, True),
-        ])
-
-    def test_gh_argv_queries_the_head_sha_with_no_cache_and_pagination(self):
-        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
-        responses = [
-            subprocess.CompletedProcess(
-                ["gh"], 0, json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
-            subprocess.CompletedProcess(
-                ["gh"], 0, json.dumps([{"jobs": [_secret_job()]}]), ""),
-        ]
-        with mock.patch.object(cd.subprocess, "run", side_effect=responses) as gh:
-            result = ag.require_secret_scan(
-                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
-                clock=FakeClock().clock, sleep=FakeClock().sleep)
-        self.assertEqual(result.verdict, ag.PASSED)
-        argv = gh.call_args_list[0].args[0]
-        self.assertEqual(argv, [
-            "gh", "api", "--method", "GET",
-            "-H", "Accept: application/vnd.github+json",
-            "-H", "Cache-Control: no-cache",
-            "--paginate", "--slurp", SECRETS_RUNS_PATH,
-        ])
-        self.assertEqual(gh.call_args_list[1].args[0][-1], jobs_path)
-
-    def test_transport_error_fails_closed_with_a_query_message(self):
-        transport = FakeTransport(error=OSError("connection unavailable"))
-        result = ag.require_secret_scan(
-            "owner/repo", HEAD_SHA, 30, transport,
-            clock=FakeClock().clock, sleep=FakeClock().sleep)
-        self.assertEqual(result.verdict, ag.FAILED)
-        self.assertIn("could not read", result.detail)
-        self.assertIn("connection unavailable", result.detail)
-
-    def test_nonzero_gh_exit_and_rate_limit_fail_closed(self):
-        error = subprocess.CalledProcessError(
-            1, ["gh"], stderr="API rate limit exceeded")
-        with mock.patch.object(cd.subprocess, "run", side_effect=error):
-            result = ag.require_secret_scan(
-                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
-                clock=FakeClock().clock, sleep=FakeClock().sleep)
-        self.assertEqual(result.verdict, ag.FAILED)
-        self.assertIn("rate limit", result.detail)
-
-    def test_unparseable_api_body_fails_closed_with_its_own_message(self):
-        malformed = subprocess.CompletedProcess(["gh"], 0, "not JSON", "")
-        with mock.patch.object(cd.subprocess, "run", return_value=malformed):
-            result = ag.require_secret_scan(
-                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
-                clock=FakeClock().clock, sleep=FakeClock().sleep)
-        self.assertEqual(result.verdict, ag.FAILED)
-        self.assertIn("could not read", result.detail)
-        self.assertIn("JSON", result.detail)
-
-    def test_workflow_dispatch_without_a_scan_fails_after_the_bound(self):
-        transport = FakeTransport({SECRETS_RUNS_PATH: []})
-        timer = FakeClock()
-        stdout = io.StringIO()
-        with mock.patch.object(ag.time, "monotonic", timer.clock), \
-                mock.patch.object(ag.time, "sleep", timer.sleep), \
-                contextlib.redirect_stdout(stdout):
-            status = ag.main(environ=_dispatch_environment(),
-                             transport=transport)
-        self.assertEqual(status, 1)
-        row = next(line for line in stdout.getvalue().splitlines()
-                   if line.startswith("| secrets |"))
-        self.assertIn("FAILED", row)
-        self.assertIn("no secrets.yml run", row)
-
 
 class AggregateSummaryTests(unittest.TestCase):
     def test_table_includes_every_gate_and_escapes_details(self):
