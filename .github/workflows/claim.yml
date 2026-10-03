@@ -41,8 +41,10 @@ jobs:
     timeout-minutes: 5
     # The narrowest token that can assign. Nothing here reads the tree, so
     # there is no contents: read and no checkout: the job talks to the API only.
-    # `pull-requests: write` lets `/claim` assign a pull request and lets the
-    # action reply when it declines a PR command.
+    # `pull-requests: write` exists for the decline reply: the action never
+    # assigns a pull request; it answers a PR command by posting that it has
+    # no effect there. Without the grant, the reply fails with HTTP 403
+    # (claim#153).
     permissions:
       issues: write
       pull-requests: write
