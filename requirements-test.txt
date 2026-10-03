@@ -1,8 +1,8 @@
 # Test-only toolchain, pinned so a tool release cannot turn CI red on an
 # unchanged commit (same reason as requirements-dev.txt).
 #
-# The SUITE itself is stdlib unittest; its one test-only dependency is the
-# second entry below:
+# The SUITE itself is stdlib unittest; its test and tool dependencies are
+# listed below:
 #
 #   coverage — `coverage run -m unittest discover`, plus the
 #   `--format=markdown` and `json` calls the workflow makes directly.
@@ -22,5 +22,9 @@
 #   only so a local `pytest` run of the same file still works. Nothing in
 #   the suite is WRITTEN against pytest and nothing should be:
 #   `python3 -m unittest discover` stays the way these tests are run.
+#
+#   PyYAML — the workflow-shape controls decode workflow and Dependabot YAML
+#   to check its structure.
 coverage==7.16.2
 pytest==9.1.1
+PyYAML==6.0.3
