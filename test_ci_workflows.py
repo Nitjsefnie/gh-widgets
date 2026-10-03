@@ -4,7 +4,11 @@
 
 Stdlib unittest, matching the rest of this repo's suite.
 """
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -203,12 +207,16 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             ("fetch-depth", "0"), ("persist-credentials", "false")])
         download = self._named_step(
             self.gitleaks_job, "Download gitleaks and verify its digest")
-        self.assertIn(
-            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/"
-            "gitleaks_8.30.1_linux_x64.tar.gz", download)
-        self.assertIn(
-            "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
-            download)
+        download_script = textwrap.dedent(
+            download.split("run: |\n", 1)[1]).strip()
+        digest = (
+            "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb")
+        digest_lines = [line.strip() for line in download_script.splitlines()
+                        if digest in line]
+        self.assertEqual(len(digest_lines), 1)
+        self.assertTrue(
+            digest_lines[0].endswith("| sha256sum -c -"),
+            "the pinned digest must be consumed by sha256sum verification")
         scan = self._named_step(
             self.gitleaks_job, "Scan the tree and the history")
         self.assertRegex(
@@ -216,6 +224,53 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             r"(?m)^        run: ./gitleaks detect --verbose --redact "
             r"--config \.gitleaks\.toml$")
         self.assertNotRegex(scan, r"(?m)^\s+if:")
+
+    def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
+        download = self._named_step(
+            self.gitleaks_job, "Download gitleaks and verify its digest")
+        script = textwrap.dedent(download.split("run: |\n", 1)[1]).strip()
+        expected_url = (
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/"
+            "gitleaks_8.30.1_linux_x64.tar.gz")
+        with tempfile.TemporaryDirectory(prefix="gitleaks-download-control-") as tmp:
+            directory = Path(tmp)
+            curl_args = directory / "curl-args"
+            tar_called = directory / "tar-called"
+            curl_args.touch()
+            stubs = {
+                "curl": 'printf \'%s\\n\' "$@" > "$CURL_ARGUMENTS"',
+                "sha256sum": "echo digest mismatch >&2; exit 1",
+                "tar": 'touch "$TAR_MARKER"',
+            }
+            for name, body in stubs.items():
+                stub = directory / name
+                stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+                stub.chmod(0o755)
+            environment = dict(
+                os.environ,
+                PATH=f"{directory}{os.pathsep}{os.environ['PATH']}",
+                CURL_ARGUMENTS=str(curl_args),
+                TAR_MARKER=str(tar_called))
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", script],
+                cwd=directory, env=environment, capture_output=True,
+                text=True, check=False)
+            curl_output = curl_args.read_text(encoding="utf-8")
+            was_extracted = tar_called.exists()
+        self.assertIn(expected_url, curl_output)
+        self.assertNotEqual(
+            result.returncode, 0,
+            "a checksum mismatch must make the download step fail")
+        self.assertFalse(
+            was_extracted,
+            "a checksum mismatch must prevent archive extraction")
+
+    def test_scan_failure_cannot_be_swallowed_by_the_gitleaks_job(self):
+        self.assertNotRegex(
+            self.gitleaks_job,
+            r"(?mi)^\s*continue-on-error\s*:\s*true\s*$",
+            "continue-on-error can swallow scan failure and let the "
+            "gitleaks job appear successful")
 
     def test_aggregate_passes_its_head_sha_and_wait_bound_to_the_gate(self):
         tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
