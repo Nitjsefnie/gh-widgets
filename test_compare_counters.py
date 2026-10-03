@@ -22,6 +22,7 @@ import io
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -171,7 +172,29 @@ class TestComparator(unittest.TestCase):
 
         self.assertIn("measuring environment", stderr.getvalue())
         self.assertIn("not a measured regression", stderr.getvalue())
+        self.assertIn("unittest collection/import error", stderr.getvalue())
         self.assertNotIn("REGRESSION", stderr.getvalue())
+
+    def test_real_unittest_import_error_is_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase><error>"
+            "ImportError: Failed to import test module: test_broken"
+            "</error></testcase></testsuite>")
+        self.assertTrue(cd._is_unittest_collection_error(root))
+
+    def test_runtime_assertion_is_not_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase><failure>"
+            "AssertionError: expected value"
+            "</failure></testcase></testsuite>")
+        self.assertFalse(cd._is_unittest_collection_error(root))
+
+    def test_empty_success_is_not_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase time='0.01'><system-out>"
+            "Ran 0 tests\nOK"
+            "</system-out></testcase></testsuite>")
+        self.assertFalse(cd._is_unittest_collection_error(root))
 
     def test_sub_50ms_tests_stay_out_of_the_table_but_count_in_the_total(self):
         base = {"m::tiny": 0.002, "m::real": 1.0}
