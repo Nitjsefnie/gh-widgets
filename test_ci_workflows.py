@@ -8,6 +8,8 @@ import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -267,6 +269,198 @@ class TestConsolidatedCiControls(unittest.TestCase):
         assert cancel is not None
         self.assertEqual(" ".join(cancel.group(1).split()),
                          "github.event_name == 'pull_request'")
+
+
+class TestDependabotActionGroups(unittest.TestCase):
+    """Keep action update groups scoped to their declared update type."""
+
+    def test_github_actions_has_distinct_version_and_security_groups(self):
+        document = yaml.safe_load(
+            (REPO_ROOT / ".github" / "dependabot.yml").read_text(
+                encoding="utf-8"))
+        actions = next(update for update in document["updates"]
+                       if update["package-ecosystem"] == "github-actions")
+        groups = actions["groups"]
+
+        self.assertEqual(set(groups), {"actions", "github-actions-security"})
+        self.assertEqual(
+            sum(group.get("applies-to") == "version-updates"
+                for group in groups.values()), 1)
+        self.assertEqual(
+            sum(group.get("applies-to") == "security-updates"
+                for group in groups.values()), 1)
+        self.assertEqual(groups["actions"]["applies-to"], "version-updates")
+        self.assertEqual(groups["actions"]["patterns"], ["*"])
+        self.assertEqual(groups["github-actions-security"]["applies-to"],
+                         "security-updates")
+        self.assertEqual(groups["github-actions-security"]["patterns"], ["*"])
+
+
+class TestClaimWorkflowShape(unittest.TestCase):
+    """Pin the claim workflow's command filter, permissions and action input."""
+
+    def setUp(self):
+        self.path = WORKFLOWS / "claim.yml"
+        self.text = self.path.read_text(encoding="utf-8")
+        self.workflow = yaml.safe_load(self.text)
+        self.job = self.workflow["jobs"]["claim"]
+
+    def test_condition_filters_only_bots_and_non_commands(self):
+        condition = " ".join(self.job["if"].split())
+        self.assertEqual(
+            condition,
+            "github.event.comment.user.type != 'Bot' && "
+            "(contains(github.event.comment.body, '/claim') || "
+            "contains(github.event.comment.body, '/unclaim') || "
+            "contains(github.event.comment.body, '/release'))")
+        self.assertNotIn("github.event.issue.pull_request", condition)
+        self.assertNotIn("github.event.issue.state", condition)
+
+    def test_permissions_are_job_scoped(self):
+        self.assertEqual(self.job.get("permissions"), {
+            "issues": "write",
+            "pull-requests": "write",
+        })
+        self.assertNotIn("permissions", self.workflow)
+
+    def test_concurrency_queues_claims_without_cancelling_them(self):
+        concurrency = self.workflow["concurrency"]
+        self.assertEqual(concurrency["group"],
+                         "claim-${{ github.event.issue.number }}")
+        self.assertEqual(concurrency.get("queue"), "max")
+        self.assertIs(concurrency.get("cancel-in-progress"), False)
+
+    def test_job_timeout_is_five_minutes(self):
+        self.assertEqual(self.job.get("timeout-minutes"), 5)
+
+    def test_action_pin_comment_and_inputs_match_the_release(self):
+        pin = ("Nitjsefnie-Actions/claim@"
+               "0c79a0325d8ab789a60c2eeaf751690d2875c39c")
+        steps = self.job["steps"]
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].get("uses"), pin)
+
+        pin_lines = [line for line in self.text.splitlines()
+                     if re.fullmatch(r"\s+- uses:.*", line)]
+        self.assertEqual(len(pin_lines), 1)
+        pin_line = re.fullmatch(r"\s+- uses:\s*(\S+)(\s+#.*)?", pin_lines[0])
+        assert pin_line is not None
+        self.assertEqual(pin_line.group(1), pin)
+        self.assertEqual(pin_line.group(2), "  # v2.0.3")
+        self.assertEqual(steps[0].get("with"), {
+            "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
+            "expire": "7",
+        })
+
+
+class TestScorecardWorkflow(unittest.TestCase):
+    """Pin the scheduled Scorecard workflow's fork guard and output scopes."""
+
+    def setUp(self):
+        path = WORKFLOWS / "scorecard.yml"
+        if path.is_file():
+            self.text = path.read_text(encoding="utf-8")
+            self.workflow = yaml.safe_load(self.text) or {}
+        else:
+            self.text = ""
+            self.workflow = {}
+        self.job = self.workflow.get("jobs", {}).get("analysis", {})
+
+    def test_weekly_schedule_uses_the_reference_cron(self):
+        trigger_keys = [key for key in self.workflow
+                        if key == "on" or key is True]
+        self.assertEqual(len(trigger_keys), 1)
+        trigger_key = trigger_keys[0]
+        self.assertEqual(set(self.workflow), {
+            "name", trigger_key, "permissions", "concurrency", "jobs",
+        })
+        self.assertEqual(self.workflow[trigger_key], {
+            "schedule": [{"cron": "23 2 * * 6"}],
+            "workflow_dispatch": None,
+        })
+
+    def test_guard_skips_forks_and_non_default_branches(self):
+        condition = " ".join(self.job.get("if", "").split())
+        self.assertEqual(
+            condition,
+            "${{ !github.event.repository.fork && "
+            "github.ref == format('refs/heads/{0}', "
+            "github.event.repository.default_branch) }}")
+
+    def test_permissions_and_job_timeout_are_scoped(self):
+        self.assertEqual(self.workflow.get("name"), "scorecard")
+        self.assertEqual(self.workflow.get("permissions"), {"contents": "read"})
+        self.assertEqual(self.workflow.get("concurrency"), {
+            "group": "scorecard-${{ github.ref }}",
+            "cancel-in-progress": True,
+        })
+        self.assertEqual(set(self.workflow.get("jobs", {})), {"analysis"})
+        self.assertEqual(set(self.job), {
+            "name", "if", "runs-on", "timeout-minutes", "permissions",
+            "steps",
+        })
+        self.assertEqual(self.job.get("name"), "Scorecard analysis")
+        self.assertEqual(self.job.get("runs-on"), "ubuntu-latest")
+        self.assertEqual(self.job.get("timeout-minutes"), 15)
+        self.assertEqual(self.job.get("permissions"), {
+            "security-events": "write",
+            "id-token": "write",
+            "contents": "read",
+        })
+
+    def test_uploads_sarif_and_publishes_scorecard_results(self):
+        expected_steps = [
+            {
+                "name": "Checkout code",
+                "uses": "actions/checkout@"
+                        "3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with": {"persist-credentials": False},
+            },
+            {
+                "name": "Run Scorecard analysis",
+                "uses": "ossf/scorecard-action@"
+                        "2d1146689b8cda280b9bc96326124645441f03bc",
+                "with": {
+                    "results_file": "results.sarif",
+                    "results_format": "sarif",
+                    "publish_results": True,
+                },
+            },
+            {
+                "name": "Upload Scorecard results artifact",
+                "uses": "actions/upload-artifact@"
+                        "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                    "name": "scorecard-results",
+                    "path": "results.sarif",
+                    "retention-days": 5,
+                },
+            },
+            {
+                "name": "Upload Scorecard results to code scanning",
+                "uses": "github/codeql-action/upload-sarif@"
+                        "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+                "with": {"sarif_file": "results.sarif"},
+            },
+        ]
+        self.assertEqual(self.job.get("steps"), expected_steps)
+
+        raw_job = _job_blocks(self.text)["analysis"]
+        pin_lines = [
+            line.strip()
+            for line in _steps_block(raw_job)
+            if re.fullmatch(r" {8}uses: \S+ # \S+", line)
+        ]
+        self.assertEqual(pin_lines, [
+            "uses: actions/checkout@"
+            "3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+            "uses: ossf/scorecard-action@"
+            "2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4",
+            "uses: actions/upload-artifact@"
+            "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+            "uses: github/codeql-action/upload-sarif@"
+            "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2",
+        ])
 
 
 if __name__ == "__main__":
