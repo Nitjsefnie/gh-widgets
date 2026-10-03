@@ -80,6 +80,8 @@ jobs:
     # changes, and the manifest entry is written against THIS string.
     name: coverage-ratchet
     runs-on: ubuntu-latest
+    # Observed at 1.2 minutes; 10 minutes caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 10
 
     # No `permissions:` block: it inherits this workflow's `contents: read`.
     # Stated here rather than left implicit because this is the job that runs

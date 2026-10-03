@@ -54,6 +54,8 @@ jobs:
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
+    # Observed at 7s; five minutes matches aggregate and caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,6 +77,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.tests == 'run'
     runs-on: ${{ matrix.os }}
+    # The slowest matrix cell takes 1m55s; 15 minutes caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 15
 
     defaults:
       run:
@@ -209,6 +213,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.lint == 'run'
     runs-on: ubuntu-latest
+    # Observed at 31s; 10 minutes caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,6 +258,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.types == 'run'
     runs-on: ubuntu-latest
+    # Observed at 19s; 10 minutes caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -287,6 +295,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.audit == 'run'
     runs-on: ubuntu-latest
+    # Observed at 24s; 15 minutes fits classifier retries and backoff, and caps a hang below GitHub's 6-hour default.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -594,6 +604,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.speed == 'run'
     runs-on: ubuntu-latest
+    # Observed at 2m11s; 20 minutes leaves longer-run headroom and caps a hang below GitHub's 6-hour default.
+    timeout-minutes: 20
 
     env:
       # NOT THE THRESHOLD. The budget that decides the gate is the per-entry
@@ -1039,6 +1051,8 @@ jobs:
     if: needs.changes.outputs.codeql == 'run'
     name: analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # Matches claim's 15-minute CodeQL timeout and caps a hung job below GitHub's 6-hour default.
+    timeout-minutes: 15
 
     permissions:
       # Writing the analysis results is the whole point; everything else
@@ -1122,6 +1136,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.actionlint == 'run'
     runs-on: ubuntu-latest
+    # Matches the claim/pr-gate actionlint precedent and caps a hang below GitHub's 6-hour default.
+    timeout-minutes: 10
 
     env:
       ACTIONLINT_VERSION: 1.7.12

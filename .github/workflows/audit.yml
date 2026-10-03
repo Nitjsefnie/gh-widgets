@@ -41,6 +41,8 @@ concurrency:
 jobs:
   pip-audit:
     runs-on: ubuntu-latest
+    # Matches pr-gate's 15-minute audit timeout; a hung job fails below GitHub's 6-hour default.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

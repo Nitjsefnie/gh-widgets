@@ -50,6 +50,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The 45-minute gate wait needs time to report; 60 minutes leaves margin and caps a hang below GitHub's 6-hour default.
+    timeout-minutes: 60
 
     permissions:
       # Creating the tag and the release.
