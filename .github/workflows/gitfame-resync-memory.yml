@@ -72,6 +72,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Dispatch-only measurements contend for the same machine's memory and CPU.
+  # Runs queue because cancelling would lose the in-flight measurement.
+  group: gitfame-resync-memory-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   measure:
     runs-on: ubuntu-latest
