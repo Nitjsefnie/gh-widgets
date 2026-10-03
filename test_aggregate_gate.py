@@ -60,9 +60,11 @@ class FakeTransport:
         self.responses = responses or {}
         self.error = error
         self.calls = []
+        self.timeouts = []
 
-    def api(self, path, *, paginate=False, no_cache=True):
+    def api(self, path, *, paginate=False, no_cache=True, timeout=None):
         self.calls.append((path, paginate, no_cache))
+        self.timeouts.append(timeout)
         if self.error is not None:
             raise self.error
         if path not in self.responses:
@@ -521,6 +523,23 @@ class SecretScanTests(unittest.TestCase):
         self.assertIn("gitleaks", row)
         self.assertIn("concluded failure", row)
 
+    def test_malformed_paginated_job_page_fails_closed_through_transport(self):
+        responses = [
+            subprocess.CompletedProcess(
+                ["gh"], 0,
+                json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
+            subprocess.CompletedProcess(
+                ["gh"], 0,
+                json.dumps([{"jobs": [_secret_job()]}, {"jobs": {}}]), ""),
+        ]
+        timer = FakeClock()
+        with mock.patch.object(cd.subprocess, "run", side_effect=responses):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("malformed paginated jobs collection", result.detail)
+
     def test_failed_run_summary_does_not_override_a_successful_gitleaks_job(self):
         run = _secret_run(7, "2026-09-07T11:00:00Z", conclusion="failure")
         transport = FakeTransport({
@@ -577,10 +596,36 @@ class SecretScanTests(unittest.TestCase):
         self.assertEqual(result.verdict, ag.PASSED)
         self.assertIn("run 11", result.detail)
 
+    def test_created_time_wins_when_start_order_disagrees(self):
+        old_created_late_start = _secret_run(
+            8, "2026-09-07T11:10:00Z", created="2026-09-07T11:00:00Z")
+        new_created_early_start = _secret_run(
+            9, "2026-09-07T11:06:00Z", created="2026-09-07T11:05:00Z")
+        cases = (
+            ("success", "failure", ag.FAILED),
+            ("failure", "success", ag.PASSED),
+        )
+        for old_conclusion, new_conclusion, expected in cases:
+            with self.subTest(old=old_conclusion, new=new_conclusion):
+                transport = FakeTransport({
+                    SECRETS_RUNS_PATH: [
+                        old_created_late_start, new_created_early_start],
+                    "repos/owner/repo/actions/runs/8/jobs?per_page=100": [
+                        _secret_job(old_conclusion)],
+                    "repos/owner/repo/actions/runs/9/jobs?per_page=100": [
+                        _secret_job(new_conclusion)],
+                })
+                timer = FakeClock()
+                result = ag.require_secret_scan(
+                    "owner/repo", HEAD_SHA, 30, transport,
+                    clock=timer.clock, sleep=timer.sleep)
+                self.assertEqual(result.verdict, expected)
+                self.assertIn("run 9", result.detail)
+
     def test_newest_run_uses_created_time_then_numeric_id(self):
         older = _secret_run(20, None, created="2026-09-07T11:00:00Z")
         newer_lower_id = _secret_run(21, None,
-                                     created="2026-09-07T11:05:00Z")
+                                     created="2026-09-07T11:05:00")
         newest = _secret_run(22, None, created="2026-09-07T11:05:00Z")
         transport = FakeTransport({
             SECRETS_RUNS_PATH: [newest, older, newer_lower_id],
@@ -593,6 +638,19 @@ class SecretScanTests(unittest.TestCase):
             clock=timer.clock, sleep=timer.sleep)
         self.assertEqual(result.verdict, ag.PASSED)
         self.assertIn("run 22", result.detail)
+
+    def test_missing_creation_time_fails_even_when_start_time_is_valid(self):
+        for created in (None, "not-a-time"):
+            with self.subTest(created=created):
+                run = _secret_run(7, "2026-09-07T11:00:00Z")
+                if created is None:
+                    run.pop("created_at")
+                else:
+                    run["created_at"] = created
+                result, _transport, _timer = self._scan(
+                    [run], [_secret_job()])
+                self.assertEqual(result.verdict, ag.FAILED)
+                self.assertIn("no valid creation time", result.detail)
 
     def test_no_run_within_bound_fails_with_its_own_detail(self):
         result, transport, _ = self._scan([], [], bound=30)
@@ -627,7 +685,7 @@ class SecretScanTests(unittest.TestCase):
                 self.assertIn(f"concluded {label}", result.detail)
 
     def test_deadline_accepts_a_success_inside_and_rejects_one_outside(self):
-        inside_clock = FakeClock([239.9])
+        inside_clock = FakeClock([239.0])
         inside_transport = FakeTransport({
             SECRETS_RUNS_PATH: deque([[], [self.secret_run]]),
             self.jobs_path: [_secret_job()],
@@ -648,6 +706,100 @@ class SecretScanTests(unittest.TestCase):
         self.assertEqual(outside.verdict, ag.FAILED)
         self.assertIn("within 240 seconds", outside.detail)
         self.assertEqual(len(outside_transport.calls), 1)
+
+    def test_legal_request_delays_cannot_exceed_the_total_wait_bound(self):
+        timer = FakeClock()
+        timeouts = []
+        delays = (59, 59, 59, 17)
+
+        def slow_run(command, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            if len(timeouts) <= len(delays):
+                delay = delays[len(timeouts) - 1]
+                self.assertLess(delay, kwargs["timeout"])
+                timer.now += delay
+                return subprocess.CompletedProcess(
+                    command, 0, '[{"workflow_runs":[]}]', "")
+            timer.now += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        with mock.patch.object(cd.subprocess, "run", side_effect=slow_run):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 240, cd.GhTransport({}),
+                clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertLessEqual(timer.now - 1000.0, 240)
+        self.assertEqual(timeouts[:3], [60, 60, 60])
+        self.assertGreater(timeouts[3], 17)
+        self.assertLess(timeouts[3], 18)
+
+    def test_request_started_before_deadline_is_capped_to_remaining_budget(self):
+        timer = FakeClock()
+        timeouts = []
+        delays = (59, 59, 59, 2)
+
+        def slow_run(command, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            if len(timeouts) <= len(delays):
+                delay = delays[len(timeouts) - 1]
+                self.assertLess(delay, kwargs["timeout"])
+                timer.now += delay
+                return subprocess.CompletedProcess(
+                    command, 0, '[{"workflow_runs":[]}]', "")
+            timer.now += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        with mock.patch.object(cd.subprocess, "run", side_effect=slow_run):
+            ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 240, cd.GhTransport({}),
+                clock=timer.clock, sleep=timer.sleep)
+        self.assertLessEqual(timer.now - 1000.0, 240)
+        self.assertEqual(timeouts[:3], [60, 60, 60])
+        self.assertGreater(timeouts[3], 17)
+        self.assertLess(timeouts[3], 18)
+        self.assertGreater(timeouts[4], 0)
+        self.assertLess(timeouts[4], 1)
+
+    def test_success_can_arrive_near_the_deadline_with_reporting_reserve(self):
+        timer = FakeClock()
+        timeouts = []
+        run_count = 0
+
+        def slow_run(command, **kwargs):
+            nonlocal run_count
+            timeouts.append(kwargs["timeout"])
+            if command[-1] == SECRETS_RUNS_PATH:
+                run_count += 1
+                if run_count <= 3:
+                    timer.now += 59
+                    self.assertLess(59, kwargs["timeout"])
+                    body = [{"workflow_runs": []}]
+                else:
+                    body = [{"workflow_runs": [self.secret_run]}]
+            else:
+                timer.now += 17
+                self.assertLess(17, kwargs["timeout"])
+                body = [{"jobs": [_secret_job()]}]
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(body), "")
+
+        with mock.patch.object(cd.subprocess, "run", side_effect=slow_run):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 240, cd.GhTransport({}),
+                clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertEqual(timer.now - 1000.0, 239)
+        self.assertGreater(timeouts[-1], 17)
+        self.assertLess(timeouts[-1], 18)
+
+    def test_zero_remaining_budget_does_not_start_another_request(self):
+        samples = iter((1000.0, 1240.0))
+        transport = FakeTransport({SECRETS_RUNS_PATH: []})
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 240, transport,
+            clock=lambda: next(samples), sleep=lambda _seconds: None)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertEqual(transport.calls, [])
 
     def test_queries_pin_head_sha_pagination_and_the_jobs_path(self):
         jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
