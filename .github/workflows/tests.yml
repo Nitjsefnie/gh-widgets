@@ -1068,12 +1068,17 @@ jobs:
       contents: read
 
     strategy:
-      # Only one language here — this repo has no JS at all. The matrix
-      # stays a matrix so adding one later is a one-line change rather
-      # than a restructure.
+      # One entry per language CodeQL analyses here: `actions` for the workflow
+      # files — among the most privileged code in the repository — and `python`
+      # for the renderers. `matrix.language` feeds the job name, the init step's
+      # `languages:` and analyze step's `category:`, so each entry lands as its
+      # own check. The matrix stays a matrix so the next language is a one-line
+      # addition.
       fail-fast: false
       matrix:
         include:
+          - language: actions
+            build-mode: none
           - language: python
             build-mode: none
 
