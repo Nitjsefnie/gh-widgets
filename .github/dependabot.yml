@@ -5,12 +5,6 @@
 # the counterpart to the pip-audit job in tests.yml, which detects the problem
 # but cannot fix it.
 #
-# Note the interaction with the repo's CI policy: PRs are not built until an
-# approving review lands (see tests.yml), so a Dependabot PR sits unbuilt
-# until a human looks at it. That is the existing policy working as intended,
-# not an extra cost of enabling this — an unreviewed bump is exactly the kind
-# of change that should not get a runner.
-#
 # There is no npm entry and no eslint here: this repo has no JavaScript at
 # all. The renderers emit SVG as text.
 
@@ -53,11 +47,17 @@ updates:
     # github/codeql-action/init and .../analyze are separate dependencies to
     # Dependabot, so ungrouped it files ONE HALF-BUMP PR PER PIN, and a tree
     # whose init and analyze pins disagree fails every CodeQL run with a
-    # configuration error (#22/#23 both went red that way). The group keeps
-    # every action bump in one atomic PR; the in-tree tripwire is
+    # configuration error (#22/#23 both went red that way). Each group applies
+    # only to its named update kind: the version-update group keeps every
+    # action version bump in one atomic PR, and the security-update group does
+    # the same for every action security bump. The in-tree tripwire is
     # test_ci_workflows.py.
     groups:
       actions:
         applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
         patterns:
           - "*"

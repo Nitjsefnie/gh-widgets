@@ -478,5 +478,33 @@ class TestConsolidatedCiControls(unittest.TestCase):
                          "github.event_name == 'pull_request'")
 
 
+class TestDependabotActionGroups(unittest.TestCase):
+    """Keep action update groups scoped to their declared update type."""
+
+    def test_github_actions_has_distinct_version_and_security_groups(self):
+        import yaml
+
+        document = yaml.safe_load(
+            (REPO_ROOT / ".github" / "dependabot.yml").read_text(
+                encoding="utf-8"))
+        actions = next(update for update in document["updates"]
+                       if update["package-ecosystem"] == "github-actions")
+        groups = actions["groups"]
+
+        self.assertEqual(set(groups), {"actions", "github-actions-security"})
+        self.assertEqual(
+            sum(group.get("applies-to") == "version-updates"
+                for group in groups.values()), 1)
+        self.assertEqual(
+            sum(group.get("applies-to") == "security-updates"
+                for group in groups.values()), 1)
+        self.assertEqual(groups["actions"]["applies-to"], "version-updates")
+        self.assertEqual(groups["actions"]["patterns"], ["*"])
+        self.assertEqual(groups["github-actions-security"]["applies-to"],
+                         "security-updates")
+        self.assertEqual(groups["github-actions-security"]["patterns"], ["*"])
+
+
+
 if __name__ == "__main__":
     unittest.main()
