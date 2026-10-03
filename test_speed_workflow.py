@@ -635,6 +635,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     # Every step that runs something, by name. A step added to the speed job must
     # be added here too, or this enumeration silently stops covering the file.
     REPOSITORY_STEPS = (
+        "Install the test toolchain",
         "Probe the counter instrument",
         "Build renderer fixtures",
         "Measure the unit suite",
