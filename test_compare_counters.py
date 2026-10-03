@@ -175,27 +175,6 @@ class TestComparator(unittest.TestCase):
         self.assertIn("unittest collection/import error", stderr.getvalue())
         self.assertNotIn("REGRESSION", stderr.getvalue())
 
-    def test_real_unittest_import_error_is_classified_as_collection_failure(self):
-        root = ET.fromstring(
-            "<testsuite><testcase><error>"
-            "ImportError: Failed to import test module: test_broken"
-            "</error></testcase></testsuite>")
-        self.assertTrue(cd._is_unittest_collection_error(root))
-
-    def test_runtime_assertion_is_not_classified_as_collection_failure(self):
-        root = ET.fromstring(
-            "<testsuite><testcase><failure>"
-            "AssertionError: expected value"
-            "</failure></testcase></testsuite>")
-        self.assertFalse(cd._is_unittest_collection_error(root))
-
-    def test_empty_success_is_not_classified_as_collection_failure(self):
-        root = ET.fromstring(
-            "<testsuite><testcase time='0.01'><system-out>"
-            "Ran 0 tests\nOK"
-            "</system-out></testcase></testsuite>")
-        self.assertFalse(cd._is_unittest_collection_error(root))
-
     def test_sub_50ms_tests_stay_out_of_the_table_but_count_in_the_total(self):
         base = {"m::tiny": 0.002, "m::real": 1.0}
         head = {"m::tiny": 0.008, "m::real": 1.0}
@@ -307,6 +286,32 @@ def verify(scans, base_folded, require=(), allow=()):
     """verify_population with the head fold done the way main() does it."""
     return cd.verify_population(scans, base_folded, cd.fold_scans(scans),
                                 list(require), list(allow))
+
+
+# These controls deliberately exercise the classifier without its fallback.
+# pylint: disable=protected-access
+class CollectionClassifierTests(unittest.TestCase):
+    def test_real_unittest_import_error_is_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase><error>"
+            "ImportError: Failed to import test module: test_broken"
+            "</error></testcase></testsuite>")
+        self.assertTrue(cd._is_unittest_collection_error(root))
+
+    def test_runtime_assertion_is_not_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase><failure>"
+            "AssertionError: expected value"
+            "</failure></testcase></testsuite>")
+        self.assertFalse(cd._is_unittest_collection_error(root))
+
+    def test_empty_success_is_not_classified_as_collection_failure(self):
+        root = ET.fromstring(
+            "<testsuite><testcase time='0.01'><system-out>"
+            "Ran 0 tests\nOK"
+            "</system-out></testcase></testsuite>")
+        self.assertFalse(cd._is_unittest_collection_error(root))
+# pylint: enable=protected-access
 
 
 class TestVerifyPopulation(unittest.TestCase):

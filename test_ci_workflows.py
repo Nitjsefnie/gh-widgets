@@ -81,6 +81,35 @@ def _steps_block(job_block):
     return steps
 
 
+def _run_download_with_failed_digest(script):
+    """Run the workflow download script with a failing checksum command."""
+    with tempfile.TemporaryDirectory(prefix="gitleaks-download-control-") as tmp:
+        directory = Path(tmp)
+        curl_args = directory / "curl-args"
+        tar_called = directory / "tar-called"
+        curl_args.touch()
+        stubs = {
+            "curl": 'printf \'%s\\n\' "$@" > "$CURL_ARGUMENTS"',
+            "sha256sum": "echo digest mismatch >&2; exit 1",
+            "tar": 'touch "$TAR_MARKER"',
+        }
+        for name, body in stubs.items():
+            stub = directory / name
+            stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+            stub.chmod(0o755)
+        environment = dict(
+            os.environ,
+            PATH=f"{directory}{os.pathsep}{os.environ['PATH']}",
+            CURL_ARGUMENTS=str(curl_args),
+            TAR_MARKER=str(tar_called))
+        result = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            cwd=directory, env=environment, capture_output=True,
+            text=True, check=False)
+        return result.returncode, curl_args.read_text(encoding="utf-8"), \
+            tar_called.exists()
+
+
 class TestCodeqlPins(unittest.TestCase):
     """Every github/codeql-action step must run the same release."""
 
@@ -232,34 +261,11 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         expected_url = (
             "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/"
             "gitleaks_8.30.1_linux_x64.tar.gz")
-        with tempfile.TemporaryDirectory(prefix="gitleaks-download-control-") as tmp:
-            directory = Path(tmp)
-            curl_args = directory / "curl-args"
-            tar_called = directory / "tar-called"
-            curl_args.touch()
-            stubs = {
-                "curl": 'printf \'%s\\n\' "$@" > "$CURL_ARGUMENTS"',
-                "sha256sum": "echo digest mismatch >&2; exit 1",
-                "tar": 'touch "$TAR_MARKER"',
-            }
-            for name, body in stubs.items():
-                stub = directory / name
-                stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-                stub.chmod(0o755)
-            environment = dict(
-                os.environ,
-                PATH=f"{directory}{os.pathsep}{os.environ['PATH']}",
-                CURL_ARGUMENTS=str(curl_args),
-                TAR_MARKER=str(tar_called))
-            result = subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c", script],
-                cwd=directory, env=environment, capture_output=True,
-                text=True, check=False)
-            curl_output = curl_args.read_text(encoding="utf-8")
-            was_extracted = tar_called.exists()
+        returncode, curl_output, was_extracted = (
+            _run_download_with_failed_digest(script))
         self.assertIn(expected_url, curl_output)
         self.assertNotEqual(
-            result.returncode, 0,
+            returncode, 0,
             "a checksum mismatch must make the download step fail")
         self.assertFalse(
             was_extracted,
