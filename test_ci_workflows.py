@@ -352,6 +352,56 @@ class TestClaimWorkflowShape(unittest.TestCase):
         })
 
 
+class TestScorecardWorkflow(unittest.TestCase):
+    """Pin the scheduled Scorecard workflow's fork guard and output scopes."""
+
+    def setUp(self):
+        import yaml
+
+        path = WORKFLOWS / "scorecard.yml"
+        if path.is_file():
+            self.workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        else:
+            self.workflow = {}
+        self.job = self.workflow.get("jobs", {}).get("analysis", {})
+
+    def test_weekly_schedule_uses_the_reference_cron(self):
+        triggers = self.workflow.get("on", self.workflow.get(True, {}))
+        self.assertEqual(triggers.get("schedule"), [{"cron": "23 2 * * 6"}])
+
+    def test_guard_skips_forks_and_non_default_branches(self):
+        condition = " ".join(self.job.get("if", "").split())
+        self.assertEqual(
+            condition,
+            "${{ !github.event.repository.fork && "
+            "github.ref == format('refs/heads/{0}', "
+            "github.event.repository.default_branch) }}")
+
+    def test_permissions_and_job_timeout_are_scoped(self):
+        self.assertEqual(self.workflow.get("permissions"), {"contents": "read"})
+        self.assertEqual(self.job.get("permissions"), {
+            "security-events": "write",
+            "id-token": "write",
+            "contents": "read",
+        })
+        self.assertIn("timeout-minutes", self.job)
+        self.assertGreater(self.job["timeout-minutes"], 0)
+
+    def test_uploads_sarif_and_publishes_scorecard_results(self):
+        steps = self.job.get("steps", [])
+        upload_steps = [step for step in steps
+                        if step.get("uses", "").startswith(
+                            "github/codeql-action/upload-sarif@")]
+        self.assertEqual(len(upload_steps), 1)
+        self.assertIn("sarif_file", upload_steps[0].get("with", {}))
+
+        scorecard_steps = [step for step in steps
+                           if step.get("uses", "").startswith(
+                               "ossf/scorecard-action@")]
+        self.assertEqual(len(scorecard_steps), 1)
+        self.assertIs(scorecard_steps[0].get("with", {}).get(
+            "publish_results"), True)
+
 
 if __name__ == "__main__":
     unittest.main()
