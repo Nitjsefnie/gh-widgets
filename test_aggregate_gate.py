@@ -523,7 +523,6 @@ class SecretScanTests(unittest.TestCase):
         self.assertIn("gitleaks", row)
         self.assertIn("concluded failure", row)
 
-
     def test_failed_run_summary_does_not_override_a_successful_gitleaks_job(self):
         run = _secret_run(7, "2026-09-07T11:00:00Z", conclusion="failure")
         transport = FakeTransport({
@@ -894,6 +893,7 @@ class SecretScanTimingTests(unittest.TestCase):
             clock=lambda: next(samples), sleep=lambda _seconds: None)
         self.assertEqual(result.verdict, ag.FAILED)
         self.assertEqual(transport.calls, [])
+
 
 class AggregateSummaryTests(unittest.TestCase):
     def test_table_includes_every_gate_and_escapes_details(self):
