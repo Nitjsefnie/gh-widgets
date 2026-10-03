@@ -159,6 +159,8 @@ class ClassificationTests(unittest.TestCase):
     def test_workflow_change_runs_code_gates_and_actionlint(self):
         result = cd.classify({".github/workflows/tests.yml"})
         self.assertEqual(set(result.values()), {"run"})
+        manifest_result = cd.classify({"requirements-zizmor.txt"})
+        self.assertEqual(manifest_result["actionlint"], "run")
 
     def test_code_change_skips_only_the_allow_gate(self):
         result = cd.classify({"new/code.py"})
