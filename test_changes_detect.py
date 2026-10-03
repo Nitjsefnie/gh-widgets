@@ -18,9 +18,11 @@ class FakeTransport:
         self.responses = responses or {}
         self.error = error
         self.calls = []
+        self.timeouts = []
 
-    def api(self, path, *, paginate=False, no_cache=True):
+    def api(self, path, *, paginate=False, no_cache=True, timeout=None):
         self.calls.append((path, paginate, no_cache))
+        self.timeouts.append(timeout)
         if self.error is not None:
             raise self.error
         if path not in self.responses:
@@ -96,6 +98,49 @@ class GhTransportTests(unittest.TestCase):
             result = cd.GhTransport({}).api(
                 "repos/owner/repo/actions/runs/7/jobs", paginate=True)
         self.assertEqual(result, jobs)
+
+    def test_api_flattens_paginated_workflow_run_pages(self):
+        runs = [{"id": 7}, {"id": 8}]
+        pages = [{"workflow_runs": [runs[0]]},
+                 {"workflow_runs": [runs[1]]}]
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(pages), stderr="")
+        with patch.object(cd.subprocess, "run", return_value=completed):
+            result = cd.GhTransport({}).api(
+                "repos/owner/repo/actions/workflows/secrets.yml/runs",
+                paginate=True)
+        self.assertEqual(result, runs)
+
+    def test_api_rejects_malformed_nested_collection_on_any_page(self):
+        cases = (
+            ("jobs", [{"jobs": [{"name": "gitleaks"}]}, {"jobs": {}}]),
+            ("jobs", [{"jobs": [{"name": "gitleaks"}]}, {"jobs": ""}]),
+            ("jobs", [{"jobs": [{"name": "gitleaks"}]}, {"other": []}]),
+            ("workflow_runs", [{"workflow_runs": [{"id": 7}]},
+                               {"workflow_runs": {}}]),
+        )
+        for collection, pages in cases:
+            with self.subTest(collection=collection, pages=pages):
+                completed = subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=json.dumps(pages), stderr="")
+                with patch.object(cd.subprocess, "run", return_value=completed):
+                    with self.assertRaisesRegex(
+                            cd.DetectionError,
+                            f"malformed paginated {collection} collection"):
+                        cd.GhTransport({}).api(
+                            "repos/owner/repo/actions/resource",
+                            paginate=True)
+
+    def test_api_timeout_defaults_to_sixty_seconds_and_accepts_a_cap(self):
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="{}", stderr="")
+        transport = cd.GhTransport({})
+        with patch.object(cd.subprocess, "run", return_value=completed) as run:
+            transport.api("repos/owner/repo/resource")
+            self.assertEqual(run.call_args.kwargs["timeout"], 60)
+
+            transport.api("repos/owner/repo/resource", timeout=12.5)
+            self.assertEqual(run.call_args.kwargs["timeout"], 12.5)
 
     def test_api_reports_cli_and_decode_failures(self):
         transport = cd.GhTransport({})

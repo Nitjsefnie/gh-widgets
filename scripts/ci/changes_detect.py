@@ -18,7 +18,7 @@ class DetectionError(RuntimeError):
 
 class Transport(Protocol):
     def api(self, path: str, *, paginate: bool = False,
-            no_cache: bool = True) -> Any:
+            no_cache: bool = True, timeout: float | None = None) -> Any:
         """Read a GitHub REST resource."""
 
 
@@ -99,12 +99,29 @@ def _list_items(data: Any) -> list[dict]:
     if isinstance(data, list):
         if all(isinstance(page, list) for page in data):
             data = [item for page in data for item in page]
-        elif all(isinstance(page, dict) and "workflow_runs" in page
+        elif any(isinstance(page, dict) and "workflow_runs" in page
                  for page in data):
-            data = [item for page in data
-                    for item in page.get("workflow_runs", [])]
-        elif all(isinstance(page, dict) and "jobs" in page for page in data):
-            data = [item for page in data for item in page.get("jobs", [])]
+            if not all(isinstance(page, dict) and "workflow_runs" in page
+                       for page in data):
+                raise DetectionError(
+                    "API response has a malformed paginated "
+                    "workflow_runs collection")
+            collections = [page["workflow_runs"] for page in data]
+            if not all(isinstance(items, list) for items in collections):
+                raise DetectionError(
+                    "API response has a malformed paginated "
+                    "workflow_runs collection")
+            data = [item for items in collections for item in items]
+        elif any(isinstance(page, dict) and "jobs" in page for page in data):
+            if not all(isinstance(page, dict) and "jobs" in page
+                       for page in data):
+                raise DetectionError(
+                    "API response has a malformed paginated jobs collection")
+            collections = [page["jobs"] for page in data]
+            if not all(isinstance(items, list) for items in collections):
+                raise DetectionError(
+                    "API response has a malformed paginated jobs collection")
+            data = [item for items in collections for item in items]
     if (not isinstance(data, list)
             or not all(isinstance(item, dict) for item in data)):
         raise DetectionError("API list response is missing or malformed")
@@ -118,7 +135,7 @@ class GhTransport:
         self.environment = environment
 
     def api(self, path: str, *, paginate: bool = False,
-            no_cache: bool = True) -> Any:
+            no_cache: bool = True, timeout: float | None = None) -> Any:
         command = [
             "gh", "api", "--method", "GET",
             "-H", "Accept: application/vnd.github+json",
@@ -131,7 +148,8 @@ class GhTransport:
         try:
             response = subprocess.run(
                 command, check=True, capture_output=True, text=True,
-                timeout=60, env=self.environment)
+                timeout=60 if timeout is None else timeout,
+                env=self.environment)
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or str(exc)).strip()
             raise DetectionError(f"gh api {path}: {detail}") from exc

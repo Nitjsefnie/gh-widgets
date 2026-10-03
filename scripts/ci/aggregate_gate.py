@@ -34,6 +34,8 @@ SECRETS_RESULT = "secrets"
 SECRETS_WAIT_BOUND_ENV = "SECRETS_WAIT_BOUND_S"
 DEFAULT_SECRETS_WAIT_BOUND_S = 240
 SECRETS_CHECK_INTERVAL_S = 15
+# Leave half a second for the aggregate row, step summary write, and exit.
+SECRETS_REPORTING_RESERVE_S = 0.5
 RUNNING_STATUSES = frozenset({
     "queued", "in_progress", "requested", "waiting", "pending",
 })
@@ -109,6 +111,20 @@ def _workflow_of(run: dict[str, Any]) -> Any:
 def _started_key(run: dict[str, Any]) -> tuple[datetime, int] | None:
     """Use a valid start/create time, with run id breaking equal-time ties."""
     text = run.get("run_started_at") or run.get("created_at")
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp, _run_id(run)
+
+
+def _created_key(run: dict[str, Any]) -> tuple[datetime, int] | None:
+    """Order one run by its creation time, with numeric id breaking ties."""
+    text = run.get("created_at")
     if not isinstance(text, str) or not text:
         return None
     try:
@@ -261,9 +277,12 @@ def _gate_result(gate: str, job: str, result: Any, required: str, *,
 
 
 def _api(transport: cd.Transport, path: str, *,
-         paginate: bool = False) -> Any:
+         paginate: bool = False, timeout: float | None = None) -> Any:
     try:
-        return transport.api(path, paginate=paginate, no_cache=True)
+        if timeout is None:
+            return transport.api(path, paginate=paginate, no_cache=True)
+        return transport.api(
+            path, paginate=paginate, no_cache=True, timeout=timeout)
     except AggregationError:
         raise
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -271,7 +290,7 @@ def _api(transport: cd.Transport, path: str, *,
 
 
 def _secrets_runs(transport: cd.Transport, repository: str,
-                  head_sha: str) -> list[dict[str, Any]]:
+                  head_sha: str, timeout: float) -> list[dict[str, Any]]:
     if REPOSITORY.fullmatch(repository) is None:
         raise QueryError("missing or invalid REPOSITORY for secrets query")
     if HEAD_SHA.fullmatch(head_sha) is None:
@@ -279,7 +298,7 @@ def _secrets_runs(transport: cd.Transport, repository: str,
     path = (
         f"repos/{repository}/actions/workflows/{SECRETS_WORKFLOW}/runs"
         f"?head_sha={quote(head_sha, safe='')}&per_page=100")
-    runs = _api(transport, path, paginate=True)
+    runs = _api(transport, path, paginate=True, timeout=timeout)
     if (not isinstance(runs, list)
             or not all(isinstance(run, dict) for run in runs)):
         raise QueryError("secrets workflow runs response is missing or malformed")
@@ -291,23 +310,25 @@ def _secrets_runs(transport: cd.Transport, repository: str,
 
 
 def _newest_secrets_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    # Creation selects the immutable run identity. Reruns keep that identity;
+    # the jobs endpoint reports the run's latest attempt conclusions.
     keyed = []
     for run in runs:
-        key = _started_key(run)
+        key = _created_key(run)
         if key is None:
             raise QueryError(
-                "secrets workflow run has no valid start or creation time")
+                "secrets workflow run has no valid creation time")
         keyed.append((key, run))
     return max(keyed, key=lambda item: item[0])[1] if keyed else None
 
 
 def _secrets_jobs(transport: cd.Transport, repository: str,
-                  run: dict[str, Any]) -> list[dict[str, Any]]:
+                  run: dict[str, Any], timeout: float) -> list[dict[str, Any]]:
     if REPOSITORY.fullmatch(repository) is None:
         raise QueryError("missing or invalid REPOSITORY for secrets job query")
     run_id = _run_id(run)
     path = f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
-    jobs = _api(transport, path, paginate=True)
+    jobs = _api(transport, path, paginate=True, timeout=timeout)
     if (not isinstance(jobs, list)
             or not all(isinstance(job, dict) for job in jobs)):
         raise QueryError("secrets workflow jobs response is missing or malformed")
@@ -315,10 +336,10 @@ def _secrets_jobs(transport: cd.Transport, repository: str,
 
 
 def _judge_secrets_run(transport: cd.Transport, repository: str,
-                       run: dict[str, Any]) -> Result:
+                       run: dict[str, Any], timeout: float) -> Result:
     run_id = _run_id(run)
     where = f"secrets.yml run {run_id} ({run.get('html_url') or '?'})"
-    jobs = _secrets_jobs(transport, repository, run)
+    jobs = _secrets_jobs(transport, repository, run, timeout)
     gitleaks = [job for job in jobs if job.get("name") == SECRETS_JOB]
     if not gitleaks:
         names = sorted(str(job.get("name")) for job in jobs)
@@ -369,11 +390,16 @@ def _completed_secrets_result(transport: cd.Transport, repository: str,
                               head_sha: str, wait_bound: int,
                               deadline: float, run: dict[str, Any],
                               clock: Callable[[], float]) -> Result:
+    remaining = deadline - clock()
+    if remaining <= SECRETS_REPORTING_RESERVE_S:
+        return _secret_deadline_failure(
+            head_sha, wait_bound, run, "jobs")
+    timeout = min(60.0, remaining - SECRETS_REPORTING_RESERVE_S)
     try:
-        result = _judge_secrets_run(transport, repository, run)
+        result = _judge_secrets_run(transport, repository, run, timeout)
     except AggregationError as exc:
         return Result(FAILED, f"could not read secrets scan job: {exc}")
-    if clock() > deadline:
+    if clock() >= deadline:
         return _secret_deadline_failure(
             head_sha, wait_bound, run, "jobs")
     return result
@@ -407,19 +433,23 @@ def require_secret_scan(repository: str, head_sha: str, wait_bound: int,
         return Result(FAILED, "SECRETS_WAIT_BOUND_S must be a positive integer")
     clock = time.monotonic if clock is None else clock
     sleep = time.sleep if sleep is None else sleep
-    deadline = clock() + wait_bound
+    started_at = clock()
+    deadline = started_at + wait_bound
     latest: dict[str, Any] | None = None
     while True:
-        if clock() > deadline:
+        remaining = deadline - clock()
+        if remaining <= SECRETS_REPORTING_RESERVE_S:
             return _secret_deadline_failure(
                 head_sha, wait_bound, latest, "wait")
+        timeout = min(60.0, remaining - SECRETS_REPORTING_RESERVE_S)
         try:
-            runs = _secrets_runs(transport, repository, head_sha)
+            runs = _secrets_runs(
+                transport, repository, head_sha, timeout)
             latest = _newest_secrets_run(runs)
         except AggregationError as exc:
             return Result(FAILED, f"could not read secrets scan status: {exc}")
 
-        if clock() > deadline:
+        if clock() >= deadline:
             return _secret_deadline_failure(
                 head_sha, wait_bound, latest, "runs")
         result = _secrets_status_result(
@@ -428,11 +458,13 @@ def require_secret_scan(repository: str, head_sha: str, wait_bound: int,
         if result is not None:
             return result
 
-        now = clock()
-        if now >= deadline:
+        remaining = deadline - clock()
+        if remaining <= SECRETS_REPORTING_RESERVE_S:
             return _secret_deadline_failure(
                 head_sha, wait_bound, latest, "wait")
-        sleep(min(SECRETS_CHECK_INTERVAL_S, deadline - now))
+        sleep(min(
+            SECRETS_CHECK_INTERVAL_S,
+            remaining - SECRETS_REPORTING_RESERVE_S))
 
 
 def _secret_scan_result(environment: dict[str, str],
