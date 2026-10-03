@@ -592,14 +592,12 @@ jobs:
     #     was compared, because a red box with an empty summary is a red nobody
     #     can act on.
     #
-    # THIS JOB INSTALLS NOTHING. That is not an oversight left over from when it
-    # installed pytest as a timing harness; it is the end state. The harness went
-    # when the counter took over, and the install outlived it only because
-    # `unittest discover` imports every test_*.py module it collects and
-    # test_compare_counters.py still imported pytest at module level. That file
-    # is now stdlib unittest like everything else, so both reasons are gone. The
-    # measurement below runs on a bare interpreter, which is also why the
-    # suite's own coverage and lint toolchain cannot be in this job's path.
+    # Install the pinned test toolchain before measuring. unittest discovery
+    # imports every test_*.py module it collects, so the measuring environment
+    # needs the same requirements-test.txt as the unittest job. pytest is
+    # installed as part of that shared toolchain but unittest remains the
+    # runner. If collection/import fails, the comparator reports an environment
+    # failure rather than calling it a measured regression.
 
     needs: changes
     if: needs.changes.outputs.speed == 'run'
@@ -649,14 +647,11 @@ jobs:
         with:
           python-version: "3.13"
 
-      # No install step, and that is the point: this job needs nothing but
-      # the standard library. It used to install pytest as a timing harness,
-      # and then kept the install after the harness went because
-      # `unittest discover` imports every test module it collects and
-      # test_compare_counters.py imported pytest at module level. Both
-      # reasons are gone — the counter writes the JUnit itself, and that
-      # test file is now stdlib unittest like everything else — so the
-      # measurement runs on a bare interpreter.
+      - name: Install the test toolchain
+        working-directory: head
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
 
       - name: Probe the counter instrument
         id: probe

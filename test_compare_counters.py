@@ -3,9 +3,10 @@
 This file is part of the stdlib unittest suite so its gate's own tests run in
 the gate that measures coverage. The suite runner is unittest, and the speed
 gate counts CPU seconds while scripts/ci/counter.py writes its own JUnit
-output, so that measurement needs nothing beyond the standard library. pytest
-remains pinned in requirements-test.txt only so an optional local `pytest` run
-of this file still works; the suite itself runs on unittest.
+output. The speed job installs requirements-test.txt because unittest
+discovery imports the full suite; this file itself still uses only the
+standard library. pytest remains pinned for optional local `pytest` runs, but
+the suite itself runs on unittest.
 
 The comparator is a gate, so its own failure modes matter more than most
 code here: a false red teaches people to ignore it, and a false green
@@ -129,14 +130,48 @@ class TestComparator(unittest.TestCase):
 
     def test_empty_report_is_an_error(self):
         report = write_junit(self.tmp_path / "r.xml", {})
-        with self.assertRaisesRegex(cd.ComparisonError, "no passing testcases"):
+        with self.assertRaisesRegex(
+                cd.ComparisonError,
+                "no passing testcases.*measuring environment"):
             cd.parse_junit(report)
 
     def test_unparseable_report_is_an_error(self):
         bad = self.tmp_path / "bad.xml"
         bad.write_text("<testsuites", encoding="utf-8")
-        with self.assertRaisesRegex(cd.ComparisonError, "not parseable"):
+        with self.assertRaisesRegex(
+                cd.ComparisonError,
+                "not parseable.*measuring environment"):
             cd.parse_junit(bad)
+
+    def test_collection_failure_names_environment_not_regression(self):
+        base = write_junit(self.tmp_path / "base.xml", {"m::a": 1.0})
+        failed = self.tmp_path / "failed.xml"
+        output = (
+            "test_ci_workflows (unittest.loader._FailedTest.test_ci_workflows) "
+            "... ERROR\n"
+            "ImportError: Failed to import test module: test_ci_workflows\n"
+            "ModuleNotFoundError: No module named 'yaml'\n"
+        )
+        measurement = cd.counter.Measurement(
+            0.01, "cpu_time", 0.02, output, "", 1)
+        cd.counter.write_junit(
+            failed, "counter::unit-suite", measurement,
+            ["python", "-m", "unittest", "discover"])
+
+        argv = sys.argv
+        stderr = io.StringIO()
+        try:
+            sys.argv = ["compare_counters.py", "--base", str(base),
+                        "--head", str(failed)]
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertEqual(cd.main(), 2)
+        finally:
+            sys.argv = argv
+
+        self.assertIn("measuring environment", stderr.getvalue())
+        self.assertIn("not a measured regression", stderr.getvalue())
+        self.assertNotIn("REGRESSION", stderr.getvalue())
 
     def test_sub_50ms_tests_stay_out_of_the_table_but_count_in_the_total(self):
         base = {"m::tiny": 0.002, "m::real": 1.0}
@@ -194,13 +229,15 @@ class TestComparator(unittest.TestCase):
         slow = write_junit(self.tmp_path / "slow.xml", {"m::a": 2.0})
         fine = write_junit(self.tmp_path / "fine.xml", {"m::a": 1.05})
         summary = self.tmp_path / "summary.md"
+        failure = io.StringIO()
 
         argv = sys.argv
         try:
             sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(slow), "--max-regression", "0.30",
                         "--summary-file", str(summary)]
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(failure):
                 self.assertEqual(cd.main(), 1)
 
             sys.argv = ["compare_counters.py", "--base", str(base),
@@ -213,6 +250,10 @@ class TestComparator(unittest.TestCase):
         # The report reaches the summary file even on the failing run — a red
         # gate with no detail is one nobody can act on.
         self.assertIn("REGRESSION", summary.read_text(encoding="utf-8"))
+        self.assertEqual(
+            failure.getvalue().strip(),
+            "FAIL: the shared entries cost +100.0% more than the committed "
+            "baseline, over the +30% budget.")
 
     def test_main_exits_2_when_it_cannot_compare(self):
         base = write_junit(self.tmp_path / "base.xml", {"m::a": 1.0})

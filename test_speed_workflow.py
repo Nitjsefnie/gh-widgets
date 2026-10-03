@@ -715,6 +715,16 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                         _arm_step_exec_env(env)
                 self.assertNotIn(STEP_EXEC_SENTINEL, env)
 
+    def test_speed_job_installs_the_pinned_test_toolchain(self):
+        _declared, working_dir, block = self.steps.step_run(
+            "Install the test toolchain")
+
+        self.assertEqual(working_dir, "head")
+        self.assertEqual(block.strip().splitlines(), [
+            "python -m pip install --upgrade pip",
+            "python -m pip install -r requirements-test.txt",
+        ])
+
     def test_small_checkout_pins_unit_discovery_population(self):
         root = self._temp_root("ghw-speed-unit-population-pin-")
         self._small_checkout(root)
