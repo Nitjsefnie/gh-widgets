@@ -175,12 +175,14 @@ jobs:
         # release, which is the opposite of what the old poll did.
         #
         # Each entry is the check-run NAME PREFIX a required job reports
-        # under. Four of them report exactly the job name; `unittest` is a
-        # six-leg matrix, so GitHub appends " (os, python)"; and codeql
-        # renames its own job to "analyze (python)". All six of them
-        # trigger on a push that touches VERSION, because tests.yml has an
-        # unfiltered push trigger. Deliberately absent, and each for a
-        # reason that a VERSION push would not change: the actionlint job
+        # under. Among tests.yml's six entries, four report the job name;
+        # `unittest` is a six-leg matrix, so GitHub appends " (os, python)",
+        # and `analyze` reports its matrix name, "analyze (python)". Those
+        # six trigger on a VERSION push through tests.yml's unfiltered push.
+        # The new `gitleaks` entry reports its job name and secrets.yml's
+        # push-to-main trigger also includes that commit. Deliberately
+        # The following workflows remain deliberately absent, each for a
+        # reason a VERSION push would not change: the actionlint job
         # (allow-lists .github/workflows/**), claim.yml (issue_comment),
         # pr-gate.yml (pull_request_target), and targeted-blame-audit.yml
         # plus the two gitfame-* measurements (schedule or dispatch only).
@@ -222,6 +224,7 @@ jobs:
             unittest    # tests.yml, job `unittest` (six-leg matrix)
             coverage-ratchet  # coverage-ratchet.yml, job `measure` (renames its check run to `coverage-ratchet`)
             aggregate   # tests.yml, job `aggregate`
+            gitleaks    # secrets.yml, job `gitleaks`
           )
           # The only way out of the manifest is to say so out loud. A
           # dispatch can waive; a push has no inputs, so a push-triggered

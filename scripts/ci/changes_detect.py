@@ -95,7 +95,7 @@ def classify(changed: set[str], *, capped: bool = False) -> dict[str, str]:
 def _list_items(data: Any) -> list[dict]:
     """Flatten gh's slurped pages and validate the returned item shape."""
     if isinstance(data, dict):
-        data = data.get("workflow_runs")
+        data = data.get("workflow_runs", data.get("jobs"))
     if isinstance(data, list):
         if all(isinstance(page, list) for page in data):
             data = [item for page in data for item in page]
@@ -103,6 +103,8 @@ def _list_items(data: Any) -> list[dict]:
                  for page in data):
             data = [item for page in data
                     for item in page.get("workflow_runs", [])]
+        elif all(isinstance(page, dict) and "jobs" in page for page in data):
+            data = [item for page in data for item in page.get("jobs", [])]
     if (not isinstance(data, list)
             or not all(isinstance(item, dict) for item in data)):
         raise DetectionError("API list response is missing or malformed")
@@ -130,12 +132,16 @@ class GhTransport:
             response = subprocess.run(
                 command, check=True, capture_output=True, text=True,
                 timeout=60, env=self.environment)
-            data = json.loads(response.stdout)
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or str(exc)).strip()
             raise DetectionError(f"gh api {path}: {detail}") from exc
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
             raise DetectionError(f"gh api {path}: {exc}") from exc
+        try:
+            data = json.loads(response.stdout)
+        except ValueError as exc:
+            raise DetectionError(
+                f"gh api {path}: response was not valid JSON: {exc}") from exc
         if not paginate:
             return data
         if not isinstance(data, list):

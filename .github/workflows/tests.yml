@@ -1235,6 +1235,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SECRETS_WAIT_BOUND_S: '240'
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_NAME: ${{ github.event_name }}
