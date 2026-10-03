@@ -296,6 +296,62 @@ class TestDependabotActionGroups(unittest.TestCase):
         self.assertEqual(groups["github-actions-security"]["patterns"], ["*"])
 
 
+class TestClaimWorkflowShape(unittest.TestCase):
+    """Pin the claim workflow's command filter, permissions and action input."""
+
+    def setUp(self):
+        import yaml
+
+        self.path = WORKFLOWS / "claim.yml"
+        self.text = self.path.read_text(encoding="utf-8")
+        self.workflow = yaml.safe_load(self.text)
+        self.job = self.workflow["jobs"]["claim"]
+
+    def test_condition_filters_only_bots_and_non_commands(self):
+        condition = " ".join(self.job["if"].split())
+        self.assertEqual(
+            condition,
+            "github.event.comment.user.type != 'Bot' && "
+            "(contains(github.event.comment.body, '/claim') || "
+            "contains(github.event.comment.body, '/unclaim') || "
+            "contains(github.event.comment.body, '/release'))")
+        self.assertNotIn("github.event.issue.pull_request", condition)
+        self.assertNotIn("github.event.issue.state", condition)
+
+    def test_permissions_are_job_scoped(self):
+        self.assertEqual(self.job.get("permissions"), {"issues": "write"})
+        self.assertNotIn("permissions", self.workflow)
+
+    def test_concurrency_queues_claims_without_cancelling_them(self):
+        concurrency = self.workflow["concurrency"]
+        self.assertEqual(concurrency["group"],
+                         "claim-${{ github.event.issue.number }}")
+        self.assertEqual(concurrency.get("queue"), "max")
+        self.assertIs(concurrency.get("cancel-in-progress"), False)
+
+    def test_job_timeout_is_five_minutes(self):
+        self.assertEqual(self.job.get("timeout-minutes"), 5)
+
+    def test_action_pin_comment_and_inputs_match_the_release(self):
+        pin = ("Nitjsefnie-Actions/claim@"
+               "cf2aaae56eb3bb6c655b8c4bc35906dafc77a63e")
+        steps = self.job["steps"]
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].get("uses"), pin)
+
+        pin_lines = [line for line in self.text.splitlines()
+                     if re.fullmatch(r"\s+- uses:.*", line)]
+        self.assertEqual(len(pin_lines), 1)
+        pin_line = re.fullmatch(r"\s+- uses:\s*(\S+)(\s+#.*)?", pin_lines[0])
+        self.assertIsNotNone(pin_line)
+        self.assertEqual(pin_line.group(1), pin)
+        self.assertEqual(pin_line.group(2), "  # v2.0.2")
+        self.assertEqual(steps[0].get("with"), {
+            "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
+            "expire": "7",
+        })
+
+
 
 if __name__ == "__main__":
     unittest.main()
