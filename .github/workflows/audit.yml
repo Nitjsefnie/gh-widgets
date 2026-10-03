@@ -4,12 +4,10 @@ name: audit
 # to its full transitive tree and checks every resolved version against the
 # PyPI advisory database and OSV.
 #
-# There is NO backend/requirements.txt here: the runtime is pure stdlib,
-# with zero third-party imports. So this gate covers the toolchain — the
-# lint, type-check and coverage pins — which is a smaller surface than the
-# sibling repos have but not an empty one: those tools run in CI with the
-# repository token, and a compromised one is a supply-chain problem even
-# though it never ships.
+# The runtime is pure stdlib, with zero third-party imports. This gate
+# covers the toolchain manifests at the repository root, now including the
+# two new tool manifests: those tools run in CI with the repository token,
+# and a compromised one is a supply-chain problem even though it never ships.
 #
 # Resolution is still the point rather than reading the pinned lines: a
 # linter drags in a dependency tree of its own, and that is where an
@@ -56,17 +54,13 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # There is no requirements.txt or pyproject.toml here (the runtime
-          # is pure stdlib), so setup-python's pip cache has nothing to key
-          # on by default and FAILS THE JOB looking for one. Point it at the
-          # pins that do exist. The glob covers requirements-test.txt too,
-          # so a change to the coverage pins invalidates the cache as well.
+          # The runtime is pure stdlib, but the root toolchain manifests
+          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # covers every manifest, including the new ones.
           cache-dependency-path: requirements-*.txt
 
       - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit==2.10.1
+        run: python -m pip install -r requirements-pip-audit.txt
 
       - name: Audit dependencies
         # Both requirements files in one invocation so a package

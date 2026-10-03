@@ -41,6 +41,8 @@
 !/pyrightconfig.json
 !/requirements-dev.txt
 !/requirements-test.txt
+!/requirements-pip-audit.txt
+!/requirements-zizmor.txt
 !/setup.cfg
 
 # `!/*.py` above matches only files directly at the root, so __pycache__/
