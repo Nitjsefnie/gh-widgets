@@ -63,45 +63,71 @@ jobs:
         run: python -m pip install -r requirements-pip-audit.txt
 
       - name: Audit dependencies
-        # Both requirements files in one invocation so a package
-        # constrained by two of them is resolved once, consistently — the
-        # same way an install would see it.
+        # Each root manifest gets its own pip-audit invocation. Combining
+        # them sends all --requirement files through one internal pip dry-run;
+        # a hash-pinned manifest beside an unhashed one flips that resolution
+        # into --require-hashes mode and fails on hashes the other manifest
+        # does not carry (observed on pr-gate's first run). Per-manifest
+        # auditing also brings the new zizmor and pip-audit manifests into the
+        # audit automatically.
         #
         # No --ignore-vuln entries at present. Each one added here must
         # carry a comment naming the advisory, why it is not fixable, and
         # what would let it be removed.
         #
-        # THE RETRY IS NARROW ON PURPOSE. pip-audit resolves against PyPI
-        # and the advisory database over the network, and a reset
-        # connection produces the same exit status as a real finding. A
-        # blanket `retry 3` would therefore re-run a genuine vulnerability
-        # three times before reporting it, and — worse — a gate that goes
-        # red for reasons unrelated to its subject is one people learn to
-        # ignore. So this retries ONLY when the output carries a transport
-        # error, and reports anything else immediately and verbatim.
+        # THE RETRY IS NARROW ON PURPOSE. This retries ONLY transport/service
+        # failures: connection errors, could-not-connect, SSLError, HTTP 5xx,
+        # rate-limited 429 — the sole retried 4xx, checked before ServiceError
+        # so other 4xx responses exit immediately — and a ServiceError
+        # exception. Findings and every other failure are reported
+        # immediately. A persisting transport failure is reported as an
+        # unreachable advisory feed.
         run: |
-          for attempt in 1 2 3; do
-            if pip-audit \
-                 --progress-spinner off \
-                 --requirement requirements-dev.txt \
-                 --requirement requirements-test.txt \
-                 > audit.out 2>&1; then
-              cat audit.out
-              exit 0
-            fi
-
-            if grep -qiE 'connection (aborted|reset|error)|read timed out|temporary failure in name resolution' audit.out; then
-              echo "attempt $attempt: transport failure talking to PyPI, retrying"
-              tail -n 5 audit.out
-              sleep $(( attempt * 15 ))
-              continue
-            fi
-
-            echo "pip-audit reported findings:" >&2
-            cat audit.out >&2
+          shopt -s nullglob
+          manifests=(requirements*.txt)
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "no requirements*.txt manifest at the repository root; nothing to audit" >&2
             exit 1
-          done
+          fi
 
-          echo "pip-audit could not reach PyPI after 3 attempts:" >&2
-          cat audit.out >&2
-          exit 1
+          for manifest in "${manifests[@]}"; do
+            echo "auditing $manifest"
+            resolved=0
+            for attempt in 1 2 3; do
+              if pip-audit --progress-spinner off --requirement "$manifest" > audit.out 2>&1; then
+                cat audit.out
+                resolved=1
+                break
+              fi
+
+              if grep -qiE '4[0-9][0-9] Client Error' audit.out \
+                  && ! grep -qiE '429 (Client Error|Too Many Requests)' audit.out; then
+                echo "pip-audit failed with a non-retryable 4xx client error:" >&2
+                cat audit.out >&2
+                exit 1
+              fi
+
+              if grep -qiE 'connection (aborted|reset|error)|read timed out|temporary failure in name resolution' audit.out \
+                  || grep -qiE 'Could not connect to (PyPI|OSV).*vulnerability feed' audit.out \
+                  || grep -qiE '(^|[[:space:]])[[:alnum:]_.]*SSLError:' audit.out \
+                  || grep -qiE '5[0-9][0-9] Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|429 (Client Error|Too Many Requests)' audit.out \
+                  || grep -qiE '(^|[[:space:]])(pip_audit\._service\.interface\.)?ServiceError:' audit.out; then
+                if [ "$attempt" -lt 3 ]; then
+                  echo "attempt $attempt: transport/service failure, retrying"
+                  tail -n 5 audit.out
+                  sleep $(( attempt * 15 ))
+                fi
+                continue
+              fi
+
+              echo "pip-audit reported findings:" >&2
+              cat audit.out >&2
+              exit 1
+            done
+
+            if [ "$resolved" -eq 0 ]; then
+              echo "pip-audit exhausted 3 attempts on $manifest after a transport/service failure:" >&2
+              cat audit.out >&2
+              exit 1
+            fi
+          done
