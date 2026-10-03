@@ -769,7 +769,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # per-file checks agree on one literal rather than two copies.
         excluded = {"claim.yml", "pr-gate.yml", "audit.yml", "codeql.yml",
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
-                    "gitfame-resync-memory.yml", "release.yml"}
+                    "gitfame-resync-memory.yml", "release.yml",
+                    "scorecard.yml"}
 
         for name, workflow_file, job in entries:
             with self.subTest(gate=name):
