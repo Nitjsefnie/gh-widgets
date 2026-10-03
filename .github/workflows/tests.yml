@@ -222,9 +222,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # There is no requirements.txt here (runtime is pure stdlib), so
-          # the cache must be keyed off the dev pins explicitly or
-          # setup-python fails the job looking for one.
+          # The runtime is pure stdlib, but the root toolchain manifests
+          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # covers every manifest, including the new ones.
           cache-dependency-path: requirements-*.txt
 
       - name: Install linters
@@ -265,9 +265,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # There is no requirements.txt here (runtime is pure stdlib), so
-          # the cache must be keyed off the dev pins explicitly or
-          # setup-python fails the job looking for one.
+          # The runtime is pure stdlib, but the root toolchain manifests
+          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # covers every manifest, including the new ones.
           cache-dependency-path: requirements-*.txt
 
       - name: Install pyright
@@ -300,17 +300,13 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # There is no requirements.txt or pyproject.toml here (the runtime
-          # is pure stdlib), so setup-python's pip cache has nothing to key
-          # on by default and FAILS THE JOB looking for one. Point it at the
-          # pins that do exist. The glob covers requirements-test.txt too,
-          # so a change to the coverage pins invalidates the cache as well.
+          # The runtime is pure stdlib, but the root toolchain manifests
+          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # covers every manifest, including the new ones.
           cache-dependency-path: requirements-*.txt
 
       - name: Install pip-audit
-        run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit==2.10.1
+        run: python -m pip install -r requirements-pip-audit.txt
 
       - name: Audit dependencies
         # Both requirements files in one invocation so a package
@@ -1116,11 +1112,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # There is no requirements.txt or pyproject.toml here (the runtime
-          # is pure stdlib), so setup-python's pip cache has nothing to key
-          # on by default and FAILS THE JOB looking for one. Point it at the
-          # pins that do exist. The glob covers requirements-test.txt too,
-          # so a change to the coverage pins invalidates the cache as well.
+          # The runtime is pure stdlib, but the root toolchain manifests
+          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # covers every manifest, including the new ones.
           cache-dependency-path: requirements-*.txt
 
       - name: Install actionlint
@@ -1137,9 +1131,7 @@ jobs:
 
       - name: Install zizmor
         id: install_zizmor
-        run: |
-          python -m pip install --upgrade pip
-          pip install zizmor==1.29.0
+        run: python3 -m pip install --require-hashes -r requirements-zizmor.txt
 
       - name: actionlint
         id: actionlint

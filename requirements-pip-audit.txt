@@ -1,0 +1,6 @@
+# This file is consumed by the pip-audit gate's install step. Hash-pinning
+# pip-audit would pin its whole transitive tree, and the fresh transitives are
+# exactly the subject the gate audits. A transitive release turning the gate
+# red on an unchanged commit is the gate working, not a flake. Dependabot's
+# pip entry watches it like every other root requirements*.txt manifest.
+pip-audit==2.10.1
