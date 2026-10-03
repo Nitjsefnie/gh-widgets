@@ -147,6 +147,21 @@ def node_id(case: ET.Element) -> str:
     return f"{classname}::{name}" if classname else name
 
 
+def _is_unittest_collection_error(root: ET.Element) -> bool:
+    """Whether a failed counter child records unittest discovery/import failure."""
+    failure_text = "\n".join(
+        text
+        for case in root.iter("testcase")
+        for tag in NOT_PASSED
+        for failure in case.findall(tag)
+        for text in failure.itertext()
+    )
+    return any(marker in failure_text for marker in (
+        "unittest.loader._FailedTest",
+        "ImportError: Failed to import test module:",
+    ))
+
+
 def scan_junit(path: Path) -> tuple:
     """One report, read three ways: (passing values, present, not_passed).
 
@@ -166,7 +181,9 @@ def scan_junit(path: Path) -> tuple:
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as exc:
-        raise ComparisonError(f"{path} is not parseable JUnit XML: {exc}") from exc
+        raise ComparisonError(
+            f"{path} is not parseable JUnit XML from the measuring "
+            f"environment; this is not a measured regression: {exc}") from exc
 
     times = {}
     present = set()
@@ -183,7 +200,18 @@ def scan_junit(path: Path) -> tuple:
         except ValueError:
             continue
     if not times:
-        raise ComparisonError(f"{path} contains no passing testcases")
+        if _is_unittest_collection_error(root):
+            raise ComparisonError(
+                f"{path} records a unittest collection/import error in the "
+                "measuring environment; the suite could not run, and this "
+                "is not a measured regression")
+        if not present:
+            detail = "contains no testcases (and no passing testcases)"
+        else:
+            detail = "contains no passing testcases"
+        raise ComparisonError(
+            f"{path} {detail}; the measuring environment produced no usable "
+            "measurement, so this is not a measured regression")
     return times, present, present - set(times)
 
 

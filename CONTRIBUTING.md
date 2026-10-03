@@ -98,8 +98,9 @@ that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
 own JUnit. It was also imported by `test_compare_counters.py`, which
 `unittest discover` had to be able to import in order to collect the suite;
 that file is now stdlib unittest like everything else. `requirements-test.txt`
-still pins it so a local `pytest` run of the same file works, and nothing in
-CI asks it for anything. Do not write a test against pytest fixtures or
+still pins it for optional local `pytest` runs. CI installs that toolchain in
+the `unittest` and `speed` jobs but continues to use `unittest` rather than
+invoking pytest. Do not write a test against pytest fixtures or
 `assert`-rewriting — it would run in CI and then not run for anyone using
 the documented command.
 
