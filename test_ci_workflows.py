@@ -109,6 +109,135 @@ class TestGitFameForkPin(unittest.TestCase):
         self.assertEqual({sha for _, sha in arms}, documented, arms)
 
 
+class TestSecretsScanWorkflow(unittest.TestCase):
+    """Pin the secret scan's trigger, history, and aggregate wiring."""
+
+    def setUp(self):
+        self.secrets_path = WORKFLOWS / "secrets.yml"
+        self.assertTrue(self.secrets_path.is_file(), "missing secrets.yml")
+        self.secrets_text = self.secrets_path.read_text(encoding="utf-8")
+        self.secrets_trigger = _trigger_block(self.secrets_text)
+        self.secrets_jobs = _job_blocks(self.secrets_text)
+        self.gitleaks_job = self.secrets_jobs.get("gitleaks", "")
+
+    def _event_block(self, name):
+        events = list(re.finditer(r"(?m)^  ([a-z_]+):\s*$",
+                                  self.secrets_trigger))
+        names = [match.group(1) for match in events]
+        self.assertEqual(names, ["push", "pull_request", "schedule",
+                                 "workflow_dispatch"])
+        index = names.index(name)
+        end = events[index + 1].start() if index + 1 < len(events) else len(
+            self.secrets_trigger)
+        return (self.secrets_trigger[events[index].start():end]
+                .strip("\n").splitlines())
+
+    def _named_step(self, job, name):
+        steps = _steps_block(job)
+        matches = [index for index, line in enumerate(steps)
+                   if line == f"      - name: {name}"]
+        self.assertEqual(len(matches), 1, name)
+        start = matches[0]
+        end = next((index for index in range(start + 1, len(steps))
+                    if steps[index].startswith("      - ")), len(steps))
+        return "\n".join(steps[start:end])
+
+    def test_secrets_scan_has_the_required_events_and_unique_cron(self):
+        self.assertEqual(self._event_block("push"),
+                         ["  push:", "    branches: [main]"])
+        self.assertEqual(self._event_block("pull_request"),
+                         ["  pull_request:"])
+        self.assertEqual(self._event_block("schedule"),
+                         ["  schedule:", "    - cron: '26 5 * * *'"])
+        self.assertEqual(self._event_block("workflow_dispatch"),
+                         ["  workflow_dispatch:"])
+        all_crons = []
+        for path in WORKFLOWS.glob("*.yml"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = re.fullmatch(
+                    r"[ \t]*-[ \t]+cron:[ \t]*(['\"]?)([^'\"\n]+?)"
+                    r"\1[ \t]*", line)
+                if match:
+                    all_crons.append(match.group(2).strip())
+        self.assertEqual(all_crons.count("26 5 * * *"), 1, all_crons)
+        self.assertEqual(all_crons.count("12 4 * * *"), 1, all_crons)
+        self.assertEqual(all_crons.count("47 3 * * 3"), 1, all_crons)
+
+    def test_secrets_scan_uses_a_read_only_full_history_job(self):
+        self.assertTrue(self.gitleaks_job)
+        self.assertRegex(self.secrets_text,
+                         r"(?m)^permissions:\n  contents: read\n\n")
+        self.assertRegex(
+            self.secrets_text,
+            r"(?m)^concurrency:\n"
+            r"  group: secrets-\$\{\{ github\.ref \}\}\n"
+            r"  cancel-in-progress: true\n\n")
+        self.assertRegex(self.gitleaks_job,
+                         r"(?m)^    runs-on: ubuntu-latest$")
+        self.assertRegex(self.gitleaks_job,
+                         r"(?m)^    timeout-minutes: 10$")
+        steps = _steps_block(self.gitleaks_job)
+        checkouts = [index for index, line in enumerate(steps)
+                     if line.startswith("      - uses: actions/checkout@")]
+        self.assertEqual(len(checkouts), 1)
+        checkout_index = checkouts[0]
+        self.assertRegex(
+            steps[checkout_index],
+            r"^      - uses: actions/checkout@"
+            r"3d3c42e5aac5ba805825da76410c181273ba90b1(?: # v7\.0\.1)?$")
+        checkout_end = next(
+            (index for index in range(checkout_index + 1, len(steps))
+             if steps[index].startswith("      - ")),
+            len(steps))
+        checkout_block = steps[checkout_index:checkout_end]
+        settings = []
+        for line in checkout_block:
+            match = re.fullmatch(r" {10}([a-z-]+):[ \t]*(.*)", line)
+            if match:
+                value = match.group(2).strip()
+                if (len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in "\"'"):
+                    value = value[1:-1]
+                settings.append((match.group(1), value))
+        self.assertEqual(settings, [
+            ("fetch-depth", "0"), ("persist-credentials", "false")])
+        download = self._named_step(
+            self.gitleaks_job, "Download gitleaks and verify its digest")
+        self.assertIn(
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/"
+            "gitleaks_8.30.1_linux_x64.tar.gz", download)
+        self.assertIn(
+            "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+            download)
+        scan = self._named_step(
+            self.gitleaks_job, "Scan the tree and the history")
+        self.assertRegex(
+            scan,
+            r"(?m)^        run: ./gitleaks detect --verbose --redact "
+            r"--config \.gitleaks\.toml$")
+        self.assertNotRegex(scan, r"(?m)^\s+if:")
+
+    def test_aggregate_passes_its_head_sha_and_wait_bound_to_the_gate(self):
+        tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
+        aggregate = _job_blocks(tests_text)["aggregate"]
+        step = self._named_step(aggregate, "Aggregate CI gates")
+        self.assertRegex(step,
+                         r"(?m)^          SECRETS_WAIT_BOUND_S: '240'$")
+        self.assertRegex(
+            step,
+            r"(?m)^          HEAD_SHA: \$\{\{ github\.event\.pull_request\."
+            r"head\.sha \|\| github\.sha \}\}$")
+        self.assertRegex(aggregate,
+                         r"(?m)^    timeout-minutes: 5$")
+        self.assertNotRegex(step, r"(?m)^\s+if:")
+
+    def test_gitleaks_config_keeps_the_default_rules(self):
+        text = (REPO_ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+        settings = [line.strip() for line in text.splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(settings, ["[extend]", "useDefault = true"])
+
+
 class TestConsolidatedCiControls(unittest.TestCase):
     """Controls for the needs-based aggregate and path selector."""
 

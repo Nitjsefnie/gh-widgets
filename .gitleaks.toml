@@ -1,0 +1,11 @@
+# The [extend] line is load-bearing: an allowlist file that replaced the
+# defaults would silently narrow this gate to nothing, so the defaults stay
+# enabled and no replacement rules or allowlist are declared here.
+#
+# The full-history scan under the defaults was clean (gitleaks 8.30.1,
+# 398 commits scanned, measured 2026-10-03). No allowlist entry exists. If a
+# documentation-reserved value, add a scoped allowlist entry with a comment
+# naming the value and explaining why no real secret equals it. Never
+# allowlist a real credential.
+[extend]
+useDefault = true

@@ -129,6 +129,10 @@ apply to each change.
 The other workflow files in `.github/workflows/` are:
 
 - `release.yml` — waits for gates, then tags and publishes releases.
+- `secrets.yml` — checks whether the tree or full Git history carries a
+  credential using digest-pinned Gitleaks 8.30.1 with `--redact`. Its daily cron
+  catches commits no workflow saw, and the aggregate check waits for its
+  `gitleaks` job on the head SHA.
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
   measured coverage exceeds the committed floor. The floor only moves
   through a pull request.

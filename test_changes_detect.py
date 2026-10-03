@@ -87,6 +87,16 @@ class GhTransportTests(unittest.TestCase):
         self.assertEqual(command[-1], "repos/owner/repo/pulls/7/files")
         self.assertEqual(run.call_args.kwargs["env"], {"GH_TOKEN": "test-token"})
 
+    def test_api_flattens_paginated_job_pages(self):
+        jobs = [{"name": "gitleaks"}, {"name": "summary"}]
+        pages = [{"jobs": [jobs[0]]}, {"jobs": [jobs[1]]}]
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(pages), stderr="")
+        with patch.object(cd.subprocess, "run", return_value=completed):
+            result = cd.GhTransport({}).api(
+                "repos/owner/repo/actions/runs/7/jobs", paginate=True)
+        self.assertEqual(result, jobs)
+
     def test_api_reports_cli_and_decode_failures(self):
         transport = cd.GhTransport({})
         with patch.object(cd.subprocess, "run",
@@ -97,7 +107,8 @@ class GhTransportTests(unittest.TestCase):
         invalid_json = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="not-json", stderr="")
         with patch.object(cd.subprocess, "run", return_value=invalid_json):
-            with self.assertRaises(cd.DetectionError):
+            with self.assertRaisesRegex(cd.DetectionError,
+                                        "not valid JSON"):
                 transport.api("repos/owner/repo/compare/base...head")
         with patch.object(cd.subprocess, "run",
                           side_effect=FileNotFoundError("gh missing")):

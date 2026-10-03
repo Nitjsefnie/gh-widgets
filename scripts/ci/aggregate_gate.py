@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +27,16 @@ ALLOWED = frozenset({"success", "skipped"})
 CANCELLED = "cancelled"
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 RUN_ID = re.compile(r"[0-9]+\Z")
+HEAD_SHA = re.compile(r"[0-9a-f]{40}\Z")
+SECRETS_WORKFLOW = "secrets.yml"
+SECRETS_JOB = "gitleaks"
+SECRETS_RESULT = "secrets"
+SECRETS_WAIT_BOUND_ENV = "SECRETS_WAIT_BOUND_S"
+DEFAULT_SECRETS_WAIT_BOUND_S = 240
+SECRETS_CHECK_INTERVAL_S = 15
+RUNNING_STATUSES = frozenset({
+    "queued", "in_progress", "requested", "waiting", "pending",
+})
 
 PASSED = "PASSED"
 FAILED = "FAILED"
@@ -258,6 +270,185 @@ def _api(transport: cd.Transport, path: str, *,
         raise QueryError(f"API request failed for {path}: {exc}") from exc
 
 
+def _secrets_runs(transport: cd.Transport, repository: str,
+                  head_sha: str) -> list[dict[str, Any]]:
+    if REPOSITORY.fullmatch(repository) is None:
+        raise QueryError("missing or invalid REPOSITORY for secrets query")
+    if HEAD_SHA.fullmatch(head_sha) is None:
+        raise QueryError("missing or invalid HEAD_SHA for secrets query")
+    path = (
+        f"repos/{repository}/actions/workflows/{SECRETS_WORKFLOW}/runs"
+        f"?head_sha={quote(head_sha, safe='')}&per_page=100")
+    runs = _api(transport, path, paginate=True)
+    if (not isinstance(runs, list)
+            or not all(isinstance(run, dict) for run in runs)):
+        raise QueryError("secrets workflow runs response is missing or malformed")
+    for run in runs:
+        if run.get("head_sha") != head_sha:
+            raise QueryError(
+                "secrets workflow query returned a run outside HEAD_SHA")
+    return runs
+
+
+def _newest_secrets_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    keyed = []
+    for run in runs:
+        key = _started_key(run)
+        if key is None:
+            raise QueryError(
+                "secrets workflow run has no valid start or creation time")
+        keyed.append((key, run))
+    return max(keyed, key=lambda item: item[0])[1] if keyed else None
+
+
+def _secrets_jobs(transport: cd.Transport, repository: str,
+                  run: dict[str, Any]) -> list[dict[str, Any]]:
+    if REPOSITORY.fullmatch(repository) is None:
+        raise QueryError("missing or invalid REPOSITORY for secrets job query")
+    run_id = _run_id(run)
+    path = f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
+    jobs = _api(transport, path, paginate=True)
+    if (not isinstance(jobs, list)
+            or not all(isinstance(job, dict) for job in jobs)):
+        raise QueryError("secrets workflow jobs response is missing or malformed")
+    return jobs
+
+
+def _judge_secrets_run(transport: cd.Transport, repository: str,
+                       run: dict[str, Any]) -> Result:
+    run_id = _run_id(run)
+    where = f"secrets.yml run {run_id} ({run.get('html_url') or '?'})"
+    jobs = _secrets_jobs(transport, repository, run)
+    gitleaks = [job for job in jobs if job.get("name") == SECRETS_JOB]
+    if not gitleaks:
+        names = sorted(str(job.get("name")) for job in jobs)
+        return Result(
+            FAILED,
+            f"{where} has no job named {SECRETS_JOB}; its jobs were: "
+            f"{', '.join(names) if names else 'none at all'}")
+    if len(gitleaks) != 1:
+        return Result(
+            FAILED,
+            f"{where} has {len(gitleaks)} jobs named {SECRETS_JOB}; "
+            "the scan verdict is ambiguous")
+    conclusion = gitleaks[0].get("conclusion")
+    if conclusion == "success":
+        return Result(PASSED, f"the {SECRETS_JOB} job of {where} concluded success")
+    label = conclusion if isinstance(conclusion, str) and conclusion else (
+        "no conclusion")
+    return Result(
+        FAILED,
+        f"the {SECRETS_JOB} job of {where} concluded {label}; only success "
+        "is a clean secret scan")
+
+
+def _secret_deadline_failure(head_sha: str, wait_bound: int,
+                             latest: dict[str, Any] | None,
+                             phase: str) -> Result:
+    if phase == "runs":
+        detail = (
+            f"the secrets scan status query did not finish within "
+            f"{wait_bound} seconds for {head_sha}")
+    elif phase == "jobs":
+        detail = (
+            f"the secrets scan job query did not finish within "
+            f"{wait_bound} seconds for {head_sha}")
+    elif latest is None:
+        detail = (
+            f"no {SECRETS_WORKFLOW} run reported on {head_sha} "
+            f"within {wait_bound} seconds")
+    else:
+        detail = (
+            f"the newest {SECRETS_WORKFLOW} run {_run_id(latest)} "
+            f"on {head_sha} was still {latest.get('status')} after "
+            f"{wait_bound} seconds")
+    return Result(FAILED, detail)
+
+
+def _completed_secrets_result(transport: cd.Transport, repository: str,
+                              head_sha: str, wait_bound: int,
+                              deadline: float, run: dict[str, Any],
+                              clock: Callable[[], float]) -> Result:
+    try:
+        result = _judge_secrets_run(transport, repository, run)
+    except AggregationError as exc:
+        return Result(FAILED, f"could not read secrets scan job: {exc}")
+    if clock() > deadline:
+        return _secret_deadline_failure(
+            head_sha, wait_bound, run, "jobs")
+    return result
+
+
+def _secrets_status_result(transport: cd.Transport, repository: str,
+                           head_sha: str, wait_bound: int,
+                           deadline: float, run: dict[str, Any] | None,
+                           clock: Callable[[], float]) -> Result | None:
+    if run is None:
+        return None
+    status = run.get("status")
+    if status == "completed":
+        return _completed_secrets_result(
+            transport, repository, head_sha, wait_bound, deadline, run, clock)
+    if status not in RUNNING_STATUSES:
+        return Result(
+            FAILED,
+            f"the newest {SECRETS_WORKFLOW} run {_run_id(run)} "
+            f"on {head_sha} has unreadable status {status!r}")
+    return None
+
+
+def require_secret_scan(repository: str, head_sha: str, wait_bound: int,
+                        transport: cd.Transport, *,
+                        clock: Callable[[], float] | None = None,
+                        sleep: Callable[[float], None] | None = None) -> Result:
+    """Wait for the newest secrets run on one head SHA and judge its job."""
+    if not isinstance(wait_bound, int) or isinstance(wait_bound, bool) \
+            or wait_bound <= 0:
+        return Result(FAILED, "SECRETS_WAIT_BOUND_S must be a positive integer")
+    clock = time.monotonic if clock is None else clock
+    sleep = time.sleep if sleep is None else sleep
+    deadline = clock() + wait_bound
+    latest: dict[str, Any] | None = None
+    while True:
+        if clock() > deadline:
+            return _secret_deadline_failure(
+                head_sha, wait_bound, latest, "wait")
+        try:
+            runs = _secrets_runs(transport, repository, head_sha)
+            latest = _newest_secrets_run(runs)
+        except AggregationError as exc:
+            return Result(FAILED, f"could not read secrets scan status: {exc}")
+
+        if clock() > deadline:
+            return _secret_deadline_failure(
+                head_sha, wait_bound, latest, "runs")
+        result = _secrets_status_result(
+            transport, repository, head_sha, wait_bound,
+            deadline, latest, clock)
+        if result is not None:
+            return result
+
+        now = clock()
+        if now >= deadline:
+            return _secret_deadline_failure(
+                head_sha, wait_bound, latest, "wait")
+        sleep(min(SECRETS_CHECK_INTERVAL_S, deadline - now))
+
+
+def _secret_scan_result(environment: dict[str, str],
+                        transport: cd.Transport) -> Result:
+    raw_bound = environment.get(
+        SECRETS_WAIT_BOUND_ENV, str(DEFAULT_SECRETS_WAIT_BOUND_S))
+    if not raw_bound.isascii() or not raw_bound.isdigit():
+        return Result(
+            FAILED,
+            f"{SECRETS_WAIT_BOUND_ENV} must be a positive integer; "
+            f"received {raw_bound!r}")
+    return require_secret_scan(
+        environment.get("REPOSITORY", ""),
+        environment.get("HEAD_SHA", ""), int(raw_bound), transport)
+
+
 def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
                       branch: str) -> SupersessionProof | None:
     if REPOSITORY.fullmatch(repository) is None:
@@ -329,8 +520,20 @@ def evaluate(needs: dict[str, Any], applicability: dict[str, str], *,
 
 
 def exit_code(results: dict[str, Result]) -> int:
-    if set(results) != set(GATE_JOBS):
+    expected = set(GATE_JOBS) | {SECRETS_RESULT}
+    if set(results) != expected:
         raise AggregationError("aggregate results are incomplete")
+    if any(row.verdict not in GREEN | {FAILED} for row in results.values()):
+        raise AggregationError("aggregate results contain an unknown verdict")
+    if results[SECRETS_RESULT].verdict not in {PASSED, FAILED}:
+        raise AggregationError("secrets result must be PASSED or FAILED")
+    return int(any(row.verdict not in GREEN for row in results.values()))
+
+
+def _needs_exit_code(results: dict[str, Result]) -> int:
+    """Evaluate the existing needs rows before adding the external scan row."""
+    if set(results) != set(GATE_JOBS):
+        raise AggregationError("needs-based aggregate results are incomplete")
     if any(row.verdict not in GREEN | {FAILED} for row in results.values()):
         raise AggregationError("aggregate results contain an unknown verdict")
     return int(any(row.verdict not in GREEN for row in results.values()))
@@ -384,8 +587,13 @@ def _context_results(environment: dict[str, str],
 
 
 def _failed_rows(reason: str) -> dict[str, Result]:
-    return {name: Result(FAILED, f"aggregate could not determine verdict: {reason}")
-            for name in GATE_JOBS}
+    rows = {
+        name: Result(FAILED, f"aggregate could not determine verdict: {reason}")
+        for name in GATE_JOBS
+    }
+    rows[SECRETS_RESULT] = Result(
+        FAILED, f"aggregate could not determine verdict: {reason}")
+    return rows
 
 
 def _write_summary(report: str, path: str) -> bool:
@@ -407,6 +615,13 @@ def main(argv: list[str] | None = None, *, transport: cd.Transport | None = None
     api = transport or cd.GhTransport(environment)
     try:
         results = _context_results(environment, api)
+        if _needs_exit_code(results) == 0:
+            results[SECRETS_RESULT] = _secret_scan_result(environment, api)
+        else:
+            results[SECRETS_RESULT] = Result(
+                FAILED,
+                "secret scan was not checked because another aggregate gate "
+                "already failed")
         status = exit_code(results)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"cannot aggregate: {exc}", file=sys.stderr)

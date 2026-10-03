@@ -72,12 +72,13 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     OTHER_SHA = "1111111111111111111111111111111111111111"
     TAG = "v9.9.9"
     MANIFEST = ["lint", "pyright", "speed", "pip-audit", "analyze",
-                "unittest", "coverage-ratchet", "aggregate"]
+                "unittest", "coverage-ratchet", "aggregate", "gitleaks"]
 
     # The whole manifest, matrix legs and all, as the check-runs API
     # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
-    # bare name; `analyze` and `unittest` rename themselves to matrix names,
-    # so the "name (" form of the match is load-bearing in every case here.
+    # bare name; `analyze` and `unittest` have matrix names, while `gitleaks`
+    # reports its job name. The "name (" form is load-bearing for the matrix
+    # cases here.
     ALL_GREEN = [
         ("completed", "success", "lint"),
         ("completed", "success", "pyright"),
@@ -94,6 +95,7 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         # manifest entry is written against that string, not the job key.
         ("completed", "success", "coverage-ratchet"),
         ("completed", "success", "aggregate"),
+        ("completed", "success", "gitleaks"),
     ]
 
     # A stand-in for `gh` whose whole world is the files beside it in the

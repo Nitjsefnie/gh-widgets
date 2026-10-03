@@ -2,9 +2,12 @@
 import contextlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
+from unittest import mock
 
 from scripts.ci import aggregate_gate as ag
 from scripts.ci import changes_detect as cd
@@ -19,6 +22,12 @@ def _all_success():
     needs.update({job: {"result": "success"}
                   for job in ag.GATE_JOBS.values()})
     return needs
+
+
+def _with_secret_result(results, verdict=ag.PASSED):
+    complete = dict(results)
+    complete["secrets"] = ag.Result(verdict, "gitleaks job concluded success")
+    return complete
 
 
 def _applicability(**overrides):
@@ -59,9 +68,63 @@ class FakeTransport:
         if path not in self.responses:
             raise AssertionError(f"unexpected API call: {path}")
         response = self.responses[path]
+        if isinstance(response, deque):
+            response = response[0] if len(response) == 1 else response.popleft()
         if isinstance(response, Exception):
             raise response
         return response
+
+
+HEAD_SHA = "a" * 40
+SECRETS_RUNS_PATH = (
+    "repos/owner/repo/actions/workflows/secrets.yml/runs"
+    f"?head_sha={HEAD_SHA}&per_page=100")
+
+
+def _secret_run(identifier, started, *, status="completed",
+                conclusion: str | None = "success", created=None):
+    return {
+        "id": identifier,
+        "status": status,
+        "conclusion": conclusion,
+        "head_sha": HEAD_SHA,
+        "run_started_at": started,
+        "created_at": created or started,
+        "html_url": f"https://github.com/owner/repo/actions/runs/{identifier}",
+    }
+
+
+def _secret_job(conclusion: str | None = "success", name="gitleaks"):
+    return {"name": name, "status": "completed", "conclusion": conclusion}
+
+
+def _dispatch_environment():
+    return {
+        "NEEDS_JSON": json.dumps(_all_success()),
+        "EVENT_NAME": "workflow_dispatch",
+        "REPOSITORY": "owner/repo",
+        "RUN_ID": "5",
+        "HEAD_BRANCH": "feature",
+        "HEAD_SHA": HEAD_SHA,
+        "DEFAULT_BRANCH": "main",
+        "EVENT_PATH": "",
+    }
+
+
+class FakeClock:
+    """Advance only when the injected wait function is called."""
+
+    def __init__(self, advances=None):
+        self.now = 1000.0
+        self.advances = deque(advances or [])
+        self.sleeps = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += self.advances.popleft() if self.advances else seconds
 
 
 class NeedsClassificationTests(unittest.TestCase):
@@ -269,7 +332,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
                      pull_requests=[{"number": 42}])
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
 
     def test_push_cancellation_is_never_excused_by_a_newer_pr_run(self):
         mine = _run(1, "2026-09-07T10:00:00Z", event="push")
@@ -277,7 +340,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
         results, transport = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
         self.assertEqual(transport.calls,
                          [("repos/owner/repo/actions/runs/1", False, True)])
 
@@ -289,7 +352,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
         results, transport = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
         self.assertEqual(transport.calls,
                          [("repos/owner/repo/actions/runs/1", False, True)])
 
@@ -310,7 +373,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
             branch="feature", transport=transport)
         self.assertEqual(result["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", result["speed"].detail)
-        self.assertEqual(ag.exit_code(result), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(result)), 1)
 
     def test_deliberate_cancel_fails_and_does_not_fail_other_gate_rows(self):
         own_path = "repos/owner/repo/actions/runs/1"
@@ -360,7 +423,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
 
     def test_newer_run_with_a_different_pr_number_is_deliberate(self):
         mine = _run(1, "2026-09-07T10:00:00Z",
@@ -370,7 +433,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
 
     def test_unattributed_fork_pr_uses_degraded_same_repo_branch_proof(self):
         mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
@@ -382,7 +445,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
                       results["speed"].detail)
         self.assertIn("two PRs from one fork branch are indistinguishable",
                       results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 0)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 0)
 
     def test_missing_association_on_either_run_uses_degraded_fallback(self):
         attributed = _run(1, "2026-09-07T10:00:00Z",
@@ -408,18 +471,297 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(results), 1)
+        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+
+
+class SecretScanTests(unittest.TestCase):
+    def setUp(self):
+        self.secret_run = _secret_run(7, "2026-09-07T11:00:00Z")
+        self.jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+
+    def _scan(self, runs, jobs, *, bound=30, clock=None):
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: runs,
+            self.jobs_path: jobs,
+        })
+        timer = clock or FakeClock()
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, bound, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        return result, transport, timer
+
+    def test_green_dispatch_requires_and_reports_a_successful_gitleaks_job(self):
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [self.secret_run],
+            self.jobs_path: [_secret_job()],
+        })
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 0)
+        self.assertIn("| secrets | PASSED |", stdout.getvalue())
+        self.assertEqual(ag.exit_code(_with_secret_result(
+            ag.decide(_all_success(), _applicability()))), 0)
+
+    def test_run_success_does_not_hide_a_failed_gitleaks_job(self):
+        run = _secret_run(7, "2026-09-07T11:00:00Z", conclusion="success")
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [run],
+            self.jobs_path: [_secret_job("failure")],
+        })
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 1)
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| secrets |"))
+        self.assertIn("FAILED", row)
+        self.assertIn("gitleaks", row)
+        self.assertIn("concluded failure", row)
+
+    def test_failed_run_summary_does_not_override_a_successful_gitleaks_job(self):
+        run = _secret_run(7, "2026-09-07T11:00:00Z", conclusion="failure")
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [run],
+            self.jobs_path: [_secret_job("success")],
+        })
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 0)
+        self.assertIn("| secrets | PASSED |", stdout.getvalue())
+
+    def test_runs_returned_for_another_head_sha_are_rejected(self):
+        wrong_sha = _secret_run(7, "2026-09-07T11:00:00Z")
+        wrong_sha["head_sha"] = "b" * 40
+        transport = FakeTransport({SECRETS_RUNS_PATH: [wrong_sha]})
+        timer = FakeClock()
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("outside HEAD_SHA", result.detail)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_newest_run_on_the_sha_wins_independent_of_response_order(self):
+        older = _secret_run(8, "2026-09-07T11:00:00Z")
+        newer = _secret_run(9, "2026-09-07T11:05:00Z", conclusion="failure")
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [older, newer],
+            "repos/owner/repo/actions/runs/9/jobs?per_page=100": [
+                _secret_job("failure")],
+        })
+        timer = FakeClock()
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("run 9", result.detail)
+        self.assertIn("failure", result.detail)
+
+        newer_success = _secret_run(11, "2026-09-07T11:05:00Z")
+        older_failure = _secret_run(10, "2026-09-07T11:00:00Z",
+                                    conclusion="failure")
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [newer_success, older_failure],
+            "repos/owner/repo/actions/runs/11/jobs?per_page=100": [
+                _secret_job()],
+        })
+        timer = FakeClock()
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertIn("run 11", result.detail)
+
+    def test_newest_run_uses_created_time_then_numeric_id(self):
+        older = _secret_run(20, None, created="2026-09-07T11:00:00Z")
+        newer_lower_id = _secret_run(21, None,
+                                     created="2026-09-07T11:05:00Z")
+        newest = _secret_run(22, None, created="2026-09-07T11:05:00Z")
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [newest, older, newer_lower_id],
+            "repos/owner/repo/actions/runs/22/jobs?per_page=100": [
+                _secret_job()],
+        })
+        timer = FakeClock()
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertIn("run 22", result.detail)
+
+    def test_no_run_within_bound_fails_with_its_own_detail(self):
+        result, transport, _ = self._scan([], [], bound=30)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("no secrets.yml run", result.detail)
+        self.assertIn(HEAD_SHA, result.detail)
+        self.assertGreater(len(transport.calls), 1)
+
+    def test_unfinished_newest_run_at_bound_fails_with_status_detail(self):
+        running = _secret_run(7, "2026-09-07T11:00:00Z",
+                              status="in_progress", conclusion=None)
+        result, _transport, _ = self._scan([running], [], bound=30)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("run 7", result.detail)
+        self.assertIn("in_progress", result.detail)
+        self.assertIn("after 30 seconds", result.detail)
+
+    def test_run_without_a_gitleaks_job_fails_and_names_available_jobs(self):
+        result, _transport, _ = self._scan(
+            [self.secret_run], [_secret_job(name="setup")])
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("no job named gitleaks", result.detail)
+        self.assertIn("setup", result.detail)
+
+    def test_every_non_success_gitleaks_conclusion_fails_with_that_conclusion(self):
+        for conclusion in ("skipped", "cancelled", "timed_out", "neutral", None):
+            with self.subTest(conclusion=conclusion):
+                result, _transport, _ = self._scan(
+                    [self.secret_run], [_secret_job(conclusion)])
+                self.assertEqual(result.verdict, ag.FAILED)
+                label = "no conclusion" if conclusion is None else conclusion
+                self.assertIn(f"concluded {label}", result.detail)
+
+    def test_deadline_accepts_a_success_inside_and_rejects_one_outside(self):
+        inside_clock = FakeClock([239.9])
+        inside_transport = FakeTransport({
+            SECRETS_RUNS_PATH: deque([[], [self.secret_run]]),
+            self.jobs_path: [_secret_job()],
+        })
+        inside = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 240, inside_transport,
+            clock=inside_clock.clock, sleep=inside_clock.sleep)
+        self.assertEqual(inside.verdict, ag.PASSED)
+
+        outside_clock = FakeClock([240.1])
+        outside_transport = FakeTransport({
+            SECRETS_RUNS_PATH: deque([[], [self.secret_run]]),
+            self.jobs_path: [_secret_job()],
+        })
+        outside = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 240, outside_transport,
+            clock=outside_clock.clock, sleep=outside_clock.sleep)
+        self.assertEqual(outside.verdict, ag.FAILED)
+        self.assertIn("within 240 seconds", outside.detail)
+        self.assertEqual(len(outside_transport.calls), 1)
+
+    def test_queries_pin_head_sha_pagination_and_the_jobs_path(self):
+        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [self.secret_run],
+            jobs_path: [_secret_job()],
+        })
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertEqual(transport.calls, [
+            (SECRETS_RUNS_PATH, True, True),
+            (jobs_path, True, True),
+        ])
+
+    def test_gh_argv_queries_the_head_sha_with_no_cache_and_pagination(self):
+        jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+        responses = [
+            subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps([{"workflow_runs": [self.secret_run]}]), ""),
+            subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps([{"jobs": [_secret_job()]}]), ""),
+        ]
+        with mock.patch.object(cd.subprocess, "run", side_effect=responses) as gh:
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        argv = gh.call_args_list[0].args[0]
+        self.assertEqual(argv, [
+            "gh", "api", "--method", "GET",
+            "-H", "Accept: application/vnd.github+json",
+            "-H", "Cache-Control: no-cache",
+            "--paginate", "--slurp", SECRETS_RUNS_PATH,
+        ])
+        self.assertEqual(gh.call_args_list[1].args[0][-1], jobs_path)
+
+    def test_transport_error_fails_closed_with_a_query_message(self):
+        transport = FakeTransport(error=OSError("connection unavailable"))
+        result = ag.require_secret_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("could not read", result.detail)
+        self.assertIn("connection unavailable", result.detail)
+
+    def test_nonzero_gh_exit_and_rate_limit_fail_closed(self):
+        error = subprocess.CalledProcessError(
+            1, ["gh"], stderr="API rate limit exceeded")
+        with mock.patch.object(cd.subprocess, "run", side_effect=error):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("rate limit", result.detail)
+
+    def test_unparseable_api_body_fails_closed_with_its_own_message(self):
+        malformed = subprocess.CompletedProcess(["gh"], 0, "not JSON", "")
+        with mock.patch.object(cd.subprocess, "run", return_value=malformed):
+            result = ag.require_secret_scan(
+                "owner/repo", HEAD_SHA, 30, cd.GhTransport({}),
+                clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("could not read", result.detail)
+        self.assertIn("JSON", result.detail)
+
+    def test_workflow_dispatch_without_a_scan_fails_after_the_bound(self):
+        transport = FakeTransport({SECRETS_RUNS_PATH: []})
+        timer = FakeClock()
+        stdout = io.StringIO()
+        with mock.patch.object(ag.time, "monotonic", timer.clock), \
+                mock.patch.object(ag.time, "sleep", timer.sleep), \
+                contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 1)
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| secrets |"))
+        self.assertIn("FAILED", row)
+        self.assertIn("no secrets.yml run", row)
 
 
 class AggregateSummaryTests(unittest.TestCase):
     def test_table_includes_every_gate_and_escapes_details(self):
         result = ag.decide(_all_success(), _applicability())
         result["tests"] = ag.Result(ag.FAILED, "bad | detail\nnext")
+        result["secrets"] = ag.Result(ag.PASSED, "clean")
         rendered = ag.render_summary(result)
         self.assertIn("### Aggregate CI gates", rendered)
         self.assertIn("| Gate | Result | Detail |", rendered)
         self.assertIn("| tests | FAILED | bad \\| detail next |", rendered)
         self.assertEqual(ag.exit_code(result), 1)
+
+    def test_exit_code_requires_the_secrets_row(self):
+        results = ag.decide(_all_success(), _applicability())
+        with self.assertRaisesRegex(ag.AggregationError, "incomplete"):
+            ag.exit_code(results)
+
+    def test_failed_needs_do_not_wait_for_the_secret_scan(self):
+        environment = _dispatch_environment()
+        needs = _all_success()
+        needs["speed"]["result"] = "failure"
+        environment["NEEDS_JSON"] = json.dumps(needs)
+        transport = FakeTransport()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=environment, transport=transport)
+        self.assertEqual(status, 1)
+        self.assertEqual(transport.calls, [])
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| secrets |"))
+        self.assertIn("FAILED", row)
+        self.assertIn("another aggregate gate already failed", row)
 
     def test_dispatch_main_writes_the_table_to_stdout_and_step_summary(self):
         with tempfile.TemporaryDirectory(prefix="ghw-aggregate-summary-") as temp:
@@ -435,10 +777,16 @@ class AggregateSummaryTests(unittest.TestCase):
                 "EVENT_PATH": "",
                 "GITHUB_STEP_SUMMARY": str(summary),
             }
+            transport = FakeTransport({
+                SECRETS_RUNS_PATH: [
+                    _secret_run(7, "2026-09-07T11:00:00Z")],
+                "repos/owner/repo/actions/runs/7/jobs?per_page=100": [
+                    _secret_job()],
+            })
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 status = ag.main(environ=environment,
-                                 transport=FakeTransport())
+                                 transport=transport)
             self.assertEqual(status, 0)
             self.assertIn("### Aggregate CI gates", stdout.getvalue())
             self.assertEqual(summary.read_text(encoding="utf-8"),
@@ -461,7 +809,7 @@ class AggregateSummaryTests(unittest.TestCase):
             self.assertEqual(
                 sum(1 for line in stdout.getvalue().splitlines()
                     if line.startswith("| ") and " | FAILED | " in line),
-                len(cd.GATES))
+                len(cd.GATES) + 1)
             self.assertIn("NEEDS_JSON", stderr.getvalue())
             self.assertEqual(summary.read_text(encoding="utf-8"),
                              stdout.getvalue())
