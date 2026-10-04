@@ -167,29 +167,34 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
         # install ever broke; the env alone would fail the run loudly but
         # never measure. tests.yml's measured cell carries both, and this
         # job's value is only the comparison against a floor measured in
-        # that cell's program, so both are required here, and the install
-        # and the env must both precede the coverage run they govern.
-        job = _job_blocks(
-            (WORKFLOWS / "coverage-ratchet.yml").read_text())["measure"]
+        # that cell's program, so both are required here. Decoded, not
+        # scanned: an install step is one whose run block actually invokes
+        # pip on the FORK_PIN variable — a bare assignment or a comment
+        # naming the pin installs nothing — and the env must sit on the
+        # Measure step's own mapping, because an env on a sibling step
+        # never reaches the unittest process. Each half is caught in its
+        # own direction: dropping the install line fails the installs
+        # assertion, moving or dropping the env fails the measure-env one.
+        workflow = yaml.safe_load(
+            (WORKFLOWS / "coverage-ratchet.yml").read_text())
+        steps = workflow["jobs"]["measure"]["steps"]
+        measure_index = next(index for index, step in enumerate(steps)
+                             if "coverage run" in step.get("run", ""))
         documented = set(DOCUMENTED_PIN.findall(
             (REPO_ROOT / "CLAUDE.md").read_text()))
         self.assertEqual(len(documented), 1, documented)
-        self.assertEqual(FORK_PIN.findall(job), list(documented), job)
-        env = re.search(r"^\s+GH_WIDGETS_REQUIRE_GIT_FAME: \"true\"$",
-                        job, re.MULTILINE)
-        assert env is not None
-        lines = job.splitlines()
-        measure_index = next(index for index, line in enumerate(lines)
-                             if "coverage run" in line)
-        pin_index = next(index for index, line in enumerate(lines)
-                         if "FORK_PIN=" in line)
-        env_line = env.group(0).strip()
-        env_index = next(index for index, line in enumerate(lines)
-                         if line.strip() == env_line)
-        for name, index in (("the pinned install", pin_index),
-                            ("the require env", env_index)):
-            self.assertLess(index, measure_index,
-                            f"{name} must precede the coverage run")
+        installs = [step for step in steps[:measure_index]
+                    if re.search(r"pip install [^\n]*\$FORK_PIN",
+                                 step.get("run", ""))]
+        self.assertTrue(installs,
+                        "no step before Measure installs the pinned fork")
+        found = {sha for step in installs
+                 for sha in FORK_PIN.findall(step.get("run", ""))}
+        self.assertEqual(found, documented, installs)
+        measure_env = steps[measure_index].get("env", {})
+        self.assertEqual(
+            measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
+            f"Measure must run with the require env set, got {measure_env}")
 
 
 class TestSecretsScanWorkflow(unittest.TestCase):
