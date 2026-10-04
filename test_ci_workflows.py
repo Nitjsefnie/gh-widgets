@@ -544,7 +544,7 @@ class TestClaimWorkflowShape(unittest.TestCase):
 
     def test_action_pin_comment_and_inputs_match_the_release(self):
         pin = ("Nitjsefnie-Actions/claim@"
-               "0c79a0325d8ab789a60c2eeaf751690d2875c39c")
+               "cd8ffd8227e94cdf60ed2580016187353b055cf4")
         steps = self.job["steps"]
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0].get("uses"), pin)
@@ -555,7 +555,7 @@ class TestClaimWorkflowShape(unittest.TestCase):
         pin_line = re.fullmatch(r"\s+- uses:\s*(\S+)(\s+#.*)?", pin_lines[0])
         assert pin_line is not None
         self.assertEqual(pin_line.group(1), pin)
-        self.assertEqual(pin_line.group(2), "  # v2.0.3")
+        self.assertEqual(pin_line.group(2), "  # v2.0.4")
         self.assertEqual(steps[0].get("with"), {
             "max-claims": "read=2, triage=4, write=6, maintain=10, admin=-1",
             "expire": "7",
