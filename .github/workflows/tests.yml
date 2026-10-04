@@ -938,19 +938,16 @@ jobs:
       - name: The committed baseline only ratchets down
         # The comparator refuses a head counter above its baseline, but
         # nothing there stops a commit from EDITING the baseline upwards in
-        # the same push. This step judges the baseline against the BASE
-        # BRANCH TIP's copy of it, so raising the ceiling you are measured
-        # against is itself a red.
+        # the same push. On a PR this step judges the baseline against the
+        # BASE BRANCH TIP's copy; on main's push it judges the landed window
+        # from github.event.before to HEAD.
         #
         # working-directory: head IS LOAD-BEARING. actions/checkout put the
         # repository at head/, so a step with no working-directory runs one
         # level above the only repository on the box and every git command
         # here dies with "not a git repository" — reproduced, rc 128. This
-        # step is gated to pull_request and every dispatch used as evidence
-        # was a workflow_dispatch, so nothing had ever executed it, and a
-        # text assertion over a wrong working directory cannot fail. The
-        # test suite now EXECUTES this block against a real checkout at
-        # head/ instead.
+        # test suite EXECUTES this block against a real checkout at head/;
+        # a text assertion over a wrong working directory cannot catch it.
         #
         # NOT base.sha. That field is the base commit at PR open or last
         # sync, and a synchronize does not refresh it, so it trails the base
@@ -959,14 +956,20 @@ jobs:
         # the comparison to be lenient about. The base REF is fetched instead
         # and its tip resolved from FETCH_HEAD at the moment the step runs.
         #
-        # Skipped on a push to main: there is no base branch for that event,
-        # and a ratchet step that silently judged the wrong base would be
-        # worse than one that does not run.
-        if: ${{ github.event_name == 'pull_request' }}
+        # On main's push, complete both tips' ancestry before checking the
+        # landed window: shallow history can make merge-base lie without
+        # erroring. A force-push has no verifiable landed window. Unlike
+        # ai-researcher's ratchet, a newly created main ref also fails closed:
+        # its all-zero before tip cannot establish the previous baseline.
+        # Rebase merges keep Budget-Raise lines; a squash that drops them
+        # refuses the raise on main's push. Rebase is the deterministic route.
+        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         # The repository is at head/, so every git command in this step has
         # to run there. See the comment above.
         working-directory: head
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           WORKSPACE: ${{ github.workspace }}
         run: |
@@ -984,19 +987,49 @@ jobs:
                  "working-directory: head" >&2
             exit 1
           fi
-          if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
-            echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
-                 "deleted?). There is nothing to ratchet against."
-            exit 0
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
+              echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
+                   "deleted?). There is nothing to ratchet against."
+              exit 0
+            fi
+            base_tip="$(git rev-parse FETCH_HEAD)"
+            echo "Base branch tip: $base_tip"
+            if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
+              echo "No $BASELINE at the base tip, so there is nothing to" \
+                   "ratchet against."
+              exit 0
+            fi
+            git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+          else
+            if [ -z "$BEFORE_SHA" ]; then
+              echo "::error::BEFORE_SHA is empty; the landed range cannot be" \
+                   "verified — failing closed" >&2
+              exit 1
+            fi
+            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              echo "::error::a newly created main ref has no previous tip;" \
+                   "the landed range cannot be verified — failing closed" >&2
+              exit 1
+            fi
+            if ! git fetch --no-tags --unshallow origin "$BEFORE_SHA" "$(git rev-parse HEAD)"; then
+              echo "::error::Could not fetch both landed-window tips;" \
+                   "failing closed" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$BEFORE_SHA" HEAD; then
+              echo "::error::previous main tip is not an ancestor of HEAD;" \
+                   "a force-push has no verifiable landed window — failing closed" >&2
+              exit 1
+            fi
+            base_tip="$BEFORE_SHA"
+            if ! git cat-file -e "$base_tip:$BASELINE"; then
+              echo "::error::No $BASELINE at the previous main tip;" \
+                   "failing closed" >&2
+              exit 1
+            fi
+            git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
           fi
-          base_tip="$(git rev-parse FETCH_HEAD)"
-          echo "Base branch tip: $base_tip"
-          if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
-            echo "No $BASELINE at the base tip, so there is nothing to" \
-                 "ratchet against."
-            exit 0
-          fi
-          git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
 
           # DECLARED REMOVALS, DERIVED FROM THE HARNESS. Retiring a renderer
           # workload means dropping it from WORKLOADS and removing its entry

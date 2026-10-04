@@ -137,8 +137,9 @@ speed if the suite outgrew its envelope), then follow the baseline's HOW TO
 RE-DERIVE using dispatch runs on that head and open the baseline-only raise
 carrier. **Merge the carrier with rebase** so its declaration-bearing commit
 message survives; a squash that drops the lines loses the raise declaration.
-The ratchet step currently judges pull requests only, so preserving that
-message also keeps the declaration and measuring provenance in main's history.
+The ratchet judges PRs and main's landed push window, so a squash that drops
+the declaration lines goes red on main's push run. Rebase is the deterministic
+route.
 Renderer ceilings remain strictly down-only; their raises cannot be
 declared. Population digest moves ride with the tests that cause them;
 with no ceiling raised, that mixed diff stays green. Non-raising baseline
