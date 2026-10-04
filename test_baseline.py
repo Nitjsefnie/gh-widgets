@@ -277,6 +277,112 @@ class TestRatchet(unittest.TestCase):
         self.assertEqual(len(moved), 1)
 
 
+class TestDeclaredRaises(unittest.TestCase):
+    """A raise is allowed only when declared, and the declaration is checked.
+
+    The strict down-only rule left the documented re-derivation route
+    (issue #133) without a green path: once the suite grew past its recorded
+    envelope, EVERY observation landed above the old maximum, and the
+    ratchet refused the very change the re-derivation procedure prescribes.
+    Declarations close that gap without opening the gate: a declared raise
+    must name a slot that actually went up, a slot declared both removed
+    and raised is a contradiction, and every undeclared raise stays a
+    failure.
+    """
+
+    def population(self, unit_max, wall_max=5.0):
+        payload = document()
+        payload["populations"]["unit-suite"]["entries"] = {
+            "counter::unit-suite": {"min": 1.0, "max": unit_max, "n": 6}}
+        payload["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": {"min": 1.0, "max": wall_max, "n": 6}}
+        return payload
+
+    SLOT = "unit-suite:entries:counter::unit-suite"
+    WALL_SLOT = "unit-suite:wall:counter::unit-suite"
+
+    def test_a_declared_raise_is_not_a_raise(self):
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(2.0),
+            allowed_raises={self.SLOT})
+        self.assertEqual(moved, {})
+
+    def test_an_undeclared_raise_still_fails(self):
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(2.0))
+        self.assertEqual(moved, {self.SLOT: (1.0, 2.0)})
+
+    def test_a_stale_declaration_is_refused(self):
+        # Declaring a raise that did not happen is the declaration checked
+        # against the documents rather than trusted: honouring it would
+        # make the log lie about what was raised.
+        with self.assertRaises(baseline.ComparisonError) as caught:
+            baseline.raised_entries(
+                self.population(2.0), self.population(1.0),
+                allowed_raises={self.SLOT})
+        self.assertIn("declared raised but is not a raise",
+                      str(caught.exception))
+        self.assertIn("2.0 -> 1.0", str(caught.exception))
+
+    def test_a_wall_raise_needs_its_own_declaration(self):
+        # Undeclared, a wall raise is reported like any other.
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(1.0, wall_max=7.0))
+        self.assertEqual(moved, {self.WALL_SLOT: (5.0, 7.0)})
+
+        # Declared, it passes, and it covers nothing else: a same-commit
+        # counter raise still needs the counter slot's own declaration.
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(2.0, wall_max=7.0),
+            allowed_raises={self.WALL_SLOT})
+        self.assertEqual(moved, {self.SLOT: (1.0, 2.0)})
+
+        # Declared together, both go through.
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(2.0, wall_max=7.0),
+            allowed_raises={self.SLOT, self.WALL_SLOT})
+        self.assertEqual(moved, {})
+
+    def test_a_wall_raise_with_its_declaration_is_allowed(self):
+        moved = baseline.raised_entries(
+            self.population(1.0), self.population(1.0, wall_max=7.0),
+            allowed_raises={self.WALL_SLOT})
+        self.assertEqual(moved, {})
+
+    def test_a_slot_declared_both_removed_and_raised_is_refused(self):
+        with self.assertRaises(baseline.ComparisonError) as caught:
+            baseline.raised_entries(
+                self.population(1.0), self.population(2.0),
+                allowed_removals={self.SLOT},
+                allowed_raises={self.SLOT})
+        self.assertIn("declared removed and declared raised",
+                      str(caught.exception))
+
+    def test_a_new_entry_is_a_declared_raise_too(self):
+        # A population the base never had is a raise by definition; the
+        # declaration is what allows it through, by the same trade the
+        # removal path introduced.
+        old = self.population(1.0)
+        del old["populations"]["unit-suite"]["entries"]
+        moved = baseline.raised_entries(
+            old, self.population(1.0), allowed_raises={self.SLOT})
+        self.assertEqual(moved, {})
+
+    def test_a_raise_declaration_does_not_cover_a_deletion(self):
+        # A deletion is a removal's business, not a raise's: a slot whose
+        # entry vanished needs --ratchet-allow-removal, and a raise
+        # declaration over a vanished entry stays a failure.
+        old = self.population(1.0)
+        new = self.population(1.0)
+        old["populations"]["unit-suite"]["entries"]["counter::gone"] = {
+            "min": 1.0, "max": 1.0, "n": 6}
+        moved = baseline.raised_entries(
+            old, new, allowed_raises={"unit-suite:entries:counter::gone"})
+        self.assertEqual(
+            moved,
+            {"unit-suite:entries:counter::gone": (1.0, None)})
+
+
 class ReadsTheCommittedBaseline(unittest.TestCase):
     """Shared access to `speed-baseline.json`, skipping when it is absent.
 

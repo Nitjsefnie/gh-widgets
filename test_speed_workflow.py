@@ -513,6 +513,63 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(lowered.returncode, 0,
                          lowered.stdout + lowered.stderr)
 
+    def test_the_baseline_ratchet_honours_a_declared_raise(self):
+        # The green route for a documented re-derivation (issue #133): the
+        # suite grew past its recorded envelope, so every observation of
+        # the new program lands above the old maximum and the strict
+        # down-only rule refused the very change the baseline's HOW TO
+        # RE-DERIVE prescribes. A raise is allowed only when declared per
+        # slot; the declaration is checked against the documents, not
+        # trusted.
+        root = self._temp_root("ghw-speed-raise-")
+        self._write_tree(root, baseline=True)
+        comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
+        target = root / "head" / "speed-baseline.json"
+
+        def run(old_unit_max, extra=()):
+            """The merge base's copy, with the unit suite moved."""
+            document = json.loads(target.read_text(encoding="utf-8"))
+            document["populations"][self.UNIT_POPULATION]["entries"] = {
+                self.UNIT_NODE: envelope(old_unit_max)}
+            old = root / "old.json"
+            old.write_text(json.dumps(document), encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(comparator),
+                 "--ratchet-baselines", str(old), str(target), *extra],
+                capture_output=True, text=True, check=False)
+
+        declared = ["--ratchet-allow-raise",
+                    f"{self.UNIT_POPULATION}:entries:{self.UNIT_NODE}"]
+
+        # Declared: the raise is honoured and the step would go green.
+        ok = run(1.0, extra=declared)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+        # Undeclared: the same raise stays a failure.
+        refused = run(1.0)
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        self.assertIn("went UP", refused.stderr)
+        self.assertIn(self.UNIT_NODE, refused.stderr)
+
+        # A declaration naming a move that is not in the documents is
+        # refused rather than honoured: this old maximum is HIGHER, so the
+        # head lowered the ceiling and the declaration lies.
+        stale = run(99.0, extra=declared)
+        self.assertEqual(stale.returncode, 2, stale.stdout + stale.stderr)
+        self.assertIn("declared raised but is not a raise", stale.stderr)
+
+        # A slot declared both removed and raised asks for two opposite
+        # verdicts and is refused before anything is judged.
+        conflict = run(
+            1.0,
+            extra=declared + [
+                "--ratchet-allow-removal",
+                f"{self.UNIT_POPULATION}:entries:{self.UNIT_NODE}"])
+        self.assertEqual(conflict.returncode, 2,
+                         conflict.stdout + conflict.stderr)
+        self.assertIn("declared removed and declared raised",
+                      conflict.stderr)
+
     @REQUIRES_BENCH
     def test_an_envelope_from_one_observation_is_refused(self):
         """A single sample's maximum is a measurement, not a worst case.

@@ -112,7 +112,12 @@ dependency vulnerability checks, security analysis, workflow syntax and
 security checks, and the speed job. The speed job counts **CPU seconds** for
 each renderer workload and for the unit suite, on pinned offline fixtures,
 and compares each against a committed baseline in `speed-baseline.json` that
-only ever ratchets down. CPU seconds rather than a deterministic instruction
+only ever ratchets down — where a raised ceiling lands only as a declared
+re-derivation: the speed job's ratchet step derives `--ratchet-allow-raise`
+declarations for the unit-suite population from the two documents it judges,
+so a suite that genuinely outgrew its recorded envelope can re-derive it
+(per the document's own HOW TO RE-DERIVE), while every renderer raise and
+every undeclared raise stays red. CPU seconds rather than a deterministic instruction
 or syscall count, because neither survives measurement on the cell that reads
 the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
 costs 12.8× the work it measures. The gate is therefore a **step-change

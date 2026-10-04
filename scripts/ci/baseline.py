@@ -220,7 +220,9 @@ def envelope_maxima(entries: dict) -> dict:
     return {node: float(envelope["max"]) for node, envelope in entries.items()}
 
 
-def raised_entries(old: dict, new: dict, allowed=frozenset()) -> dict:
+def raised_entries(old: dict, new: dict,
+                   allowed_removals=frozenset(),
+                   allowed_raises=frozenset()) -> dict:
     """Entries that went UP between two baseline documents, or went AWAY.
 
     The comparator refuses to let a head counter exceed its baseline, but
@@ -252,8 +254,33 @@ def raised_entries(old: dict, new: dict, allowed=frozenset()) -> dict:
 
     Lowering a recorded maximum, or raising a minimum alone, is an improvement
     and stays allowed: the ceiling is the maximum.
+
+    A RAISE is allowed when it is DECLARED, by the same trade the removal
+    path above introduced, and for the same reason: the documented
+    re-derivation route ("HOW TO RE-DERIVE" in the committed document) has
+    no other green path. A suite grows by design, so its recorded envelope
+    eventually no longer describes the program it gates, and every
+    observation then lands above a ceiling the re-derivation procedure is
+    supposed to replace. A declared raise is checked against the documents
+    rather than trusted: a slot declared raised that has NOT gone up is a
+    stale declaration and is refused, which is what stops a declaration from
+    being pasted over a diff it does not describe. Declaring does not
+    testify that the new numbers were measured — no code path can — which
+    is why the envelope validator refuses n below 2 ("re-measure, do not
+    widen the number by hand") and the re-derived figures carry their
+    dispatch run ids in the document's `basis`, where review reads them.
+    The workflow derives the declarations for the unit-suite population
+    from the two documents it is judging; every other population's raise
+    stays undeclared and therefore refused.
     """
-    allowed = set(allowed)
+    allowed = set(allowed_removals)
+    raises = set(allowed_raises)
+    conflict = allowed & raises
+    if conflict:
+        raise ComparisonError(
+            "these slots are both declared removed and declared raised: "
+            + ", ".join(sorted(conflict))
+            + " — that asks for two opposite verdicts at once; pick one")
     moved = {}
     for name in sorted(set(old.get("populations", {}))
                        | set(new.get("populations", {}))):
@@ -276,6 +303,14 @@ def raised_entries(old: dict, new: dict, allowed=frozenset()) -> dict:
                 now = after.get(node, {}).get("max")
                 if now is None:
                     moved[slot] = (was, None)
-                elif was is None or now > was:
+                    continue
+                if was is None or now > was:
+                    if slot in raises:
+                        continue
                     moved[slot] = (was, now)
+                elif slot in raises:
+                    raise ComparisonError(
+                        f"{slot} was declared raised but is not a raise "
+                        f"({was} -> {now}): a declaration that contradicts "
+                        "the documents is refused rather than honoured")
     return moved

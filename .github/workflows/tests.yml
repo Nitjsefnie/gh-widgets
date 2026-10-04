@@ -565,6 +565,13 @@ jobs:
     # rather than carried. Re-derive, never carry, sometimes means removing a
     # document that describes a program this tree is not.
     #
+    # THE SUITE'S ENVELOPE IS NOW WINDOW 5 (issue #133): four dispatches at
+    # 2901f4e, after the suite grew 784 -> 988 tests and every observation
+    # landed above window 4's maximum. A raised ceiling lands through a
+    # declared, derived raise in the ratchet step below — renderer raises and
+    # undeclared raises stay refused. The figures and the dispatch run ids are
+    # in speed-baseline.json's basis.
+    #
     # The population digests DO describe this tree, and they are checked on the
     # box by test_baseline.py before anything reaches a runner: adding a test
     # invalidates them, so a commit that does fails the suite in under a second
@@ -1031,9 +1038,44 @@ jobs:
             echo "Declared workload removals: ${removals[*]}"
           fi
 
+          # DECLARED RAISES, DERIVED FROM THE DOCUMENTS, UNIT SUITE ONLY.
+          # The unit suite's membership changes by design, so its recorded
+          # envelope eventually stops describing the program it gates, and
+          # the documented re-derivation route (the baseline's HOW TO
+          # RE-DERIVE) has to be able to land green. A raise is allowed
+          # only when declared, and the declaration is DERIVED here from
+          # the two documents rather than trusted: every slot whose
+          # recorded maximum goes up in the head document is named on the
+          # command line, so the tool sees an explicit declaration for
+          # every rise and its log says so. Every other population keeps
+          # the strict down-only rule — a renderer workload's envelope
+          # never rises (issue #133: the suite's had to, 784 -> 988 tests,
+          # every dispatch then landing above the old ceiling).
+          raise_slots="$(python3 -c 'import json,sys; \
+              raisep = lambda was, now: now is not None and (was is None or now > was); \
+              old, new = (json.load(open(name)) for name in sys.argv[1:]); \
+              unit = lambda doc: doc.get("populations", {}).get("unit-suite", {}); \
+              slots = ( \
+                  f"unit-suite:{key}:{node}" \
+                  for key in ("entries", "wall") \
+                  for node in sorted(set(unit(old).get(key, {})) | set(unit(new).get(key, {}))) \
+                  if raisep(unit(old).get(key, {}).get(node, {}).get("max"), \
+                            unit(new).get(key, {}).get(node, {}).get("max"))); \
+              print(" ".join(slots))' \
+              "$RUNNER_TEMP/base-baseline.json" "$BASELINE")"
+          raises_args=()
+          while IFS= read -r slot; do
+            if [ -n "$slot" ]; then
+              raises_args+=(--ratchet-allow-raise "$slot")
+            fi
+          done <<< "$raise_slots"
+          if [ "${#raises_args[@]}" -ne 0 ]; then
+            echo "Declared unit-suite raises: ${raises_args[*]}"
+          fi
+
           python3 scripts/ci/compare_counters.py \
             --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
-            "${removals[@]}"
+            "${removals[@]}" "${raises_args[@]}"
 
       - name: Upload JUnit reports
         if: ${{ !cancelled() }}

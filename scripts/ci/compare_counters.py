@@ -707,7 +707,7 @@ def _check_metric(baseline_metric, head_metric) -> None:
 
 
 def ratchet_check(old_path: Path, new_path: Path,
-                  allowed_removals=()) -> int:
+                  allowed_removals=(), allowed_raises=()) -> int:
     """The down-only half of the gate: no baseline entry may go UP.
 
     Every population, in one pass: the workflow runs this against the merge
@@ -718,10 +718,19 @@ def ratchet_check(old_path: Path, new_path: Path,
     Run against the MERGE BASE's copy of the baseline, not the parent's last
     successful run and not the previous commit on this branch — a gate that
     judges the wrong base is worse than no gate, because it reads as one.
+
+    A raise is permitted only when DECLARED, per slot, with
+    --ratchet-allow-raise — the same declared-exception shape as
+    --ratchet-allow-removal. The workflow derives the declarations for the
+    unit-suite population from the two documents, so a re-derived envelope
+    lands loudly instead of impossibly; every undeclared raise stays a
+    failure, and a declaration that contradicts the documents (a slot named
+    as raised that did not go up, or one declared both removed and raised)
+    is refused rather than honoured.
     """
     old = read_baseline(old_path)
     new = read_baseline(new_path)
-    moved = raised_entries(old, new, allowed_removals)
+    moved = raised_entries(old, new, allowed_removals, allowed_raises)
     if not moved:
         print(f"baseline ratchet: no entry raised in {new_path}")
         return 0
@@ -729,8 +738,10 @@ def ratchet_check(old_path: Path, new_path: Path,
              "only ever ratchets down:"]
     for node, (was, now) in moved.items():
         lines.append(f"- `{node}`: {was} -> {now}")
-    lines.append("  Lowering is always allowed. If a rise is real, it is "
-                 "because the work got dearer — say so in the pull request.")
+    lines.append("  Lowering is always allowed. A rise is allowed only as a "
+                 "declared re-derivation (--ratchet-allow-raise), which the "
+                 "workflow derives for the unit-suite population from the "
+                 "two documents; every undeclared raise stays a failure.")
     print("\n".join(lines), file=sys.stderr)
     return 1
 
@@ -807,6 +818,14 @@ def main(argv: list | None = None) -> int:
                              "what --list-workloads no longer emits. A "
                              "declared removal that is still recorded is "
                              "refused")
+    parser.add_argument("--ratchet-allow-raise", action="append",
+                        default=[], metavar="POP:KEY:NODE",
+                        help="a `population:key:node` slot whose recorded "
+                             "maximum in NEW is above its value in OLD, "
+                             "declared as a re-derivation rather than a "
+                             "regression; repeatable. A declared raise that "
+                             "did not happen, or a slot declared both removed "
+                             "and raised, is refused")
     args = parser.parse_args(argv)
 
     if args.print_population:
@@ -847,7 +866,8 @@ def main(argv: list | None = None) -> int:
                      "accommodation this gate refuses to make")
 
     try:
-        return ratchet_check(*ratchet, args.ratchet_allow_removal) if ratchet else _compare(args)
+        return ratchet_check(*ratchet, args.ratchet_allow_removal,
+                             args.ratchet_allow_raise) if ratchet else _compare(args)
     except MissingBaseline as exc:
         # A missing baseline is an expected first push when a comparison was
         # asked for, and an error when the RATCHET was: there is no
