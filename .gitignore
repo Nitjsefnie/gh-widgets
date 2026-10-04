@@ -105,3 +105,11 @@
 /units/*
 !/units/*.service
 !/units/*.timer
+
+# ---- fixtures/diff_coverage/ — offline patch-coverage inputs ---------------
+!/fixtures/
+/fixtures/*
+!/fixtures/diff_coverage/
+/fixtures/diff_coverage/*
+!/fixtures/diff_coverage/*.xml
+!/fixtures/diff_coverage/*.diff

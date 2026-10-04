@@ -1203,6 +1203,73 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --no-progress .github/workflows/
 
+  diff-coverage:
+    # INFORMATIONAL, never a gate — which is why it is deliberately absent
+    # from `aggregate` below. A comment that failed to post must not be able
+    # to block a merge, and the number it reports is one a reviewer judges:
+    # a refactor that only moves code, and a fix whose test lives behind an
+    # optional dependency, both read low for reasons a threshold cannot tell
+    # apart. The ratchet in `unittest` is the gate.
+    #
+    # Pull requests only, and only when the measured cell produced the
+    # coverage artifact this job consumes.
+    if: ${{ !cancelled() && needs.unittest.result == 'success'
+               && github.event_name == 'pull_request' }}
+    needs: [unittest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # This job reads the proposed tree, so it must not carry a token that can
+    # write conversation. The trusted workflow_run commenter owns that token.
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit the event named, and the exact SHA `unittest`
+          # measured. Resolving `refs/pull/N/merge` here instead could hand
+          # this job a different tree than the coverage report describes.
+          ref: ${{ github.sha }}
+          # Both parents of that merge commit, which the diff below needs.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-xml
+
+      - name: Install the pinned statement analyzer
+        run: python3 -m pip install --requirement requirements-test.txt
+
+      - name: Measure the coverage of this change
+        # HEAD is the merge tree checked out above and HEAD^1 is, by
+        # construction, the base tip that was merged into it. The event
+        # payload's base.sha is not that: the base branch can advance between
+        # the event and checkout, and its later commits must not be attributed
+        # to this pull request.
+        run: |
+          git diff --text --no-ext-diff --no-textconv --unified=0 \
+            HEAD^1..HEAD > patch.diff
+          python3 scripts/ci/diff_coverage.py \
+            --coverage coverage.xml \
+            --diff patch.diff > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package the comment for the trusted commenter
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s\n' "$PR_NUMBER" > pr-number.txt
+
+      - name: Upload the comment for the trusted commenter
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diff-coverage-comment
+          path: |
+            body.md
+            pr-number.txt
+          if-no-files-found: error
+
   aggregate:
     # The required check always reports on pull requests and main pushes,
     # including commits where every path-filtered gate is not applicable.

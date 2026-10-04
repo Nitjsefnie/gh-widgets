@@ -672,5 +672,135 @@ class TestScorecardWorkflow(unittest.TestCase):
         ])
 
 
+class TestPatchCoverageWorkflows(unittest.TestCase):
+    """Keep patch coverage informational and its writer trusted."""
+
+    def setUp(self):
+        self.tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
+        self.tests = yaml.safe_load(self.tests_text)
+        self.jobs = self.tests["jobs"]
+
+    def test_diff_coverage_runs_only_for_successful_pull_request_tests(self):
+        job = self.jobs.get("diff-coverage")
+        self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
+        assert job is not None
+
+        self.assertEqual(job.get("needs"), ["unittest"])
+        condition = " ".join(job.get("if", "").split())
+        self.assertIn("needs.unittest.result == 'success'", condition)
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("!cancelled()", condition)
+        self.assertEqual(job.get("permissions"), {"contents": "read"})
+        self.assertNotIn("diff-coverage", self.jobs["aggregate"].get("needs", []))
+        self.assertLess(self.tests_text.index("\n  diff-coverage:"),
+                        self.tests_text.index("\n  aggregate:"))
+
+    def test_diff_coverage_measures_the_merge_commit_and_uploads_its_comment(self):
+        job = self.jobs.get("diff-coverage")
+        self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
+        assert job is not None
+        steps = job.get("steps", [])
+        checkout = next(step for step in steps
+                        if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"].get("ref"), "${{ github.sha }}")
+        self.assertEqual(checkout["with"].get("fetch-depth"), 0)
+        self.assertIs(checkout["with"].get("persist-credentials"), False)
+
+        downloads = [step for step in steps
+                     if step.get("uses", "").startswith(
+                         "actions/download-artifact@")]
+        self.assertEqual(len(downloads), 1)
+        self.assertEqual(
+            downloads[0]["uses"],
+            "actions/download-artifact@"
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c")
+        self.assertEqual(downloads[0].get("with", {}).get("name"), "coverage-xml")
+        self.assertRegex(
+            self.tests_text,
+            r"(?m)^      - uses: actions/download-artifact@"
+            r"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8\.0\.1$")
+
+        measure = next(step for step in steps
+                       if step.get("name") == "Measure the coverage of this change")
+        run = measure.get("run", "")
+        self.assertIn("--text --no-ext-diff --no-textconv --unified=0", run)
+        self.assertIn("HEAD^1..HEAD", run)
+        self.assertIn("scripts/ci/diff_coverage.py", run)
+        self.assertNotIn("--js-coverage", run)
+        self.assertIn("$GITHUB_STEP_SUMMARY", run)
+
+        uploads = [step for step in steps
+                   if step.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0].get("with", {}).get("name"),
+                         "diff-coverage-comment")
+        self.assertEqual(set(uploads[0]["with"]["path"].splitlines()),
+                         {"body.md", "pr-number.txt"})
+        self.assertEqual(uploads[0]["with"].get("if-no-files-found"), "error")
+
+    def test_coverage_comment_workflow_has_one_trusted_writer_and_updates_in_place(self):
+        path = WORKFLOWS / "coverage-comment.yml"
+        self.assertTrue(path.is_file(), "missing coverage-comment.yml")
+        text = path.read_text(encoding="utf-8")
+        workflow = yaml.safe_load(text)
+        trigger_key = "on" if "on" in workflow else True
+        self.assertEqual(workflow[trigger_key]["workflow_run"], {
+            "workflows": ["tests"], "types": ["completed"],
+        })
+        self.assertEqual(workflow.get("permissions"), {
+            "pull-requests": "write", "actions": "read",
+        })
+        self.assertRegex(text, r"(?m)^  workflow_run:  # zizmor: ignore\[dangerous-triggers\]$")
+        self.assertNotIn("actions/checkout", text)
+        self.assertEqual(set(workflow.get("jobs", {})), {"comment"})
+        job = workflow["jobs"]["comment"]
+        self.assertEqual(
+            " ".join(job.get("if", "").split()),
+            "github.event.workflow_run.event == 'pull_request'")
+        steps = job.get("steps", [])
+        self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@")
+                             for step in steps))
+        downloads = [step for step in steps
+                     if step.get("uses", "").startswith(
+                         "actions/download-artifact@")]
+        self.assertEqual(len(downloads), 1)
+        self.assertEqual(downloads[0]["with"].get("name"),
+                         "diff-coverage-comment")
+        self.assertEqual(downloads[0]["with"].get("run-id"),
+                         "${{ github.event.workflow_run.id }}")
+        self.assertRegex(
+            text,
+            r"(?m)^        uses: actions/download-artifact@"
+            r"3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8\.0\.1$")
+
+        scripts = "\n".join(step.get("run", "") for step in steps)
+        artifact_lookup = next(step for step in steps
+                               if step.get("name") == "Check for the comment artifact")
+        self.assertIn("Cache-Control: no-cache", artifact_lookup.get("run", ""))
+        self.assertIn("--paginate", artifact_lookup.get("run", ""))
+        self.assertEqual([step["uses"] for step in steps if "uses" in step],
+                         [downloads[0]["uses"]])
+        self.assertIn("HEAD_REPO", scripts)
+        self.assertIn(".head.sha", scripts)
+        self.assertIn(".head.repo.full_name", scripts)
+        self.assertIn("test -f pr-number.txt", scripts)
+        self.assertIn('if [ "$claimed" != "$PR_NUMBER" ]; then', scripts)
+        self.assertIn("<!-- gh-widgets-diff-coverage -->", scripts)
+        self.assertIn("gh api -X POST", scripts)
+        self.assertIn("gh api -X PATCH", scripts)
+        self.assertIn("Cache-Control: no-cache", scripts)
+        self.assertIn("--paginate", scripts)
+        post_step = next(step for step in steps
+                         if step.get("name") == "Post or update the pull request comment")
+        post_script = post_step.get("run", "")
+        number_check = post_script.index('if [ "$claimed" != "$PR_NUMBER" ]; then')
+        self.assertLess(number_check, post_script.index("gh api -X POST"))
+        self.assertLess(number_check, post_script.index("gh api -X PATCH"))
+        self.assertRegex(
+            post_script,
+            r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$REPO/issues/\$PR_NUMBER/comments\"")
+        self.assertIn("[ \"$current_head_repo\" != \"$HEAD_REPO\" ]", post_script)
+
+
 if __name__ == "__main__":
     unittest.main()
