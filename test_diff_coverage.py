@@ -15,6 +15,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 import os
 from pathlib import Path
+from unittest import mock
 
 from scripts.ci import diff_coverage as reporter
 
@@ -67,6 +68,38 @@ class TestDiffCoverageCli(unittest.TestCase):
 
         self.assertEqual(return_code, 0)
         self.assertEqual(in_process_output.getvalue(), result.stdout)
+
+    def test_validate_statement_records_closes_its_database(self):
+        """The statement analyzer's database must not survive validation.
+
+        coverage.py's no-disk data still opens a shared-cache memory-URI
+        sqlite connection, and `SqliteDb.close(force=False)` deliberately
+        leaves no-disk connections open; an analyzer abandoned without
+        `CoverageData.close(force=True)` leaked one unclosed connection
+        per run, printed as a ResourceWarning at interpreter shutdown
+        (issue 147).
+        """
+        created = []
+        real_analyzer = (
+            reporter._analyzer)  # pylint: disable=protected-access
+
+        def spy():
+            analyzer = real_analyzer()
+            created.append(analyzer)
+            return analyzer
+
+        previous_directory = Path.cwd()
+        self.addCleanup(os.chdir, previous_directory)
+        os.chdir(self.directory)
+        with mock.patch.object(reporter, "_analyzer", side_effect=spy):
+            reporter.validate_statement_records(
+                {"alpha.py": {1, 2}, "beta.py": {1, 2}},
+                {"alpha.py": {1, 2}, "beta.py": {1, 2}})
+        self.assertTrue(created)
+        # coverage.py exposes no public close for the analyzer; the fix
+        # reaches the same private attribute, so the assertion reads it.
+        self.assertEqual(
+            created[0]._data._dbs, {})  # pylint: disable=protected-access
 
     def test_cli_has_no_javascript_coverage_input(self):
         result = subprocess.run(
