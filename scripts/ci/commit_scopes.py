@@ -74,11 +74,11 @@ def git(root, *arguments, what):
     a clean tree is the false green this exists to prevent: a non-zero status
     is a refusal naming what was being attempted, never an empty answer.
 
-    stdout and stderr decode with surrogateescape so a path git prints raw —
-    `ls-tree -z` output carries non-UTF-8 filename bytes undecorated —
-    survives as the string it is; subprocess re-encodes every argument with
-    the filesystem encoding, so `cat-file blob HEAD:<path>` reads the same
-    bytes back.
+    This helper reads command text, including workflow blobs and subjects.
+    Raw path enumeration uses binary output in tracked_files() instead:
+    text mode translates carriage returns even with surrogateescape.
+    subprocess re-encodes path arguments with the filesystem encoding, so
+    `cat-file blob HEAD:<path>` reads the enumerated bytes back.
     """
     command = ("git", "-C", str(root)) + arguments
     done = subprocess.run(command, capture_output=True, text=True,
@@ -129,11 +129,21 @@ def tracked_files(root):
     # core.quotePath — `".github/workflows/\303\274ber.yml"` — and the
     # leading double quote misses the workflow-file filter below, so the
     # workflow would leave the name set in silence and a commit naming it
-    # would pass green. Paths are decoded byte-exact (see git()), never
-    # unquoted back: the raw bytes ARE the path.
-    return tuple(f for f in
-                 git(root, "ls-tree", "-z", "-r", "--name-only", "--full-tree", "HEAD",
-                     what="list the tracked tree").split("\0") if f)
+    # would pass green. Read bytes before splitting: text mode's universal
+    # newlines alias a CR filename to a distinct LF filename, even when
+    # errors="surrogateescape" preserves undecodable bytes. Decode each raw
+    # path with surrogateescape, without newline translation or unquoting:
+    # the raw bytes ARE the path.
+    command = ("git", "-C", str(root), "ls-tree", "-z", "-r", "--name-only",
+               "--full-tree", "HEAD")
+    done = subprocess.run(command, capture_output=True, text=False, check=False)
+    if done.returncode != 0:
+        detail = done.stderr.decode("utf-8", errors="surrogateescape").strip()
+        raise GateError(
+            f"cannot list the tracked tree: `{' '.join(command)}` exited "
+            f"{done.returncode}: {detail or 'no output'}")
+    return tuple(raw.decode("utf-8", errors="surrogateescape")
+                 for raw in done.stdout.split(b"\0") if raw)
 
 
 def workflow_files(files):
