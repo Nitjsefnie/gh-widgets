@@ -382,6 +382,21 @@ class TestDeclaredRaises(unittest.TestCase):
             moved,
             {"unit-suite:entries:counter::gone": (1.0, None)})
 
+    def test_a_declaration_naming_no_existing_slot_is_refused(self):
+        # A typo'd declaration names no slot either document has; honouring
+        # the silence would make "checked against the documents" true only
+        # for the declarations that happen to resolve.
+        for typo in ("unit-suite:entries:counter::typo",
+                     "typo:entries:counter::unit-suite",
+                     "unit-suite:typo:counter::unit-suite"):
+            with self.subTest(typo=typo):
+                with self.assertRaises(baseline.ComparisonError) as caught:
+                    baseline.raised_entries(
+                        self.population(1.0), self.population(1.0),
+                        allowed_raises={typo})
+                self.assertIn("name no slot that exists",
+                              str(caught.exception))
+
 
 class ReadsTheCommittedBaseline(unittest.TestCase):
     """Shared access to `speed-baseline.json`, skipping when it is absent.

@@ -282,12 +282,17 @@ def raised_entries(old: dict, new: dict,
     dispatch run ids in the document's `basis`, where review reads them.
     The workflow derives the declarations for the unit-suite population
     from the two documents it is judging; every other population's raise
-    stays undeclared and therefore refused.
+    stays undeclared and therefore refused. A declaration that names no
+    slot either document has — a typo — is refused too, once the documents
+    have been walked: it is checked against what exists, not silently
+    ignored, which is what keeps the checked-against-the-documents promise
+    true for every declaration and not only for the ones that resolve.
     """
     allowed = set(allowed_removals)
     raises = set(allowed_raises)
     _refuse_contradictory_declarations(allowed, raises)
     moved = {}
+    declared_seen = set()
     for name in sorted(set(old.get("populations", {}))
                        | set(new.get("populations", {}))):
         for key in ("entries", "wall"):
@@ -307,6 +312,8 @@ def raised_entries(old: dict, new: dict,
                     continue
                 was = before.get(node, {}).get("max")
                 now = after.get(node, {}).get("max")
+                if slot in raises:
+                    declared_seen.add(slot)
                 if now is None:
                     moved[slot] = (was, None)
                     continue
@@ -319,4 +326,12 @@ def raised_entries(old: dict, new: dict,
                         f"{slot} was declared raised but is not a raise "
                         f"({was} -> {now}): a declaration that contradicts "
                         "the documents is refused rather than honoured")
+    if raises - declared_seen:
+        raise ComparisonError(
+            "these slots were declared raised but name no slot that exists "
+            "in either document: "
+            + ", ".join(sorted(raises - declared_seen))
+            + " — a declaration is checked against the documents, and a "
+              "declaration nothing resolves to is refused rather than "
+              "silently ignored")
     return moved
