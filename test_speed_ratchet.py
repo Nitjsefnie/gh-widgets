@@ -458,5 +458,113 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         self.assertEqual(ratchet.returncode, 0, ratchet.stdout + ratchet.stderr)
 
 
+class TestMainPushRatchet(unittest.TestCase):
+    """Judge the landed window with the real step, including its fetches."""
+
+    steps = StepRunner()
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.root = Path(stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="ghw-push-ratchet-")))
+        self.fixture = CarrierFixture(self.root, document())
+        bench = self.fixture.head / "scripts" / "bench"
+        bench.mkdir()
+        shutil.copyfile(HARNESS, bench / "e2e_bench.py")
+        self.fixture.git("add", "scripts/bench/e2e_bench.py")
+        self.fixture.git("commit", "-qm", "Seed workload listing")
+        self.fixture.base = self.fixture.git("rev-parse", "HEAD").stdout.strip()
+
+    def _push_step(self, before=None):
+        """Start shallow at the landed tip, with a bare origin holding history."""
+        fixture = self.fixture
+        remote = self.root / "remote.git"
+        fixture.git("clone", "--bare", str(fixture.head), str(remote))
+        fixture.git("remote", "add", "origin", remote.as_uri())
+        (fixture.head / ".git" / "shallow").write_text(
+            fixture.git("rev-parse", "HEAD").stdout + fixture.base + "\n",
+            encoding="utf-8")
+        declared, working_dir, block = self.steps.step_run(
+            "The committed baseline only ratchets down")
+        env = self.steps.env_for(
+            declared, self.root, EVENT_NAME="push",
+            BEFORE_SHA=fixture.base if before is None else before)
+        return self.steps.bash(block, self.root, working_dir, env)
+
+    def test_step_schedules_prs_and_main_pushes_only(self):
+        step = self.steps.step_text("The committed baseline only ratchets down")
+        condition = next(line.strip() for line in step.splitlines()
+                         if line.strip().startswith("if:"))
+        self.assertEqual(
+            condition,
+            "if: ${{ github.event_name == 'pull_request' || "
+            "(github.event_name == 'push' && github.ref == 'refs/heads/main') }}")
+        declared = self.steps.step_run(
+            "The committed baseline only ratchets down")[0]
+        self.assertEqual(declared["EVENT_NAME"], "${{ github.event_name }}")
+        self.assertEqual(declared["BEFORE_SHA"], "${{ github.event.before }}")
+
+    @REQUIRES_POSIX_SHELL
+    def test_squash_landing_without_declarations_is_refused_on_push_route(self):
+        self.fixture.commit("Squash baseline carrier (#140)", self.fixture.new)
+        result = self._push_step()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("has no declaration", result.stderr)
+        self.assertNotIn("Declared unit-suite raises:", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_rebase_landing_keeps_declarations_on_push_route(self):
+        self.fixture.commit(self.fixture.MESSAGE, self.fixture.new)
+        result = self._push_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Declared unit-suite raises: --ratchet-allow-raise "
+                      "unit-suite:entries:counter::unit-suite", result.stdout)
+        self.assertIn("no entry raised", result.stdout)
+        self.assertEqual(self.fixture.git("rev-parse", "--is-shallow-repository")
+                         .stdout.strip(), "false")
+
+    @REQUIRES_POSIX_SHELL
+    def test_new_main_ref_fails_closed_on_push_route(self):
+        self.fixture.commit(self.fixture.MESSAGE, self.fixture.new)
+        result = self._push_step(before="0" * 40)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("newly created main ref has no previous tip", result.stderr)
+        self.assertIn("failing closed", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_missing_before_sha_fails_closed_on_push_route(self):
+        self.fixture.commit(self.fixture.MESSAGE, self.fixture.new)
+        result = self._push_step(before="")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("BEFORE_SHA is empty", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_force_push_landing_fails_closed_on_push_route(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        landed = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "--orphan", "unrelated")
+        fixture.git("commit", "-qm", "Unrelated previous main tip")
+        unrelated = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "--detach", landed)
+        result = self._push_step(before=unrelated)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("force-push", result.stderr)
+        self.assertIn("failing closed", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_missing_before_baseline_fails_closed_on_push_route(self):
+        fixture = self.fixture
+        fixture.git("rm", "speed-baseline.json")
+        fixture.git("commit", "-qm", "Previous main has no baseline")
+        fixture.base = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        result = self._push_step()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("No speed-baseline.json at the previous main tip",
+                      result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
