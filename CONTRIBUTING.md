@@ -239,6 +239,25 @@ UNTRACKED file. For a file the repo tracks, add `--no-index`, because
 `check-ignore` otherwise consults the index and a tracked path is never
 subject to the rules.
 
+## Commit messages
+
+Use `type(scope): summary` when a scope helps identify the change. The types
+in use are:
+
+| Type | Change |
+| --- | --- |
+| `ci` | Workflows and CI tooling |
+| `deps` | Dependency updates |
+| `docs` | Documentation |
+| `fix` | Bug fixes |
+| `style` | Formatting and style |
+| `test` | Tests |
+
+A workflow's name (its top-level `name:`) or file stem is a scope only with
+the `ci` type: use `ci(tests)` for the tests workflow. The
+`scripts/ci/commit_scopes.py` check enforces this on unmerged commits only
+(`origin/main..HEAD`); already-merged history is never re-judged.
+
 ## House style
 
 - **Python** — stdlib only, type hints where they help, no framework.

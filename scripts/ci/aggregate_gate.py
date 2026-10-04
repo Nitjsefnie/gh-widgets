@@ -47,6 +47,7 @@ SUPERSEDED = "SUPERSEDED"
 GREEN = frozenset({PASSED, SKIPPED, SUPERSEDED})
 
 GATE_JOBS = {
+    "gate-integrity": "gates",
     "tests": "unittest",
     "lint": "lint",
     "types": "pyright",

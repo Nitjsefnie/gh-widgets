@@ -50,6 +50,7 @@ jobs:
       speed: ${{ steps.detect.outputs.speed }}
       codeql: ${{ steps.detect.outputs.codeql }}
       actionlint: ${{ steps.detect.outputs.actionlint }}
+      gate-integrity: ${{ steps.detect.outputs.gate-integrity }}
     permissions:
       contents: read
       pull-requests: read
@@ -1203,6 +1204,58 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --no-progress .github/workflows/
 
+  gates:
+    # Integrity checks run on every event, including documentation-only PRs.
+    # No selector dependency: the required aggregate waits for this verdict.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check no tracked file carries a merge-conflict marker
+        # A conflict marker can look like prose in a Markdown file, so review
+        # and code-focused gates can miss it: a mechanical check must read
+        # documentation too. git grep reads tracked files from the working
+        # tree, which on a clean checkout is what the repository ships, and
+        # -I keeps a binary from being reported as a match. The three markers
+        # are matched in the shapes git writes them: `<<<<<<< ` and `>>>>>>> `
+        # carry a label after seven characters, and the separator is exactly
+        # seven `=`; diff3's extra `||||||| base` line changes nothing because
+        # the other three are still written. This unconditional job also runs
+        # for documentation-only changes.
+        # Explicit `shell: bash` adds --noprofile --norc on this Ubuntu runner;
+        # pipefail is its only operative delta. The body already guards
+        # `git grep` with `|| found=$?`, so no pipe here can turn "no match"
+        # into a failure the implicit shell would not have.
+        shell: bash
+        run: |
+          # git grep exits 1 for "no match" and above 1 for an error it could
+          # not run, and a guard that reads its own error as a clean tree is
+          # the false green this step exists to prevent.
+          found=0
+          git grep -nI -E '^(<{7}( |$)|>{7}( |$)|={7}$)' -- . || found=$?
+          if [ "$found" -gt 1 ]; then
+            echo "git grep exited $found, so no marker was looked for."
+            exit "$found"
+          fi
+          if [ "$found" -eq 0 ]; then
+            echo "A merge-conflict marker is committed. Resolve the conflict, rebase onto the target branch and push again."
+            exit 1
+          fi
+
+      - name: Require this head to carry main's gate-defining commits
+        # Freshness first: work judged against a base main has already moved
+        # on from is work whose verdict does not carry.
+        run: python3 scripts/ci/gate_base_freshness.py
+
+      - name: Refuse a commit whose scope names a workflow outside the ci type
+        # CONTRIBUTING.md allows workflow-name or file-stem scopes only with
+        # type ci. Only outgoing commits are judged, after the freshness step:
+        # both checks fetch main and must read the rebased head.
+        run: python3 scripts/ci/commit_scopes.py
+
   diff-coverage:
     # INFORMATIONAL, never a gate — which is why it is deliberately absent
     # from `aggregate` below. A comment that failed to post must not be able
@@ -1281,7 +1334,7 @@ jobs:
         || github.event_name == 'workflow_dispatch'
         || (github.event_name == 'push'
             && github.ref == 'refs/heads/main')) }}
-    needs: [changes, unittest, lint, pyright, pip-audit, speed, analyze, actionlint]
+    needs: [changes, unittest, lint, pyright, pip-audit, speed, analyze, actionlint, gates]
     permissions:
       contents: read
       pull-requests: read

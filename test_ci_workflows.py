@@ -1,4 +1,6 @@
 """Offline workflow invariants, run with ``python3 -m unittest discover``."""
+# Existing workflow/aggregate controls stay together in these test modules.
+# pylint: disable=too-many-lines
 import json
 import os
 import re
@@ -337,7 +339,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
         self.assertEqual(
             {name.strip() for name in needs.group(1).split(",")},
             {"changes", "unittest", "lint", "pyright", "pip-audit",
-             "speed", "analyze", "actionlint"})
+             "speed", "analyze", "actionlint", "gates"})
         trigger = _trigger_block(self.workflow)
         self.assertNotRegex(trigger, r"(?m)^\s+paths(?:-ignore)?:")
         self.assertFalse((self.scripts / "aggregate_gates.py").exists())
@@ -392,7 +394,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
                 self.assertNotIn(gate, workflow_gates.values())
                 workflow_gates[job] = gate
         self.assertEqual(set(workflow_gates.values()),
-                         set(changes_detect.GATES))
+                         set(changes_detect.GATES) - {"gate-integrity"})
 
     def test_schedule_crons_have_separate_unconditional_owners(self):
         trigger = _trigger_block(self.workflow)
@@ -477,6 +479,78 @@ class TestConsolidatedCiControls(unittest.TestCase):
         assert cancel is not None
         self.assertEqual(" ".join(cancel.group(1).split()),
                          "github.event_name == 'pull_request'")
+
+
+class TestGateIntegrityWorkflow(unittest.TestCase):
+    """The integrity guard runs regardless of the path selector's verdict."""
+
+    def setUp(self):
+        self.workflow = yaml.safe_load((WORKFLOWS / 'tests.yml').read_text())
+        self.jobs = self.workflow['jobs']
+        self.job = self.jobs.get('gates', {})
+
+    def test_guard_runs_unconditionally_and_feeds_the_required_aggregate(self):
+        self.assertTrue(self.job, 'missing gates job')
+        self.assertNotIn('if', self.job)
+        self.assertNotIn('needs', self.job)
+        self.assertEqual(self.job['runs-on'], 'ubuntu-latest')
+        self.assertEqual(self.job['timeout-minutes'], 5)
+        self.assertIn('gates', self.jobs['aggregate']['needs'])
+        self.assertEqual(self.jobs['aggregate'].get('name', 'aggregate'),
+                         'aggregate')
+        self.assertEqual(self.jobs['changes']['outputs']['gate-integrity'],
+                         '${{ steps.detect.outputs.gate-integrity }}')
+        self.assertLess(list(self.jobs).index('actionlint'),
+                        list(self.jobs).index('gates'))
+        self.assertLess(list(self.jobs).index('gates'),
+                        list(self.jobs).index('aggregate'))
+
+    def test_steps_check_markers_then_freshness_then_scopes(self):
+        steps = self.job.get('steps', [])
+        self.assertEqual(len(steps), 4)
+        self.assertTrue(steps[0]['uses'].startswith('actions/checkout@'))
+        self.assertIs(steps[0]['with']['persist-credentials'], False)
+        for step in steps:
+            self.assertNotIn('if', step)
+            self.assertNotIn('continue-on-error', step)
+        self.assertEqual(steps[1]['shell'], 'bash')
+        self.assertEqual(shlex.split(steps[2]['run']),
+                         ['python3', 'scripts/ci/gate_base_freshness.py'])
+        self.assertEqual(shlex.split(steps[3]['run']),
+                         ['python3', 'scripts/ci/commit_scopes.py'])
+
+    @REQUIRES_POSIX_SHELL
+    def test_marker_step_passes_clean_tree_and_refuses_each_git_marker(self):
+        self.assertTrue(self.job, 'missing gates job')
+        script = self.job['steps'][1]['run']
+        with tempfile.TemporaryDirectory(prefix='ghw-markers-') as tmp:
+            repo = Path(tmp)
+            subprocess.run(['git', 'init', str(repo)], check=True,
+                           capture_output=True)
+            path = repo / 'README.md'
+            cases = ('clean prose\n======== heading\n', '<<<<<<< HEAD\n',
+                     '>>>>>>> branch\n', '=======\n', '<<<<<<<\n',
+                     '>>>>>>>\n')
+            for index, content in enumerate(cases):
+                with self.subTest(content=content):
+                    path.write_text(content, encoding='utf-8')
+                    subprocess.run(['git', '-C', str(repo), 'add', 'README.md'],
+                                   check=True, capture_output=True)
+                    done = subprocess.run(
+                        ['bash', '-e', '-o', 'pipefail', '-c', script],
+                        cwd=repo, capture_output=True, text=True, check=False)
+                    self.assertEqual(done.returncode, 0 if index == 0 else 1,
+                                     done.stdout + done.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_marker_step_propagates_git_errors(self):
+        self.assertTrue(self.job, 'missing gates job')
+        with tempfile.TemporaryDirectory(prefix='ghw-no-git-') as tmp:
+            done = subprocess.run(
+                ['bash', '-e', '-o', 'pipefail', '-c',
+                 self.job['steps'][1]['run']], cwd=tmp,
+                capture_output=True, text=True, check=False)
+            self.assertGreater(done.returncode, 1, done.stdout + done.stderr)
 
 
 class TestDependabotActionGroups(unittest.TestCase):

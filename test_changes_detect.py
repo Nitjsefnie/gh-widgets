@@ -210,6 +210,7 @@ class PathMatcherTests(unittest.TestCase):
 class ClassificationTests(unittest.TestCase):
     def test_docs_only_skips_the_deny_and_allow_gates(self):
         result = cd.classify({"README.md", "docs/a/b.md"})
+        self.assertEqual(result.pop("gate-integrity"), "run")
         self.assertEqual(set(result.values()), {"skip"})
 
     def test_workflow_change_runs_code_gates_and_actionlint(self):
@@ -255,7 +256,8 @@ class ClassificationTests(unittest.TestCase):
             self.assertEqual(
                 {name for name, decision in result.items()
                  if decision == "run"},
-                {expected} if expected else set())
+                ({expected, "gate-integrity"} if expected
+                 else {"gate-integrity"}))
             self.assertEqual(transport.calls, [])
 
     def test_dispatch_runs_every_gate_without_an_api_read(self):
@@ -275,7 +277,7 @@ class ClassificationTests(unittest.TestCase):
         )
         expected = {name: "run" for name in (
             "tests", "lint", "types", "audit", "speed", "codeql",
-            "actionlint")}
+            "actionlint", "gate-integrity")}
         for before, comparison_base, response in cases:
             with self.subTest(before=before[:8], status=response["status"]):
                 path = (f"repos/owner/repo/compare/{comparison_base}..."
@@ -444,6 +446,22 @@ class AcquisitionTests(unittest.TestCase):
                         default_branch="main",
                         payload={"before": "b" * 40, "after": "a" * 40})
 
+    def test_gate_integrity_runs_for_empty_and_documentation_diffs(self):
+        for changed in (set(), {'README.md'}, {'new/code.py'}):
+            with self.subTest(changed=changed):
+                self.assertEqual(cd.classify(changed)['gate-integrity'], 'run')
+
+    def test_schedule_reports_gate_integrity_as_unconditional(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = cd.main(environ={'EVENT_NAME': 'schedule',
+                                      'SCHEDULE': cd.AUDIT_CRON},
+                             transport=FakeTransport())
+        self.assertEqual(status, 0)
+        self.assertIn('gate-integrity=run', output.getvalue())
+        self.assertIn('gate-integrity: run — gate integrity runs on every event',
+                      output.getvalue())
+
 
 class FailClosedTests(unittest.TestCase):
     def test_api_failure_writes_run_for_every_gate(self):
@@ -503,9 +521,9 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(status, 0)
             lines = stdout.getvalue().splitlines()
             for gate in ("tests", "lint", "types", "audit", "speed",
-                         "codeql", "actionlint"):
+                         "codeql", "actionlint", "gate-integrity"):
                 self.assertIn(
-                    f"{gate}: run — tag push refs/tags/v1.0 runs all seven gates",
+                    f"{gate}: run — tag push refs/tags/v1.0 runs all 8 gates",
                     lines)
                 self.assertIn(f"{gate}=run", lines)
 
