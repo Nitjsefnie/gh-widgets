@@ -117,7 +117,15 @@ re-derivation: the speed job's ratchet step derives `--ratchet-allow-raise`
 declarations for the unit-suite population from the two documents it judges,
 so a suite that genuinely outgrew its recorded envelope can re-derive it
 (per the document's own HOW TO RE-DERIVE), while every renderer raise and
-every undeclared raise stays red. CPU seconds rather than a deterministic instruction
+every undeclared raise stays red. That derivation makes the unit-suite
+ceiling self-authorizing in one precise sense: any pull request that edits
+`speed-baseline.json` upward passes the ratchet step for the unit-suite
+slots, because the step derives the declarations from the same diff it is
+judging. Review of that diff is the control — a legitimate raise carries
+measured provenance (n ≥ 2 envelopes and the dispatch run ids in `basis`),
+and a raise without it has no business merging. The renderer workloads
+cannot be raised this way at all: nothing derives declarations for them, so
+their ceilings are strictly down-only. CPU seconds rather than a deterministic instruction
 or syscall count, because neither survives measurement on the cell that reads
 the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
 costs 12.8× the work it measures. The gate is therefore a **step-change
