@@ -227,7 +227,7 @@ class TestPrefetchedClones(unittest.TestCase):
                 seen.append(repo)
                 self.assertIsNone(err)
                 self.assertEqual(clone_s, 0.5)
-                shutil.rmtree(dest, ignore_errors=True)
+                impact_clone.remove_scratch_dir(dest)
         self.assertEqual(seen, [f"o/r{i}" for i in range(5)])
         self.assertEqual(cl.call_count, 5)
 
@@ -260,7 +260,7 @@ class TestPrefetchedClones(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertEqual(count(), want,
                                  f"prefetch did not run ahead at {i}")
-                shutil.rmtree(dest, ignore_errors=True)
+                impact_clone.remove_scratch_dir(dest)
 
     def test_clone_failure_is_handed_over_not_raised(self):
         def flaky(repo, *_a):
@@ -275,7 +275,7 @@ class TestPrefetchedClones(unittest.TestCase):
                 seen.append(repo)
                 if err is not None:
                     errs[repo] = str(err)
-                shutil.rmtree(dest, ignore_errors=True)
+                impact_clone.remove_scratch_dir(dest)
         self.assertEqual(seen, [f"o/r{i}" for i in range(4)],
                          "a failed clone must not stop the chain")
         self.assertEqual(list(errs), ["o/r1"])
@@ -290,10 +290,17 @@ class TestPrefetchedClones(unittest.TestCase):
         with mock.patch.object(render_impact, "clone_repo", side_effect=record):
             gen = render_impact.prefetched_clones(fake_moved(6))
             _repo, _t, dest, _c, _w, _e = next(gen)
-            shutil.rmtree(dest, ignore_errors=True)
+            impact_clone.remove_scratch_dir(dest)
             gen.close()
         leftover = [p for p in made if p.exists()]
         self.assertEqual(leftover, [], f"prefetch leaked {leftover}")
+
+    def test_owner_lock_registry_drains(self):
+        """Plain rmtree on a yielded scratch leaves its owner lock in
+        impact_clone._SCRATCH_LOCKS forever, warned at shutdown (147)."""
+        # unittest orders classes alphabetically, so every class that
+        # consumes prefetched_clones has run by the time this sentinel does.
+        self.assertEqual(impact_clone._SCRATCH_LOCKS, {})  # pylint: disable=protected-access
 
 
 class TestTargetedCounts(unittest.TestCase):
@@ -479,7 +486,7 @@ class TestCloneLookahead(unittest.TestCase):
             with lock:
                 inflight = len(started)
             gate.set()
-            shutil.rmtree(fut.result(timeout=10)[2], ignore_errors=True)
+            impact_clone.remove_scratch_dir(fut.result(timeout=10)[2])
             gen.close()
         self.assertEqual(inflight, 3,
                          "depth=3 must run exactly 3 clones concurrently")
@@ -939,14 +946,13 @@ class TestCheckoutPin(unittest.TestCase):
 
         def record(_repo, _branch, dest, head=None):
             seen.append(head)
-            shutil.rmtree(dest, ignore_errors=True)
             return 0.1
 
         moved = [("o/r", {"branch": "main", "head": "pinned"})]
         with mock.patch.object(render_impact, "clone_repo", side_effect=record):
             for _repo, _t, dest, _c, _w, _e in \
                     render_impact.prefetched_clones(moved, depth=1):
-                shutil.rmtree(dest, ignore_errors=True)
+                impact_clone.remove_scratch_dir(dest)
         self.assertEqual(seen, ["pinned"])
 
 
