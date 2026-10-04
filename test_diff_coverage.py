@@ -93,7 +93,7 @@ class TestDiffCoverageCli(unittest.TestCase):
         os.chdir(self.directory)
         with mock.patch.object(reporter, "_analyzer", side_effect=spy):
             reporter.validate_statement_records(
-                {"alpha.py": {1, 2}, "beta.py": {1, 2}},
+                {"alpha.py": {1: 1, 2: 1}, "beta.py": {1: 1, 2: 1}},
                 {"alpha.py": {1, 2}, "beta.py": {1, 2}})
         self.assertTrue(created)
         # coverage.py exposes no public close for the analyzer; the fix
