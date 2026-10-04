@@ -31,6 +31,7 @@ CODEQL_IGNORES = (
     "NOTICE", ".gitignore",
 )
 GATES = {
+    "gate-integrity": ("deny", ()),
     "tests": ("deny", CODE_IGNORES),
     "lint": ("deny", CODE_IGNORES),
     "types": ("deny", CODE_IGNORES),
@@ -76,7 +77,7 @@ def classify(changed: set[str], *, capped: bool = False) -> dict[str, str]:
     """Return run/skip for each gate, conservatively handling a capped diff."""
     decisions = {}
     for name, (kind, patterns) in GATES.items():
-        if capped:
+        if capped or (kind == "deny" and not patterns):
             required = True
         elif kind == "deny":
             required = not all(
@@ -270,6 +271,7 @@ def classify_event(event: str, *, transport: Transport, repository: str,
         return {name: "run" for name in GATES}
     if event == "schedule":
         active = {
+            "gate-integrity": True,
             "audit": schedule == AUDIT_CRON,
             "codeql": schedule == CODEQL_CRON,
         }
@@ -289,6 +291,8 @@ def _reason(event: str, gate: str, decision: str, *, changed: set[str] | None,
             capped: bool, fallback: str) -> str:
     if fallback:
         reason = fallback
+    elif gate == "gate-integrity":
+        reason = "gate integrity runs on every event"
     elif event == "workflow_dispatch":
         reason = "manual dispatch runs every gate"
     elif event == "schedule" and decision == "run":
@@ -340,7 +344,7 @@ def _detect(environment: dict[str, str],
             if tag_ref:
                 decisions = classify_event(
                     event, transport=api, repository=repository, payload=payload)
-                fallback = f"tag push {tag_ref} runs all seven gates"
+                fallback = f"tag push {tag_ref} runs all {len(GATES)} gates"
             else:
                 changed, capped = changed_files(
                     api, repository, event=event,

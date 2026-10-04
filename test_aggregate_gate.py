@@ -1,4 +1,6 @@
 """Needs-based verdicts for the consolidated CI aggregate job."""
+# Existing workflow/aggregate controls stay together in these test modules.
+# pylint: disable=too-many-lines
 import contextlib
 import io
 import json
@@ -203,6 +205,38 @@ class NeedsClassificationTests(unittest.TestCase):
         needs["unexpected"] = {"result": "success"}
         with self.assertRaises(ag.AggregationError):
             ag.decide(needs, _applicability())
+
+    def test_gate_integrity_failure_or_skip_cannot_pass_the_aggregate(self):
+        for state in ('failure', 'skipped', 'neutral'):
+            needs = _all_success()
+            needs['gates'] = {'result': state}
+            with self.subTest(state=state):
+                rows = ag.decide(needs, _applicability())
+                self.assertEqual(rows['gate-integrity'].verdict, ag.FAILED)
+
+    def test_failed_rows_include_gate_integrity_on_aggregate_errors(self):
+        rows = ag._failed_rows('API unavailable')  # pylint: disable=protected-access
+        self.assertEqual(rows['gate-integrity'].verdict, ag.FAILED)
+
+    def test_docs_only_push_passes_with_unconditional_gates_success(self):
+        applicability = cd.classify({'README.md'})
+        needs = _all_success()
+        for gate, job in ag.GATE_JOBS.items():
+            if applicability[gate] == 'skip':
+                needs[job]['result'] = 'skipped'
+        rows = ag.decide(needs, applicability)
+        self.assertEqual(rows['gate-integrity'].verdict, ag.PASSED)
+        self.assertTrue(all(row.verdict in ag.GREEN for row in rows.values()))
+
+    def test_missing_integrity_need_and_applicability_are_refused(self):
+        needs = _all_success()
+        del needs['gates']
+        with self.assertRaises(ag.AggregationError):
+            ag.decide(needs, _applicability())
+        applicability = _applicability()
+        del applicability['gate-integrity']
+        with self.assertRaises(ag.AggregationError):
+            ag.decide(_all_success(), applicability)
 
 
 class CancelledRunMixin:
