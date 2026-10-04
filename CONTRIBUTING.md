@@ -137,6 +137,7 @@ The other workflow files in `.github/workflows/` are:
 - `coverage-ratchet.yml` — measures coverage on `main` and announces when
   measured coverage exceeds the committed floor. The floor only moves
   through a pull request.
+- `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
 - `targeted-blame-audit.yml` — contribution-counting correctness audit.
