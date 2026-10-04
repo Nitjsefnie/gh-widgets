@@ -12,6 +12,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from bench_platform import REQUIRES_POSIX_SHELL
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -34,6 +36,9 @@ FORK_PIN = re.compile(r'FORK_PIN="git\+https://github\.com/Nitjsefnie-OSC/'
                       r'git-fame@([0-9a-f]{40})"')
 DOCUMENTED_PIN = re.compile(r"git\+https://github\.com/Nitjsefnie-OSC/"
                             r"git-fame@([0-9a-f]{40})")
+CONTINUE_ON_ERROR_KEY = re.compile(
+    r"(?mi)^[ \t]*(?:-[ \t]+)?"
+    r"(?:continue-on-error|[\"']continue-on-error[\"'])[ \t]*:")
 
 
 def _job_blocks(text):
@@ -254,6 +259,7 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             r"--config \.gitleaks\.toml$")
         self.assertNotRegex(scan, r"(?m)^\s+if:")
 
+    @REQUIRES_POSIX_SHELL
     def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
         download = self._named_step(
             self.gitleaks_job, "Download gitleaks and verify its digest")
@@ -274,9 +280,22 @@ class TestSecretsScanWorkflow(unittest.TestCase):
     def test_scan_failure_cannot_be_swallowed_by_the_gitleaks_job(self):
         self.assertNotRegex(
             self.gitleaks_job,
-            r"(?mi)^\s*continue-on-error\s*:\s*true\s*$",
-            "continue-on-error can swallow scan failure and let the "
-            "gitleaks job appear successful")
+            CONTINUE_ON_ERROR_KEY,
+            "continue-on-error converts a failing step or job into a "
+            "successful one, defeating the aggregate's job-conclusion fold")
+
+    def test_error_swallowing_control_recognizes_yaml_mapping_keys(self):
+        for declaration in (
+                "continue-on-error: true",
+                '"continue-on-error": ${{ true }}',
+                "'continue-on-error': true # comment",
+                "- continue-on-error: true",
+                '- "continue-on-error": true',
+                "- 'continue-on-error': true"):
+            with self.subTest(declaration=declaration):
+                self.assertRegex(declaration, CONTINUE_ON_ERROR_KEY)
+        self.assertNotRegex("# continue-on-error: true",
+                            CONTINUE_ON_ERROR_KEY)
 
     def test_aggregate_passes_its_head_sha_and_wait_bound_to_the_gate(self):
         tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
