@@ -26,6 +26,7 @@ from pathlib import Path
 
 from bench_platform import REQUIRES_POSIX_SHELL
 from speed_workflow_steps import StepRunner
+from test_speed_workflow import CarrierFixture
 
 REPO_ROOT = Path(__file__).resolve().parent
 COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
@@ -281,36 +282,44 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
 
     # -- the RAISE derivation, executed --------------------------------------
 
-    def _derived_raises(self, old_doc, new_doc):
-        """The STEP's own raise-derivation fragment, run against two docs.
+    def _raise_step(self, old_doc, new_doc, message="", extra=None, shallow=False):
+        """Run the STEP's own declaration block against a carrier repository.
 
-        Sliced out of the `speed` job in `tests.yml` between the line that
-        builds `raise_slots` and the step's announcement of what it derived.
+        Sliced out of the `speed` job in `tests.yml` from the declaration
+        block's header through the loop that builds the comparator args.
         The fragment reads the base copy from $RUNNER_TEMP and the head from
         $BASELINE, exactly as the step does.
         """
-        _declared, _working_dir, block = self.steps.step_run(
-            "The committed baseline only ratchets down")
+        block = self.steps.step_run(
+            "The committed baseline only ratchets down")[2]
         lines = block.splitlines(True)
         start = next(i for i, line in enumerate(lines)
-                     if line.lstrip().startswith('raise_slots='))
+                     if line.lstrip().startswith('# DECLARED RAISES'))
         end = next(i for i, line in enumerate(lines)
                    if line.lstrip().startswith('done <<< "$raise_slots"'))
         fragment = "".join(lines[start:end + 1])
 
         root = self.temp_root("ghw-raise-")
-        (root / "head").mkdir(parents=True, exist_ok=True)
-        base = root / "base-baseline.json"
-        base.write_text(json.dumps(old_doc), encoding="utf-8")
-        head = root / "head-baseline.json"
-        head.write_text(json.dumps(new_doc), encoding="utf-8")
+        fixture = CarrierFixture(root, old_doc)
+        fixture.commit(message or "Change baseline", new_doc, extra)
+        if shallow:
+            remote = root / "remote.git"
+            fixture.git("clone", "--bare", str(fixture.head), str(remote))
+            fixture.git("remote", "add", "origin", remote.as_uri())
+            (fixture.head / ".git" / "shallow").write_text(
+                fixture.git("rev-parse", "HEAD").stdout + fixture.base + "\n",
+                encoding="utf-8")
         script = ("set -euo pipefail\n"
                   f'RUNNER_TEMP="{root}"\n'
-                  f'BASELINE="{head}"\n'
+                  'BASELINE="speed-baseline.json"\n'
+                  f'base_tip="{fixture.base}"\n'
                   + fragment
                   + 'printf "%s\\n" "${raises_args[@]+${raises_args[@]}}"\n')
-        done = self.steps.bash(script, root, "head",
-                               self.steps.env_for({"BASELINE": "x"}, root))
+        return self.steps.bash(script, root, "head",
+                               self.steps.env_for({"BASELINE": "x"}, root)), fixture
+
+    def _derived_raises(self, old_doc, new_doc, message=""):
+        done, _fixture = self._raise_step(old_doc, new_doc, message)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return done.stdout.split()
 
@@ -327,11 +336,15 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         """
         old_doc = document()
         new_doc = document()
+        old_doc["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": envelope(40.0)}
         new_doc["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = envelope(14.0)
         new_doc["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": envelope(60.0)}
-        derived = self._derived_raises(old_doc, new_doc)
+        message = (CarrierFixture.MESSAGE + "\nBudget-Raise: speed-baseline.json "
+                   "unit-suite:wall:counter::unit-suite 40 -> 60")
+        derived = self._derived_raises(old_doc, new_doc, message)
         self.assertEqual(derived, [
             "--ratchet-allow-raise",
             "unit-suite:entries:counter::unit-suite",
@@ -362,12 +375,12 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
                             root / "head" / "scripts" / "ci" / name)
         comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
 
-        def ratchet(old_doc, new_doc):
+        def ratchet(old_doc, new_doc, message=""):
             base = root / "base-baseline.json"
             base.write_text(json.dumps(old_doc), encoding="utf-8")
             head = root / "head-baseline.json"
             head.write_text(json.dumps(new_doc), encoding="utf-8")
-            derived = self._derived_raises(old_doc, new_doc)
+            derived = self._derived_raises(old_doc, new_doc, message)
             return subprocess.run(
                 [sys.executable, str(comparator),
                  "--ratchet-baselines", str(base), str(head), *derived],
@@ -376,11 +389,15 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         # Both unit slots rise: the step declares both, the tool accepts.
         old_doc = document()
         new_doc = document()
+        old_doc["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": envelope(40.0)}
         new_doc["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = envelope(14.0)
         new_doc["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": envelope(60.0)}
-        unit = ratchet(old_doc, new_doc)
+        message = (CarrierFixture.MESSAGE + "\nBudget-Raise: speed-baseline.json "
+                   "unit-suite:wall:counter::unit-suite 40 -> 60")
+        unit = ratchet(old_doc, new_doc, message)
         self.assertEqual(unit.returncode, 0, unit.stdout + unit.stderr)
         self.assertIn("no entry raised", unit.stdout)
 
@@ -392,6 +409,53 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
                          renderer.stdout + renderer.stderr)
         self.assertIn("renderer-workloads:entries:e2e::bench.render-impact",
                       renderer.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_raise_step_refuses_a_mixed_pr_with_the_split_route(self):
+        old, new = document(), document()
+        new["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14)
+        result, _fixture = self._raise_step(
+            old, new, CarrierFixture.MESSAGE,
+            {"test_new.py": "# added control\n"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("code PR first (red on speed)", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_raise_step_refuses_an_undeclared_raise(self):
+        old, new = document(), document()
+        new["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14)
+        result, _fixture = self._raise_step(old, new)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("has no declaration", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_raise_step_fetches_the_full_shallow_checkout_message_window(self):
+        old, new = document(), document()
+        new["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14)
+        result, fixture = self._raise_step(old, new, CarrierFixture.MESSAGE,
+                                           shallow=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.split(), ["--ratchet-allow-raise",
+                                                 CarrierFixture.SLOT])
+        self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
+                         .stdout.strip(), "false")
+
+    @REQUIRES_POSIX_SHELL
+    def test_digest_move_with_test_changes_passes_the_step_and_ratchet(self):
+        old, new = document(), document()
+        new["populations"]["unit-suite"]["population"] = "c" * 64
+        result, fixture = self._raise_step(
+            old, new, extra={"test_new.py": "# added control\n"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.split(), [])
+        ratchet = subprocess.run(
+            [sys.executable, str(COMPARATOR), "--ratchet-baselines",
+             str(fixture.base_path), str(fixture.head / "speed-baseline.json")],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(ratchet.returncode, 0, ratchet.stdout + ratchet.stderr)
 
 
 if __name__ == "__main__":

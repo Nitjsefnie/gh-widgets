@@ -729,8 +729,10 @@ def ratchet_check(old_path: Path, new_path: Path,
         lines.append(f"- `{node}`: {was} -> {now}")
     lines.append("  Lowering is always allowed. A rise is allowed only as a "
                  "declared re-derivation (--ratchet-allow-raise), which the "
-                 "workflow derives for the unit-suite population from the "
-                 "two documents; every undeclared raise stays a failure.")
+                 "workflow reads from pure baseline-carrier commits' exact "
+                 "Budget-Raise lines and measuring dispatch run ids; every "
+                 "undeclared raise stays a failure, and renderer ceilings "
+                 "stay strictly down-only.")
     print("\n".join(lines), file=sys.stderr)
     return 1
 
@@ -811,7 +813,9 @@ def main(argv: list | None = None) -> int:
                         default=[], metavar="POP:KEY:NODE",
                         help="a `population:key:node` slot whose recorded "
                              "maximum went UP, declared as a re-derivation; "
-                             "a declaration that contradicts the documents "
+                             "the workflow reads unit-suite declarations "
+                             "from pure baseline-carrier commit messages. "
+                             "A declaration that contradicts the documents "
                              "is refused")
     args = parser.parse_args(argv)
 
