@@ -1,12 +1,8 @@
-"""Invariants over .github/workflows that no workflow run can check itself.
-
-    python3 -m unittest discover -v
-
-Stdlib unittest, matching the rest of this repo's suite.
-"""
+"""Offline workflow invariants, run with ``python3 -m unittest discover``."""
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -682,6 +678,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
         self.tests = yaml.safe_load(self.tests_text)
         self.jobs = self.tests["jobs"]
+        self._stub_interpreter = None
 
     def _post_step_script(self):
         workflow = yaml.safe_load(
@@ -703,7 +700,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 f"{claimed_number}\n", encoding="utf-8")
             calls_path = cwd / "gh-calls.jsonl"
             stub = cwd / "gh"
-            stub.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""\
+            stub.with_suffix(".py").write_text(textwrap.dedent("""\
                 import json
                 import os
                 import sys
@@ -774,6 +771,11 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                     refuse("unexpected endpoint " + endpoint)
                 raise SystemExit(0)
                 """), encoding="utf-8")
+            stub.write_text(
+                "#!/bin/sh\nexec " +
+                shlex.quote(str(self._stub_interpreter or sys.executable)) + " " +
+                shlex.quote(str(stub.with_suffix(".py"))) + ' "$@"\n',
+                encoding="utf-8")
             stub.chmod(0o755)
             expected_sha = "a" * 40
             scenario = {
@@ -974,6 +976,21 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 self.assertEqual(len(writes), 1, calls)
                 self.assertEqual(writes[0][writes[0].index("-X") + 1], method)
                 self.assertIn(endpoint, writes[0])
+
+    @REQUIRES_POSIX_SHELL
+    def test_trusted_writer_runs_stub_with_interpreter_path_containing_spaces(self):
+        with tempfile.TemporaryDirectory(prefix="python interpreter ") as root:
+            interpreter = Path(root) / "python"
+            interpreter.symlink_to(sys.executable)
+            self._stub_interpreter = str(interpreter)
+
+            result, calls = self._run_post_step(comments=())
+            del self._stub_interpreter
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        writes = [call for call in calls if "-X" in call]
+        self.assertEqual(len(writes), 1, calls)
+        self.assertEqual(writes[0][writes[0].index("-X") + 1], "POST")
 
 
 if __name__ == "__main__":
