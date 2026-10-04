@@ -105,7 +105,26 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
 
+      - name: Install the pinned git-fame
+        # Parity with tests.yml's measured cell, which installs this same pin
+        # and runs the suite with GH_WIDGETS_REQUIRE_GIT_FAME set. Without it
+        # the git-fame-gated test classes skip, and the skip is SILENT in the
+        # number: the suite stays green while the three statements covering
+        # impact_loc.check_git_fame()'s success path go unexecuted, moving the
+        # reading 903 -> 906 missing and 83.2 -> 83.1 against an unchanged
+        # 5385-statement floor — the red of run 37203738774. A floor is only
+        # comparable within one program-environment, not just one interpreter
+        # build; this step is what makes this job's program the one the floor
+        # was measured over. GH_WIDGETS_REQUIRE_GIT_FAME on the Measure step
+        # below turns any future absence into a loud failure rather than a
+        # quiet skip.
+        run: |
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
+          python -m pip install "$FORK_PIN"
+
       - name: Measure
+        env:
+          GH_WIDGETS_REQUIRE_GIT_FAME: "true"
         run: |
           python -m coverage run --source=. --omit='test_*.py' \
             -m unittest discover

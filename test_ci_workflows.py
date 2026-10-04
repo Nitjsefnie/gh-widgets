@@ -150,6 +150,48 @@ class TestGitFameForkPin(unittest.TestCase):
         self.assertEqual({sha for _, sha in arms}, documented, arms)
 
 
+class TestCoverageRatchetCellParity(unittest.TestCase):
+    """coverage-ratchet must measure the program tests.yml's cell measures.
+
+    A coverage floor is comparable only within one program-environment, not
+    just one interpreter build. The git-fame-gated classes in test_impact.py
+    skip when the tool is absent and GH_WIDGETS_REQUIRE_GIT_FAME is unset —
+    a green suite whose three check_git_fame() success-path statements go
+    unexecuted, moving the reading 903 -> 906 missing and 83.2 -> 83.1
+    against an unchanged 5385-statement floor. That reading is what made
+    run 37203738774 red on main, not a real coverage change on the tree.
+    """
+
+    def test_measure_matches_the_measured_cell_toolchain(self):
+        # The pin alone would measure correctly but fail silently if the
+        # install ever broke; the env alone would fail the run loudly but
+        # never measure. tests.yml's measured cell carries both, and this
+        # job's value is only the comparison against a floor measured in
+        # that cell's program, so both are required here, and the install
+        # and the env must both precede the coverage run they govern.
+        job = _job_blocks(
+            (WORKFLOWS / "coverage-ratchet.yml").read_text())["measure"]
+        documented = set(DOCUMENTED_PIN.findall(
+            (REPO_ROOT / "CLAUDE.md").read_text()))
+        self.assertEqual(len(documented), 1, documented)
+        self.assertEqual(FORK_PIN.findall(job), list(documented), job)
+        env = re.search(r"^\s+GH_WIDGETS_REQUIRE_GIT_FAME: \"true\"$",
+                        job, re.MULTILINE)
+        self.assertIsNotNone(env, job)
+        lines = job.splitlines()
+        measure_index = next(index for index, line in enumerate(lines)
+                             if "coverage run" in line)
+        pin_index = next(index for index, line in enumerate(lines)
+                         if "FORK_PIN=" in line)
+        env_line = env.group(0).strip()
+        env_index = next(index for index, line in enumerate(lines)
+                         if line.strip() == env_line)
+        for name, index in (("the pinned install", pin_index),
+                            ("the require env", env_index)):
+            self.assertLess(index, measure_index,
+                            f"{name} must precede the coverage run")
+
+
 class TestSecretsScanWorkflow(unittest.TestCase):
     """Pin the secret scan's trigger, history, and aggregate wiring."""
 
