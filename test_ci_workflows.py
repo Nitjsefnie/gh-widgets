@@ -208,12 +208,16 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
                                cwd=tmp, env=environment, check=False)
             if record.exists():
                 calls = record.read_text().splitlines()
+        install_calls = [call for call in calls
+                         if call.startswith("-m pip install")]
+        self.assertEqual(len(install_calls), 1, calls)
+        # The pin must ride the install call's own target argument: a
+        # sibling invocation that merely mentions the ref — a diagnostic
+        # print, an env echo — cannot lend it to the install.
         self.assertEqual(
-            len([call for call in calls
-                 if call.startswith("-m pip install")]), 1, calls)
-        self.assertEqual(
-            set(DOCUMENTED_PIN.findall("\n".join(calls))), documented,
-            f"the recorded install did not use the documented pin: {calls}")
+            set(DOCUMENTED_PIN.findall(install_calls[0])), documented,
+            f"the install did not target the documented pin: "
+            f"{install_calls[0]}")
         measure_env = steps[measure_index].get("env", {})
         self.assertEqual(
             measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
