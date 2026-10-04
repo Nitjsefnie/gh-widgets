@@ -158,7 +158,7 @@ class TestGateBoundary(_Case):
     def test_a_measurement_a_hair_below_the_floor_fails(self):
         self.write_report(percent=71.86, statements=1000, missing=281)
         code, _, err = self.run_verb("gate")
-        self.assertNotEqual(code, 0)
+        self.assertEqual(code, 1)
         # The message states the OBSERVATION, not a guess at the cause: two
         # numbers the reader can act on, and no diagnosis to be wrong about.
         self.assertIn("measured 71.8 against a floor of 71.9", err)
@@ -238,9 +238,10 @@ class TestAnEmptyMeasurementIsNotAMeasurement(_Case):
         self.assertIn("percent_covered=None", err)
 
     def test_the_file_count_is_printed_on_a_normal_run_too(self):
-        self.write_committed()
+        self.write_committed(files=11)
         self.write_report(files=11)
-        _, out, _ = self.run_verb("gate")
+        code, out, _ = self.run_verb("gate")
+        self.assertEqual(code, 0)
         self.assertIn("11 file(s)", out)
 
 
@@ -290,6 +291,35 @@ class TestAMovedPopulationIsRefused(_Case):
     already printed on every run — so it is committed and compared.
     """
 
+    def test_a_gate_above_the_floor_with_a_different_file_count_is_refused(self):
+        self.write_committed(floor=10.0, measured=10.0, files=11)
+        self.write_report(percent=90.0, files=12, statements=3000, missing=300)
+        code, _, err = self.run_verb("gate")
+        self.assertEqual(code, 2)
+        self.assertIn("the population moved", err)
+
+    def test_a_gate_above_the_floor_with_matching_file_counts_passes(self):
+        self.write_committed(floor=10.0, measured=10.0, files=11)
+        self.write_report(percent=90.0, files=11, statements=3000, missing=300)
+        code, out, err = self.run_verb("gate")
+        self.assertEqual(code, 0)
+        self.assertIn("at or above it", out)
+        self.assertNotIn("the population moved", err)
+
+    def test_gate_and_raise_refuse_a_moved_population_with_the_same_message(self):
+        for committed_files, measured_files in ((11, 12), (12, 11)):
+            with self.subTest(committed=committed_files, measured=measured_files):
+                self.write_committed(floor=10.0, files=committed_files)
+                before = self.floor_path.read_bytes()
+                self.write_report(percent=90.0, files=measured_files)
+                gate_code, _, gate_err = self.run_verb("gate")
+                raise_code, _, raise_err = self.run_verb("raise", commit=SHA)
+                self.assertEqual(gate_code, 2)
+                self.assertEqual(raise_code, 2)
+                self.assertIn("the population moved", gate_err)
+                self.assertEqual(gate_err, raise_err)
+                self.assertEqual(self.floor_path.read_bytes(), before)
+
     def test_a_raise_over_a_different_file_count_is_refused(self):
         self.write_committed(floor=10.0, measured=10.0, files=11)
         before = self.floor_path.read_bytes()
@@ -308,15 +338,13 @@ class TestAMovedPopulationIsRefused(_Case):
         self.assertEqual(code, 2)
         self.assertIn("the population moved", err)
 
-    def test_the_gate_still_judges_a_different_file_count(self):
-        # The refusal is about MOVING the floor, not about reading it: a
-        # population that grew must still be gated, or the gate would silently
-        # stop covering the file it was extended to cover.
+    def test_a_gate_below_the_floor_refuses_a_different_file_count_first(self):
         self.write_committed(floor=71.9, files=11)
         self.write_report(percent=60.0, files=12)
         code, _, err = self.run_verb("gate")
-        self.assertEqual(code, 1)
-        self.assertIn("measured 60.0 against a floor of 71.9", err)
+        self.assertEqual(code, 2)
+        self.assertIn("the population moved", err)
+        self.assertNotIn("FAIL: measured", err)
 
     def test_the_file_count_is_recorded_on_a_raise(self):
         self.write_committed(floor=10.0, measured=10.0, files=11)
