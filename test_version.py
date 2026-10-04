@@ -9,6 +9,7 @@ Stdlib unittest, matching the rest of this repo's suite.
 """
 import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,28 @@ def load_common(path=REPO_ROOT / "ghwidgets_common.py"):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def copy_common_with_siblings(directory):
+    """Copy the shared module and its runtime siblings into one fixture."""
+    for name in ("ghwidgets_common", "ghwidgets_cache", "ghwidgets_journal"):
+        shutil.copyfile(REPO_ROOT / f"{name}.py", directory / f"{name}.py")
+    return directory / "ghwidgets_common.py"
+
+
+def isolate_sibling_modules(test):
+    """Let the fixture load its siblings, then restore prior registrations."""
+    names = ("ghwidgets_cache", "ghwidgets_journal")
+    saved = {name: sys.modules[name] for name in names if name in sys.modules}
+
+    def restore():
+        for name in names:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved)
+
+    test.addCleanup(restore)
+    for name in names:
+        sys.modules.pop(name, None)
 
 
 class VersionFileTests(unittest.TestCase):
@@ -134,23 +157,29 @@ class RepoVersionConstantTests(unittest.TestCase):
         deploy over a cosmetic field.
         """
         with tempfile.TemporaryDirectory() as tmp:
-            copied = Path(tmp) / "ghwidgets_common.py"
-            copied.write_text(
-                (REPO_ROOT / "ghwidgets_common.py").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+            copied = copy_common_with_siblings(Path(tmp))
+            isolate_sibling_modules(self)
             common = load_common(copied)
+            # Alphabetical unittest order and _load_sibling's sys.modules-first
+            # policy must not decide the verdict; exercise this copy end to end.
+            self.assertEqual(Path(common.ghwidgets_cache.__file__).resolve(),
+                             copied.with_name("ghwidgets_cache.py").resolve())
+            self.assertEqual(Path(common.ghwidgets_journal.__file__).resolve(),
+                             copied.with_name("ghwidgets_journal.py").resolve())
             self.assertEqual(common.REPO_VERSION, "unknown")
 
     def test_blank_file_degrades_to_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
-            copied = Path(tmp) / "ghwidgets_common.py"
-            copied.write_text(
-                (REPO_ROOT / "ghwidgets_common.py").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+            copied = copy_common_with_siblings(Path(tmp))
+            isolate_sibling_modules(self)
             (Path(tmp) / "VERSION").write_text("   \n", encoding="utf-8")
             common = load_common(copied)
+            # Alphabetical unittest order and _load_sibling's sys.modules-first
+            # policy must not decide the verdict; exercise this copy end to end.
+            self.assertEqual(Path(common.ghwidgets_cache.__file__).resolve(),
+                             copied.with_name("ghwidgets_cache.py").resolve())
+            self.assertEqual(Path(common.ghwidgets_journal.__file__).resolve(),
+                             copied.with_name("ghwidgets_journal.py").resolve())
             self.assertEqual(common.REPO_VERSION, "unknown")
 
 
