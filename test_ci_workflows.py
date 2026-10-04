@@ -211,13 +211,20 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
         install_calls = [call for call in calls
                          if call.startswith("-m pip install")]
         self.assertEqual(len(install_calls), 1, calls)
-        # The pin must ride the install call's own target argument: a
-        # sibling invocation that merely mentions the ref — a diagnostic
-        # print, an env echo — cannot lend it to the install.
+        # The install call must be EXACTLY the expected argv: the pin is
+        # the target requirement, not any substring of the call — a
+        # sibling invocation cannot lend the ref to the install, and an
+        # option value riding on the call (--cache-dir, --index-url)
+        # targets nothing. Splitting the recorded line keeps argument
+        # boundaries, so the set equality below is an exact contract:
+        # `-m pip install <documented URL>` and nothing else. A wrapper
+        # that genuinely execs python records the same argv and passes.
+        (sha,) = documented
         self.assertEqual(
-            set(DOCUMENTED_PIN.findall(install_calls[0])), documented,
-            f"the install did not target the documented pin: "
-            f"{install_calls[0]}")
+            {tuple(call.split()) for call in install_calls},
+            {("-m", "pip", "install",
+              f"git+https://github.com/Nitjsefnie-OSC/git-fame@{sha}")},
+            install_calls)
         measure_env = steps[measure_index].get("env", {})
         self.assertEqual(
             measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
