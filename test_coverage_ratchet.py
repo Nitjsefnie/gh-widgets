@@ -316,7 +316,13 @@ class TestAMovedPopulationIsRefused(_Case):
                 raise_code, _, raise_err = self.run_verb("raise", commit=SHA)
                 self.assertEqual(gate_code, 2)
                 self.assertEqual(raise_code, 2)
-                self.assertIn("the population moved", gate_err)
+                expected = (
+                    f"coverage ratchet: {self.floor_path} was measured over "
+                    f"{committed_files} file(s) and this run measured "
+                    f"{measured_files}: the population moved, so this floor "
+                    "is not comparable until `files` here is re-measured "
+                    "and committed deliberately\n")
+                self.assertEqual(gate_err, expected)
                 self.assertEqual(gate_err, raise_err)
                 self.assertEqual(self.floor_path.read_bytes(), before)
 
