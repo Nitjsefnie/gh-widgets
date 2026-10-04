@@ -225,10 +225,11 @@ summary. Raising it is a deliberate pull request: download the
 pull request, or run `scripts/ci/coverage_ratchet.py raise` locally. The floor
 is never lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a
 smaller number than it read. Raise coverage by writing tests; never by editing
-the floor. One consequence worth knowing before you add a source module: the
-gate deliberately judges coverage without comparing file counts, so `tests.yml` stays
-green on your pull request, and the file-count check fires only after merge, on
-`main` — where it blocks every release until someone re-derives the floor.
+the floor. Before you add or remove a source module, account for the changed
+file count: both `gate` and `raise` refuse a measurement whose file count differs
+from the committed record. The PR gate in `tests.yml` refuses that mismatch
+before merge, even when coverage exceeds the floor, until the file count is
+re-measured and committed deliberately.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise

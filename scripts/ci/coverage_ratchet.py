@@ -13,10 +13,9 @@ writes, so neither this script nor its tests ever shells out to coverage:
     coverage_ratchet.py gate  --coverage-json coverage.json
     coverage_ratchet.py raise --coverage-json coverage.json --commit "$GITHUB_SHA"
 
-`gate` is what tests.yml runs on every push and pull request: measured >= floor
-is a pass, anything less is a red naming the two numbers and nothing more. It
-states the OBSERVATION, because the diagnosis belongs to whoever reads the red
-and a gate that guesses reads as a gate that is wrong.
+`gate` is what tests.yml runs on every push and pull request: it first requires
+the measured file count to match the committed record. With matching counts,
+measured >= floor is a pass; anything less exits 1 naming the two numbers.
 
 `raise` produces a candidate floor file for a pull request: floor := measured,
 but ONLY when measured is strictly above the floor already committed. The main
@@ -26,8 +25,8 @@ There is no branch anywhere in this file that writes a smaller number than it
 read, so the one direction a ratchet must never move cannot be reached by
 adding a flag.
 
-It also refuses outright when the measurement covers a different NUMBER OF
-FILES than the committed record does. A percentage is a ratio, so adding one
+Both subcommands refuse outright when the measurement covers a different
+NUMBER OF FILES than the committed record does. A percentage is a ratio, so adding one
 shipped module moves it while every statement count stays comparable and
 nothing else announces the change; a ratchet that compares only to itself
 cannot see that. That refusal is exit 2, not exit 0-with-no-write: a moved
@@ -39,10 +38,10 @@ moved has to be written where the number is, in repo-visible terms, because the
 pull request that explains it is not there when someone reads this file two
 months later. So a committed file with no basis is an error, not a default.
 
-Exit codes: 0 in bounds (or nothing to raise), 1 below the floor, 2 could not
-measure at all. 2 is separate from 1 on purpose: a tool that cannot read its
-input is not a gate that failed, and reporting the two alike teaches people to
-read the red as noise.
+Exit codes: 0 in bounds (or nothing to raise), 1 gate below the floor with
+matching file counts, 2 invalid or unreadable input, or a file-count mismatch.
+2 is separate from 1: input errors and incomparable populations are refused
+before the gate compares percentages.
 """
 from __future__ import annotations
 
@@ -265,9 +264,26 @@ def _atomic_write(path: Path, text: str) -> None:
             os.unlink(temp_name)
 
 
+def _check_population(measurement: Measurement, document: dict,
+                      floor_path: Path) -> None:
+    """Require comparable file counts before gating or raising the floor."""
+    # The population is part of the measurement, not an incidental detail of
+    # it. Adding or removing a shipped file moves the percentage while nothing
+    # else changes, so comparing the new ratio against a floor the old
+    # denominator set is comparing two different programs. Both subcommands
+    # refuse that comparison until a human records the move.
+    if measurement.files != document["files"]:
+        raise RatchetError(
+            f"{floor_path} was measured over {document['files']} file(s) and "
+            f"this run measured {measurement.files}: the population moved, so "
+            "this floor is not comparable until `files` here is re-measured "
+            "and committed deliberately")
+
+
 def gate(measurement: Measurement, floor_path: Path) -> int:
-    """Compare the measurement against the committed floor. 0 in bounds."""
+    """Compare matching populations against the floor. 0 in bounds."""
     document = read_committed(floor_path)
+    _check_population(measurement, document, floor_path)
     floor = float(document["floor"])
     if measurement.percent >= floor:
         print(f"coverage gate: measured {measurement.percent} against a floor "
@@ -280,27 +296,16 @@ def gate(measurement: Measurement, floor_path: Path) -> int:
 
 def raise_floor(measurement: Measurement, floor_path: Path,
                 commit: str | None = None) -> int:
-    """Move the floor up to the measurement, never down. 0 either way.
+    """Move the floor up over a matching population, never down. 0 either way.
 
-    The single condition below is the whole ratchet: `measured <= floor` exits
-    without writing. Every other key in the document is carried over from what
-    was committed, so a raise cannot rewrite the population it measured, the
-    cell it was measured on, or the reason the floor exists.
+    With comparable file counts, `measured <= floor` exits without writing.
+    Every other key in the document is carried over from what was committed,
+    so a raise cannot rewrite the population it measured, the cell it was
+    measured on, or the reason the floor exists.
     """
     document = read_committed(floor_path)
+    _check_population(measurement, document, floor_path)
     floor = float(document["floor"])
-    # The population is part of the measurement, not an incidental detail of
-    # it. Adding or removing a shipped file moves the percentage while nothing
-    # else changes, so comparing the new ratio against a floor the old
-    # denominator set is comparing two different programs. The floor still
-    # GATES against any population (that is what it is for); it just refuses
-    # to move itself across one until a human records the move.
-    if measurement.files != document["files"]:
-        raise RatchetError(
-            f"{floor_path} was measured over {document['files']} file(s) and "
-            f"this run measured {measurement.files}: the population moved, so "
-            "this floor is not comparable until `files` here is re-measured "
-            "and committed deliberately")
     if measurement.percent <= floor:
         print(f"floor stays at {floor}: measured {measurement.percent} is not "
               "above it, and a ratchet only moves in one direction")
