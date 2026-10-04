@@ -11,7 +11,12 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import redirect_stdout
+from io import StringIO
+import os
 from pathlib import Path
+
+from scripts.ci import diff_coverage as reporter
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -51,6 +56,17 @@ class TestDiffCoverageCli(unittest.TestCase):
                       result.stdout)
         self.assertIn("| `alpha.py` | 2 | 3 | 2 |", result.stdout)
         self.assertIn("| `beta.py` | 0 | 2 | 1-2 |", result.stdout)
+
+        previous_directory = Path.cwd()
+        self.addCleanup(os.chdir, previous_directory)
+        os.chdir(self.directory)
+        in_process_output = StringIO()
+        with redirect_stdout(in_process_output):
+            return_code = reporter.main([
+                "--coverage", str(self.coverage), "--diff", str(self.diff)])
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(in_process_output.getvalue(), result.stdout)
 
     def test_cli_has_no_javascript_coverage_input(self):
         result = subprocess.run(
