@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -702,8 +703,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 f"{claimed_number}\n", encoding="utf-8")
             calls_path = cwd / "gh-calls.jsonl"
             stub = cwd / "gh"
-            stub.write_text(textwrap.dedent("""\
-                #!/usr/bin/env python3
+            stub.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""\
                 import json
                 import os
                 import sys
@@ -923,6 +923,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
             r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$REPO/issues/\$PR_NUMBER/comments\"")
         self.assertIn("[ \"$current_head_repo\" != \"$HEAD_REPO\" ]", post_script)
 
+    @REQUIRES_POSIX_SHELL
     def test_trusted_writer_refuses_each_head_identity_mismatch(self):
         mismatches = (
             ("sha", "b" * 40, "owner/repo"),
@@ -936,6 +937,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse([call for call in calls if "-X" in call], calls)
 
+    @REQUIRES_POSIX_SHELL
     def test_trusted_writer_refuses_an_artifact_for_another_pull_request(self):
         result, calls = self._run_post_step(claimed_number="43")
 
@@ -944,6 +946,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertFalse([call for call in calls if "-X" in call], calls)
         self.assertEqual(calls, [])
 
+    @REQUIRES_POSIX_SHELL
     def test_trusted_writer_refuses_comment_or_head_lookup_failures(self):
         for failure in ("comments", "head"):
             with self.subTest(failure=failure):
@@ -952,6 +955,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse([call for call in calls if "-X" in call], calls)
 
+    @REQUIRES_POSIX_SHELL
     def test_trusted_writer_posts_or_patches_exactly_one_marker_comment(self):
         cases = (
             ("post", (), "POST", "repos/owner/repo/issues/42/comments"),
