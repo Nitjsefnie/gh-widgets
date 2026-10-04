@@ -220,6 +220,17 @@ def envelope_maxima(entries: dict) -> dict:
     return {node: float(envelope["max"]) for node, envelope in entries.items()}
 
 
+def _refuse_contradictory_declarations(allowed, raises):
+    """A slot declared both removed and raised asks for two opposite
+    verdicts; refuse it before anything is judged."""
+    conflict = allowed & raises
+    if conflict:
+        raise ComparisonError(
+            "these slots are both declared removed and declared raised: "
+            + ", ".join(sorted(conflict))
+            + " — that asks for two opposite verdicts at once; pick one")
+
+
 def raised_entries(old: dict, new: dict,
                    allowed_removals=frozenset(),
                    allowed_raises=frozenset()) -> dict:
@@ -275,12 +286,7 @@ def raised_entries(old: dict, new: dict,
     """
     allowed = set(allowed_removals)
     raises = set(allowed_raises)
-    conflict = allowed & raises
-    if conflict:
-        raise ComparisonError(
-            "these slots are both declared removed and declared raised: "
-            + ", ".join(sorted(conflict))
-            + " — that asks for two opposite verdicts at once; pick one")
+    _refuse_contradictory_declarations(allowed, raises)
     moved = {}
     for name in sorted(set(old.get("populations", {}))
                        | set(new.get("populations", {}))):
