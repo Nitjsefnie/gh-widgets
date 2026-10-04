@@ -227,20 +227,32 @@ def changed_files(transport: Transport, repository: str, *, event: str,
     before, after = _sha(payload.get("before")), _sha(payload.get("after"))
     if after != _sha(sha):
         raise DetectionError("push event after does not match HEAD_SHA")
-    return _compare_files(transport, repository, before, after, default_branch)
+    return _compare_files(transport, repository, before, after, default_branch,
+                          ref=payload.get("ref", ""))
 
 
 def _compare_files(transport: Transport, repository: str, before: str,
-                   after: str, default_branch: str) -> tuple[set[str], bool]:
+                   after: str, default_branch: str, *,
+                   ref: str = "") -> tuple[set[str], bool]:
+    default_branch_push = bool(default_branch) and ref == (
+        f"refs/heads/{default_branch}")
+    # Falling back on the default branch itself would compare its new tip
+    # with itself and skip the gates that must judge the landed window.
     if before == "0" * 40:
         if not default_branch:
             raise DetectionError("new-branch push has no default branch to compare")
+        if default_branch_push:
+            raise DetectionError(
+                "created default branch has no judgeable changed-path basis")
         before = quote(default_branch, safe="")
     comparison = _api(
         transport, f"repos/{repository}/compare/{before}...{after}")
     if isinstance(comparison, dict) and comparison.get("status") == "diverged":
         if not default_branch:
             raise DetectionError("divergent push has no default branch to compare")
+        if default_branch_push:
+            raise DetectionError(
+                "default-branch history rewritten; changed paths are not judgeable")
         baseline = quote(default_branch, safe="")
         if before != baseline:
             comparison = _api(
