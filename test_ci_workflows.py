@@ -43,17 +43,16 @@ CONTINUE_ON_ERROR_KEY = re.compile(
     r"(?mi)^[ \t]*(?:-[ \t]+)?"
     r"(?:continue-on-error|[\"']continue-on-error[\"'])[ \t]*:")
 # A python executable stub that appends ONE JSON array per invocation, so
-# the recorded calls keep argv boundaries: arguments that arrive grouped
-# into a single string cannot masquerade as the separate shape later.
+# the recorded calls keep argv boundaries AND ARGUMENT BYTES: encoding is
+# delegated to the interpreter running this suite (a real JSON encoder),
+# never to shell command substitution or ad hoc escaping, which lose
+# trailing newlines and mangle backslashes. `python -c CODE "$@"` puts the
+# stub's own arguments in sys.argv[1:] unchanged, whatever they contain.
 _ARGV_JSON_STUB = (
     "#!/bin/sh\n"
-    "json=''\n"
-    "for arg do\n"
-    "  esc=$(printf '%s' \"$arg\" | sed -e 's/\\\\\\\\/\\\\\\\\\\\\/g'"
-    " -e 's/\"/\\\\\"/g')\n"
-    "  json=\"${json}${json:+,}\\\"$esc\\\"\"\n"
-    "done\n"
-    "printf '[%s]\\n' \"$json\" >> \"$RECORD\"\n")
+    f"exec {shlex.quote(sys.executable)} -c"
+    " 'import json, sys; print(json.dumps(sys.argv[1:]))'"
+    " \"$@\" >> \"$RECORD\"\n")
 
 
 def _argv_calls_with_recording_python(installs):
