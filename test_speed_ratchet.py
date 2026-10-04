@@ -279,6 +279,120 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return done.stdout.split()
 
+    # -- the RAISE derivation, executed --------------------------------------
+
+    def _derived_raises(self, old_doc, new_doc):
+        """The STEP's own raise-derivation fragment, run against two docs.
+
+        Sliced out of the `speed` job in `tests.yml` between the line that
+        builds `raise_slots` and the step's announcement of what it derived.
+        The fragment reads the base copy from $RUNNER_TEMP and the head from
+        $BASELINE, exactly as the step does.
+        """
+        _declared, _working_dir, block = self.steps.step_run(
+            "The committed baseline only ratchets down")
+        lines = block.splitlines(True)
+        start = next(i for i, line in enumerate(lines)
+                     if line.lstrip().startswith('raise_slots='))
+        end = next(i for i, line in enumerate(lines)
+                   if line.lstrip().startswith('done <<< "$raise_slots"'))
+        fragment = "".join(lines[start:end + 1])
+
+        root = self.temp_root("ghw-raise-")
+        (root / "head").mkdir(parents=True, exist_ok=True)
+        base = root / "base-baseline.json"
+        base.write_text(json.dumps(old_doc), encoding="utf-8")
+        head = root / "head-baseline.json"
+        head.write_text(json.dumps(new_doc), encoding="utf-8")
+        script = ("set -euo pipefail\n"
+                  f'RUNNER_TEMP="{root}"\n'
+                  f'BASELINE="{head}"\n'
+                  + fragment
+                  + 'printf "%s\\n" "${raises_args[@]+${raises_args[@]}}"\n')
+        done = self.steps.bash(script, root, "head",
+                               self.steps.env_for({"BASELINE": "x"}, root))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout.split()
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_ratchet_step_declares_both_unit_raises_separately(self):
+        """The raise derivation, executed against two documents.
+
+        The first live run of this derivation printed the slots
+        space-joined on one line and the step's `while IFS= read -r` loop
+        splits on newlines, so both declarations arrived as ONE undeclared
+        slot name and the ratchet refused its own re-derivation — while the
+        whole unit suite stayed green, because nothing in it executes this
+        fragment. This control does.
+        """
+        old_doc = document()
+        new_doc = document()
+        new_doc["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14.0)
+        new_doc["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": envelope(60.0)}
+        derived = self._derived_raises(old_doc, new_doc)
+        self.assertEqual(derived, [
+            "--ratchet-allow-raise",
+            "unit-suite:entries:counter::unit-suite",
+            "--ratchet-allow-raise",
+            "unit-suite:wall:counter::unit-suite",
+        ], "a CPU and a wall raise at once must arrive as TWO separate "
+           "declarations; one merged argument names no slot and the "
+           "ratchet refuses its own re-derivation")
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_ratchet_step_declares_nothing_when_nothing_rises(self):
+        self.assertEqual(self._derived_raises(document(), document()), [])
+
+    @REQUIRES_POSIX_SHELL
+    def test_derived_unit_raises_satisfy_the_real_comparator(self):
+        """The workflow boundary: the step's derivation feeds the tool.
+
+        The derived declarations are the arguments the ratchet invocation
+        receives, so the pair must compose: unit raises pass with them,
+        and a renderer raise — which the step never declares — still
+        refuses. This is the accepted-exception's scope, checked at the
+        boundary rather than taken from the tool's unit tests.
+        """
+        root = self.temp_root("ghw-raise-compose-")
+        (root / "head" / "scripts" / "ci").mkdir(parents=True)
+        for name in ("compare_counters.py", "baseline.py", "counter.py"):
+            shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name,
+                            root / "head" / "scripts" / "ci" / name)
+        comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
+
+        def ratchet(old_doc, new_doc):
+            base = root / "base-baseline.json"
+            base.write_text(json.dumps(old_doc), encoding="utf-8")
+            head = root / "head-baseline.json"
+            head.write_text(json.dumps(new_doc), encoding="utf-8")
+            derived = self._derived_raises(old_doc, new_doc)
+            return subprocess.run(
+                [sys.executable, str(comparator),
+                 "--ratchet-baselines", str(base), str(head), *derived],
+                capture_output=True, text=True, check=False)
+
+        # Both unit slots rise: the step declares both, the tool accepts.
+        old_doc = document()
+        new_doc = document()
+        new_doc["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14.0)
+        new_doc["populations"]["unit-suite"]["wall"] = {
+            "counter::unit-suite": envelope(60.0)}
+        unit = ratchet(old_doc, new_doc)
+        self.assertEqual(unit.returncode, 0, unit.stdout + unit.stderr)
+        self.assertIn("no entry raised", unit.stdout)
+
+        # A renderer maximum rises: the step derives nothing for it, and
+        # the tool refuses — the renderer half stays strictly down-only.
+        renderer = ratchet(document(impact=1.3514),
+                           document(impact=1.9))
+        self.assertEqual(renderer.returncode, 1,
+                         renderer.stdout + renderer.stderr)
+        self.assertIn("renderer-workloads:entries:e2e::bench.render-impact",
+                      renderer.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
