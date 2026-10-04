@@ -1061,7 +1061,7 @@ jobs:
                   for node in sorted(set(unit(old).get(key, {})) | set(unit(new).get(key, {}))) \
                   if raisep(unit(old).get(key, {}).get(node, {}).get("max"), \
                             unit(new).get(key, {}).get(node, {}).get("max"))); \
-              print(" ".join(slots))' \
+              print("\n".join(slots))' \
               "$RUNNER_TEMP/base-baseline.json" "$BASELINE")"
           raises_args=()
           while IFS= read -r slot; do

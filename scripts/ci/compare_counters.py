@@ -710,23 +710,12 @@ def ratchet_check(old_path: Path, new_path: Path,
                   allowed_removals=(), allowed_raises=()) -> int:
     """The down-only half of the gate: no baseline entry may go UP.
 
-    Every population, in one pass: the workflow runs this against the merge
-    base's copy of the document, and a population added by the head commit
-    has no baseline there, which is a raise by definition and is reported as
-    one.
-
     Run against the MERGE BASE's copy of the baseline, not the parent's last
     successful run and not the previous commit on this branch — a gate that
     judges the wrong base is worse than no gate, because it reads as one.
-
-    A raise is permitted only when DECLARED, per slot, with
-    --ratchet-allow-raise — the same declared-exception shape as
-    --ratchet-allow-removal. The workflow derives the declarations for the
-    unit-suite population from the two documents, so a re-derived envelope
-    lands loudly instead of impossibly; every undeclared raise stays a
-    failure, and a declaration that contradicts the documents (a slot named
-    as raised that did not go up, or one declared both removed and raised)
-    is refused rather than honoured.
+    Raises and removals are governed by declared exceptions; the full
+    contract, including how a declaration is checked against the documents,
+    is `baseline.raised_entries`'s docstring.
     """
     old = read_baseline(old_path)
     new = read_baseline(new_path)
@@ -821,11 +810,9 @@ def main(argv: list | None = None) -> int:
     parser.add_argument("--ratchet-allow-raise", action="append",
                         default=[], metavar="POP:KEY:NODE",
                         help="a `population:key:node` slot whose recorded "
-                             "maximum in NEW is above its value in OLD, "
-                             "declared as a re-derivation rather than a "
-                             "regression; repeatable. A declared raise that "
-                             "did not happen, or a slot declared both removed "
-                             "and raised, is refused")
+                             "maximum went UP, declared as a re-derivation; "
+                             "a declaration that contradicts the documents "
+                             "is refused")
     args = parser.parse_args(argv)
 
     if args.print_population:
