@@ -4,6 +4,7 @@
 
 Stdlib unittest, matching the rest of this repo's suite.
 """
+import json
 import os
 import re
 import subprocess
@@ -32,7 +33,8 @@ def envelope(value, samples=6):
     return {"min": round(value * 0.8, 6), "max": value, "n": samples}
 
 
-WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+WORKFLOWS = Path(os.environ.get(
+    "GH_WIDGETS_WORKFLOWS", REPO_ROOT / ".github" / "workflows"))
 CODEQL_USE = re.compile(r"uses:\s*github/codeql-action/([\w-]+)@(\S+)")
 FORK_PIN = re.compile(r'FORK_PIN="git\+https://github\.com/Nitjsefnie-OSC/'
                       r'git-fame@([0-9a-f]{40})"')
@@ -680,6 +682,126 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.tests = yaml.safe_load(self.tests_text)
         self.jobs = self.tests["jobs"]
 
+    def _post_step_script(self):
+        workflow = yaml.safe_load(
+            (WORKFLOWS / "coverage-comment.yml").read_text(encoding="utf-8"))
+        return next(
+            step["run"]
+            for step in workflow["jobs"]["comment"]["steps"]
+            if step.get("name") == "Post or update the pull request comment")
+
+    def _run_post_step(self, *, claimed_number="42", current_sha=None,
+                       current_repo="owner/repo", comments=(), failure=None):
+        """Run the shipped writer script with an allow-listed offline gh stub."""
+        with tempfile.TemporaryDirectory(
+                prefix="diff-coverage-comment-") as directory:
+            cwd = Path(directory)
+            (cwd / "body.md").write_text(
+                "### Patch coverage of this change\n", encoding="utf-8")
+            (cwd / "pr-number.txt").write_text(
+                f"{claimed_number}\n", encoding="utf-8")
+            calls_path = cwd / "gh-calls.jsonl"
+            stub = cwd / "gh"
+            stub.write_text(textwrap.dedent("""\
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+
+                def refuse(message):
+                    print("strict gh stub refused: " + message, file=sys.stderr)
+                    raise SystemExit(90)
+
+                args = sys.argv[1:]
+                with open(os.environ["GH_CALLS"], "a", encoding="utf-8") as log:
+                    log.write(json.dumps(args) + "\\n")
+                if not args or args.pop(0) != "api":
+                    refuse("only gh api is allowed")
+                method = None
+                if "-X" in args:
+                    index = args.index("-X")
+                    if index + 1 >= len(args):
+                        refuse("missing method")
+                    method = args[index + 1]
+                    del args[index:index + 2]
+                endpoints = [arg for arg in args if arg.startswith("repos/")]
+                if len(endpoints) != 1:
+                    refuse("expected exactly one API endpoint")
+                endpoint = endpoints[0]
+                scenario = json.loads(os.environ["GH_SCENARIO"])
+
+                def require(condition, message):
+                    if not condition:
+                        refuse(message)
+
+                headers = ["-H", "Cache-Control: no-cache"]
+                if (endpoint == "repos/owner/repo/issues/42/comments"
+                        and method is None):
+                    require(method is None, "comment listing must be a read")
+                    require(args == headers + ["--paginate", endpoint,
+                            "--jq", ".[]"], "unexpected comment-list arguments")
+                    if scenario["failure"] == "comments":
+                        print("comment lookup failed", file=sys.stderr)
+                        raise SystemExit(17)
+                    for comment in scenario["comments"]:
+                        print(json.dumps(comment))
+                elif endpoint == "repos/owner/repo/pulls/42":
+                    require(method is None, "head lookup must be a read")
+                    require(args == headers + [endpoint, "--jq",
+                            '[.head.sha // "", .head.repo.full_name // ""] | @tsv'],
+                            "unexpected head-lookup arguments")
+                    if scenario["failure"] == "head":
+                        print("head lookup failed", file=sys.stderr)
+                        raise SystemExit(18)
+                    print(scenario["current_sha"] + "\\t" +
+                          scenario["current_repo"])
+                elif endpoint == "repos/owner/repo/issues/comments/314":
+                    require(method == "PATCH", "only marker PATCH is allowed")
+                    require(args == [endpoint, "-F", "body=@comment.md"],
+                            "unexpected PATCH arguments")
+                    require("<!-- gh-widgets-diff-coverage -->" in
+                            open("comment.md", encoding="utf-8").read(),
+                            "PATCH body lacks the marker")
+                elif (endpoint == "repos/owner/repo/issues/42/comments"
+                      and method == "POST"):
+                    require(method == "POST", "only comment POST is allowed")
+                    require(args == [endpoint, "-F", "body=@comment.md"],
+                            "unexpected POST arguments")
+                    require("<!-- gh-widgets-diff-coverage -->" in
+                            open("comment.md", encoding="utf-8").read(),
+                            "POST body lacks the marker")
+                else:
+                    refuse("unexpected endpoint " + endpoint)
+                raise SystemExit(0)
+                """), encoding="utf-8")
+            stub.chmod(0o755)
+            expected_sha = "a" * 40
+            scenario = {
+                "current_sha": current_sha or expected_sha,
+                "current_repo": current_repo,
+                "comments": list(comments),
+                "failure": failure,
+            }
+            environment = dict(
+                os.environ,
+                PATH=f"{cwd}{os.pathsep}{os.environ['PATH']}",
+                GH_TOKEN="test-token",
+                GH_CALLS=str(calls_path),
+                GH_SCENARIO=json.dumps(scenario),
+                REPO="owner/repo",
+                HEAD_SHA=expected_sha,
+                HEAD_REPO="owner/repo",
+                PR_NUMBER="42")
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c",
+                 self._post_step_script()],
+                cwd=cwd, env=environment, capture_output=True, text=True,
+                check=False, timeout=10)
+            calls = ([json.loads(line) for line in
+                      calls_path.read_text(encoding="utf-8").splitlines()]
+                     if calls_path.exists() else [])
+            return result, calls
+
     def test_diff_coverage_runs_only_for_successful_pull_request_tests(self):
         job = self.jobs.get("diff-coverage")
         self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
@@ -800,6 +922,54 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
             post_script,
             r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$REPO/issues/\$PR_NUMBER/comments\"")
         self.assertIn("[ \"$current_head_repo\" != \"$HEAD_REPO\" ]", post_script)
+
+    def test_trusted_writer_refuses_each_head_identity_mismatch(self):
+        mismatches = (
+            ("sha", "b" * 40, "owner/repo"),
+            ("repository", "a" * 40, "fork/repo"),
+        )
+        for identity, current_sha, current_repo in mismatches:
+            with self.subTest(identity=identity):
+                result, calls = self._run_post_step(
+                    current_sha=current_sha, current_repo=current_repo)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse([call for call in calls if "-X" in call], calls)
+
+    def test_trusted_writer_refuses_an_artifact_for_another_pull_request(self):
+        result, calls = self._run_post_step(claimed_number="43")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to post", result.stderr)
+        self.assertFalse([call for call in calls if "-X" in call], calls)
+        self.assertEqual(calls, [])
+
+    def test_trusted_writer_refuses_comment_or_head_lookup_failures(self):
+        for failure in ("comments", "head"):
+            with self.subTest(failure=failure):
+                result, calls = self._run_post_step(failure=failure)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse([call for call in calls if "-X" in call], calls)
+
+    def test_trusted_writer_posts_or_patches_exactly_one_marker_comment(self):
+        cases = (
+            ("post", (), "POST", "repos/owner/repo/issues/42/comments"),
+            ("patch", ({
+                "id": 314,
+                "user": {"login": "github-actions[bot]"},
+                "body": "<!-- gh-widgets-diff-coverage --> previous report",
+            },), "PATCH", "repos/owner/repo/issues/comments/314"),
+        )
+        for action, comments, method, endpoint in cases:
+            with self.subTest(action=action):
+                result, calls = self._run_post_step(comments=comments)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                writes = [call for call in calls if "-X" in call]
+                self.assertEqual(len(writes), 1, calls)
+                self.assertEqual(writes[0][writes[0].index("-X") + 1], method)
+                self.assertIn(endpoint, writes[0])
 
 
 if __name__ == "__main__":

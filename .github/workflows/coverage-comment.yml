@@ -18,10 +18,10 @@ name: coverage comment
 # and repository are also checked against the current pull request before a
 # comment can be written.
 #
-# `pull_request_target` is not the answer. As `tests.yml` explains, that
-# trigger would give a run of proposed code the base repository's token and
-# secrets. The workflow_run split keeps the write-capable job on this trusted
-# file while the untrusted job stays read-only.
+# `pull_request_target` is not the answer: that trigger would give a run of
+# proposed code the base repository's token and secrets. The `workflow_run`
+# split keeps the write-capable job on this trusted file while the untrusted
+# job stays read-only.
 
 # zizmor calls `workflow_run` fundamentally insecure, and it is right about
 # the usual shape: a run that checks out the pull request, or runs something
