@@ -987,20 +987,22 @@ jobs:
                  "working-directory: head" >&2
             exit 1
           fi
+          # PR lines retain their original columns: executed-step controls slice
+          # and execute these exact lines; byte identity keeps the PR diff honest.
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
-              echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
-                   "deleted?). There is nothing to ratchet against."
-              exit 0
-            fi
-            base_tip="$(git rev-parse FETCH_HEAD)"
-            echo "Base branch tip: $base_tip"
-            if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
-              echo "No $BASELINE at the base tip, so there is nothing to" \
-                   "ratchet against."
-              exit 0
-            fi
-            git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+          if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
+            echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
+                 "deleted?). There is nothing to ratchet against."
+            exit 0
+          fi
+          base_tip="$(git rev-parse FETCH_HEAD)"
+          echo "Base branch tip: $base_tip"
+          if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
+            echo "No $BASELINE at the base tip, so there is nothing to" \
+                 "ratchet against."
+            exit 0
+          fi
+          git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
           else
             if [ -z "$BEFORE_SHA" ]; then
               echo "::error::BEFORE_SHA is empty; the landed range cannot be" \

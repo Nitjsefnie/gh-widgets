@@ -469,6 +469,7 @@ class TestMainPushRatchet(unittest.TestCase):
         self.root = Path(stack.enter_context(
             tempfile.TemporaryDirectory(prefix="ghw-push-ratchet-")))
         self.fixture = CarrierFixture(self.root, document())
+        self.fixture.base_path.unlink()
         bench = self.fixture.head / "scripts" / "bench"
         bench.mkdir()
         shutil.copyfile(HARNESS, bench / "e2e_bench.py")
@@ -481,15 +482,25 @@ class TestMainPushRatchet(unittest.TestCase):
         fixture = self.fixture
         remote = self.root / "remote.git"
         fixture.git("clone", "--bare", str(fixture.head), str(remote))
-        fixture.git("remote", "add", "origin", remote.as_uri())
-        (fixture.head / ".git" / "shallow").write_text(
-            fixture.git("rev-parse", "HEAD").stdout + fixture.base + "\n",
-            encoding="utf-8")
+        # Keep the seed separately; file:// makes --depth use a real fetch.
+        fixture.head.rename(self.root / "source")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", remote.as_uri(), str(fixture.head)],
+            cwd=self.root, capture_output=True, text=True, check=True)
+        self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
+                         .stdout.strip(), "true")
+        previous = subprocess.run(
+            ["git", "cat-file", "-e", f"{fixture.base}^{{commit}}"],
+            cwd=fixture.head, capture_output=True, check=False)
+        self.assertNotEqual(previous.returncode, 0,
+                            "the shallow checkout must lack the before tip")
         declared, working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
         env = self.steps.env_for(
             declared, self.root, EVENT_NAME="push",
             BEFORE_SHA=fixture.base if before is None else before)
+        self.assertFalse(fixture.base_path.exists(),
+                         "the step must extract the previous tip's baseline")
         return self.steps.bash(block, self.root, working_dir, env)
 
     def test_step_schedules_prs_and_main_pushes_only(self):
@@ -523,6 +534,8 @@ class TestMainPushRatchet(unittest.TestCase):
         self.assertIn("no entry raised", result.stdout)
         self.assertEqual(self.fixture.git("rev-parse", "--is-shallow-repository")
                          .stdout.strip(), "false")
+        self.assertEqual(json.loads(self.fixture.base_path.read_text(
+            encoding="utf-8")), self.fixture.old)
 
     @REQUIRES_POSIX_SHELL
     def test_new_main_ref_fails_closed_on_push_route(self):
