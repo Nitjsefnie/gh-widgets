@@ -42,6 +42,44 @@ DOCUMENTED_PIN = re.compile(r"git\+https://github\.com/Nitjsefnie-OSC/"
 CONTINUE_ON_ERROR_KEY = re.compile(
     r"(?mi)^[ \t]*(?:-[ \t]+)?"
     r"(?:continue-on-error|[\"']continue-on-error[\"'])[ \t]*:")
+# A python executable stub that appends ONE JSON array per invocation, so
+# the recorded calls keep argv boundaries: arguments that arrive grouped
+# into a single string cannot masquerade as the separate shape later.
+_ARGV_JSON_STUB = (
+    "#!/bin/sh\n"
+    "json=''\n"
+    "for arg do\n"
+    "  esc=$(printf '%s' \"$arg\" | sed -e 's/\\\\\\\\/\\\\\\\\\\\\/g'"
+    " -e 's/\"/\\\\\"/g')\n"
+    "  json=\"${json}${json:+,}\\\"$esc\\\"\"\n"
+    "done\n"
+    "printf '[%s]\\n' \"$json\" >> \"$RECORD\"\n")
+
+
+def _argv_calls_with_recording_python(installs):
+    """Execute each run scalar under bash with a recording python stub.
+
+    Returns every recorded JSON argv vector, in order — the process
+    boundary's answer to what the steps actually invoke, with argument
+    boundaries preserved.
+    """
+    calls = []
+    with tempfile.TemporaryDirectory(prefix="ghw-fame-pin-") as tmp:
+        stub = Path(tmp) / "python"
+        stub.write_text(_ARGV_JSON_STUB)
+        stub.chmod(0o755)
+        record = Path(tmp) / "calls"
+        environment = dict(
+            os.environ,
+            PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
+            RECORD=str(record))
+        for step in installs:
+            subprocess.run(["bash", "-e", "-c", step["run"]],
+                           cwd=tmp, env=environment, check=False)
+        if record.exists():
+            calls = [json.loads(line)
+                     for line in record.read_text().splitlines()]
+    return calls
 
 
 def _job_blocks(text):
@@ -192,39 +230,25 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
                     if "FORK_PIN=" in step.get("run", "")]
         self.assertTrue(installs,
                         "no step before Measure assigns the pinned fork")
-        calls = []
-        with tempfile.TemporaryDirectory(prefix="ghw-fame-pin-") as tmp:
-            stub = Path(tmp) / "python"
-            stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" "
-                            ">> \"$RECORD\"\n")
-            stub.chmod(0o755)
-            record = Path(tmp) / "calls"
-            environment = dict(
-                os.environ,
-                PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
-                RECORD=str(record))
-            for step in installs:
-                subprocess.run(["bash", "-e", "-c", step["run"]],
-                               cwd=tmp, env=environment, check=False)
-            if record.exists():
-                calls = record.read_text().splitlines()
-        install_calls = [call for call in calls
-                         if call.startswith("-m pip install")]
-        self.assertEqual(len(install_calls), 1, calls)
-        # The install call must be EXACTLY the expected argv: the pin is
+        # The recorder keeps ARGV BOUNDARIES — one JSON array per python
+        # invocation, so arguments that arrive grouped into one string
+        # cannot masquerade as the separate `-m pip install <url>` shape.
+        # The install call is then the exact expected vector: the pin is
         # the target requirement, not any substring of the call — a
         # sibling invocation cannot lend the ref to the install, and an
         # option value riding on the call (--cache-dir, --index-url)
-        # targets nothing. Splitting the recorded line keeps argument
-        # boundaries, so the set equality below is an exact contract:
-        # `-m pip install <documented URL>` and nothing else. A wrapper
-        # that genuinely execs python records the same argv and passes.
+        # targets nothing. A wrapper that genuinely execs python records
+        # the same vector and passes.
+        vectors = _argv_calls_with_recording_python(installs)
+        install_vectors = [vector for vector in vectors
+                           if vector[:3] == ["-m", "pip", "install"]]
+        self.assertEqual(len(install_vectors), 1, vectors)
         (sha,) = documented
         self.assertEqual(
-            {tuple(call.split()) for call in install_calls},
-            {("-m", "pip", "install",
-              f"git+https://github.com/Nitjsefnie-OSC/git-fame@{sha}")},
-            install_calls)
+            install_vectors[0],
+            ["-m", "pip", "install",
+             f"git+https://github.com/Nitjsefnie-OSC/git-fame@{sha}"],
+            install_vectors)
         measure_env = steps[measure_index].get("env", {})
         self.assertEqual(
             measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
