@@ -1177,6 +1177,12 @@ class CarrierFixture:
         self.new["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = envelope(14)
         self.git("init", "-q")
+        # Identity by per-repo config, never by flags or environment: this
+        # repository's discipline forbids -c user.name/-c user.email and
+        # GIT_AUTHOR_*/GIT_COMMITTER_* on its own commits, and the fixtures
+        # keep the same shape.
+        self.git("config", "user.name", "fixture")
+        self.git("config", "user.email", "fixture@example.com")
         (self.head / "speed-baseline.json").write_text(
             json.dumps(self.old), encoding="utf-8")
         self.git("add", "scripts", "speed-baseline.json")
