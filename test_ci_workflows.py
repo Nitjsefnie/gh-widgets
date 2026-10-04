@@ -162,19 +162,24 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
     run 37203738774 red on main, not a real coverage change on the tree.
     """
 
+    @REQUIRES_POSIX_SHELL
     def test_measure_matches_the_measured_cell_toolchain(self):
         # The pin alone would measure correctly but fail silently if the
         # install ever broke; the env alone would fail the run loudly but
         # never measure. tests.yml's measured cell carries both, and this
         # job's value is only the comparison against a floor measured in
-        # that cell's program, so both are required here. Decoded, not
-        # scanned: an install step is one whose run block actually invokes
-        # pip on the FORK_PIN variable — a bare assignment or a comment
-        # naming the pin installs nothing — and the env must sit on the
-        # Measure step's own mapping, because an env on a sibling step
+        # that cell's program, so both are required here. The install is
+        # judged at the process boundary, not by text: the decoded run
+        # scalar executes under bash with a recording python stub on
+        # PATH, so a commented or colon-prefixed "install" — any spelling
+        # that never invokes the interpreter — records nothing and fails,
+        # a wrong pin records a different ref and fails, and a wrapper
+        # that genuinely execs python still passes. The env is judged on
+        # Measure's own decoded mapping, because an env on a sibling step
         # never reaches the unittest process. Each half is caught in its
-        # own direction: dropping the install line fails the installs
-        # assertion, moving or dropping the env fails the measure-env one.
+        # own direction: dropping, commenting or no-oping the install
+        # fails the recorded-call assertions; moving or dropping the env
+        # fails the measure-env one.
         workflow = yaml.safe_load(
             (WORKFLOWS / "coverage-ratchet.yml").read_text())
         steps = workflow["jobs"]["measure"]["steps"]
@@ -184,13 +189,31 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
             (REPO_ROOT / "CLAUDE.md").read_text()))
         self.assertEqual(len(documented), 1, documented)
         installs = [step for step in steps[:measure_index]
-                    if re.search(r"pip install [^\n]*\$FORK_PIN",
-                                 step.get("run", ""))]
+                    if "FORK_PIN=" in step.get("run", "")]
         self.assertTrue(installs,
-                        "no step before Measure installs the pinned fork")
-        found = {sha for step in installs
-                 for sha in FORK_PIN.findall(step.get("run", ""))}
-        self.assertEqual(found, documented, installs)
+                        "no step before Measure assigns the pinned fork")
+        calls = []
+        with tempfile.TemporaryDirectory(prefix="ghw-fame-pin-") as tmp:
+            stub = Path(tmp) / "python"
+            stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" "
+                            ">> \"$RECORD\"\n")
+            stub.chmod(0o755)
+            record = Path(tmp) / "calls"
+            environment = dict(
+                os.environ,
+                PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
+                RECORD=str(record))
+            for step in installs:
+                subprocess.run(["bash", "-e", "-c", step["run"]],
+                               cwd=tmp, env=environment, check=False)
+            if record.exists():
+                calls = record.read_text().splitlines()
+        self.assertEqual(
+            len([call for call in calls
+                 if call.startswith("-m pip install")]), 1, calls)
+        self.assertEqual(
+            set(DOCUMENTED_PIN.findall("\n".join(calls))), documented,
+            f"the recorded install did not use the documented pin: {calls}")
         measure_env = steps[measure_index].get("env", {})
         self.assertEqual(
             measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
