@@ -177,7 +177,7 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
         self.assertEqual(FORK_PIN.findall(job), list(documented), job)
         env = re.search(r"^\s+GH_WIDGETS_REQUIRE_GIT_FAME: \"true\"$",
                         job, re.MULTILINE)
-        self.assertIsNotNone(env, job)
+        assert env is not None
         lines = job.splitlines()
         measure_index = next(index for index, line in enumerate(lines)
                              if "coverage run" in line)
