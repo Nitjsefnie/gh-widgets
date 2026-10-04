@@ -188,6 +188,53 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
                     "no route to retirement")
 
     @REQUIRES_POSIX_SHELL
+    def test_listed_workload_is_not_retired_when_more_listing_output_is_delayed(
+            self):
+        """A match must not close the producer pipe before its later writes."""
+        _declared, _working_dir, block = self.steps.step_run(
+            "The committed baseline only ratchets down")
+        lines = block.splitlines()
+        start = next(index for index, line in enumerate(lines)
+                     if line.lstrip().startswith(
+                         "if ! printf '%s\\n' \"$listing\" | grep"))
+        end = next(index for index in range(start + 1, len(lines))
+                   if lines[index].strip() == "fi")
+        membership = "\n".join(lines[start:end + 1]).replace(
+            "printf '%s\\n' \"$listing\"", '"$LISTING_PRODUCER"', 1)
+
+        root = self.temp_root("ghw-retire-delayed-")
+        producer = root / "list-workloads.sh"
+        producer.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' 'e2e::bench.render-impact'\n"
+            "\"$PYTHON\" -c 'import time; time.sleep(0.075)'\n"
+            "printf '%s\\n' 'e2e::bench.render-responsiveness'\n",
+            encoding="utf-8")
+        producer.chmod(0o755)
+
+        script = "\n".join((
+            "set -euo pipefail",
+            "node='e2e::bench.render-impact'",
+            "removals=()",
+            membership,
+            'printf "%s\\n" "${removals[@]+${removals[@]}}"',
+        ))
+        env = self.steps.env_for(
+            {"LISTING_PRODUCER": str(producer), "PYTHON": sys.executable},
+            root)
+        # Bound the regression itself as well as its fixture delay so a broken
+        # workflow fragment cannot hang the suite indefinitely.
+        result = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            cwd=root, env=env, capture_output=True, text=True, check=False,
+            timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.stdout.split(), [],
+            "a workload listed before delayed producer output must not be "
+            "declared retired")
+
+    @REQUIRES_POSIX_SHELL
     def test_nothing_is_declared_when_the_harness_still_lists_everything(self):
         """The other direction, so the check cannot simply always declare."""
         self.assertEqual(self._declared_removals(list(WORKLOAD_NODES)), [])
@@ -211,10 +258,9 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         fragment = "".join(lines[start:end]).replace(
             'listing="$(python3 scripts/bench/e2e_bench.py --list-workloads)"',
             "listing=$'" + "\n".join(listing) + "'")
-        self.assertIn("grep -qxF", fragment,
-                      "the step matches a listed workload with a glob, so a "
-                      "retired e2e::bench.render reads as present — it "
-                      "prefixes the other two ids")
+        self.assertIn('grep -xF "$node" >/dev/null', fragment,
+                      "the step must drain the listing; grep -q can SIGPIPE "
+                      "the producer under pipefail")
 
         root = self.temp_root("ghw-retire-")
         (root / "head" / "scripts" / "ci").mkdir(parents=True)
