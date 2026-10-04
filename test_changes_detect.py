@@ -498,6 +498,100 @@ class FailClosedTests(unittest.TestCase):
             self.assertNotIn("=skip", "\n".join(outputs))
 
 
+class DefaultBranchPushTests(unittest.TestCase):
+    """Unjudgeable default-branch pushes must still schedule every gate."""
+
+    ALL_RUN = {
+        "gate-integrity": "run", "tests": "run", "lint": "run",
+        "types": "run", "audit": "run", "speed": "run", "codeql": "run",
+        "actionlint": "run",
+    }
+    EMPTY_RUN = {
+        "gate-integrity": "run", "tests": "skip", "lint": "skip",
+        "types": "skip", "audit": "skip", "speed": "skip", "codeql": "skip",
+        "actionlint": "skip",
+    }
+
+    def _push_result(self, before, ref, transport, default_branch="main"):
+        with tempfile.TemporaryDirectory(prefix="ghw-default-push-") as temp:
+            root = Path(temp)
+            event_path = root / "event.json"
+            event_path.write_text(json.dumps({
+                "before": before, "after": "a" * 40, "ref": ref,
+            }), encoding="utf-8")
+            output_path = root / "github-output.txt"
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = cd.main(environ={
+                    "EVENT_NAME": "push", "EVENT_PATH": str(event_path),
+                    "REPOSITORY": "owner/repo", "HEAD_SHA": "a" * 40,
+                    "DEFAULT_BRANCH": default_branch,
+                    "GITHUB_OUTPUT": str(output_path),
+                }, transport=transport)
+            self.assertEqual(status, 0, output.getvalue())
+            decisions = dict(line.split("=", 1) for line in
+                             output_path.read_text(encoding="utf-8").splitlines())
+            return decisions, output.getvalue()
+
+    def test_new_default_branch_runs_all_gates_without_self_comparison(self):
+        for branch in ("main", "trunk"):
+            with self.subTest(branch=branch):
+                fallback = f"repos/owner/repo/compare/{branch}..." + "a" * 40
+                transport = FakeTransport(responses={
+                    fallback: {"status": "identical", "files": []},
+                })
+                decisions, reason = self._push_result(
+                    "0" * 40, f"refs/heads/{branch}", transport, branch)
+                self.assertEqual(decisions, self.ALL_RUN)
+                self.assertIn("created default branch", reason)
+                self.assertIn("no judgeable changed-path basis", reason)
+                self.assertIn("running every gate", reason)
+                self.assertEqual(transport.calls, [])
+
+    def test_diverged_default_branch_runs_all_gates_without_self_comparison(self):
+        initial = "repos/owner/repo/compare/" + "b" * 40 + "..." + "a" * 40
+        for branch in ("main", "trunk"):
+            with self.subTest(branch=branch):
+                fallback = f"repos/owner/repo/compare/{branch}..." + "a" * 40
+                transport = FakeTransport(responses={
+                    initial: {"status": "diverged", "files": []},
+                    fallback: {"status": "identical", "files": []},
+                })
+                decisions, reason = self._push_result(
+                    "b" * 40, f"refs/heads/{branch}", transport, branch)
+                self.assertEqual(decisions, self.ALL_RUN)
+                self.assertIn("default-branch history rewritten", reason)
+                self.assertIn("running every gate", reason)
+                self.assertEqual(transport.calls, [(initial, False, True)])
+
+    def test_new_working_branch_keeps_default_branch_substitution(self):
+        fallback = "repos/owner/repo/compare/main..." + "a" * 40
+        for ref in ("refs/heads/feature", "refs/heads/main-topic"):
+            with self.subTest(ref=ref):
+                transport = FakeTransport(responses={
+                    fallback: {"status": "identical", "files": []},
+                })
+                decisions, reason = self._push_result("0" * 40, ref, transport)
+                self.assertEqual(decisions, self.EMPTY_RUN)
+                self.assertNotIn("detection failed", reason)
+                self.assertEqual(transport.calls, [(fallback, False, True)])
+
+    def test_diverged_working_branch_keeps_default_branch_substitution(self):
+        initial = "repos/owner/repo/compare/" + "b" * 40 + "..." + "a" * 40
+        fallback = "repos/owner/repo/compare/main..." + "a" * 40
+        for ref in ("refs/heads/feature", "refs/heads/main-topic"):
+            with self.subTest(ref=ref):
+                transport = FakeTransport(responses={
+                    initial: {"status": "diverged", "files": []},
+                    fallback: {"status": "identical", "files": []},
+                })
+                decisions, reason = self._push_result("b" * 40, ref, transport)
+                self.assertEqual(decisions, self.EMPTY_RUN)
+                self.assertNotIn("detection failed", reason)
+                self.assertEqual(transport.calls,
+                                 [(initial, False, True), (fallback, False, True)])
+
+
 class ReportingTests(unittest.TestCase):
     def test_tag_push_explains_run_everywhere_in_gate_outputs(self):
         with tempfile.TemporaryDirectory(prefix="ghw-tag-push-") as temp:
