@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 from unittest import mock
 
+from coverage.sqldata import CoverageData
+
 from scripts.ci import diff_coverage as reporter
 
 
@@ -70,36 +72,49 @@ class TestDiffCoverageCli(unittest.TestCase):
         self.assertEqual(in_process_output.getvalue(), result.stdout)
 
     def test_validate_statement_records_closes_its_database(self):
-        """The statement analyzer's database must not survive validation.
+        """The statement analyzer's database must be physically closed.
 
-        coverage.py's no-disk data still opens a shared-cache memory-URI
-        sqlite connection, and `SqliteDb.close(force=False)` deliberately
+        coverage.py's no-disk data still opens a shared-cache sqlite
+        connection, and `SqliteDb.close(force=False)` deliberately
         leaves no-disk connections open; an analyzer abandoned without
         `CoverageData.close(force=True)` leaked one unclosed connection
         per run, printed as a ResourceWarning at interpreter shutdown
-        (issue 147).
+        (issue 147). Registry emptiness is only a proxy —
+        `close(force=False)` empties `_dbs` too while keeping the
+        connection usable — so the control retains the database objects
+        before cleanup and asserts the underlying connection closed.
         """
         created = []
+        retained = []
         real_analyzer = (
             reporter._analyzer)  # pylint: disable=protected-access
+        real_close = CoverageData.close
 
         def spy():
             analyzer = real_analyzer()
             created.append(analyzer)
             return analyzer
 
+        def retain_and_close(data, force=False):
+            retained.extend(
+                data._dbs.values())  # pylint: disable=protected-access
+            real_close(data, force=force)
+
         previous_directory = Path.cwd()
         self.addCleanup(os.chdir, previous_directory)
         os.chdir(self.directory)
-        with mock.patch.object(reporter, "_analyzer", side_effect=spy):
+        with mock.patch.object(reporter, "_analyzer", spy), \
+                mock.patch.object(CoverageData, "close", retain_and_close):
             reporter.validate_statement_records(
                 {"alpha.py": {1: 1, 2: 1}, "beta.py": {1: 1, 2: 1}},
                 {"alpha.py": {1, 2}, "beta.py": {1, 2}})
         self.assertTrue(created)
-        # coverage.py exposes no public close for the analyzer; the fix
-        # reaches the same private attribute, so the assertion reads it.
-        self.assertEqual(
-            created[0]._data._dbs, {})  # pylint: disable=protected-access
+        self.assertTrue(retained)
+        for db in retained:
+            # The property is physical closure; pylint cannot see that the
+            # mock hands us coverage's own SqliteDb objects.
+            self.assertIsNone(
+                db.con)  # pylint: disable=protected-access
 
     def test_cli_has_no_javascript_coverage_input(self):
         result = subprocess.run(

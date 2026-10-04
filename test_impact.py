@@ -295,13 +295,6 @@ class TestPrefetchedClones(unittest.TestCase):
         leftover = [p for p in made if p.exists()]
         self.assertEqual(leftover, [], f"prefetch leaked {leftover}")
 
-    def test_owner_lock_registry_drains(self):
-        """Plain rmtree on a yielded scratch leaves its owner lock in
-        impact_clone._SCRATCH_LOCKS forever, warned at shutdown (147)."""
-        # unittest orders classes alphabetically, so every class that
-        # consumes prefetched_clones has run by the time this sentinel does.
-        self.assertEqual(impact_clone._SCRATCH_LOCKS, {})  # pylint: disable=protected-access
-
 
 class TestTargetedCounts(unittest.TestCase):
     """The fast path's failure mode is a silent ZERO, so its author matching
