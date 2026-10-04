@@ -280,10 +280,13 @@ def raised_entries(old: dict, new: dict,
     is why the envelope validator refuses n below 2 ("re-measure, do not
     widen the number by hand") and the re-derived figures carry their
     dispatch run ids in the document's `basis`, where review reads them.
-    The workflow derives the declarations for the unit-suite population
-    from the two documents it is judging; every other population's raise
-    stays undeclared and therefore refused. A declaration that names no
-    slot either document has — a typo — is refused too, once the documents
+    The workflow reads exact Budget-Raise lines from carrying commit
+    messages, requires measuring dispatch run ids in those messages, and
+    permits unit-suite raises only when the PR touches speed-baseline.json
+    alone. It checks each line's from/to against the documents before
+    passing slot names here; renderer ceilings stay strictly down-only.
+    A declaration that names no slot either document has — a typo — is
+    refused too, once the documents
     have been walked: it is checked against what exists, not silently
     ignored, which is what keeps the checked-against-the-documents promise
     true for every declaration and not only for the ones that resolve.

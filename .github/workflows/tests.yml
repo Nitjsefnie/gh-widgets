@@ -1038,31 +1038,19 @@ jobs:
             echo "Declared workload removals: ${removals[*]}"
           fi
 
-          # DECLARED RAISES, DERIVED FROM THE DOCUMENTS, UNIT SUITE ONLY.
-          # The unit suite's membership changes by design, so its recorded
-          # envelope eventually stops describing the program it gates, and
-          # the documented re-derivation route (the baseline's HOW TO
-          # RE-DERIVE) has to be able to land green. A raise is allowed
-          # only when declared, and the declaration is DERIVED here from
-          # the two documents rather than trusted: every slot whose
-          # recorded maximum goes up in the head document is named on the
-          # command line, so the tool sees an explicit declaration for
-          # every rise and its log says so. Every other population keeps
-          # the strict down-only rule — a renderer workload's envelope
-          # never rises (issue #133: the suite's had to, 784 -> 988 tests,
-          # every dispatch then landing above the old ceiling).
-          raise_slots="$(python3 -c 'import json,sys; \
-              raisep = lambda was, now: now is not None and (was is None or now > was); \
-              old, new = (json.load(open(name)) for name in sys.argv[1:]); \
-              unit = lambda doc: doc.get("populations", {}).get("unit-suite", {}); \
-              slots = ( \
-                  f"unit-suite:{key}:{node}" \
-                  for key in ("entries", "wall") \
-                  for node in sorted(set(unit(old).get(key, {})) | set(unit(new).get(key, {}))) \
-                  if raisep(unit(old).get(key, {}).get(node, {}).get("max"), \
-                            unit(new).get(key, {}).get(node, {}).get("max"))); \
-              print("\n".join(slots))' \
-              "$RUNNER_TEMP/base-baseline.json" "$BASELINE")"
+          # DECLARED RAISES, FROM PURE CARRIER COMMIT MESSAGES, UNIT SUITE ONLY.
+          # Read all carrying messages, not PR prose: a message edit changes
+          # the SHA and re-runs this job; a PR-body edit does not. The Python
+          # entry point requires a baseline-only PR, exact Budget-Raise lines
+          # and measuring dispatch run ids before emitting any slot names.
+          # Checkout and the fresh-base fetch above are shallow; obtain both
+          # ancestries so no earlier carrying message can be silently missed.
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin "$base_tip" "$(git rev-parse HEAD)"
+          fi
+          raise_slots="$(python3 scripts/ci/ratchet_declarations.py \
+              "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
+              --base "$base_tip" --head HEAD)"
           raises_args=()
           while IFS= read -r slot; do
             if [ -n "$slot" ]; then

@@ -112,20 +112,39 @@ dependency vulnerability checks, security analysis, workflow syntax and
 security checks, and the speed job. The speed job counts **CPU seconds** for
 each renderer workload and for the unit suite, on pinned offline fixtures,
 and compares each against a committed baseline in `speed-baseline.json` that
-only ever ratchets down — where a raised ceiling lands only as a declared
-re-derivation: the speed job's ratchet step derives `--ratchet-allow-raise`
-declarations for the unit-suite population from the two documents it judges,
-so a suite that genuinely outgrew its recorded envelope can re-derive it
-(per the document's own HOW TO RE-DERIVE), while every renderer raise and
-every undeclared raise stays red. That derivation makes the unit-suite
-ceiling self-authorizing in one precise sense: any pull request that edits
-`speed-baseline.json` upward passes the ratchet step for the unit-suite
-slots, because the step derives the declarations from the same diff it is
-judging. Review of that diff is the control — a legitimate raise carries
-measured provenance (n ≥ 2 envelopes and the dispatch run ids in `basis`),
-and a raise without it has no business merging. The renderer workloads
-cannot be raised this way at all: nothing derives declarations for them, so
-their ceilings are strictly down-only. CPU seconds rather than a deterministic instruction
+only ever ratchets down, with unit-suite raises permitted solely as a
+declared re-derivation in a **pure carrier PR**: its changed-file set must be
+exactly `{speed-baseline.json}`. Each raised key requires one line anywhere
+in the carrying commit's message, naming the exact old and new maxima:
+
+```
+Budget-Raise: speed-baseline.json <population:key:node> <from> -> <to>
+```
+
+Use the ASCII ` -> ` arrow. The same carrying message must record the
+dispatch run ids the re-derivation was measured on: GitHub
+`https://github.com/<owner>/<repo>/actions/runs/<digits>` URLs or standalone,
+whitespace-delimited all-digit tokens of at least eight digits, on a
+non-declaration line. PR-body declarations do not count: editing the body
+does not re-run the speed job; changing a commit message produces a new SHA
+that does. The job checks the lines against the documents before passing
+`--ratchet-allow-raise` slots to the comparator; missing, contradictory,
+duplicate and leftover declarations are refused. Keep measured provenance
+(n ≥ 2 envelopes and dispatch run ids in `basis`) in the baseline too.
+
+A raise mixed with code or tests is refused. Land the code PR first (red on
+speed if the suite outgrew its envelope), then follow the baseline's HOW TO
+RE-DERIVE using dispatch runs on that head and open the baseline-only raise
+carrier. **Merge the carrier with rebase** so its declaration-bearing commit
+message survives; a squash that drops the lines loses the raise declaration.
+The ratchet step currently judges pull requests only, so preserving that
+message also keeps the declaration and measuring provenance in main's history.
+Renderer ceilings remain strictly down-only; their raises cannot be
+declared. Population digest moves ride with the tests that cause them;
+with no ceiling raised, that mixed diff stays green. The digest is the only
+baseline edit a code PR may carry.
+
+CPU seconds rather than a deterministic instruction
 or syscall count, because neither survives measurement on the cell that reads
 the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
 costs 12.8× the work it measures. The gate is therefore a **step-change
@@ -214,7 +233,9 @@ has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
 work this commit does in CPU seconds — per renderer workload and for the
 unit suite, on pinned offline fixtures — and fails when a committed,
-down-only baseline is exceeded; with no baseline committed it reports what
+baseline is exceeded, with renderer ceilings strictly down-only and
+unit-suite raises requiring the pure-carrier declarations above; with no
+baseline committed it reports what
 it measured and exits 0, because no data is not a regression; elapsed time
 survives only as a gross smoke check that reports no number), `release`
 (tags `v<VERSION>` once every gate a `VERSION` push

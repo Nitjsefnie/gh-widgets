@@ -1141,3 +1141,150 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertEqual(completed.returncode, 0,
                          completed.stdout + completed.stderr)
         self.assertIn("renderer workloads", summary)
+
+
+class CarrierFixture:
+    """A linear repository fixture; it never runs nested discovery."""
+
+    SLOT = "unit-suite:entries:counter::unit-suite"
+    WALL_SLOT = "unit-suite:wall:counter::unit-suite"
+    MESSAGE = (f"Raise envelope\n\nBudget-Raise: speed-baseline.json {SLOT} "
+               "10 -> 14\n\nMeasured on dispatch 37188224043\n"
+               "Explanation after the declaration")
+
+    def __init__(self, root, old_doc=None):
+        self.root = root
+        self.head = root / "head"
+        scripts = self.head / "scripts" / "ci"
+        scripts.mkdir(parents=True)
+        for name in ("compare_counters.py", "baseline.py", "counter.py",
+                     "ratchet_declarations.py"):
+            source = REPO_ROOT / "scripts" / "ci" / name
+            shutil.copyfile(source, scripts / name)
+        self.old = {
+            "schema": 3, "basis": "fixture envelope", "cell": "fixture",
+            "measured_commit": "0" * 40, "measured_at": "2026-10-04",
+            "populations": {"unit-suite": {
+                "metric": "cpu_time", "tolerance": 0.4,
+                "population": "a" * 64,
+                "entries": {"counter::unit-suite": envelope(10)},
+                "wall": {"counter::unit-suite": envelope(40)},
+            }},
+        }
+        if old_doc is not None:
+            self.old = old_doc
+        self.new = json.loads(json.dumps(self.old))
+        self.new["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(14)
+        self.git("init", "-q")
+        (self.head / "speed-baseline.json").write_text(
+            json.dumps(self.old), encoding="utf-8")
+        self.git("add", "scripts", "speed-baseline.json")
+        self.git("commit", "-qm", "Seed program and baseline")
+        self.base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.base_path = root / "base-baseline.json"
+        self.base_path.write_text(json.dumps(self.old), encoding="utf-8")
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.head,
+                              capture_output=True, text=True, check=True)
+
+    def commit(self, message, doc=None, extra=None):
+        paths = []
+        if doc is not None:
+            (self.head / "speed-baseline.json").write_text(
+                json.dumps(doc), encoding="utf-8")
+            paths.append("speed-baseline.json")
+        for path, content in (extra or {}).items():
+            (self.head / path).write_text(content, encoding="utf-8")
+            paths.append(path)
+        if paths:
+            self.git("add", *paths)
+        self.git("commit", "--allow-empty", "-qm", message)
+
+    def declarations(self, base=None):
+        return subprocess.run(
+            [sys.executable, str(self.head / "scripts" / "ci" /
+                                 "ratchet_declarations.py"),
+             str(self.base_path), "speed-baseline.json",
+             "--base", self.base if base is None else base, "--head", "HEAD"],
+            cwd=self.head, capture_output=True, text=True, check=False)
+
+
+class TestCarrierDeclarationCLI(unittest.TestCase):
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        root = Path(stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="ghw-carrier-")))
+        self.fixture = CarrierFixture(root)
+
+    def test_carrier_cli_reads_whole_commit_messages_and_prints_slots(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        result = fixture.declarations()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [fixture.SLOT])
+
+    def test_new_base_changes_are_not_mistaken_for_pr_paths(self):
+        fixture = self.fixture
+        fixture.git("branch", "base-tip")
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        carrier = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "base-tip")
+        fixture.commit("Base advances", extra={"unrelated.py": "# base\n"})
+        base = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "--detach", carrier)
+        result = fixture.declarations(base=base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [fixture.SLOT])
+
+    def test_separate_code_commit_still_makes_the_pr_impure(self):
+        fixture = self.fixture
+        fixture.commit("Add test", extra={"test_new.py": "# fixture\n"})
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        result = fixture.declarations()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("code PR first (red on speed)", result.stderr)
+        self.assertIn("test_new.py", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_same_commit_code_and_raise_refuse(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.new,
+                       {"render.py": "# fixture\n"})
+        result = fixture.declarations()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("re-derived from runs on that head", result.stderr)
+
+    def test_all_window_commits_are_scanned_and_duplicates_refuse(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        fixture.commit(fixture.MESSAGE)
+        result = fixture.declarations()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("does not match a raise in this diff", result.stderr)
+
+    def test_message_outside_the_window_cannot_declare(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE)
+        base = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.commit("Raise without a line", fixture.new)
+        result = fixture.declarations(base=base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("has no declaration", result.stderr)
+
+    def test_invalid_base_ref_is_a_setup_failure(self):
+        result = self.fixture.declarations(base="missing-ref")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_shallow_history_is_refused_instead_of_skipping_messages(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.new)
+        (fixture.head / ".git" / "shallow").write_text(
+            fixture.git("rev-parse", "HEAD").stdout, encoding="utf-8")
+        result = fixture.declarations()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("full history", result.stderr)
