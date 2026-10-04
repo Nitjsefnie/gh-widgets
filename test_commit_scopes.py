@@ -393,6 +393,28 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
                     self.assertEqual(done.returncode, 1, done.stdout)
                     self.assertIn('fix(unusual)', done.stdout)
 
+    @unittest.skipIf(sys.platform == 'win32',
+                     'Windows rejects CR/LF filenames')
+    def test_cr_and_lf_workflow_paths_cannot_alias_and_bypass_scope_rule(self):
+        repo = self.tmp / 'repo'
+        _git(self.tmp, 'init', '-b', 'main', str(repo))
+        _config(repo)
+        # Text-mode ls-tree turns the CR spelling into the LF spelling,
+        # reading the decoy twice and losing the protected workflow's name.
+        _commit(repo, 'ci: seed the two distinct workflow paths', {
+            '.github/workflows/a\rb.yml': 'name: protected\njobs: {}\n',
+            '.github/workflows/a\nb.yml': 'name: decoy\njobs: {}\n',
+        })
+        origin = self.tmp / 'origin.git'
+        _git(self.tmp, 'clone', '--bare', str(repo), str(origin))
+        _git(repo, 'remote', 'add', 'origin', str(origin))
+        _git(repo, 'commit', '--allow-empty', '-m',
+             'fix(protected): forbidden workflow scope')
+        done = _run_gate(self.tmp, repo)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('scope `protected`', done.stdout)
+        self.assertIn('type `fix` is not `ci`', done.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
