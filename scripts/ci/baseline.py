@@ -223,7 +223,7 @@ def envelope_maxima(entries: dict) -> dict:
 def _refuse_contradictory_declarations(allowed, raises):
     """A slot declared both removed and raised asks for two opposite
     verdicts; refuse it before anything is judged."""
-    conflict = allowed & raises
+    conflict = set(allowed) & set(raises)
     if conflict:
         raise ComparisonError(
             "these slots are both declared removed and declared raised: "
@@ -288,9 +288,7 @@ def raised_entries(old: dict, new: dict,
     ignored, which is what keeps the checked-against-the-documents promise
     true for every declaration and not only for the ones that resolve.
     """
-    allowed = set(allowed_removals)
-    raises = set(allowed_raises)
-    _refuse_contradictory_declarations(allowed, raises)
+    _refuse_contradictory_declarations(allowed_removals, allowed_raises)
     moved = {}
     declared_seen = set()
     for name in sorted(set(old.get("populations", {}))
@@ -300,7 +298,7 @@ def raised_entries(old: dict, new: dict,
             after = new.get("populations", {}).get(name, {}).get(key, {})
             for node in sorted(set(before) | set(after)):
                 slot = f"{name}:{key}:{node}"
-                if slot in allowed:
+                if slot in allowed_removals:
                     if node in after:
                         raise ComparisonError(
                             f"{slot} was declared removed but is still "
@@ -312,25 +310,25 @@ def raised_entries(old: dict, new: dict,
                     continue
                 was = before.get(node, {}).get("max")
                 now = after.get(node, {}).get("max")
-                if slot in raises:
+                if slot in allowed_raises:
                     declared_seen.add(slot)
                 if now is None:
                     moved[slot] = (was, None)
                     continue
                 if was is None or now > was:
-                    if slot in raises:
+                    if slot in allowed_raises:
                         continue
                     moved[slot] = (was, now)
-                elif slot in raises:
+                elif slot in allowed_raises:
                     raise ComparisonError(
                         f"{slot} was declared raised but is not a raise "
                         f"({was} -> {now}): a declaration that contradicts "
                         "the documents is refused rather than honoured")
-    if raises - declared_seen:
+    if set(allowed_raises) - declared_seen:
         raise ComparisonError(
             "these slots were declared raised but name no slot that exists "
             "in either document: "
-            + ", ".join(sorted(raises - declared_seen))
+            + ", ".join(sorted(set(allowed_raises) - declared_seen))
             + " — a declaration is checked against the documents, and a "
               "declaration nothing resolves to is refused rather than "
               "silently ignored")
