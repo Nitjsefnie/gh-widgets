@@ -203,19 +203,30 @@ def validate_statement_records(
     from the denominator and turn incomplete measurement into flattering news.
     """
     analyzer = _analyzer()
-    for path in sorted(set(measured) & set(added)):
-        # coverage.py's statement analyzer is the oracle for which added
-        # lines are executable statements. This workflow measures Python.
-        if not path.lower().endswith('.py'):
-            continue
-        _source, statements, _excluded, _missing, _formatted = (
-            analyzer.analysis2(path))
-        required = set(statements) & added[path]
-        absent = required.difference(measured[path])
-        if absent:
-            raise ValueError(
-                f'missing executable statement records for {path}: '
-                f'{_ranges(absent)}')
+    try:
+        for path in sorted(set(measured) & set(added)):
+            # coverage.py's statement analyzer is the oracle for which added
+            # lines are executable statements. This workflow measures Python.
+            if not path.lower().endswith('.py'):
+                continue
+            _source, statements, _excluded, _missing, _formatted = (
+                analyzer.analysis2(path))
+            required = set(statements) & added[path]
+            absent = required.difference(measured[path])
+            if absent:
+                raise ValueError(
+                    f'missing executable statement records for {path}: '
+                    f'{_ranges(absent)}')
+    finally:
+        # coverage.py's no-disk data still opens a shared-cache memory-URI
+        # sqlite connection, and SqliteDb.close(force=False) deliberately
+        # leaves no-disk connections open; only close(force=True) closes
+        # them. Abandoning the analyzer leaked one unclosed connection per
+        # analysis, printed as a ResourceWarning at interpreter shutdown
+        # (issue 147). _data stays None until the first analysis.
+        if analyzer._data is not None:  # pylint: disable=protected-access
+            analyzer._data.close(  # pylint: disable=protected-access
+                force=True)
 
 
 def _ranges(numbers: Iterable[int]) -> str:
