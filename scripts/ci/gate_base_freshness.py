@@ -20,21 +20,26 @@ set in silence, and a narrower set reports green over a wider gate.
 
 The workflow defining a required job is itself a gate input. Here that is
 `tests.yml`, whose `aggregate` job runs `scripts/ci/aggregate_gate.py`.
-The derivation also follows static imports of tracked Python modules, so
-`changes_detect.py`, which defines applicability, is included without a
-second hand-held path list.
+The derivation walks the transitive static `needs` dependencies of each
+required job. Thus `aggregate` includes the unit, coverage, speed, lint and
+integrity checks whose outcomes it judges. Named inputs in their run commands
+and workflow/job/step parameters are included, followed by static imports of
+tracked Python modules and exact tracked-file string literals in those modules
+(for example the coverage floor's default filename). `changes_detect.py`, which
+defines applicability, is included without a second hand-held path list.
 
-WHAT IT CANNOT SEE. The derivation reads text and static Python imports:
+WHAT IT CANNOT SEE. The derivation reads workflow text and static Python ASTs:
 
-  - A tool reading a configuration file no `run:` names.
+  - Tool-implicit configuration not named in workflow parameters or literal
+    Python filenames. Merely following `needs` does not solve dynamic config.
   - The whole-tree spelling. `git grep ... -- .` in the `gates` job reads
     EVERY tracked file. `.` resolves to nothing here: enforcing freshness
     for the whole tree would require a rebase on every main change, beyond
     the gate-defining files this check is meant to protect.
   - Dynamic imports, imports resolved through runtime sys.path changes,
-    files a script opens without a static import, and scripts discovered
-    at runtime. Following `aggregate`'s static imports
-    includes the selector, but does not enumerate every gate's test inputs.
+    constructed filenames without a matching static literal, and scripts
+    discovered at runtime. Dependency traversal includes the gate runners,
+    but does not enumerate every gate's dynamically discovered test inputs.
 
 Runs on the standard library alone. The workflows are read with a parser for
 the block layout this repository uses rather than a YAML dependency, because
@@ -51,6 +56,7 @@ import ast
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # The required status contexts. Hand-held, and only here: a ruleset is
@@ -174,8 +180,8 @@ def top_level_keys(lines, key):
     return found
 
 
-def workflow_steps(text, workflow):
-    """{job name: [step, ...]} for one workflow, each step its `run` and `uses`."""
+def workflow_jobs(text, workflow):
+    """Jobs with static dependencies, steps, and literal parameter values."""
     lines = text.splitlines()
     # Every top-level `jobs:` is collected rather than the first one taken: a
     # document with two of them says which jobs this workflow defines only if
@@ -215,45 +221,144 @@ def workflow_steps(text, workflow):
         jobs[name] = (index + 1, block_end(lines, index, 2))
         index = jobs[name][1]
 
-    return {name: job_steps(lines, name, span, workflow)
+    parameters = []
+    for at, _ in top_level_keys(lines, "env"):
+        parameters.append(parameter_text(lines, at, block_end(lines, at, 0), 0))
+    return {name: job_definition(lines, name, span, workflow, "\n".join(parameters))
             for name, span in jobs.items()}
 
 
-def job_steps(lines, name, span, workflow):
+@dataclass
+class WorkflowJob:
+    """The static inputs and dependency edges retained for a workflow job."""
+
+    steps: list[dict[str, str | None]]
+    needs: tuple[str, ...]
+    parameters: str
+
+
+def dependency_names(lines, at, end, workflow):
+    """Read static scalar, flow-list, or block-list `needs`; refuse other shapes.
+
+    Expressions, aliases, mappings, and multiline flow lists cannot establish
+    the dependency graph this reader walks. They must refuse, not erase edges.
+    """
+    value = lines[at].strip().partition(":")[2].strip()
+    value = re.split(r"\s+#", value, maxsplit=1)[0]
+    children = [line for line in lines[at + 1:end] if not skippable(line)]
+    if value and children:
+        raise WorkflowError(f"{workflow}: multiline `needs` value is not modelled")
+    if value.startswith("[") and value.endswith("]"):
+        names = value[1:-1].split(",")
+    elif value:
+        names = [value]
+    else:
+        names = []
+        for line in children:
+            entry = SEQUENCE.match(line.strip()) if indent_of(line) == 6 else None
+            if entry is None:
+                raise WorkflowError(f"{workflow}: `needs` requires a static job list")
+            names.append(re.split(r"\s+#", entry["rest"], maxsplit=1)[0])
+    result = []
+    for name in names:
+        name = name.strip()
+        if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'":
+            name = name[1:-1]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name) is None:
+            raise WorkflowError(f"{workflow}: unmodelled `needs` job name {name!r}")
+        result.append(name)
+    if not result:
+        raise WorkflowError(f"{workflow}: empty `needs` cannot establish dependencies")
+    return tuple(result)
+
+
+def parameter_text(lines, at, end, key_indent):
+    """Literal values in a block `env`/`with` mapping, without its key names.
+
+    Expressions are stripped by the path matcher later. Nested/flow mappings
+    are refused: silently ignoring those would discard explicitly named inputs.
+    """
+    value = lines[at].strip().partition(":")[2].strip()
+    if value == "{}":
+        return ""
+    if value:
+        raise WorkflowError(f"unmodelled parameter mapping at {lines[at]!r}")
+    values = []
+    index = at + 1
+    while index < end:
+        line = lines[index]
+        if skippable(line):
+            index += 1
+            continue
+        match = MAPPING.match(line.strip()) if indent_of(line) == key_indent + 2 else None
+        if match is None or not match["value"]:
+            raise WorkflowError(f"unmodelled parameter entry {line!r}")
+        value = match["value"]
+        if BLOCK_SCALAR.match(value):
+            value, index = block_scalar(lines, index, key_indent + 2, end)
+        else:
+            if value.startswith(("{", "[", "&", "*")):
+                raise WorkflowError(f"unmodelled parameter value {value!r}")
+            index += 1
+        values.append(value)
+    return "\n".join(values)
+
+
+def job_definition(lines, name, span, workflow, inherited_parameters):
     start, end = span
-    steps = []
+    job = WorkflowJob([], (), inherited_parameters)
+    seen = set()
     index = start
     while index < end:
         line = lines[index]
         if skippable(line):
             index += 1
             continue
-        if indent_of(line) != 4:
-            raise WorkflowError(
-                f"{workflow}: expected a step list or a job key in job "
-                f"`{name}`, found {line!r}")
-        match = MAPPING.match(line.strip())
+        match = MAPPING.match(line.strip()) if indent_of(line) == 4 else None
         if not match:
             raise WorkflowError(
                 f"{workflow}: expected a job key in job `{name}`, found {line!r}")
-        if match["key"] == "steps" and match["value"] is not None:
-            # `steps: [{run: ...}]` is a real spelling, and reading the key's
-            # block and finding no entries in it yields an empty step list — a
-            # plausible answer rather than a refusal, for a job whose steps are
-            # right there.
-            raise WorkflowError(
-                f"{workflow}: `steps:` carries a value in job `{name}`; this "
-                f"reader models only the block form")
-        if match["key"] != "steps":
-            # Every other job key — runs-on, strategy, env, permissions — is a
-            # mapping or a scalar that never names a file this check reads, and
-            # its children sit at an indent a step's own keys also use. Skipping
-            # the key's whole block rather than its first line is what keeps
-            # `permissions:`'s children from being read as steps.
-            index = block_end(lines, index, 4)
+        key = match["key"]
+        stop = block_end(lines, index, 4)
+        if key in ("steps", "needs", "env") and key in seen:
+            raise WorkflowError(f"{workflow}: duplicate {key!r} in job `{name}`")
+        seen.add(key)
+        if key == "steps":
+            if match["value"] is not None:
+                raise WorkflowError(
+                    f"{workflow}: `steps:` carries a value in job `{name}`; this "
+                    f"reader models only the block form")
+            step_entries(lines, name, index + 1, stop, workflow, job.steps)
+        elif key == "needs":
+            job.needs = dependency_names(lines, index, stop, workflow)
+        elif key == "env":
+            job.parameters += "\n" + parameter_text(lines, index, stop, 4)
+        # Other job keys (conditions, strategy, permissions, runners) are not
+        # dependency edges. Skip their whole blocks, not just their first line.
+        index = stop
+    return job
+
+
+def dependency_closure(jobs, required, workflow):
+    """Walk prerequisite edges only; refuse missing jobs or dependency cycles."""
+    pending = [(required, False)]
+    active, visited = set(), set()
+    while pending:
+        name, finishing = pending.pop()
+        if finishing:
+            active.remove(name)
+            visited.add(name)
             continue
-        index = step_entries(lines, name, index + 1, block_end(lines, index, 4), workflow, steps)
-    return steps
+        if name in active:
+            raise WorkflowError(f"{workflow}: dependency cycle at job `{name}`")
+        if name in visited:
+            continue
+        if name not in jobs:
+            raise WorkflowError(f"{workflow}: dependency job `{name}` is missing")
+        active.add(name)
+        pending.append((name, True))
+        pending.extend((dependency, False) for dependency in jobs[name].needs)
+    return sorted(visited)
 
 
 def step_entries(lines, name, start, end, workflow, steps):
@@ -289,11 +394,13 @@ def apply_field(lines, end, key, value, at, step):
         # The value is the reference alone; the `# v7.0.1` after it is a
         # comment, and an action reference never contains a space.
         step["uses"] = value.split()[0] if value else None
+    elif key in ("with", "env"):
+        stop = min(end, block_end(lines, at, 8))
+        step["parameters"] = (step["parameters"] or "") + "\n" + parameter_text(
+            lines, at, stop, 8)
+        return stop
     elif not value or BLOCK_SCALAR.match(value):
-        # A `with:`/`env:` mapping or a block scalar the step carries but does
-        # not execute. Its text is an input to a step, not a file a step reads,
-        # and reading one is how an expression's spelling would be mistaken for
-        # a path. Its lines are stepped over rather than read as step keys.
+        # Skip other metadata blocks without reading their children as keys.
         return block_end(lines, at, 8)
     return at + 1
 
@@ -308,7 +415,7 @@ def step_fields(lines, name, start, end, workflow, dash):
     after the dash line reads a step with no keys in it: a `uses:` that never
     reaches the local-action branch, and a `run:` that contributes no path.
     """
-    step = {"run": None, "uses": None}
+    step = {"run": None, "uses": None, "parameters": None}
     index = start
     if dash:
         match = MAPPING.match(dash)
@@ -428,13 +535,38 @@ def workflow_names(files):
                   and (f.endswith(".yml") or f.endswith(".yaml")))
 
 
+def python_references(tree, path):
+    """Static module names and exact file literals, including default parameters.
+
+    A literal contributes only when it names a tracked file exactly; directory
+    strings do not expand the tree. Constructed paths and runtime file discovery
+    remain outside this derivation. Defaults such as `coverage-floor.json` are
+    included even when the workflow relies on the script's default argument.
+    """
+    modules, literals = [], []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            literals.append(node.value.removeprefix("./"))
+        elif isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            prefix = node.module or ""
+            if node.level:
+                parents = path.split("/")[:-node.level]
+                prefix = ".".join([*parents, prefix]).rstrip(".")
+            modules.append(prefix)
+            modules.extend(f"{prefix}.{alias.name}" for alias in node.names)
+    return modules, literals
+
+
 def python_import_paths(root, paths, files):
     """Static Python imports resolved from the repository root or relatively.
 
     Read HEAD blobs, just like the workflows. External modules contribute
     nothing; local imports contribute their module and package initializers.
-    A visited set bounds cycles by the tracked tree's size. Dynamic imports
-    and runtime file reads remain the named reach limit above.
+    Exact tracked-file literals contribute default parameters as well. A visited
+    set bounds cycles by the tracked tree's size. Dynamic imports and constructed
+    filenames remain the named reach limit above.
     """
     pending = [path for path in paths if path.endswith(".py")]
     visited = set()
@@ -449,17 +581,12 @@ def python_import_paths(root, paths, files):
                 filename=path)
         except SyntaxError as refusal:
             raise GateError(f"cannot read Python imports in {path}: {refusal}") from refusal
-        modules = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                modules.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                prefix = node.module or ""
-                if node.level:
-                    parents = path.split("/")[:-node.level]
-                    prefix = ".".join([*parents, prefix]).rstrip(".")
-                modules.append(prefix)
-                modules.extend(f"{prefix}.{alias.name}" for alias in node.names)
+        modules, literals = python_references(tree, path)
+        for literal in literals:
+            if literal in files and literal not in paths:
+                paths.add(literal)
+                if literal.endswith(".py"):
+                    pending.append(literal)
         for module in modules:
             candidates_ = [module.replace(".", "/") + ".py"]
             candidates_.extend("/".join(module.split(".")[:end]) + "/__init__.py"
@@ -471,7 +598,7 @@ def python_import_paths(root, paths, files):
 
 
 def gate_paths(root):
-    """Gate-defining paths derived from workflows and static local imports.
+    """Gate paths from required jobs, their prerequisites, parameters and imports.
 
     Every workflow is parsed, not only the ones a required job turns out to be
     in: a workflow this cannot read is a workflow whose steps it cannot account
@@ -483,7 +610,7 @@ def gate_paths(root):
         raise GateError("HEAD tracks no files, so the tree to compare is not there")
     parsed = {}
     for workflow in workflow_names(files):
-        parsed[workflow] = workflow_steps(
+        parsed[workflow] = workflow_jobs(
             git(root, "cat-file", "blob", f"HEAD:{workflow}",
                 what=f"read {workflow}"), workflow)
     derived = set()
@@ -505,21 +632,20 @@ def gate_paths(root):
         for name in defining:
             # The required job's steps, needs graph and conditions live here.
             derived.add(name)
-            for step in parsed[name][job]:
-                uses = step["uses"] or ""
-                if uses.startswith("./"):
-                    # A step running a composite action out of THIS repository
-                    # reads that action's files as its own parameters, and they
-                    # are not text in this workflow. The directory is taken whole
-                    # rather than its `action.yml` alone: what the action reaches
-                    # from inside is the same question this matcher cannot
-                    # answer, and a partial answer would be a narrower gate than
-                    # it looks.
-                    derived.update(files if uses == "./" else resolve(uses, files))
-                if not step["run"]:
-                    continue
-                for candidate in candidates(step["run"]):
+            for reached in dependency_closure(parsed[name], job, name):
+                definition = parsed[name][reached]
+                for candidate in candidates(definition.parameters):
                     derived.update(resolve(candidate, files))
+                for step in definition.steps:
+                    uses = step["uses"] or ""
+                    if uses.startswith("./"):
+                        # Composite actions read local files beyond the workflow;
+                        # retain the whole action directory rather than guessing
+                        # which nested run statements the action will execute.
+                        derived.update(files if uses == "./" else resolve(uses, files))
+                    text = (step["run"] or "") + "\n" + (step["parameters"] or "")
+                    for candidate in candidates(text):
+                        derived.update(resolve(candidate, files))
     if not derived:
         raise GateError(
             "the required checks name no file in this tree, so there is nothing "

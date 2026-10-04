@@ -97,6 +97,56 @@ def _advance_main(tmp, origin, subject, files):
     _git(other, 'push', 'origin', 'main')
 
 
+def _dependency_fixture(tmp):
+    """Aggregate + transitive gates, and separate informational jobs."""
+    repo, origin = _fixture(tmp)
+    _commit(repo, 'ci: seed the aggregate dependency graph', {
+        '.github/workflows/tests.yml':
+            'name: tests\n'
+            'env:\n  WORKFLOW_CONFIG: workflow-thresholds.json\n'
+            'jobs:\n'
+            '  aggregate:\n'
+            '    needs: [checks, gates, speed]\n'
+            '    steps:\n      - run: python scripts/ci/aggregate_gate.py\n'
+            '  checks:\n'
+            '    needs:\n      - unittest\n'
+            '    steps:\n      - run: echo checks\n'
+            '  unittest:\n'
+            '    steps:\n      - run: python scripts/ci/coverage_ratchet.py\n'
+            '        env:\n          STEP_CONFIG: step-thresholds.json\n'
+            '      - uses: example/check@v1\n'
+            '        with:\n          config-file: action-thresholds.json\n'
+            '  gates:\n'
+            '    steps:\n'
+            '      - run: python scripts/ci/gate_base_freshness.py\n'
+            '      - run: python scripts/ci/commit_scopes.py\n'
+            '  speed:\n'
+            '    env:\n      BASELINE: speed-baseline.json\n'
+            '    steps:\n'
+            '      - run: python scripts/ci/compare_counters.py --baseline "$BASELINE"\n'
+            '  informational:\n'
+            '    needs: unittest\n'
+            '    steps:\n      - run: python extras/informational.py\n'
+            '  unrelated:\n'
+            '    steps:\n      - run: python extras/unrelated.py\n',
+        'scripts/ci/aggregate_gate.py': 'print("aggregate")\n',
+        'scripts/ci/coverage_ratchet.py':
+            'DEFAULT_FLOOR_FILE = "coverage-floor.json"\n',
+        'scripts/ci/gate_base_freshness.py': 'print("freshness")\n',
+        'scripts/ci/commit_scopes.py': 'print("scopes")\n',
+        'scripts/ci/compare_counters.py': 'print("speed")\n',
+        'coverage-floor.json': '{}\n',
+        'speed-baseline.json': '{}\n',
+        'workflow-thresholds.json': '{}\n',
+        'step-thresholds.json': '{}\n',
+        'action-thresholds.json': '{}\n',
+        'extras/informational.py': 'print("informational")\n',
+        'extras/unrelated.py': 'print("unrelated")\n',
+    })
+    _git(repo, 'push', 'origin', 'main')
+    return repo, origin
+
+
 class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-public-methods
     """Rehearse the guard against isolated offline git repositories."""
 
@@ -111,11 +161,14 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         module = _load()
         assert module.REQUIRED_JOBS == ('aggregate',)
         assert module.BASE_BRANCH == 'main'
-        assert module.gate_paths(ROOT) == [
-            '.github/workflows/tests.yml',
-            'scripts/ci/aggregate_gate.py',
-            'scripts/ci/changes_detect.py',
-        ]
+        paths = module.gate_paths(ROOT)
+        for path in ('.github/workflows/tests.yml',
+                     'scripts/ci/aggregate_gate.py', 'scripts/ci/changes_detect.py',
+                     'scripts/ci/coverage_ratchet.py',
+                     'scripts/ci/gate_base_freshness.py',
+                     'scripts/ci/commit_scopes.py',
+                     'coverage-floor.json', 'speed-baseline.json'):
+            self.assertIn(path, paths)
 
     def test_green_when_the_head_carries_every_gate_commit(self):
         tmp = self.tmp
@@ -274,7 +327,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         }
         for why, text in fixtures.items():
             try:
-                module.workflow_steps(text, 'fixture.yml')
+                module.workflow_jobs(text, 'fixture.yml')
             except module.WorkflowError:
                 continue
             raise AssertionError(f'{why} must refuse, not parse')
@@ -391,7 +444,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
                 '          echo one\n'
                 '          # a comment bash receives\n'
                 '          grep README.md\n')
-        steps = module.workflow_steps(text, 'w.yml')['actionlint']
+        steps = module.workflow_jobs(text, 'w.yml')['actionlint'].steps
         assert [step['run'] for step in steps] == [
             'echo one\n# a comment bash receives\ngrep README.md']
 
@@ -407,7 +460,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
                 '        with:\n'
                 '          fetch-depth: 0\n'
                 '      - uses: ./\n')
-        steps = module.workflow_steps(text, 'w.yml')['actionlint']
+        steps = module.workflow_jobs(text, 'w.yml')['actionlint'].steps
         assert steps[0]['uses'] == 'actions/checkout@1111111111111111111111111111111111111111'
         assert steps[1]['uses'] == './'
 
@@ -497,7 +550,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         for name in module.workflow_names(module.tracked_files(ROOT)):
             text = module.git(ROOT, 'cat-file', 'blob', f'HEAD:{name}',
                               what=f'read {name}')
-            jobs = module.workflow_steps(text, name)
+            jobs = module.workflow_jobs(text, name)
             assert jobs, name
 
     def test_parser_refusal_arms(self):
@@ -523,7 +576,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         }
         for why, text in cases.items():
             try:
-                module.workflow_steps(text, 'w.yml')
+                module.workflow_jobs(text, 'w.yml')
             except module.WorkflowError:
                 continue
             raise AssertionError(f'{why} must refuse, not parse')
@@ -542,8 +595,8 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
                 '        name: renamed\n'
                 'permissions:\n'
                 '  contents: read\n')
-        jobs = module.workflow_steps(text, 'w.yml')
-        steps = jobs['actionlint']
+        jobs = module.workflow_jobs(text, 'w.yml')
+        steps = jobs['actionlint'].steps
         assert steps[0]['run'] == 'echo one'
         assert steps[0]['uses'] is None
 
@@ -673,6 +726,121 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         self.assertIn(path, module.gate_paths(repo))
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(module.check(repo), 1)
+
+    def test_transitive_dependency_and_integrity_scripts_make_a_head_stale(self):
+        for path in ('scripts/ci/coverage_ratchet.py',
+                     'scripts/ci/gate_base_freshness.py',
+                     'scripts/ci/commit_scopes.py'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                repo, origin = _dependency_fixture(Path(tmp))
+                _advance_main(Path(tmp), origin, 'ci: move a dependency gate',
+                              {path: '# gate changed\n'})
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    status = _load().check(repo)
+                self.assertEqual(status, 1, out.getvalue())
+                self.assertIn('ci: move a dependency gate', out.getvalue())
+                self.assertIn(path, out.getvalue())
+
+    def test_configured_parameters_and_literal_defaults_are_gate_inputs(self):
+        for path in ('coverage-floor.json', 'speed-baseline.json',
+                     'workflow-thresholds.json', 'step-thresholds.json',
+                     'action-thresholds.json'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                repo, origin = _dependency_fixture(Path(tmp))
+                _advance_main(Path(tmp), origin, 'ci: move a gate parameter',
+                              {path: '{"changed": true}\n'})
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    status = _load().check(repo)
+                self.assertEqual(status, 1, out.getvalue())
+                self.assertIn(path, out.getvalue())
+
+    def test_informational_and_unrelated_job_scripts_are_not_gate_inputs(self):
+        for path in ('extras/informational.py', 'extras/unrelated.py'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+                repo, origin = _dependency_fixture(Path(tmp))
+                module = _load()
+                self.assertNotIn(path, module.gate_paths(repo))
+                _advance_main(Path(tmp), origin, 'docs: change a non-gate script',
+                              {path: '# informational code changed\n'})
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(module.check(repo), 0)
+
+    def test_static_needs_scalar_flow_and_block_forms_reach_the_dependency(self):
+        for spelling in ('    needs: unit\n',
+                         '    needs: [unit] # static list\n',
+                         '    needs:\n      - unit\n',
+                         '    needs: ["unit"]\n'):
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as tmp:
+                repo, _ = _fixture(Path(tmp))
+                _commit(repo, 'ci: spell a static dependency', {
+                    '.github/workflows/tests.yml':
+                        'name: tests\njobs:\n  aggregate:\n' + spelling +
+                        '    steps:\n      - run: echo aggregate\n'
+                        '  unit:\n    steps:\n      - run: python child.py\n',
+                    'child.py': 'print("child")\n',
+                })
+                self.assertIn('child.py', _load().gate_paths(repo))
+
+    def test_unmodelled_dependency_shapes_refuse_instead_of_narrowing(self):
+        spellings = (
+            '    needs: ${{ inputs.jobs }}\n',
+            '    needs: {unit: true}\n',
+            '    needs: [unit, ${{ inputs.other }}]\n',
+            '    needs:\n      unit: true\n',
+            '    needs: &jobs [unit]\n',
+            '    needs: *jobs\n',
+            '    needs: [unit\n',
+            '    needs:\n',
+            '    needs: unit\n    needs: other\n',
+        )
+        for spelling in spellings:
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as tmp:
+                repo, _ = _fixture(Path(tmp))
+                _commit(repo, 'ci: unmodelled needs', {
+                    '.github/workflows/tests.yml':
+                        'name: tests\njobs:\n  aggregate:\n' + spelling +
+                        '    steps:\n      - run: python run_tests.py\n',
+                })
+                module = _load()
+                with self.assertRaises(module.WorkflowError):
+                    module.gate_paths(repo)
+
+    def test_missing_dependency_and_cycles_refuse(self):
+        for needs, child_needs in (('absent', ''), ('unit', '    needs: aggregate\n')):
+            with self.subTest(needs=needs), tempfile.TemporaryDirectory() as tmp:
+                repo, _ = _fixture(Path(tmp))
+                _commit(repo, 'ci: invalid graph', {
+                    '.github/workflows/tests.yml':
+                        'name: tests\njobs:\n  aggregate:\n'
+                        f'    needs: {needs}\n'
+                        '    steps:\n      - run: python run_tests.py\n'
+                        '  unit:\n' + child_needs +
+                        '    steps:\n      - run: echo unit\n',
+                })
+                module = _load()
+                with self.assertRaises(module.WorkflowError):
+                    module.gate_paths(repo)
+
+    def test_parameter_shapes_refuse_instead_of_discarding_inputs(self):
+        module = _load()
+        for spelling in ('    env: {CONFIG: floor.json}\n',
+                         '    env:\n      CONFIG:\n        file: floor.json\n',
+                         '    steps:\n      - uses: example/check@v1\n'
+                         '        with: {file: floor.json}\n'):
+            with self.subTest(spelling=spelling), self.assertRaises(module.WorkflowError):
+                module.workflow_jobs('jobs:\n  aggregate:\n' + spelling, 'w.yml')
+
+    def test_parameter_block_scalars_and_dashed_env_keep_named_inputs(self):
+        module = _load()
+        jobs = module.workflow_jobs(
+            'env:\n  CONFIG: |\n    workflow.json\n'
+            'jobs:\n  aggregate:\n'
+            '    steps:\n      - env:\n          CONFIG: step.json\n'
+            '        run: echo config\n', 'w.yml')
+        self.assertIn('workflow.json', jobs['aggregate'].parameters)
+        self.assertIn('step.json', jobs['aggregate'].steps[0]['parameters'])
 
 
 if __name__ == "__main__":
