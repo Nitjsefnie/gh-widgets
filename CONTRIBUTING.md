@@ -141,8 +141,10 @@ The ratchet step currently judges pull requests only, so preserving that
 message also keeps the declaration and measuring provenance in main's history.
 Renderer ceilings remain strictly down-only; their raises cannot be
 declared. Population digest moves ride with the tests that cause them;
-with no ceiling raised, that mixed diff stays green. The digest is the only
-baseline edit a code PR may carry.
+with no ceiling raised, that mixed diff stays green. Non-raising baseline
+edits may ride with code changes, including digest re-derivation or lowering
+a recorded maximum, which is always allowed. Only a raise demands the pure
+carrier.
 
 CPU seconds rather than a deterministic instruction
 or syscall count, because neither survives measurement on the cell that reads
@@ -232,7 +234,7 @@ The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
 work this commit does in CPU seconds — per renderer workload and for the
-unit suite, on pinned offline fixtures — and fails when a committed,
+unit suite, on pinned offline fixtures — and fails when a committed
 baseline is exceeded, with renderer ceilings strictly down-only and
 unit-suite raises requiring the pure-carrier declarations above; with no
 baseline committed it reports what
