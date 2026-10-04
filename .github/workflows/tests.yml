@@ -1005,7 +1005,10 @@ jobs:
           # governed by its population digest instead, and no listing here
           # can vouch for it.
           #
-          # `grep -qxF`, not a glob. `e2e::bench.render` is a PREFIX of
+          # `grep -xF "$node" >/dev/null`, without `-q`, matches a whole line
+          # and drains the listing. Under `pipefail`, `grep -q` can exit on its
+          # first match and SIGPIPE the producer, falsely declaring a present
+          # workload retired. `e2e::bench.render` is a PREFIX of
           # `e2e::bench.render-impact` and of `e2e::bench.render-responsiveness`,
           # so `case "$listing" in *"$node"*)` found a retired bench.render
           # still "present" and left it undeclared — which left one of the
@@ -1018,7 +1021,7 @@ jobs:
               print(" ".join(json.load(open(sys.argv[1]))["populations"] \
               ["renderer-workloads"]["entries"]))' \
               "$RUNNER_TEMP/base-baseline.json"); do
-            if ! printf '%s\n' "$listing" | grep -qxF "$node"; then
+            if ! printf '%s\n' "$listing" | grep -xF "$node" >/dev/null; then
               removals+=(--ratchet-allow-removal \
                          "renderer-workloads:entries:$node")
             fi
