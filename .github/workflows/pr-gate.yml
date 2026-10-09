@@ -37,3 +37,4 @@ jobs:
           repository: ${{ github.repository }}
           pull-request-number: ${{ github.event.pull_request.number }}
           pull-request-author: ${{ github.event.pull_request.user.login }}
+          require-commit-attribution: 'true'
