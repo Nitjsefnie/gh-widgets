@@ -1148,7 +1148,7 @@ class TestActionFamiliesShareOneRef(unittest.TestCase):
     so a coordinated bump stays green and only the split reddens.
     """
 
-    USES = re.compile(r"(?m)^\s*-\s*uses:\s*([\w.-]+/[\w./-]+)@(\S+)")
+    USES = re.compile(r"(?m)^\s*(?:-\s*)?uses:\s*([\w.-]+/[\w./-]+)@(\S+)")
 
     def test_every_action_family_shares_one_ref(self):
         refs = {}
