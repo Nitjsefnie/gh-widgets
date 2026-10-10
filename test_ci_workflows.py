@@ -372,7 +372,8 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         # assertion is that the failed-digest run fetched the URL the
         # script itself names, not any release a test hard-codes.
         expected_url = re.search(
-            r"https://\S+/releases/download/\S+\.tar\.gz", script)
+            r"https://github\.com/gitleaks/gitleaks/releases/download/"
+            r"\S+\.tar\.gz", script)
         assert expected_url is not None, script
         returncode, curl_output, was_extracted = (
             _run_download_with_failed_digest(script))
@@ -812,12 +813,19 @@ class TestScorecardWorkflow(unittest.TestCase):
         steps = self.job.get("steps")
         self.assertEqual(len(steps), len(expected_steps))
         for step, expected in zip(steps, expected_steps):
-            self.assertEqual(step.get("name"), expected["name"])
-            self.assertEqual(step.get("with"), expected["with"])
+            uses = step.get("uses", "")
             self.assertTrue(
-                step.get("uses", "").startswith(expected["action"] + "@"),
+                uses.startswith(expected["action"] + "@"),
                 f'{expected["name"]} must run {expected["action"]}, '
-                f'got {step.get("uses", "")}')
+                f'got {uses}')
+            # Every key except the revision-carrying uses: compared exactly,
+            # so if:/env:/continue-on-error: cannot drift unnoticed.
+            rest = {key: value for key, value in step.items() if key != "uses"}
+            expected_rest = {key: value for key, value in expected.items()
+                             if key != "action"}
+            self.assertEqual(
+                rest, expected_rest,
+                f'{expected["name"]} step drifted beyond its action identity')
 
 
 class TestPatchCoverageWorkflows(unittest.TestCase):
@@ -1140,7 +1148,7 @@ class TestActionFamiliesShareOneRef(unittest.TestCase):
     so a coordinated bump stays green and only the split reddens.
     """
 
-    USES = re.compile(r"uses:\s*([\w.-]+/[\w./-]+)@(\S+)")
+    USES = re.compile(r"(?m)^\s*-\s*uses:\s*([\w.-]+/[\w./-]+)@(\S+)")
 
     def test_every_action_family_shares_one_ref(self):
         refs = {}
