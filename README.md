@@ -305,10 +305,13 @@ GH_STAR_REPOS=Nitjsefnie/Overflow GH_TOKEN_FILE=/etc/gh-widget.token \
 ```
 
 `--repos` overrides the comma-separated `GH_STAR_REPOS` list. Names are
-normalized to lowercase, duplicates removed, and each repository writes
+deduplicated case-insensitively, and each repository writes a lowercase
 `stars-<owner>-<repo>.svg` (for Overflow, `stars-nitjsefnie-overflow.svg`).
-A list whose names would produce the same filename is rejected. Only public
-repositories are published. `OUT_DIR`, `THEME`, `GH_TOKEN`, and `GH_TOKEN_FILE`
+A list whose names would produce the same filename is rejected.
+GitHub's canonical `nameWithOwner` casing is used for the card's subtitle,
+title, and description and retained in the cache. Older cache entries without
+it use the first configured spelling of the repository name.
+Only public repositories are published. `OUT_DIR`, `THEME`, `GH_TOKEN`, and `GH_TOKEN_FILE`
 and their CLI flags behave like the other renderers.
 
 GitHub supplies timestamps for **current stargazers only**: users who
