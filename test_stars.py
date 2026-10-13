@@ -25,6 +25,7 @@ DATES = ['2026-09-04T00:00:00Z', '2026-09-05T00:00:00Z']
 
 def page(dates, total=2, more=False, cursor=None, private=False):
     return {'repository': {'isPrivate': private, 'stargazerCount': total,
+                           'nameWithOwner': 'Owner/Repo',
                            'stargazers': {
                                'edges': [{'starredAt': d} for d in dates],
                                'pageInfo': {'hasNextPage': more,
@@ -156,6 +157,40 @@ class InputsAndCLI(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cache = self.root / 'stars-cache.json'
+
+    def test_canonical_casing_survives_live_and_cache_fallback_render(self):
+        argv = ['render-stars.py', '--repos', 'owner/repo,OWNER/REPO', '--token', 't',
+                '--cache-file', str(self.cache), '--out-dir', str(self.root)]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(
+                stars, 'gql', return_value=page(DATES)) as gql:
+            stars.main()
+        self.assertEqual(gql.call_count, 1)
+        cached = json.loads(self.cache.read_text(encoding='utf-8'))
+        output = self.root / 'stars-owner-repo.svg'
+        for fallback in (False, True):
+            if fallback:
+                with mock.patch.object(sys, 'argv', argv), mock.patch.object(
+                        stars, 'fetch_stars', side_effect=RuntimeError('offline')):
+                    stars.main()
+            root = ET.fromstring(output.read_text(encoding='utf-8'))
+            self.assertEqual(root.findtext('{*}title'), 'Star history for Owner/Repo')
+            self.assertTrue((root.findtext('{*}desc') or '').startswith('Owner/Repo:'))
+            self.assertIn('Owner/Repo', [node.text for node in root.findall('{*}text')])
+        self.assertEqual(list(self.root.glob('stars-*.svg')), [output])
+        self.assertEqual(cached['owner/repo']['nameWithOwner'], 'Owner/Repo')
+
+    def test_old_cache_uses_configured_spelling_with_lowercase_key_and_filename(self):
+        self.cache.write_text(json.dumps({'version': 1, 'owner/repo': {
+            'total': 2, 'starred_at': DATES, 'fetched_at': DATES[0]}}), encoding='utf-8')
+        argv = ['render-stars.py', '--repos', 'OWNER/Repo,owner/repo', '--token', 't',
+                '--cache-file', str(self.cache), '--out-dir', str(self.root)]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(
+                stars, 'fetch_stars', side_effect=RuntimeError('offline')):
+            stars.main()
+        root = ET.fromstring((self.root / 'stars-owner-repo.svg').read_text(encoding='utf-8'))
+        self.assertEqual(root.findtext('{*}title'), 'Star history for OWNER/Repo')
+        self.assertTrue((root.findtext('{*}desc') or '').startswith('OWNER/Repo:'))
+        self.assertIn('OWNER/Repo', [node.text for node in root.findall('{*}text')])
 
     def test_live_fetch_merges_repo_cache_and_fallback_does_not_write(self):
         history = {'total': 2, 'starred_at': DATES}

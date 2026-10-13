@@ -45,6 +45,7 @@ STARS_QUERY = '''
 query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     isPrivate
+    nameWithOwner
     stargazerCount
     stargazers(first: 100, after: $cursor,
                orderBy: {field: STARRED_AT, direction: ASC}) {
@@ -96,7 +97,8 @@ def fetch_stars(token, repo):
             raise ValueError('star history exceeds GitHub cap')
         info = connection['pageInfo']
         if not info['hasNextPage'] or len(dates) == MAX_STARS:
-            history = validate_history({'total': total, 'starred_at': dates})
+            history = validate_history({'total': total, 'starred_at': dates,
+                                        'nameWithOwner': node['nameWithOwner']})
             history['starred_at'].sort(key=parse_ts)
             return history
         cursor = info['endCursor']
@@ -110,6 +112,7 @@ def fetch_stars(token, repo):
 # pylint: disable=too-many-locals
 def render_stars(C, repo, history, now=None):
     """Draw a step for each star, with elapsed UTC time on the x axis."""
+    repo = history.get('nameWithOwner', repo)
     now = now or datetime.now(timezone.utc)
     dates = sorted(min(parse_ts(s), now) for s in history['starred_at'])
     start = dates[0] if dates else now
@@ -159,7 +162,7 @@ def load_inputs(path, token, repo):
     except RepositoryUnavailableError:
         raise
     except Exception as exc:
-        cached = common.load_cache(path, CACHE_VERSION).get(repo)
+        cached = common.load_cache(path, CACHE_VERSION).get(repo.lower())
         try:
             validate_history(cached)
             parse_ts(cached['fetched_at'])
@@ -167,7 +170,7 @@ def load_inputs(path, token, repo):
             raise exc from None
         return cached, common.CacheFallback(cached['fetched_at'], 'fetch_stars', exc)
     history = {**history, 'fetched_at': datetime.now(timezone.utc).isoformat(timespec='seconds')}
-    common.merge_cache(path, CACHE_VERSION, {repo: history})
+    common.merge_cache(path, CACHE_VERSION, {repo.lower(): history})
     return history, None
 
 
@@ -186,8 +189,11 @@ def parse_args():
     if not repos or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', repo)
                         or repo.split('/')[1] in ('.', '..') for repo in repos):
         p.error('--repos (or GH_STAR_REPOS) must list owner/repo names')
-    args.repos = list(dict.fromkeys(repo.lower() for repo in repos))
-    if len({repo.replace('/', '-') for repo in args.repos}) != len(args.repos):
+    configured_names = {}
+    for repo in repos:
+        configured_names.setdefault(repo.lower(), repo)
+    args.repos = list(configured_names.values())
+    if len({repo.lower().replace('/', '-') for repo in args.repos}) != len(args.repos):
         p.error('configured repositories produce colliding SVG filenames')
     token = args.token
     if not token and args.token_file:
@@ -209,7 +215,7 @@ def main():
             print(f'fetch failed at {fallback.phase}: {fallback.message}; '
                   f'rendering {repo} from cache (fetched_at={fallback.fetched_at})')
             svg = common.stamp_cache_notice(C, svg, fallback.fetched_at)
-        path = out / ('stars-' + repo.replace('/', '-') + '.svg')
+        path = out / ('stars-' + repo.lower().replace('/', '-') + '.svg')
         common.atomic_write_text(path, svg)
         print(f'wrote {path} ({history["total"]} stars)')
 
