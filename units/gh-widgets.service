@@ -36,8 +36,6 @@ Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
 # blame pass silently under-counts. Read by fetch_identity, which impact and
 # responsiveness both call; render.py does not call it and is unaffected.
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
-# render.py reads this; private organization repos never reach the SVG.
-Environment=GH_EXTRA_ORGS=
 Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
 StateDirectory=gh-widgets
 # systemd resets this directory's mode at each start, so declare it here.
@@ -45,7 +43,12 @@ StateDirectoryMode=0700
 # UMask=0077 restricts newly created files and directories to owner access.
 UMask=0077
 
-ExecStart=/usr/local/bin/render-gh-widgets.py
+# render.py counts these orgs' public, non-fork repos into the stats card;
+# private organization repos never reach the SVG. The list is every org the
+# token's account belongs to, looked up at each run (read:org also returns
+# private memberships), so joining or leaving an org needs no edit here.
+# A failed lookup fails the unit rather than rendering an under-count.
+ExecStart=/bin/bash -c 'set -o pipefail; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py'
 ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
