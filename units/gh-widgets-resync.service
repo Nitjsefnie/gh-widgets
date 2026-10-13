@@ -25,6 +25,7 @@ Environment=GH_USER=Nitjsefnie
 Environment=GH_TOKEN_FILE=/etc/gh-widget.token
 Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
 Environment=THEME=tokyonight
+Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
 # Dropping this makes the blame pass under-count silently, and it bites
 # hardest here: --resync re-blames every repo at once.
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
@@ -43,6 +44,9 @@ UMask=0077
 ExecStart=/usr/local/bin/render-gh-widgets.py --resync
 ExecStart=/usr/local/bin/render-impact.py --resync --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
+# Star history refetches the entire current stargazer list on every run;
+# it has no --resync flag. Its cache is only a failed-fetch fallback.
+ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
 
 # Far longer than the hourly unit: a resync re-clones and re-blames every
 # external repo rather than only the ones whose HEAD moved.

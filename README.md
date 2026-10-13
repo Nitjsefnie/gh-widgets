@@ -1,8 +1,8 @@
 # gh-widgets
 
 Self-hosted alternative to `github-readme-stats` and friends. Renders six
-static SVGs about your GitHub profile on a cron — no JavaScript, no third-party
-service, no flakiness.
+profile SVGs and repository star-history SVGs on a cron — no JavaScript,
+no third-party service, no flakiness.
 
 <img src="https://nitjsefni.eu/widgets/stats.svg" width="720" alt="Followers: 14; public repositories: 11; stars received: 26; forks received: 5; contributions in the last year: 36,700." /><br/>
 <img src="https://nitjsefni.eu/widgets/streak.svg" width="720" alt="Current streak: 95 days; longest streak: 95 days; total contributions: 36,700." /><br/>
@@ -57,7 +57,7 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-`install.sh` stages a nine-file deployment set: the three renderer entry
+`install.sh` stages a ten-file deployment set: the four renderer entry
 points, `render-impact.py`'s `impact_loc.py` sibling and its `impact_clone.py`
 dependency, their shared `ghwidgets_common.py` runtime dependency and its
 `ghwidgets_cache.py` and `ghwidgets_journal.py` siblings, and the separately
@@ -291,6 +291,51 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
 caches images for ~10 minutes, so README updates lag by that much).
+## Repository star history (`render-stars.py`)
+
+The cumulative step line plots dates from the first star to render time and
+shows the current total. It uses the shared card, fonts, and four theme
+palettes; the existing palettes are all dark themes.
+
+```sh
+GH_STAR_REPOS=Nitjsefnie/Overflow GH_TOKEN_FILE=/etc/gh-widget.token \
+  OUT_DIR=./widgets ./render-stars.py
+./render-stars.py --repos owner/one,owner/two --token-file /path/to/token \
+  --out-dir ./widgets --cache-file ./stars-cache.json --theme catppuccin
+```
+
+`--repos` overrides the comma-separated `GH_STAR_REPOS` list. Names are
+normalized to lowercase, duplicates removed, and each repository writes
+`stars-<owner>-<repo>.svg` (for Overflow, `stars-nitjsefnie-overflow.svg`).
+A list whose names would produce the same filename is rejected. Only public
+repositories are published. `OUT_DIR`, `THEME`, `GH_TOKEN`, and `GH_TOKEN_FILE`
+and their CLI flags behave like the other renderers.
+
+GitHub supplies timestamps for **current stargazers only**: users who
+un-starred are absent, so this reconstructs surviving stars rather than a
+complete historical total. GitHub caps the list at **40,000**. Above that
+limit, the graph shows the first 40,000 returned stars and discloses the cap;
+the headline still shows the repository's current total. Neither limitation
+is worked around.
+
+Every run fetches the complete available list through the shared GraphQL
+retry helper, so un-stars are reflected on the next refresh. The separate
+cache defaults to `/var/lib/gh-widgets/stars-cache.json`, configurable with
+`STARS_CACHE_FILE` or `--cache-file`; it ignores the profile's `CACHE_FILE`.
+Updates use the shared locked, atomic cache writer. A failed fetch uses a
+valid cached history with a visible fetch timestamp; without one it fails
+and leaves the previous SVG intact. An explicitly missing or private repo
+fails even if a formerly public history is cached. No credentials or
+stargazer identities are cached.
+
+Both services in `units/` configure `GH_STAR_REPOS=Nitjsefnie/Overflow` and run
+the stars renderer after the other renderers, with its cache passed explicitly.
+It has no `--resync`: every run already refetches the current list.
+After deployment, embed Overflow's widget with:
+
+```html
+<img src="https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg" width="720" alt="Overflow star history" />
+```
 
 ## The `external` widget
 
@@ -352,7 +397,7 @@ along with the number of rows the top-N cut hides.
 It fetches its own PR data — one paginated GraphQL connection, the same one
 `render.py` uses — so it needs a token; it runs in sequence after
 `render-impact.py` in the same service rather than on a schedule of its own
-(`units/gh-widgets.service` runs all three renderers as sequential
+(`units/gh-widgets.service` runs all four renderers as sequential
 `ExecStart` lines on an hourly timer; the weekly resync unit runs the same
 sequence, with `--resync` on `render-gh-widgets.py` and `render-impact.py`
 only — `render-responsiveness.py` takes none, since re-running it after the

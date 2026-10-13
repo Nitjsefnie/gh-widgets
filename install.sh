@@ -1,13 +1,13 @@
 #!/bin/sh
 # gh-widgets — install the renderers and their shared modules.
 #
-# The three renderers share ghwidgets_common.py and assert its COMMON_VERSION
+# The four renderers share ghwidgets_common.py and assert its COMMON_VERSION
 # at startup, so they must be deployed together. Copying one without the other
 # leaves a working-looking install that refuses to run (by design). render-
 # impact.py also loads impact_loc.py beside itself. The EXIT trap rolls back
 # an interrupted or failed commit: when the trap can run, the result is the
 # complete prior set or the complete verified new set, never a mixed set.
-# Each same-filesystem mv is atomic, but the nine-file commit is not one atomic
+# Each same-filesystem mv is atomic, but the ten-file commit is not one atomic
 # operation: SIGKILL or power loss cannot run a shell trap and can still leave
 # a mixed set during commit. Re-running this installer repairs that state.
 #
@@ -133,6 +133,7 @@ set -- \
     "render-impact.py:render-impact.py" \
     "impact_loc.py:impact_loc.py" \
     "render-responsiveness.py:render-responsiveness.py" \
+    "render-stars.py:render-stars.py" \
     "ghwidgets_common.py:ghwidgets_common.py" \
     "ghwidgets_cache.py:ghwidgets_cache.py" \
     "ghwidgets_journal.py:ghwidgets_journal.py" \
@@ -185,7 +186,7 @@ staged=""
 # Prove the install is coherent rather than assuming it: every entry point
 # loads the shared module and checks its version on startup, so --help
 # exercises exactly the failure this script exists to prevent.
-for dst in render-gh-widgets.py render-impact.py render-responsiveness.py; do
+for dst in render-gh-widgets.py render-impact.py render-responsiveness.py render-stars.py; do
     if ! PYTHONDONTWRITEBYTECODE=1 "$DEST/$dst" --help >/dev/null 2>&1; then
         echo "install.sh: $DEST/$dst failed to start after install" >&2
         exit 1
@@ -224,7 +225,7 @@ fi
 
 # ---- systemd units -------------------------------------------------------
 # One hourly unit renders every SVG in sequence; one weekly unit reruns the
-# same three renderers, passing --resync only to the two that accept it. These
+# same four renderers, passing --resync only to the two that accept it. These
 # replaced five service/timer pairs whose ordering lived in `After=` chains.
 if [ "$(id -u)" -ne 0 ]; then
     echo "install.sh: --units needs root to write $UNIT_DIR" >&2
