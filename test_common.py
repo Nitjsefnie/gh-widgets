@@ -690,7 +690,7 @@ class VersionContract(unittest.TestCase):
         # if the scripts' REQUIRED_COMMON tracks COMMON_VERSION.
         here = Path(__file__).parent
         for name in ("render.py", "render-impact.py",
-                     "render-responsiveness.py"):
+                     "render-responsiveness.py", "render-stars.py"):
             src = (here / name).read_text()
             self.assertIn(f"REQUIRED_COMMON = {common.COMMON_VERSION}", src,
                           f"{name} does not pin COMMON_VERSION")

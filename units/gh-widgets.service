@@ -8,9 +8,9 @@
 # overlapping with it.
 #
 # Order is load-bearing: render-impact.py refreshes the shared impact cache
-# that render-responsiveness.py then reads, so responsiveness runs last.
+# that render-responsiveness.py then reads. Star history is independent.
 #
-# A unit has ONE environment block but three renderers using TWO caches, so the
+# A unit has ONE environment block but four renderers using THREE caches, so the
 # split is deliberate: CACHE_FILE= below is the profile cache, and the two
 # renderers that share the impact cache get it as an explicit --cache-file flag
 # (the flag overrides the env var). render.py has NO --cache-file flag at all —
@@ -30,6 +30,7 @@ Environment=GH_USER=Nitjsefnie
 Environment=GH_TOKEN_FILE=/etc/gh-widget.token
 Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
 Environment=THEME=tokyonight
+Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
 # Line ownership is an exact match against the account's GitHub noreply
 # addresses; the workstation address never appears as one, so without this the
 # blame pass silently under-counts. Read by fetch_identity, which impact and
@@ -47,8 +48,9 @@ UMask=0077
 ExecStart=/usr/local/bin/render-gh-widgets.py
 ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
+ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
 
-# Covers all three in sequence. The blame pass dominates: it re-clones and
+# Covers all four in sequence. The blame pass dominates: it re-clones and
 # re-blames every external repo whose default-branch HEAD moved.
 TimeoutStartSec=5400
 Nice=12

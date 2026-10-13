@@ -8,8 +8,8 @@ renderers themselves have. There are **four** files, and they replaced **ten**:
 
 | unit | when | what |
 |---|---|---|
-| `gh-widgets.service` + `.timer` | hourly | all three renderers, in sequence |
-| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | all three renderers in sequence; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
+| `gh-widgets.service` + `.timer` | hourly | all four renderers, in sequence |
+| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | all four renderers in sequence; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
 
 The five old `render-*` service/timer pairs are **gone**; ordering that used to
 be expressed with `After=` chains between separate units is now just the order
@@ -17,10 +17,11 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs a nine-file deployment set to `/usr/local/bin`
+unit.** Bare, it installs a ten-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`, `impact_loc.py`,
 `render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_cache.py`,
-`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`). The renderers
+`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`).
+The renderers
 load `ghwidgets_common.py` and assert its `COMMON_VERSION` at startup; that
 module imports the adjacent cache and journal modules, and `impact_loc.py`
 imports the adjacent clone module. `ghwidgets_data.py` is installed alongside
@@ -117,7 +118,7 @@ moving branch is not supported. The renderer CLIs, flags, caches, and SVG
 output remain unchanged and standalone. `cache.json` and `impact-cache.json`
 are separate private renderer caches, not the public integration API.
 
-**Two caches, and the flags are not symmetric.** `cache.json` is the profile
+**Three caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and
 `render-responsiveness.py` — do not point them at one file. The unit sets
 `CACHE_FILE=…/cache.json` in its environment and passes `--cache-file
@@ -126,6 +127,11 @@ cache; `impact-cache.json` is shared by `render-impact.py` and
 **`render-responsiveness.py` has no `--resync`** (it has no cache of its own;
 re-running it after the impact resync *is* its resync). Check `--help` before
 adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
+
+`render-stars.py` uses a separate `stars-cache.json`, configured by
+`--cache-file` or `STARS_CACHE_FILE` (never `CACHE_FILE`), and `GH_STAR_REPOS`
+or `--repos` for its repository list. It refetches all current stargazers on
+every run and has no `--resync` flag. Both units configure Overflow.
 
 > **Do not drop `GH_EXTRA_EMAILS`.** Line ownership is an exact match against
 > the account's GitHub noreply addresses (derived from `login` + `databaseId`),

@@ -7,6 +7,7 @@ No network; no filesystem outside a TemporaryDirectory.
 """
 import importlib.util
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -15,6 +16,25 @@ if spec is None or spec.loader is None:
     raise SystemExit("error: cannot load ghwidgets_common.py")
 common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
+
+stars_spec = importlib.util.spec_from_file_location(
+    "encoding_stars", Path(__file__).with_name("render-stars.py"))
+if stars_spec is None or stars_spec.loader is None:
+    raise SystemExit("error: cannot load render-stars.py")
+stars = importlib.util.module_from_spec(stars_spec)
+stars_spec.loader.exec_module(stars)
+
+
+class StarSvgEncoding(unittest.TestCase):
+    def test_generated_svg_is_ascii_and_controls_are_stripped(self):
+        svg = stars.render_stars(common.THEMES["tokyonight"],
+                                 'owner/repo\x01\x1b&<"',
+                                 {"total": 1, "starred_at": ["2026-09-04T00:00:00Z"]})
+        svg.encode("ascii")
+        ET.fromstring(svg)
+        self.assertNotIn("\x01", svg)
+        self.assertNotIn("\x1b", svg)
+        self.assertIn("&amp;&lt;&quot;", svg)
 
 
 class XmlEscapeControlStripping(unittest.TestCase):

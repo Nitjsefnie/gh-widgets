@@ -3,6 +3,7 @@
 import importlib.util
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -20,10 +21,31 @@ render = load_renderer("accessible_render", "render.py")
 impact = load_renderer("accessible_impact", "render-impact.py")
 responsiveness = load_renderer(
     "accessible_responsiveness", "render-responsiveness.py")
+stars = load_renderer("accessible_stars", "render-stars.py")
 
 
 class CardAccessibility(unittest.TestCase):
     SVG_NS = "http://www.w3.org/2000/svg"
+
+    def test_stars_card_has_accessible_summary(self):
+        svg = stars.render_stars(stars.THEMES["tokyonight"], "owner/repo", {
+            "total": 2, "starred_at": ["2026-09-04T00:00:00Z"] * 2,
+        }, datetime(2026, 10, 13, tzinfo=timezone.utc))
+        self.assert_accessible_card(
+            svg, "stars", "Star history for owner/repo",
+            "owner/repo: 2 current stars. Cumulative stars from "
+            "2026-09-04 to 2026-10-13; current stargazers only. "
+            "Users who un-starred are absent.")
+
+    def test_empty_stars_card_describes_zero_stars(self):
+        svg = stars.render_stars(stars.THEMES["tokyonight"], "owner/repo", {
+            "total": 0, "starred_at": [],
+        }, datetime(2026, 10, 13, tzinfo=timezone.utc))
+        self.assert_accessible_card(
+            svg, "stars", "Star history for owner/repo",
+            "owner/repo: 0 current stars. Cumulative stars from "
+            "2026-10-13 to 2026-10-13; current stargazers only. "
+            "Users who un-starred are absent.")
 
     def assert_accessible_card(self, svg, card, title, desc):
         root = ET.fromstring(svg)
