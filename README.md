@@ -90,7 +90,7 @@ the stats card.
 |---|---|
 | `GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
 | `GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
-| `GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; private repos are filtered out. |
+| `GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account belongs to (`gh api user/orgs`); private repos are filtered out. |
 
 ## Tuning the impact score (`render-impact.py`)
 
