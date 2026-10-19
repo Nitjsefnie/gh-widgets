@@ -156,14 +156,6 @@ GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
 GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
 ```
 
-A star graph for any other repository comes from `render-stars.py`, which
-writes `stars-<owner>-<repo>.svg` for each repository in `GH_STAR_REPOS` (or
-`--repos`); see [Repository star history](#repository-star-history-render-starspy).
-
-```sh
-GH_STAR_REPOS=owner/repo GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./render-stars.py
-```
-
 ## Public snapshots
 
 `ghwidgets_data.py` is the supported importable boundary for consumers such as
