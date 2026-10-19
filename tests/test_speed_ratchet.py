@@ -16,6 +16,8 @@ is a prefix of the other two ids, and a reimplementation that tested the
 wrong thing would have gone on passing.
 """
 import contextlib
+import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -23,6 +25,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
@@ -31,6 +34,7 @@ from tests.test_speed_workflow import CarrierFixture
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
 HARNESS = REPO_ROOT / "scripts" / "bench" / "e2e_bench.py"
+SPEED_RATCHET = REPO_ROOT / "scripts" / "ci" / "speed_ratchet.py"
 
 WORKLOAD_NODES = ("e2e::bench.render", "e2e::bench.render-impact",
                   "e2e::bench.render-responsiveness")
@@ -590,6 +594,291 @@ class TestMainPushRatchet(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("No gate/speed-baseline.json at the previous main tip",
                       result.stderr)
+
+
+class TestSpeedRatchetTightening(unittest.TestCase):
+    """Lower only maxima justified by the comparator's passing head values."""
+
+    steps = StepRunner()
+    UNIT_NODE = "counter::unit-suite"
+    UNIT_POPULATION = ["tests.test_one.TestOne.test_a"]
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.root = Path(stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="ghw-speed-tighten-")))
+        self.reports_dir = self.root / "reports"
+        self.reports_dir.mkdir()
+        self.baseline_path = self.root / "speed-baseline.json"
+        self.output_path = self.root / "output" / "speed-baseline.json"
+        self.output_path.parent.mkdir()
+        self.unit_population_path = self.reports_dir / "unit-population.txt"
+        self.renderer_population_path = self.reports_dir / "renderer-population.txt"
+        self.unit_reports = [self.reports_dir / f"unit-{number}.xml"
+                             for number in (1, 2)]
+        self.renderer_reports = [self.reports_dir / f"bench-head-{number}.xml"
+                                 for number in (1, 2)]
+        self.unit_population_path.write_text(
+            "\n".join(self.UNIT_POPULATION) + "\n", encoding="utf-8")
+        self.renderer_population_path.write_text(
+            "\n".join(WORKLOAD_NODES) + "\n", encoding="utf-8")
+        self.baseline = document()
+        self.baseline["populations"]["unit-suite"]["population"] = \
+            self._population_digest(self.UNIT_POPULATION)
+        self.baseline["populations"]["renderer-workloads"]["population"] = \
+            self._population_digest(WORKLOAD_NODES)
+        self.baseline["populations"]["unit-suite"]["entries"][
+            self.UNIT_NODE] = {"min": 5.0, "max": 10.0, "n": 6}
+        self.baseline["populations"]["unit-suite"]["wall"] = {
+            self.UNIT_NODE: {"min": 10.0, "max": 20.0, "n": 6}}
+        self.baseline["populations"]["renderer-workloads"]["wall"] = {
+            WORKLOAD_NODES[0]: {"min": 0.04, "max": 0.085, "n": 6}}
+        self._write_baseline()
+
+    @staticmethod
+    def _population_digest(node_ids):
+        joined = "\n".join(sorted(node_ids)) + "\n"
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _write_report(path, entries, walls=None, extra=()):
+        suite = ET.Element("testsuite", {
+            "name": "fixture", "tests": str(len(entries) + len(extra)),
+            "failures": "0", "errors": "0", "skipped": "0",
+            "gh-metric": "cpu_time",
+        })
+        for node, value in [*entries.items(), *extra]:
+            classname, name = node.split("::", maxsplit=1)
+            attributes = {"classname": classname, "name": name,
+                          "time": str(value)}
+            if walls and node in walls:
+                attributes["gh-wall"] = str(walls[node])
+            ET.SubElement(suite, "testcase", attributes)
+        ET.ElementTree(suite).write(path, encoding="utf-8",
+                                    xml_declaration=True)
+
+    def _write_baseline(self):
+        self.baseline_path.write_text(
+            json.dumps(self.baseline, indent=2), encoding="utf-8")
+
+    def _write_reports(self, *, unit=9.0, unit_wall=18.0, renderer=None,
+                       renderer_wall=0.07, extra=(), malformed=False):
+        if renderer is None:
+            renderer = {node: 0.9 for node in WORKLOAD_NODES}
+            renderer[WORKLOAD_NODES[0]] = 1.0
+            renderer[WORKLOAD_NODES[1]] = 1.2
+        renderer_walls = {WORKLOAD_NODES[0]: renderer_wall}
+        for path in self.unit_reports:
+            self._write_report(path, {self.UNIT_NODE: unit},
+                               {self.UNIT_NODE: unit_wall})
+        for path in self.renderer_reports:
+            self._write_report(path, renderer, renderer_walls, extra=extra)
+        if malformed:
+            self.unit_reports[0].write_text("<testsuite", encoding="utf-8")
+
+    def _run(self):
+        command = [
+            sys.executable, str(SPEED_RATCHET),
+            "--baseline", str(self.baseline_path),
+            "--output", str(self.output_path),
+            "--unit-population-file", str(self.unit_population_path),
+            "--renderer-population-file", str(self.renderer_population_path),
+        ]
+        for path in self.unit_reports:
+            command.extend(("--unit-report", str(path)))
+        for path in self.renderer_reports:
+            command.extend(("--renderer-report", str(path)))
+        return subprocess.run(command, capture_output=True, text=True,
+                              check=False)
+
+    def test_workflow_helper_derives_the_main_push_condition(self):
+        condition_reader = getattr(self.steps, "step_condition", None)
+        self.assertTrue(callable(condition_reader),
+                        "workflow step conditions must be derived beside "
+                        "their executed run blocks")
+        self.assertEqual(
+            condition_reader("Stage a tightened speed baseline"),
+            "${{ success() && github.event_name == 'push' && "
+            "github.ref == 'refs/heads/main' }}")
+
+    def _prepare_step_checkout(self):
+        head = self.root / "head"
+        scripts = head / "scripts" / "ci"
+        scripts.mkdir(parents=True)
+        for name in ("speed_ratchet.py", "compare_counters.py", "baseline.py",
+                     "counter.py"):
+            shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name,
+                            scripts / name)
+        (head / "gate").mkdir()
+        (head / "gate/speed-baseline.json").write_bytes(
+            self.baseline_path.read_bytes())
+        return head
+
+    def _run_tighten_step(self):
+        head = self._prepare_step_checkout()
+        declared, working_dir, block = self.steps.step_run(
+            "Stage a tightened speed baseline")
+        self.assertEqual(working_dir, "head")
+        env = self.steps.env_for(declared, self.root,
+                                 GITHUB_SHA="a" * 40)
+        result = self.steps.bash(block, self.root, working_dir, env)
+        output_path = Path(env["GITHUB_OUTPUT"])
+        output = (output_path.read_text(encoding="utf-8")
+                  if output_path.is_file() else "")
+        return result, output, head
+
+    def test_main_push_step_stages_the_tightened_record_and_measured_base(self):
+        self._write_reports()
+
+        result, output, head = self._run_tighten_step()
+
+        data = self.root / "ratchet-data"
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("changed=true", output)
+        self.assertEqual((data / "base.txt").read_text(encoding="utf-8"),
+                         "a" * 40 + "\n")
+        staged = json.loads((data / "speed-baseline.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(staged["populations"]["unit-suite"]["entries"]
+                         [self.UNIT_NODE]["max"], 9.0)
+        self.assertEqual(json.loads((head / "gate/speed-baseline.json")
+                                    .read_text(encoding="utf-8")),
+                         self.baseline)
+
+    def test_main_push_step_stages_nothing_when_no_maximum_tightens(self):
+        renderer = {node: self.baseline["populations"]["renderer-workloads"]
+                    ["entries"][node]["max"] for node in WORKLOAD_NODES}
+        self._write_reports(unit=10.0, unit_wall=20.0, renderer=renderer,
+                            renderer_wall=0.085)
+
+        result, output, _head = self._run_tighten_step()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("changed=false", output)
+        self.assertFalse((self.root / "ratchet-data" / "base.txt").exists())
+        self.assertFalse((self.root / "ratchet-data" / "speed-baseline.json")
+                         .exists())
+
+    def test_lower_head_values_write_only_the_corresponding_maxima(self):
+        self._write_reports()
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        updated = json.loads(self.output_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            updated["populations"]["unit-suite"]["entries"][self.UNIT_NODE],
+            {"min": 5.0, "max": 9.0, "n": 6})
+        self.assertEqual(
+            updated["populations"]["unit-suite"]["wall"][self.UNIT_NODE],
+            {"min": 10.0, "max": 18.0, "n": 6})
+        self.assertEqual(
+            updated["populations"]["renderer-workloads"]["entries"]
+            [WORKLOAD_NODES[1]], {"min": 1.08112, "max": 1.2, "n": 6})
+        self.assertEqual(
+            updated["populations"]["renderer-workloads"]["wall"]
+            [WORKLOAD_NODES[0]], {"min": 0.04, "max": 0.07, "n": 6})
+        self.assertEqual(updated["populations"]["renderer-workloads"]
+                         ["entries"][WORKLOAD_NODES[0]],
+                         self.baseline["populations"]["renderer-workloads"]
+                         ["entries"][WORKLOAD_NODES[0]])
+
+    def test_equal_or_higher_head_values_write_nothing(self):
+        before = self.baseline_path.read_bytes()
+        self._write_reports(
+            unit=10.0, unit_wall=21.0,
+            renderer={node: self.baseline["populations"]
+                      ["renderer-workloads"]["entries"][node]["max"]
+                      for node in WORKLOAD_NODES},
+            renderer_wall=0.09)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.output_path.exists())
+        self.assertEqual(self.baseline_path.read_bytes(), before)
+
+    def test_any_positive_improvement_tightens_without_hysteresis(self):
+        self._write_reports(unit=9.999999)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        updated = json.loads(self.output_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["populations"]["unit-suite"]["entries"]
+                         [self.UNIT_NODE]["max"], 9.999999)
+
+    def test_authored_metadata_is_carried_unchanged(self):
+        self._write_reports()
+        authored = ("schema", "basis", "cell", "measured_commit",
+                    "measured_at")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        updated = json.loads(self.output_path.read_text(encoding="utf-8"))
+        for key in authored:
+            with self.subTest(key=key):
+                self.assertEqual(updated[key], self.baseline[key])
+        for name in self.baseline["populations"]:
+            for key in ("metric", "tolerance", "population"):
+                with self.subTest(population=name, key=key):
+                    self.assertEqual(updated["populations"][name][key],
+                                     self.baseline["populations"][name][key])
+
+    def test_population_digest_mismatch_refuses_without_writing(self):
+        self._write_reports()
+        self.unit_population_path.write_text(
+            "tests.test_other.TestOne.test_a\n", encoding="utf-8")
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("different unit suite", result.stderr)
+        self.assertFalse(self.output_path.exists())
+
+    def test_malformed_report_refuses_without_writing(self):
+        self._write_reports(malformed=True)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not parseable JUnit XML", result.stderr)
+        self.assertFalse(self.output_path.exists())
+
+    def test_an_unrecorded_report_entry_is_refused(self):
+        self._write_reports(extra=[("e2e::bench.unrecorded", 0.1)])
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not recorded", result.stderr)
+        self.assertFalse(self.output_path.exists())
+
+    def test_a_tightened_result_must_still_validate_as_a_baseline(self):
+        self._write_reports()
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        baseline_path = REPO_ROOT / "scripts" / "ci" / "baseline.py"
+        spec = importlib.util.spec_from_file_location(
+            "ghw_speed_ratchet_test_baseline", baseline_path)
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        loaded = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loaded)
+        self.assertEqual(loaded.read_baseline(self.output_path)["schema"], 3)
+
+    def test_a_head_below_the_recorded_minimum_refuses_the_invalid_range(self):
+        self._write_reports(unit=4.0)
+
+        result = self._run()
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("min", result.stderr)
+        self.assertFalse(self.output_path.exists())
 
 
 if __name__ == "__main__":
