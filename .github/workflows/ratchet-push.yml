@@ -1,0 +1,320 @@
+name: ratchet push
+
+# The privileged half of the coverage and speed ratchets. The measuring
+# workflows run repository code with read-only access and publish only a
+# tightened JSON record plus the SHA it measured. This workflow treats those
+# bytes as data and pushes them from the protected main-push environment.
+#
+# zizmor flags workflow_run because another branch's event data or code could
+# reach a privileged job. That hazard does not apply here: the job admits only
+# a successful push run on main from this repository, downloads only this
+# repository's artifact from that run, checks the artifact against fetched
+# main data inline, and authenticates the push with the deploy key rather than
+# the job token. It checks out no repository and runs no repository code.
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
+    workflows: [tests, coverage-ratchet]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  # Queue completed measurements. The older run drops green if main moved.
+  group: ratchet-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    environment: main-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+
+    steps:
+      - name: List the triggering run's artifacts
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if ! gh api -H 'Cache-Control: no-cache' --paginate \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired != true) | .name' \
+            > artifact-names.txt
+          then
+            echo "listing artifacts for run $RUN_ID failed" >&2
+            exit 1
+          fi
+          if grep -qx 'ratchet-push' artifact-names.txt; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'No tightened ratchet artifact; nothing to push.'
+          fi
+
+      - name: Download the triggering run's ratchet artifact
+        if: steps.artifact.outputs.present == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ratchet-push
+          path: ${{ runner.temp }}/ratchet-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate and push the ratchet record
+        if: steps.artifact.outputs.present == 'true'
+        env:
+          MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
+            echo "MASTER_PUSH_DEPLOY_KEY is empty: the main-push environment is missing its secret" >&2
+            exit 1
+          fi
+          case "$RUN_ID" in
+            ''|*[!0-9]*)
+              echo "workflow_run id is not numeric: $RUN_ID" >&2
+              exit 1
+              ;;
+          esac
+
+          data="$RUNNER_TEMP/ratchet-data"
+          repo="$RUNNER_TEMP/ratchet-repo"
+          document_name="$(python3 - "$data" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          def refuse(message):
+              print(f"ratchet artifact: {message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          directory = Path(sys.argv[1])
+          try:
+              files = list(directory.iterdir())
+          except OSError as error:
+              refuse(f"cannot list {directory}: {error}")
+          if any(path.is_symlink() or not path.is_file() for path in files):
+              refuse("the artifact must contain only regular files")
+          names = {path.name for path in files}
+          coverage = {"base.txt", "coverage-floor.json"}
+          speed = {"base.txt", "speed-baseline.json"}
+          if names == coverage:
+              document = "coverage-floor.json"
+          elif names == speed:
+              document = "speed-baseline.json"
+          else:
+              refuse("expected exactly base.txt and one known ratchet record")
+          try:
+              base = (directory / "base.txt").read_bytes()
+          except OSError as error:
+              refuse(f"cannot read base.txt: {error}")
+          sha = base[:-1] if base.endswith(b"\n") else base
+          if len(sha) != 40 or any(byte not in b"0123456789abcdef"
+                                  for byte in sha):
+              refuse("base.txt must carry one 40-character lowercase SHA")
+          print(document)
+          PY
+          )"
+          base="$(cat "$data/base.txt")"
+
+          eval "$(ssh-agent -s)" >/dev/null
+          trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
+          ssh-add <(printf '%s\n' "$MASTER_PUSH_DEPLOY_KEY") >/dev/null
+          mkdir -p "$HOME/.ssh"
+          known_hosts="$RUNNER_TEMP/ratchet-known-hosts"
+          # Pinned from GitHub's Meta endpoint:
+          # https://docs.github.com/en/rest/meta/meta#get-github-meta-information
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            'github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=' \
+            'github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=' \
+            > "$known_hosts"
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts -o BatchMode=yes"
+
+          git init -q "$repo"
+          git -C "$repo" remote add origin "git@github.com:$REPO.git"
+          git -C "$repo" fetch --quiet origin main
+          git -C "$repo" checkout -q -B ratchet FETCH_HEAD
+          fetched="$(git -C "$repo" rev-parse HEAD)"
+
+          if [ "$base" != "$fetched" ]; then
+            echo "::notice::Main moved while this run measured; the next push measures and stages its own record."
+            {
+              echo "### Dropped ratchet artifact: main moved"
+              echo
+              echo "Measured base $base is no longer main's tip ($fetched)."
+              echo "This run's record is dropped; the next main push measures and stages again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          document_name="$(python3 - "$data" "$repo" <<'PY'
+          import json
+          import math
+          import sys
+          from pathlib import Path
+
+          def refuse(message):
+              print(f"ratchet artifact: {message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          def object_at(path):
+              try:
+                  value = json.loads(Path(path).read_text(encoding="utf-8"))
+              except (OSError, ValueError) as error:
+                  refuse(f"{path} is not readable JSON: {error}")
+              if type(value) is not dict:
+                  refuse(f"{path} is not a JSON object")
+              return value
+
+          def same(left, right):
+              return type(left) is type(right) and left == right
+
+          def number(value):
+              return type(value) in (int, float) and math.isfinite(value)
+
+          data = Path(sys.argv[1])
+          repo = Path(sys.argv[2])
+          names = {path.name for path in data.iterdir()}
+          if names == {"base.txt", "coverage-floor.json"}:
+              name = "coverage-floor.json"
+              old = object_at(repo / "gate" / name)
+              new = object_at(data / name)
+              keys = {"schema", "basis", "population", "cell", "measured",
+                      "floor", "statements", "missing", "files",
+                      "measured_commit", "measured_at"}
+              if set(old) != keys or set(new) != keys:
+                  refuse("coverage-floor.json has an unexpected key set")
+              for key in ("schema", "basis", "population", "cell"):
+                  if not same(new[key], old[key]):
+                      refuse(f"coverage-floor.json changed authored key {key}")
+              try:
+                  measured_base = (data / "base.txt").read_text(
+                      encoding="ascii").strip()
+              except OSError as error:
+                  refuse(f"cannot read base.txt: {error}")
+              if new["measured_commit"] != measured_base:
+                  refuse("coverage measured_commit differs from base.txt")
+              if not isinstance(new["measured_at"], str) \
+                      or not new["measured_at"].strip():
+                  refuse("coverage measured_at must be a non-empty string")
+              if not number(new["floor"]) or not number(new["measured"]):
+                  refuse("coverage floor and measured must be finite numbers")
+              if new["floor"] != new["measured"]:
+                  refuse("coverage floor must equal measured")
+              if new["floor"] > 100:
+                  refuse("coverage floor must be at most 100")
+              if not number(old["floor"]) or new["floor"] <= old["floor"]:
+                  refuse("coverage floor did not strictly improve")
+              for key in ("statements", "missing", "files"):
+                  if type(new[key]) is not int or new[key] <= 0:
+                      refuse(f"coverage {key} must be a positive integer")
+              if type(old["files"]) is not int or new["files"] != old["files"]:
+                  refuse("coverage files count differs from fetched main")
+          elif names == {"base.txt", "speed-baseline.json"}:
+              name = "speed-baseline.json"
+              old = object_at(repo / "gate" / name)
+              new = object_at(data / name)
+              top_keys = {"schema", "basis", "cell", "measured_commit",
+                          "measured_at", "populations"}
+              population_keys = {"metric", "tolerance", "population",
+                                 "entries", "wall"}
+              envelope_keys = {"min", "max", "n"}
+              if set(old) != top_keys or set(new) != top_keys:
+                  refuse("speed-baseline.json has an unexpected key set")
+              for key in ("schema", "basis", "cell", "measured_commit",
+                          "measured_at"):
+                  if not same(new[key], old[key]):
+                      refuse(f"speed-baseline.json changed authored key {key}")
+              old_pops, new_pops = old["populations"], new["populations"]
+              if type(old_pops) is not dict or type(new_pops) is not dict \
+                      or set(old_pops) != set(new_pops):
+                  refuse("speed-baseline.json changed its population set")
+              lowered = False
+              for population_name, old_pop in old_pops.items():
+                  new_pop = new_pops[population_name]
+                  if type(old_pop) is not dict or type(new_pop) is not dict \
+                          or set(old_pop) != population_keys \
+                          or set(new_pop) != population_keys:
+                      refuse(f"{population_name} has an unexpected shape")
+                  for key in ("metric", "tolerance", "population"):
+                      if not same(new_pop[key], old_pop[key]):
+                          refuse(f"{population_name} changed {key}")
+                  for map_name in ("entries", "wall"):
+                      old_map, new_map = old_pop[map_name], new_pop[map_name]
+                      if type(old_map) is not dict or type(new_map) is not dict \
+                              or set(old_map) != set(new_map):
+                          refuse(f"{population_name}.{map_name} changed its entries")
+                      for entry_name, old_entry in old_map.items():
+                          new_entry = new_map[entry_name]
+                          if type(old_entry) is not dict \
+                                  or type(new_entry) is not dict \
+                                  or set(old_entry) != envelope_keys \
+                                  or set(new_entry) != envelope_keys:
+                              refuse(f"{entry_name} has an invalid envelope")
+                          for key in ("min", "n"):
+                              if not same(new_entry[key], old_entry[key]):
+                                  refuse(f"{entry_name} changed {key}")
+                          if not number(old_entry["min"]) \
+                                  or not number(old_entry["max"]) \
+                                  or not number(new_entry["max"]):
+                              refuse(f"{entry_name} has a non-finite bound")
+                          if type(new_entry["n"]) is not int \
+                                  or new_entry["n"] < 2:
+                              refuse(f"{entry_name}.n is not a valid sample count")
+                          if old_entry["min"] > old_entry["max"] \
+                                  or old_entry["min"] > new_entry["max"]:
+                              refuse(f"{entry_name} is not a valid range")
+                          if new_entry["max"] > old_entry["max"]:
+                              refuse(f"{entry_name}.max loosened the baseline")
+                          lowered = lowered or new_entry["max"] < old_entry["max"]
+              if not lowered:
+                  refuse("speed baseline contains no strict maximum reduction")
+          else:
+              refuse("the artifact shape changed after its base check")
+          print(name)
+          PY
+          )"
+
+          cp -- "$data/$document_name" "$repo/gate/$document_name"
+          git -C "$repo" add -- "gate/$document_name"
+          if git -C "$repo" diff --cached --quiet; then
+            echo "validated ratchet artifact produced no change" >&2
+            exit 1
+          fi
+          git -C "$repo" config user.name 'github-actions[bot]'
+          git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$repo" commit -m "ci(ratchet): tighten the recorded thresholds from run $RUN_ID (automated)"
+
+          if git -C "$repo" push origin HEAD:refs/heads/main; then
+            echo "ratchet record pushed from run $RUN_ID"
+            exit 0
+          fi
+          if ! git -C "$repo" fetch --quiet origin main; then
+            echo "ratchet push was rejected and main could not be re-fetched" >&2
+            exit 1
+          fi
+          latest="$(git -C "$repo" rev-parse FETCH_HEAD)"
+          if [ "$latest" = "$fetched" ]; then
+            echo "ratchet push was rejected while main stood still at $fetched" >&2
+            exit 1
+          fi
+          echo "::notice::Main moved during the ratchet push; the next push measures and stages again."
+          {
+            echo "### Dropped ratchet commit: main moved during push"
+            echo
+            echo "Main moved from $fetched to $latest after this run measured."
+            echo "This ratchet commit was rejected; the next main push measures and stages again."
+          } >> "$GITHUB_STEP_SUMMARY"

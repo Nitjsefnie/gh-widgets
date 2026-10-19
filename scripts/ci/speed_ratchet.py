@@ -18,6 +18,10 @@ observed. The gate stays green throughout because its ceiling is
 ``max * (1 + tolerance)`` and every tighten sets ``max`` to a passing head
 value.
 
+If a head value falls below the recorded ``min``, lowering ``max`` alone
+would make an invalid envelope. Since ``min`` is carried unchanged, the
+candidate fails baseline validation and nothing is written.
+
 The authored explanation and measurement identity are not re-stamped by this
 tool. Provenance for an automated move is the ratchet commit message, which
 names the triggering run id.
@@ -120,8 +124,7 @@ def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
         for map_name, head_values in (("entries", head_entries),
                                       ("wall", head_wall)):
             recorded = recorded_population[map_name]
-            _check_recorded_entries(head_values,
-                                    recorded_population["entries"], name)
+            _check_recorded_entries(head_values, recorded, name)
             for node, head_value in head_values.items():
                 envelope = recorded.get(node)
                 if envelope is None or head_value >= envelope["max"]:

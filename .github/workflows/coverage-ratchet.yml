@@ -1,15 +1,14 @@
 name: coverage-ratchet
 
-# Measures coverage against the committed floor and announces a candidate when
-# the measured floor is higher. The floor is only ever raised through a human
-# pull request. The old hand-edited fail-under literal in tests.yml rotted until
-# it was deleted or ignored; this workflow keeps the comparison tied to the
-# committed floor while leaving the decision to raise it reviewable.
+# Measures coverage against the committed floor and stages a candidate when
+# the measured floor is higher. ratchet-push.yml lands a strictly higher
+# candidate after this workflow succeeds; no automated path lowers the floor.
+# The old hand-edited fail-under literal in tests.yml rotted until it was
+# deleted or ignored; this workflow keeps the comparison tied to committed data.
 #
 # WHY THIS IS A SEPARATE WORKFLOW. tests.yml runs a matrix and a whole test
 # suite; this workflow measures the release branch on the same cell named by
-# the floor and publishes a candidate artifact for review. The committed floor
-# changes through a pull request, where the data change is visible.
+# the floor and stages a candidate artifact for the separate data-only push job.
 #
 # WHY IT IS A RELEASE GATE. release.yml's manifest lists this workflow, so a
 # release waits for it. The floor is committed DATA now, and a release must
@@ -139,10 +138,9 @@ jobs:
             --coverage-json coverage.json
 
       - name: Compute the candidate floor
-        # The decision remains in this read-only job. The coverage-floor-candidate
-        # artifact is the input to the deliberate raise procedure: replace
-        # gate/coverage-floor.json and open a pull request. The checked-out floor
-        # stays untouched because the raise subcommand operates on its copy.
+        # The checked-out floor stays untouched because the raise subcommand
+        # operates on its copy. The stage step below publishes a strict climb
+        # as data for ratchet-push.yml.
         #
         # --floor-file points at a copy so the checkout is not dirtied by the
         # run, and so the artifact is unmistakably the ratchet's output rather
@@ -154,10 +152,12 @@ jobs:
             --floor-file candidate-coverage-floor.json \
             --commit "$GITHUB_SHA"
 
-      - name: Announce a climbable floor
-        # Compare local files only. The candidate step above changed its copy;
-        # gate/coverage-floor.json in the checkout remains the committed floor.
+      - name: Stage a climbable floor
+        id: stage
+        # A moved population still fails the `files` tripwire above. A human
+        # re-derives that record before any candidate can be staged.
         run: |
+          set -euo pipefail
           if ! candidate=$(jq -r '.floor' candidate-coverage-floor.json); then
             echo "::error::Could not read the candidate coverage floor."
             exit 1
@@ -173,29 +173,44 @@ jobs:
           fi
 
           if [ "$climbed" = 1 ]; then
+            stage="$RUNNER_TEMP/ratchet-data"
+            mkdir -p "$stage"
+            cp candidate-coverage-floor.json "$stage/coverage-floor.json"
+            printf '%s\n' "$GITHUB_SHA" > "$stage/base.txt"
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
             if ! cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ### Coverage floor can climb
+          ### Coverage floor staged for ratchet-push
           Measured coverage floor: $candidate; committed floor: $committed.
 
-          To raise it, download the coverage-floor-candidate artifact and open a
-          pull request; see CONTRIBUTING.md.
+          The successful coverage-ratchet run staged this record for the
+          trusted ratchet-push workflow.
           EOF
             then
-              echo "::error::Could not append the coverage floor summary."
+              echo "::error::Could not append the staged coverage floor summary."
               exit 1
             fi
             notice="Measured coverage floor is $candidate; committed floor is $committed. "
-            notice+="The measured floor exceeds the committed floor. "
-            notice+="To raise it, download the coverage-floor-candidate "
-            notice+="artifact and open a pull request; see CONTRIBUTING.md."
+            notice+="The candidate is staged for the trusted ratchet-push workflow."
             if ! printf '::notice::%s\n' "$notice"; then
               exit 1
             fi
           else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
             if ! printf '%s\n' "Coverage floor has not climbed."; then
               exit 1
             fi
           fi
+
+      - name: Upload the tightened coverage floor
+        if: steps.stage.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ratchet-push
+          path: |
+            ${{ runner.temp }}/ratchet-data/base.txt
+            ${{ runner.temp }}/ratchet-data/coverage-floor.json
+          retention-days: 1
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
