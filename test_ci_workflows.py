@@ -449,6 +449,14 @@ class TestConsolidatedCiControls(unittest.TestCase):
         self.assertNotRegex(trigger, r"(?m)^\s+paths(?:-ignore)?:")
         self.assertFalse((self.scripts / "aggregate_gates.py").exists())
 
+    def test_push_filter_matches_secrets_workflow(self):
+        workflow = yaml.safe_load(_trigger_block(self.workflow))
+        secrets = yaml.safe_load(_trigger_block(
+            (WORKFLOWS / "secrets.yml").read_text(encoding="utf-8")))
+        trigger_key = "on" if "on" in workflow else True
+        self.assertEqual(workflow[trigger_key]["push"],
+                         secrets[trigger_key]["push"])
+
     def test_aggregate_has_no_polling_and_short_timeout(self):
         self.assertNotRegex(self.aggregate.lower(), r"\b(?:sleep|poll(?:ing)?)\b")
         timeout = re.search(r"(?m)^    timeout-minutes:\s*(\d+)\s*$",
