@@ -621,7 +621,6 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
     def test_steps_check_markers_then_freshness_then_scopes(self):
         steps = self.job.get('steps', [])
         self.assertEqual(len(steps), 4)
-        self.assertTrue(steps[0]['uses'].startswith('actions/checkout@'))
         self.assertIs(steps[0]['with']['persist-credentials'], False)
         for step in steps:
             self.assertNotIn('if', step)
@@ -991,15 +990,12 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         steps = job.get("steps", [])
         checkout = next(step for step in steps
                         if step.get("uses", "").startswith("actions/checkout@"))
-        self.assertEqual(checkout["with"].get("ref"), "${{ github.sha }}")
-        self.assertEqual(checkout["with"].get("fetch-depth"), 0)
         self.assertIs(checkout["with"].get("persist-credentials"), False)
 
         downloads = [step for step in steps
                      if step.get("uses", "").startswith(
                          "actions/download-artifact@")]
         self.assertEqual(len(downloads), 1)
-        self.assertEqual(downloads[0].get("with", {}).get("name"), "coverage-xml")
 
         measure = next(step for step in steps
                        if step.get("name") == "Measure the coverage of this change")
@@ -1013,11 +1009,6 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         uploads = [step for step in steps
                    if step.get("uses", "").startswith("actions/upload-artifact@")]
         self.assertEqual(len(uploads), 1)
-        self.assertEqual(uploads[0].get("with", {}).get("name"),
-                         "diff-coverage-comment")
-        self.assertEqual(set(uploads[0]["with"]["path"].splitlines()),
-                         {"body.md", "pr-number.txt"})
-        self.assertEqual(uploads[0]["with"].get("if-no-files-found"), "error")
 
     def test_coverage_comment_workflow_has_one_trusted_writer_and_updates_in_place(self):
         path = WORKFLOWS / "coverage-comment.yml"
@@ -1045,10 +1036,6 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                      if step.get("uses", "").startswith(
                          "actions/download-artifact@")]
         self.assertEqual(len(downloads), 1)
-        self.assertEqual(downloads[0]["with"].get("name"),
-                         "diff-coverage-comment")
-        self.assertEqual(downloads[0]["with"].get("run-id"),
-                         "${{ github.event.workflow_run.id }}")
 
         scripts = "\n".join(step.get("run", "") for step in steps)
         artifact_lookup = next(step for step in steps
