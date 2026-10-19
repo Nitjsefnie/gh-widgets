@@ -17,6 +17,7 @@ import re
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -331,6 +332,14 @@ def run_main(cache_file, out_dir, gql_fn=None, nodes=()):
 
 
 class RenderCard(unittest.TestCase):
+    def test_sub_minute_wait_is_escaped_and_parses_as_xml(self):
+        svg = resp.render_responsiveness(
+            resp.THEMES['tokyonight'], [resp.Scored(10.0, 1, 0.001, 'a/b')])
+        root = ET.fromstring(svg)
+        self.assertIn('font-size="11">&lt;1 min</text>', svg)
+        self.assertEqual([node.text for node in root.findall("{*}text[@x='390']")],
+                         ['avg wait', '<1 min'])
+
     def render(self, nodes):
         """One end-to-end run against a cold cache: the fetch supplies every
         PR, so the card is drawn from what this script itself just fetched."""
