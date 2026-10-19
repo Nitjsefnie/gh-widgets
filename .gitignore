@@ -11,10 +11,10 @@
 # it is what stops a `!*.py` from reaching into `__pycache__/`, `.venv/` or
 # the generated `widgets/` tree.
 #
-# NOTE the shape of this repo: the renderers and their tests live at the
-# ROOT, not under a package directory. So the root block below names back
-# `*.py` directly — and that is exactly why `__pycache__/` must stay denied
-# by the leading `*` and never re-opened.
+# Runtime modules live in src/ and tests in tests/. Each directory below
+# re-opens only its shipped file types; generated __pycache__/ trees stay
+# denied by the leading `*`. The public ghwidgets_data.py boundary stays
+# at the root for pinned consumers.
 #
 # Adding a file whose type is not already named back for its directory means
 # adding a rule here. `git status` will NOT tell you the file is missing; it
@@ -24,8 +24,8 @@
 
 *
 
-# ---- repository root — renderers, shared modules, tests, config -----------
-!/*.py
+# ---- repository root — public boundary, docs and project config ----------
+!/ghwidgets_data.py
 !/.gitignore
 !/.pylintrc
 !/.gitleaks.toml
@@ -37,20 +37,29 @@
 !/README.md
 !/SECURITY.md
 !/VERSION
-!/coverage-floor.json
-!/speed-baseline.json
 !/install.sh
 !/pyrightconfig.json
-!/requirements-dev.txt
-!/requirements-test.txt
-!/requirements-pip-audit.txt
-!/requirements-zizmor.txt
 !/setup.cfg
 
-# `!/*.py` above matches only files directly at the root, so __pycache__/
-# stays denied. Re-stated explicitly because this is the one repo where the
-# root glob is broad enough for that to matter.
-/__pycache__/
+# ---- src/ — renderers and their shared runtime modules --------------------
+!/src/
+/src/*
+!/src/*.py
+
+# ---- tests/ — stdlib unittest package ------------------------------------
+!/tests/
+/tests/*
+!/tests/*.py
+
+# ---- gate/ — committed coverage and speed records ------------------------
+!/gate/
+/gate/*
+!/gate/*.json
+
+# ---- requirements/ — pinned development and CI toolchains ----------------
+!/requirements/
+/requirements/*
+!/requirements/*.txt
 
 # ---- .github/ — CI workflows, dependabot, issue and PR templates ----------
 !/.github/

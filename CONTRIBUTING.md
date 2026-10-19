@@ -31,15 +31,15 @@ was. That is fine in both directions.
 
 ## The two constraints that reject the most patches
 
-- **`render.py` is standard library only**, and `test_render.py` is too. A
+- **`src/render.py` is standard library only**, and `tests/test_render.py` is too. A
   patch that adds `requests`, `jinja2`, or an SVG library to that path will
   be declined — the point is that it drops onto a server and runs. If you
   need HTTP, use `urllib.request`; if you need templating, use f-strings.
 
-  `render-impact.py` is the documented exception: its blame pass shells out
+  `src/render-impact.py` is the documented exception: its blame pass shells out
   to the **`git` CLI** and to **git-fame** (pip). That is the whole reason
   it is a separate script with separate units and its own cache, rather
-  than another card in `render.py`. Keep the boundary — new dependencies
+  than another card in `src/render.py`. Keep the boundary — new dependencies
   belong on the impact side, if anywhere.
 - **Identity is derived, never configured.** Whose repos count as insider,
   and whose lines count as ours, come from the token's own account via
@@ -50,17 +50,17 @@ was. That is fine in both directions.
 - **Ownership matching is exact.** Commit-author email in a third-party repo
   is attacker-controllable, so it is matched by exact set membership. Do not
   reintroduce a substring, prefix, or regex test.
-- **Shared code lives in `ghwidgets_common.py`, `ghwidgets_cache.py`, and
-  `ghwidgets_journal.py`**. Renderers load `ghwidgets_common.py` by path and
+- **Shared code lives in `src/ghwidgets_common.py`, `src/ghwidgets_cache.py`, and
+  `src/ghwidgets_journal.py`**. Renderers load `src/ghwidgets_common.py` by path and
   version-check it via `COMMON_VERSION`. If you change that module's
   interface, bump `COMMON_VERSION` and both scripts' `REQUIRED_COMMON` —
-  `test_common.py` fails if they drift apart.
+  `tests/test_common.py` fails if they drift apart.
 - **No request-time work.** The renderer runs on a timer and writes files.
   Nothing in this repo may fetch, compute, or phone home when a browser
   loads the SVG. That is the failure mode of the hosted services this
   replaces.
 
-Related: keep the query filtered. `render.py` asks for `privacy: PUBLIC` and
+Related: keep the query filtered. `src/render.py` asks for `privacy: PUBLIC` and
 skips `isPrivate` pull requests. Removing either leaks private repository
 names into a public SVG.
 
@@ -69,7 +69,7 @@ names into a public SVG.
 No install step and no dependencies:
 
 ```sh
-GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
+GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./src/render.py
 ```
 
 A classic PAT with the documented `public_repo` scope is enough;
@@ -95,9 +95,9 @@ until someone looks at a broken README.
 nothing left to do here. It was the `speed` job in `tests.yml`, collecting
 these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
 that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
-own JUnit. It was also imported by `test_compare_counters.py`, which
+own JUnit. It was also imported by `tests/test_compare_counters.py`, which
 `unittest discover` had to be able to import in order to collect the suite;
-that file is now stdlib unittest like everything else. `requirements-test.txt`
+that file is now stdlib unittest like everything else. `requirements/test.txt`
 still pins it for optional local `pytest` runs. CI installs that toolchain in
 the `unittest` and `speed` jobs but continues to use `unittest` rather than
 invoking pytest. Do not write a test against pytest fixtures or
@@ -111,14 +111,14 @@ unit tests and coverage, Python style and lint checks, Python type checks,
 dependency vulnerability checks, security analysis, workflow syntax and
 security checks, and the speed job. The speed job counts **CPU seconds** for
 each renderer workload and for the unit suite, on pinned offline fixtures,
-and compares each against a committed baseline in `speed-baseline.json` that
+and compares each against a committed baseline in `gate/speed-baseline.json` that
 only ever ratchets down, with unit-suite raises permitted solely as a
 declared re-derivation in a **pure carrier PR**: its changed-file set must be
-exactly `{speed-baseline.json}`. Each raised key requires one line anywhere
+exactly `{gate/speed-baseline.json}`. Each raised key requires one line anywhere
 in the carrying commit's message, naming the exact old and new maxima:
 
 ```
-Budget-Raise: speed-baseline.json <population:key:node> <from> -> <to>
+Budget-Raise: gate/speed-baseline.json <population:key:node> <from> -> <to>
 ```
 
 Use the ASCII ` -> ` arrow. The same carrying message must record the
@@ -184,14 +184,14 @@ is**, and that is the whole of what they cover:
 
 ```sh
 python3 -m unittest discover -v                                  # tests
-python3 -m coverage run --source=. --omit='test_*.py' \
+python3 -m coverage run --source=. --omit='tests/*' \
   -m unittest discover && python3 -m coverage report \
   && python3 -m coverage json -o coverage.json                  # coverage
 python3 scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
 git ls-files -co --exclude-standard '*.py' | xargs pylint        # lint
 git ls-files -co --exclude-standard '*.py' | xargs pycodestyle   # lint
 pyright                                                          # types
-pip-audit -r requirements-dev.txt -r requirements-test.txt       # audit
+pip-audit -r requirements/dev.txt -r requirements/test.txt       # audit
 actionlint .github/workflows/*.yml && zizmor .github/workflows/  # actionlint
 ```
 
@@ -205,7 +205,7 @@ repository's history, because the checklist does not run them.
 
 Run one cell locally if you can — a Linux-only dependency does not stop
 `python3 -m unittest discover` exercising a suite that also has to import on
-Windows, and `python3 -m unittest test_the_thing` is usually enough to see
+Windows, and `python3 -m unittest tests.test_the_thing` is usually enough to see
 an import error the full run only reports as a mass failure. What you cannot
 do locally is the reverse: nothing above exercises a POSIX-only import on a
 platform that has none, and nothing above runs a shell script under bash on
@@ -214,15 +214,14 @@ imports, `/proc`, `/dev`, signals, file modes, shell in a workflow — open the
 pull request and let the matrix decide.** That costs a reader nothing and it
 is the only instruction here that has no local substitute.
 
-`pip install -r requirements-dev.txt -r requirements-test.txt` gets the
+`pip install -r requirements/dev.txt -r requirements/test.txt` gets the
 pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
 workflows, so leaving them out reported coverage for a smaller program than
-the one that ships. The floor lives in `coverage-floor.json` at the repository
-root as committed data. When measured coverage exceeds it,
+the one that ships. The floor lives in `gate/coverage-floor.json` as committed data. When measured coverage exceeds it,
 `coverage-ratchet.yml` announces the climbable floor with an annotation and step
 summary. Raising it is a deliberate pull request: download the
-`coverage-floor-candidate` artifact, replace `coverage-floor.json`, and open a
+`coverage-floor-candidate` artifact, replace `gate/coverage-floor.json`, and open a
 pull request, or run `scripts/ci/coverage_ratchet.py raise` locally. The floor
 is never lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a
 smaller number than it read. Raise coverage by writing tests; never by editing
@@ -256,7 +255,7 @@ missing, those checks fail instead of skipping. Other matrix cells skip those
 environment-conditional checks when git-fame is absent.
 
 **Release = edit `VERSION`.** One bare semver line at the repo root, no
-leading `v`. `REPO_VERSION` in `ghwidgets_common.py` reads it — and note
+leading `v`. `REPO_VERSION` in `src/ghwidgets_common.py` reads it — and note
 it is NOT `COMMON_VERSION`, which is the interface-compatibility marker
 between that module and the renderers. Bumping one never means the other
 moved. A deployed copy has no `VERSION` beside it (`install.sh` copies the
@@ -268,9 +267,11 @@ not "tidy" one back to `@v4`: a tag is a moving pointer, and these jobs
 hold a repository token. Dependabot keeps the hashes current.
 
 **`.gitignore` is deny-by-default**: `*` first, then each shipped path
-named back. Note the shape of this repo — the renderers and their tests
-live at the ROOT, so the root block names back `*.py` directly, which is
-exactly why `__pycache__/` must stay denied and never re-opened. A new
+named back. Runtime code lives in `src/`, unit tests in `tests/`, gate data in `gate/`,
+and pinned toolchains in `requirements/`. Each kept directory is re-opened,
+its contents denied again, then its shipped file types named back with a
+directory-scoped glob. `__pycache__/` stays denied and is never re-opened.
+The root names back only the public `ghwidgets_data.py` module. A new
 file of an unlisted type is invisible to git and will NOT appear in
 `git status`; `git check-ignore -v <path>` names the rule hiding an
 UNTRACKED file. For a file the repo tracks, add `--no-index`, because

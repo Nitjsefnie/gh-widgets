@@ -17,7 +17,7 @@ import sys
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-DOCUMENT = "speed-baseline.json"
+DOCUMENT = "gate/speed-baseline.json"
 _DECLARATION_PREFIX = 'Budget-Raise: '
 _DECLARATION_LINE = re.compile(
     r'^(?P<document>\S+) +(?P<key>.+) +(?P<was>\S+) -> (?P<to>\S+)$')

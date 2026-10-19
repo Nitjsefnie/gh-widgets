@@ -4,7 +4,7 @@ name: release
 # on the default branch. The version is the input to one thing: the tag
 # people install by. It used to be two — the speed job used to benchmark HEAD
 # against the latest release, and now measures HEAD alone against the
-# committed counter baseline in speed-baseline.json, which no release
+# committed counter baseline in gate/speed-baseline.json, which no release
 # feeds.
 #
 # WHY IT WAITS FOR THE OTHER GATES. A tag is the one artefact here that

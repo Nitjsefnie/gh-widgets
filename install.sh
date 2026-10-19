@@ -129,16 +129,16 @@ trap 'exit 143' TERM
 
 # source -> installed name
 set -- \
-    "render.py:render-gh-widgets.py" \
-    "render-impact.py:render-impact.py" \
-    "impact_loc.py:impact_loc.py" \
-    "render-responsiveness.py:render-responsiveness.py" \
-    "render-stars.py:render-stars.py" \
-    "render-popularity.py:render-popularity.py" \
-    "ghwidgets_common.py:ghwidgets_common.py" \
-    "ghwidgets_cache.py:ghwidgets_cache.py" \
-    "ghwidgets_journal.py:ghwidgets_journal.py" \
-    "impact_clone.py:impact_clone.py" \
+    "src/render.py:render-gh-widgets.py" \
+    "src/render-impact.py:render-impact.py" \
+    "src/impact_loc.py:impact_loc.py" \
+    "src/render-responsiveness.py:render-responsiveness.py" \
+    "src/render-stars.py:render-stars.py" \
+    "src/render-popularity.py:render-popularity.py" \
+    "src/ghwidgets_common.py:ghwidgets_common.py" \
+    "src/ghwidgets_cache.py:ghwidgets_cache.py" \
+    "src/ghwidgets_journal.py:ghwidgets_journal.py" \
+    "src/impact_clone.py:impact_clone.py" \
     "ghwidgets_data.py:ghwidgets_data.py"
 
 # Verify every source exists BEFORE touching the destination, so a missing

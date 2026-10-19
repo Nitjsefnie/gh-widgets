@@ -267,11 +267,11 @@ def measure(
 def _measured_source(path: str) -> bool:
     """Whether some coverage report is expected to name this changed path.
 
-    This repository's coverage command omits `test_*.py`. Coverage's glob
-    matches that basename at any depth, so the same rule applies here.
+    This repository's coverage command omits `tests/*`, including the
+    package bootstrap as well as the test modules.
     """
     if path.lower().endswith('.py'):
-        return not Path(path).name.startswith("test_")
+        return not path.startswith("tests/")
     return False
 
 
@@ -316,7 +316,7 @@ def render(rows, covered, total, unmeasured=()):
         # A change that only touches test files is common, and a bare
         # "nothing added" reads like the tool failed to find the diff.
         out.append('No **measured** lines were added. Coverage omits '
-                   '`test_*.py`, so a change confined to test files or to '
+                   '`tests/*`, so a change confined to test files or to '
                    'files the report does not measure has no patch coverage '
                    'to report — that is not the same as none of it running.')
     else:

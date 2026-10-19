@@ -372,8 +372,9 @@ def collect_node_ids(directory: Path) -> list:
     """
     loader = unittest.TestLoader()
     try:
+        top_level = directory.parent if (directory / "__init__.py").is_file() else directory
         discovered = loader.discover(str(directory),
-                                     top_level_dir=str(directory))
+                                     top_level_dir=str(top_level))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         raise CounterError(
             f"{directory} could not be collected, so the population digest "

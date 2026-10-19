@@ -540,7 +540,7 @@ def python_references(tree, path):
 
     A literal contributes only when it names a tracked file exactly; directory
     strings do not expand the tree. Constructed paths and runtime file discovery
-    remain outside this derivation. Defaults such as `coverage-floor.json` are
+    remain outside this derivation. Defaults such as `gate/coverage-floor.json` are
     included even when the workflow relies on the script's default argument.
     """
     modules, literals = [], []

@@ -12,7 +12,7 @@ Imported by path rather than as a package, for the same reason counter.py
 is: scripts/ci holds standalone CI entry points and deliberately has no
 __init__.py.
 
-Modelled on coverage-floor.json: committed data rather than a literal in a
+Modelled on gate/coverage-floor.json: committed data rather than a literal in a
 workflow, a REQUIRED `basis` so the reason a number sits where it does lives
 at the number, a provenance pair, and a validator that refuses rather than
 degrades.
@@ -282,7 +282,7 @@ def raised_entries(old: dict, new: dict,
     dispatch run ids in the document's `basis`, where review reads them.
     The workflow reads exact Budget-Raise lines from carrying commit
     messages, requires measuring dispatch run ids in those messages, and
-    permits unit-suite raises only when the PR touches speed-baseline.json
+    permits unit-suite raises only when the PR touches gate/speed-baseline.json
     alone. It checks each line's from/to against the documents before
     passing slot names here; renderer ceilings stay strictly down-only.
     A declaration that names no slot either document has — a typo — is

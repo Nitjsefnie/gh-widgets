@@ -55,7 +55,7 @@ EXIT CODES. 0 within budget, 1 over budget, 2 could not compare at all.
 Deliberately different: a workflow that reports a restructured suite as a
 performance regression teaches people to read the red as noise.
 
-    compare_counters.py --baseline speed-baseline.json --population unit-suite \
+    compare_counters.py --baseline gate/speed-baseline.json --population unit-suite \
                          --head head1.xml head2.xml \
                          --require-test e2e::bench.render
 """
@@ -69,7 +69,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_BASELINE = REPO_ROOT / "speed-baseline.json"
+DEFAULT_BASELINE = REPO_ROOT / "gate/speed-baseline.json"
 SUPPORTED_SCHEMA = 3
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is

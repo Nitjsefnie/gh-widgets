@@ -17,11 +17,12 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs a ten-file deployment set to `/usr/local/bin`
+unit.** Bare, it installs an eleven-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`, `impact_loc.py`,
 `render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_cache.py`,
-`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`).
-The renderers
+`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`, `render-popularity.py`).
+Sources live under `src/` except the root public `ghwidgets_data.py`;
+installed filenames stay flat. The renderers
 load `ghwidgets_common.py` and assert its `COMMON_VERSION` at startup; that
 module imports the adjacent cache and journal modules, and `impact_loc.py`
 imports the adjacent clone module. `ghwidgets_data.py` is installed alongside
@@ -96,7 +97,7 @@ cannot have `closed_at`; a closed issue requires a reason that is neither
 `null` nor `REOPENED` (and accepts any other reason string); PRs do not have a
 `state_reason` field; a `MERGED` PR must have both outcome timestamps; and
 `OPEN` or `CLOSED` PRs must be unmerged with `merged_at: null`.
-`test_data.py` pins every one of these cells against the validator, so the prose
+`tests/test_data.py` pins every one of these cells against the validator, so the prose
 above cannot drift away from the code without a test failing.
 
 The supported public functions are `normalise_issue`,
@@ -205,7 +206,7 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > (`min(32, cpu+4)`), and passing the flag explicitly would turn an older
 > install from "slow" into "every repo errors", which poisons the cache.
 >
-> **Three guards, at three different times.** `test_impact.py` fails if the
+> **Three guards, at three different times.** `tests/test_impact.py` fails if the
 > installed build lacks `--jobs` (test time); `install.sh` warns (install
 > time); and `render-impact.py`'s `check_git_fame()` prints the installed
 > version on **every render** (run time). All three probe for `--jobs` in
@@ -278,7 +279,7 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > older `a99855d3`, so it compared a different build against the current one.
 > That is why the pin is decided on memory, where both arms are the same
 > build and the comparison is like-for-like. The measurement workflows now
-> install the documented pin, and `test_ci_workflows.py` fails if they drift
+> install the documented pin, and `tests/test_ci_workflows.py` fails if they drift
 > from it again. The fork's `git fame` process never enters the sampler's
 > top-12 list, so that
 > column reads 0 for it: it is below every listed process, not unmeasured.
@@ -417,6 +418,6 @@ everything, so it takes far longer than an incremental run.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
 > scopes incl. `repo`), not a narrow PAT. Safe only because the renderer filters
-> at the query (`privacy: PUBLIC`, `render.py:227`) and skips `isPrivate` PRs —
+> at the query (`privacy: PUBLIC`, `src/render.py:227`) and skips `isPrivate` PRs —
 > keep that filter, or private repos leak into public SVGs. Swap in a
 > `read:user`+`public_repo` PAT if you want least privilege.
