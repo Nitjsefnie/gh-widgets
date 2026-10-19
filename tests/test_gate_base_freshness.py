@@ -167,7 +167,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
                      'scripts/ci/coverage_ratchet.py',
                      'scripts/ci/gate_base_freshness.py',
                      'scripts/ci/commit_scopes.py',
-                     'coverage-floor.json', 'speed-baseline.json'):
+                     'gate/coverage-floor.json', 'gate/speed-baseline.json'):
             self.assertIn(path, paths)
 
     def test_green_when_the_head_carries_every_gate_commit(self):
