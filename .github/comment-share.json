@@ -179,6 +179,10 @@
     7497,
     29630
   ],
+  "tests/test_comment_record_contract.py": [
+    534,
+    2889
+  ],
   "tests/test_compare_counters.py": [
     3076,
     15728
@@ -193,7 +197,7 @@
   ],
   "tests/test_coverage_ratchet_ci.py": [
     8872,
-    30823
+    30682
   ],
   "tests/test_impact.py": [
     5834,
