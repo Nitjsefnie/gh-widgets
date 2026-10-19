@@ -41,6 +41,7 @@ Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import argparse
 import importlib.util
+import math
 import os
 import sys
 import urllib.error
@@ -98,6 +99,20 @@ CacheFallback = common.CacheFallback
 # be discarded and refetched rather than trusted.
 CACHE_VERSION = 3
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
+
+# WCAG non-text contrast: swatches must reach 3:1 on track and card endpoints.
+LANGUAGE_MIN_CONTRAST = 3.0
+# CIE76 distance 20 separates the neighboring blues (distance about 16).
+LANGUAGE_MIN_DELTA_E = 20.0
+# Two L* units keep hue-preserving corrections small before trying larger ones.
+LANGUAGE_LIGHTNESS_STEP = 2
+# 50 steps in either direction cover the full 0..100 L* range, bounding work.
+LANGUAGE_MAX_STEPS = 50
+# Both neutrals pass 3:1 on all themes; their L* span exceeds twice delta-E 20,
+# so at least one is separated from any single finalized predecessor.
+LANGUAGE_FALLBACK_COLORS = ("#888888", "#ffffff")
+# A two-pixel background split remains visible between neighboring segments.
+LANGUAGE_GAP = 2
 
 
 def load_cache(path):
@@ -655,6 +670,79 @@ def render_external(C, pr_opened, pr_merged, pr_repos,
                            f"{iss_repos} repos ({accept_rate})."))
 
 
+def language_rgb(color):
+    """Opaque sRGB hex to linear channels (WCAG relative luminance)."""
+    channels = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+    return [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4
+            for c in channels]
+
+
+def language_contrast(first, second):
+    """WCAG contrast ratio, symmetric in foreground and background."""
+    values = [sum(c * w for c, w in zip(language_rgb(color), (.2126, .7152, .0722)))
+              for color in (first, second)]
+    return (max(values) + .05) / (min(values) + .05)
+
+
+def language_lab(color):
+    """sRGB -> XYZ -> CIELAB, relative to the sRGB D65 reference white."""
+    r, g, b = language_rgb(color)
+    xyz = ((.4124564*r + .3575761*g + .1804375*b) / .95047,
+           .2126729*r + .7151522*g + .0721750*b,
+           (.0193339*r + .1191920*g + .9503041*b) / 1.08883)
+    x, y, z = [v ** (1/3) if v > (6/29) ** 3
+               else v / (3 * (6/29) ** 2) + 4/29 for v in xyz]
+    return 116*y - 16, 500*(x-y), 200*(y-z)
+
+
+def language_hex(lightness, a, b):
+    """D65 Lab -> sRGB, clipping gamut and quantizing BEFORE checking it."""
+    y = (lightness + 16) / 116
+    xyz = [v ** 3 if v > 6/29 else 3 * (6/29) ** 2 * (v - 4/29)
+           for v in (y + a/500, y, y - b/200)]
+    x, y, z = [v * white for v, white in zip(xyz, (.95047, 1, 1.08883))]
+    linear = (3.2404542*x - 1.5371385*y - .4985314*z,
+              -.9692660*x + 1.8760108*y + .0415560*z,
+              .0556434*x - .2040259*y + 1.0572252*z)
+    channels = [12.92*c if c <= .0031308 else 1.055*c ** (1/2.4) - .055
+                for c in linear]
+    return '#' + ''.join(f'{round(min(1, max(0, c)) * 255):02x}' for c in channels)
+
+
+def language_color_ok(C, color, previous):
+    """Validate the actual emitted hex against every surface and predecessor."""
+    return (all(language_contrast(color, C[key]) >= LANGUAGE_MIN_CONTRAST
+                for key in ('border', 'bg', 'bg2'))
+            and (previous is None or math.dist(language_lab(color),
+                                               language_lab(previous)) >= LANGUAGE_MIN_DELTA_E))
+
+
+def language_colors(C, top):
+    """Finalize left-to-right: never change an already validated predecessor.
+
+    Each candidate must pass BOTH checks before it is committed, so improving
+    contrast cannot invalidate the pair behind it. The bounded Lab search tries
+    nearby lighter/darker shades first; gamut exhaustion uses separated neutrals.
+    """
+    result = []
+    previous = None
+    for name, size, pct, raw in top:
+        color = xml_color(raw)[:7]
+        if not language_color_ok(C, color, previous):
+            lightness, a, b = language_lab(color)
+            candidates = (language_hex(min(100, max(0, lightness + sign * step * LANGUAGE_LIGHTNESS_STEP)), a, b)
+                          for step in range(1, LANGUAGE_MAX_STEPS + 1)
+                          for sign in (1, -1))
+            reference = language_lab(previous or color)
+            fallback = max(LANGUAGE_FALLBACK_COLORS,
+                           key=lambda c, ref=reference: math.dist(language_lab(c), ref))
+            color = next((c for c in candidates if language_color_ok(C, c, previous)),
+                         fallback)
+        result.append((name, size, pct, color))
+        previous = color
+    return result
+
+
 def language_legend(C, top):
     """One legend row per language: color swatch, name, share percent."""
     legend = []
@@ -670,7 +758,7 @@ def language_legend(C, top):
 
 
 def render_languages(C, langs):
-    top = langs[:5]
+    top = language_colors(C, langs[:5])
     pct_sum = sum(p for _, _, p, _ in top) or 1
     bar_x, bar_w, y = 20, 380, 88
     rects = []
@@ -679,6 +767,11 @@ def render_languages(C, langs):
         seg = (pct / pct_sum) * bar_w
         rects.append(f'<rect x="{rect_x:.1f}" y="{y}" width="{seg:.1f}" height="10" fill="{xml_color(color)}"/>')
         rect_x += seg
+    # Paint splits after all segments, centered on their shared boundaries.
+    split_x = bar_x
+    for _, _, pct, _ in top[:-1]:
+        split_x += pct / pct_sum * bar_w
+        rects.append(f'<rect x="{split_x - LANGUAGE_GAP/2:.1f}" y="{y}" width="{LANGUAGE_GAP}" height="10" fill="{C["bg"]}"/>')
     body = f"""
   <text x="20" y="34" fill="{C['cyan']}" font-size="14" font-weight="600">top languages</text>
   <text x="20" y="52" fill="{C['dim']}" font-size="11">by bytes of code, public repos</text>

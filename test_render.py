@@ -5,10 +5,13 @@
 
 No network: every case is a hand-built contribution calendar.
 """
+# Language SVG regressions belong alongside the other profile renderer tests.
+# pylint: disable=too-many-lines
 import datetime
 import importlib.util
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -926,6 +929,142 @@ class CorruptCache(unittest.TestCase):
             # The successful run rewrites a clean, current-version cache.
             self.assertEqual(render.load_cache(cache_file)["version"],
                              render.CACHE_VERSION)
+
+
+class LanguageColors(unittest.TestCase):
+    """Measure emitted fills independently of the renderer's color helpers."""
+
+    @staticmethod
+    def linear(color):
+        channels = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+        return [c / 12.92 if c <= 0.04045 else ((c + .055) / 1.055) ** 2.4
+                for c in channels]
+
+    @classmethod
+    def contrast(cls, first, second):
+        luminances = [sum(c * w for c, w in zip(cls.linear(color), (.2126, .7152, .0722)))
+                      for color in (first, second)]
+        return (max(luminances) + .05) / (min(luminances) + .05)
+
+    @classmethod
+    def lab(cls, color):
+        rgb = cls.linear(color)
+        xyz = [sum(c * w for c, w in zip(rgb, row)) / white
+               for row, white in zip(
+                   ((.4124564, .3575761, .1804375),
+                    (.2126729, .7151522, .0721750),
+                    (.0193339, .1191920, .9503041)),
+                   (.95047, 1, 1.08883))]
+        x, y, z = [v ** (1/3) if v > (6/29) ** 3
+                   else v / (3 * (6/29) ** 2) + 4/29 for v in xyz]
+        return (116 * y - 16, 500 * (x - y), 200 * (y - z))
+
+    def rendered(self, theme, colors):
+        langs = [(f'Language {i}', 100-i, 100/len(colors), color)
+                 for i, color in enumerate(colors)]
+        root = ET.fromstring(render.render_languages(theme, langs))
+        rects = root.findall('.//{http://www.w3.org/2000/svg}rect')
+        bars = [r for r in rects if r.get('y') == '88'
+                and r.get('fill') not in (theme['border'], theme['bg'])]
+        dots = [r for r in rects if r.get('width') == '9']
+        self.assertEqual(len(bars), min(len(colors), 5))
+        self.assertEqual([r.get('fill') for r in bars],
+                         [r.get('fill') for r in dots])
+        return root, bars, [r.attrib['fill'] for r in dots]
+
+    def assert_readable(self, theme, colors):
+        for color in colors:
+            for surface in ('border', 'bg', 'bg2'):
+                self.assertGreaterEqual(self.contrast(color, theme[surface]),
+                                        render.LANGUAGE_MIN_CONTRAST)
+        for first, second in zip(colors, colors[1:]):
+            self.assertNotEqual(first, second)
+            self.assertGreaterEqual(math.dist(self.lab(first), self.lab(second)),
+                                    render.LANGUAGE_MIN_DELTA_E)
+
+    def test_blues_are_separated_on_every_theme(self):
+        for theme in render.THEMES.values():
+            with self.subTest(theme=theme['bg']):
+                _, _, colors = self.rendered(theme, ['#3178c6', '#3572A5'])
+                self.assert_readable(theme, colors)
+
+    def test_distinct_colors_preserve_exact_github_hex(self):
+        for theme in render.THEMES.values():
+            _, _, colors = self.rendered(theme, ['#FfCC00', '#00CCFF'])
+            self.assert_readable(theme, colors)
+            self.assertEqual(colors, ['#FfCC00', '#00CCFF'])
+
+    def test_gap_has_background_fill_and_two_pixel_width(self):
+        theme = render.THEMES['tokyonight']
+        root, bars, _ = self.rendered(theme, ['#FfCC00', '#00CCFF'])
+        gaps = [r for r in root.findall('.//{http://www.w3.org/2000/svg}rect')
+                if r.get('y') == '88' and r.get('fill') == theme['bg']]
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(float(gaps[0].attrib['width']), 2)
+        boundary = float(bars[1].attrib['x'])
+        self.assertAlmostEqual(float(gaps[0].attrib['x']) + 1, boundary)
+        self.assertEqual(gaps[0].get('height'), '10')
+
+    def test_gradient_endpoints_are_both_checked(self):
+        for endpoint in ('bg', 'bg2'):
+            theme = dict(render.THEMES['tokyonight'], **{endpoint: '#777777'})
+            _, _, colors = self.rendered(theme, ['#888888'])
+            self.assert_readable(theme, colors)
+
+    def test_five_languages_converge_without_breaking_previous_pairs(self):
+        for theme in render.THEMES.values():
+            for source in (['#888888'] * 5,
+                           ['#000000', '#ffffff', '#fefefe', '#010203', '#0000ff']):
+                _, _, colors = self.rendered(theme, source)
+                self.assert_readable(theme, colors)
+                self.assertEqual(colors, self.rendered(theme, source)[2])
+                self.assertEqual(colors, self.rendered(theme, colors)[2])
+
+    def test_small_contrast_adjustment_keeps_blue_hue(self):
+        theme = render.THEMES['tokyonight']
+        _, _, colors = self.rendered(theme, ['#3178c6'])
+        before, after = self.lab('#3178c6'), self.lab(colors[0])
+        self.assertGreater(after[0], before[0])
+        self.assertLessEqual(math.dist(before, after), render.LANGUAGE_LIGHTNESS_STEP * 2)
+        self.assert_readable(theme, colors)
+
+    def test_exhausted_search_uses_readable_separated_fallbacks(self):
+        with mock.patch.object(render, 'LANGUAGE_MAX_STEPS', 0):
+            for theme in render.THEMES.values():
+                for source in (['#000000'] * 5,
+                               ['#bebebe', '#bebebe', '#ffffff', '#ffffff']):
+                    _, _, colors = self.rendered(theme, source)
+                    self.assert_readable(theme, colors)
+
+    def test_white_neighbor_steps_darker_before_using_fallback(self):
+        theme = render.THEMES['tokyonight']
+        _, _, colors = self.rendered(theme, ['#ffffff', '#ffffff'])
+        self.assert_readable(theme, colors)
+        self.assertLess(self.lab(colors[1])[0], self.lab('#ffffff')[0])
+        self.assertLessEqual(math.dist(self.lab(colors[1]), self.lab('#ffffff')),
+                             render.LANGUAGE_MIN_DELTA_E + 2 * render.LANGUAGE_LIGHTNESS_STEP)
+
+    def test_color_conversion_including_dark_linear_branches(self):
+        for source in ('#000000', '#010a03', '#0b0b0b', '#3178c6',
+                       '#ff0000', '#00ff00', '#0000ff', '#ffffff'):
+            with self.subTest(source=source):
+                for got, expected in zip(render.language_rgb(source), self.linear(source)):
+                    self.assertAlmostEqual(got, expected)
+                for got, expected in zip(render.language_lab(source), self.lab(source)):
+                    self.assertAlmostEqual(got, expected)
+                self.assertAlmostEqual(render.language_contrast(source, '#888888'),
+                                       self.contrast(source, '#888888'))
+                round_trip = render.language_hex(*self.lab(source))
+                self.assertLess(math.dist(self.lab(round_trip), self.lab(source)), .5)
+
+    def test_empty_single_and_top_five_keep_gap_count(self):
+        theme = render.THEMES['tokyonight']
+        for count in (0, 1, 6):
+            root, _, colors = self.rendered(theme, ['#888888'] * count)
+            self.assert_readable(theme, colors)
+            gaps = [r for r in root.findall('.//{http://www.w3.org/2000/svg}rect')
+                    if r.get('y') == '88' and r.get('fill') == theme['bg']]
+            self.assertEqual(len(gaps), max(0, min(count, 5) - 1))
 
 
 class SvgInputEscaping(unittest.TestCase):
