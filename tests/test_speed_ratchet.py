@@ -728,8 +728,8 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         for path in self.renderer_reports:
             command.extend(("--renderer-report", str(path)))
 
-        result = subprocess.run(command, capture_output=True, text=True,
-                                 check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(self.output_path.is_file())
