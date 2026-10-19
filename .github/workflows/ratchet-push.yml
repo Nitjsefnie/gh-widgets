@@ -5,6 +5,10 @@ name: ratchet push
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
+# Older artifacts may cross changes to OTHER records; their own record or a
+# non-data change invalidates them. Apply-time validation still reads main.
+# A cancelled measuring run publishes no eligible artifact (success is required
+# below); producer cancellation is separate, and the next source push measures again.
 #
 # zizmor flags workflow_run because another branch's event data or code could
 # reach a privileged job. That hazard does not apply here: the job admits only
@@ -20,7 +24,7 @@ on:
 permissions: {}
 
 concurrency:
-  # Queue completed measurements. The older run drops green if main moved.
+  # Queue completed measurements so sibling record artifacts can all land.
   group: ratchet-push
   cancel-in-progress: false
 
@@ -36,6 +40,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read
+      contents: read
 
     steps:
       - name: List the triggering run's artifacts
@@ -73,6 +78,7 @@ jobs:
       - name: Validate and push the ratchet record
         if: steps.artifact.outputs.present == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
@@ -131,6 +137,10 @@ jobs:
           PY
           )"
           base="$(cat "$data/base.txt")"
+          record_path="gate/$document_name"
+          if [ "$document_name" = comment-share.json ]; then
+            record_path=".github/$document_name"
+          fi
 
           eval "$(ssh-agent -s)" >/dev/null
           trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
@@ -153,14 +163,69 @@ jobs:
           fetched="$(git -C "$repo" rev-parse HEAD)"
 
           if [ "$base" != "$fetched" ]; then
-            echo "::notice::Main moved while this run measured; the next push measures and stages its own record."
-            {
-              echo "### Dropped ratchet artifact: main moved"
-              echo
-              echo "Measured base $base is no longer main's tip ($fetched)."
-              echo "This run's record is dropped; the next main push measures and stages again."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            comparison="$RUNNER_TEMP/ratchet-comparison.json"
+            if gh api -H 'Cache-Control: no-cache' --paginate --slurp \
+              "repos/$REPO/compare/$base...$fetched?per_page=100" > "$comparison"
+            then
+              decision="$(python3 - "$comparison" "$record_path" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          try:
+              pages = json.loads(Path(sys.argv[1]).read_bytes())
+              if not isinstance(pages, list) or not pages \
+                      or any(not isinstance(page, dict) or page.get("status") != "ahead"
+                             for page in pages):
+                  raise ValueError("comparison does not verify forward history")
+              if not isinstance(pages[0].get("files"), list):
+                  raise ValueError("comparison has no changed-file list")
+              changed = set()
+              for page in pages:
+                  files = page.get("files", [])
+                  if not isinstance(files, list) or len(files) >= 300:
+                      raise ValueError("changed-file list is malformed or capped")
+                  for entry in files:
+                      if not isinstance(entry, dict) \
+                              or not isinstance(entry.get("filename"), str) \
+                              or not entry["filename"]:
+                          raise ValueError("changed file has no filename")
+                      changed.add(entry["filename"])
+                      if entry.get("status") == "renamed":
+                          previous = entry.get("previous_filename")
+                          if not isinstance(previous, str) or not previous:
+                              raise ValueError("rename has no previous filename")
+                          changed.add(previous)
+              records = {"gate/coverage-floor.json", "gate/speed-baseline.json",
+                         ".github/comment-share.json"}
+              record_path = sys.argv[2]
+              if record_path not in records:
+                  raise ValueError("unknown ratchet record")
+              allowed = records - {record_path}
+              blocked = changed - allowed
+              if blocked:
+                  print("own record or non-data paths moved: "
+                        + ", ".join(repr(path) for path in sorted(blocked)))
+              else:
+                  print("sibling-data")
+          except (OSError, ValueError, TypeError) as error:
+              print(f"cannot verify intervening paths: {error}")
+          PY
+          )"
+            else
+              decision='cannot verify intervening paths: compare API failed'
+            fi
+            if [ "$decision" != sibling-data ]; then
+              echo "::notice::Dropped $record_path from $base: $decision."
+              {
+                echo "### Dropped ratchet artifact: own record or measured program may have moved"
+                echo
+                echo "Window $base...$fetched for $record_path: $decision."
+                echo "Only changes to other data records permit reuse; no automatic retry is assumed."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::notice::Applying $record_path measured at $base across sibling data changes to $fetched."
           fi
 
           document_name="$(python3 - "$data" "$repo" <<'PY'
@@ -332,10 +397,6 @@ jobs:
           PY
           )"
 
-          record_path="gate/$document_name"
-          if [ "$document_name" = comment-share.json ]; then
-            record_path=".github/$document_name"
-          fi
           cp -- "$data/$document_name" "$repo/$record_path"
           git -C "$repo" add -- "$record_path"
           if git -C "$repo" diff --cached --quiet; then
@@ -359,10 +420,10 @@ jobs:
             echo "ratchet push was rejected while main stood still at $fetched" >&2
             exit 1
           fi
-          echo "::notice::Main moved during the ratchet push; the next push measures and stages again."
+          echo "::notice::Main moved during the ratchet push; this rejected artifact was not applied."
           {
             echo "### Dropped ratchet commit: main moved during push"
             echo
             echo "Main moved from $fetched to $latest after this run measured."
-            echo "This ratchet commit was rejected; the next main push measures and stages again."
+            echo "This ratchet commit was rejected; no automatic retry is assumed. A future source push measures again."
           } >> "$GITHUB_STEP_SUMMARY"

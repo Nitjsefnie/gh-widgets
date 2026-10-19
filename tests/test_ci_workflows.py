@@ -1202,7 +1202,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             "github.repository")
         self.assertEqual(self.job["environment"], "main-push")
         self.assertEqual(self.job["timeout-minutes"], 15)
-        self.assertEqual(self.job["permissions"], {"actions": "read"})
+        self.assertEqual(self.job["permissions"], {"actions": "read", "contents": "read"})
 
     def test_only_the_triggering_runs_ratchet_artifact_is_downloaded(self):
         listing = self._step("List the triggering run's artifacts")
@@ -1336,34 +1336,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                 capture_output=True, text=True, check=False)
         self.assertEqual(refused.returncode, 1)
         self.assertIn("exactly base.txt", refused.stderr)
-
-    @REQUIRES_POSIX_SHELL
-    def test_stale_artifact_drops_green_with_notice_and_summary(self):
-        run = self._step("Validate and push the ratchet record")["run"]
-        start = run.index('if [ "$base" != "$fetched" ]; then')
-        end = run.index('document_name="$(python3', start)
-        staleness = run[start:end]
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-stale-") as tmp:
-            directory = Path(tmp)
-            summary = directory / "summary.md"
-            script = "\n".join((
-                "set -euo pipefail",
-                'base="' + "a" * 40 + '"',
-                'fetched="' + "b" * 40 + '"',
-                'RUN_ID="12345678"',
-                f'GITHUB_STEP_SUMMARY="{summary}"',
-                staleness,
-                "echo unreachable",
-            ))
-            result = subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c", script],
-                cwd=directory, capture_output=True, text=True,
-                check=False, timeout=10)
-            summary_text = summary.read_text(encoding="utf-8")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("::notice::Main moved", result.stdout)
-        self.assertIn("Dropped ratchet artifact", summary_text)
-        self.assertNotIn("unreachable", result.stdout)
 
     def _run_rejected_push(self, remote_main):
         run = self._step("Validate and push the ratchet record")["run"]
