@@ -41,6 +41,7 @@ import importlib.util
 import json
 import math
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -158,6 +159,13 @@ def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
 
 def _write_validated(path: Path, candidate: dict) -> None:
     """Validate a temporary JSON file before atomically replacing the target."""
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        # New output: query global umask briefly in this short-lived CLI.
+        old = os.umask(0)
+        os.umask(old)
+        mode = 0o666 & ~old
     text = json.dumps(candidate, indent=2, ensure_ascii=False) + "\n"
     directory = path.parent
     handle_fd, temp_name = tempfile.mkstemp(
@@ -169,7 +177,7 @@ def _write_validated(path: Path, candidate: dict) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         baseline.read_baseline(Path(temp_name))
-        os.chmod(temp_name, 0o644)
+        os.chmod(temp_name, mode)
         os.replace(temp_name, path)
     finally:
         if handle_fd is not None:
