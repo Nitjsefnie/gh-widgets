@@ -167,7 +167,7 @@ jobs:
           import json
           import math
           import sys
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
 
           def refuse(message):
               print(f"ratchet artifact: {message}", file=sys.stderr)
@@ -310,10 +310,15 @@ jobs:
                                                     indent=2) + "\n").encode("utf-8"):
                   refuse("comment-share.json does not use the action writer's serialization")
               for path, pair in new.items():
+                  relative = PurePosixPath(path)
+                  if not path or relative.is_absolute() or ".." in relative.parts \
+                          or str(relative) != path or "\\" in path \
+                          or any(ord(char) < 32 or ord(char) == 127 for char in path):
+                      refuse(f"{path!r}: expected a repository-relative file path")
                   if type(pair) is not list or len(pair) != 2 \
                           or any(type(value) is not int or value < 0 for value in pair) \
-                          or pair[0] > pair[1]:
-                      refuse(f"{path}: expected non-negative [comments, total], comments <= total")
+                          or pair[0] > pair[1] or pair[1] <= 0:
+                      refuse(f"{path}: expected non-negative [comments, total], comments <= total and total > 0")
                   if path in old:
                       comments, total = pair
                       recorded_comments, recorded_total = old[path]

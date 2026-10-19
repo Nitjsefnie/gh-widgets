@@ -50,6 +50,9 @@
 !/tests/
 /tests/*
 !/tests/*.py
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/comment-ratchet-v1-policy.txt
 
 # ---- gate/ — committed coverage and speed records ------------------------
 !/gate/
