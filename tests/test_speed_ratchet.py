@@ -27,6 +27,8 @@ import unittest
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import yaml
+
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
 from tests.test_speed_workflow import CarrierFixture
@@ -701,6 +703,26 @@ class TestSpeedRatchetTightening(unittest.TestCase):
             condition_reader("Stage a tightened speed baseline"),
             "${{ success() && github.event_name == 'push' && "
             "github.ref == 'refs/heads/main' }}")
+
+    def test_only_a_tightened_main_push_uploads_the_ratchet_artifact(self):
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / "tests.yml")
+            .read_text(encoding="utf-8"))
+        upload = next(step for step in workflow["jobs"]["speed"]["steps"]
+                      if step.get("name") ==
+                      "Upload the tightened speed baseline")
+        self.assertEqual(upload["uses"].split("@", maxsplit=1)[0],
+                         "actions/upload-artifact")
+        self.assertEqual(upload["with"]["name"], "ratchet-push")
+        self.assertEqual(upload["with"]["retention-days"], 1)
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIn("base.txt", upload["with"]["path"])
+        self.assertIn("speed-baseline.json", upload["with"]["path"])
+        self.assertEqual(
+            " ".join(upload["if"].split()),
+            "success() && github.event_name == 'push' && "
+            "github.ref == 'refs/heads/main' && "
+            "steps.tighten.outputs.changed == 'true'")
 
     def _prepare_step_checkout(self):
         head = self.root / "head"

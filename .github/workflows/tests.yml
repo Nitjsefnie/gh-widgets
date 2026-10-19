@@ -198,8 +198,9 @@ jobs:
         if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
         # A RATCHET, not a target — and the floor is committed data now, not a
         # literal in this file: gate/coverage-floor.json
-        # carries it, coverage-ratchet.yml raises it automatically on main
-        # whenever coverage climbs, and there is no code path that lowers it.
+        # carries it, coverage-ratchet.yml stages a strict climb for
+        # ratchet-push.yml to land after the successful main run, and no
+        # automated code path lowers it.
         # So this step only ever asks the question; it never answers it.
         run: python scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
 

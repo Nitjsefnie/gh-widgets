@@ -40,10 +40,19 @@ Merging them back re-creates the same problem at the next addition.
 Stdlib unittest, matching the rest of this repo's suite.
 """
 import json
+import os
 import re
 import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
+
+from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -666,29 +675,109 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             _assert_no_job_write_scopes(planted)
 
     def test_the_candidate_floor_is_computed_in_the_read_only_job(self):
-        # The candidate is computed on a copy and uploaded for the human
-        # pull-request procedure.
+        # The candidate is computed on a copy; the trusted workflow_run job
+        # receives only an artifact after this workflow succeeds.
         command = _command(
             next(step for step in _steps(self.jobs["measure"])
                  if step["name"] == "Compute the candidate floor"))
         self.assertIn("--floor-file candidate-coverage-floor.json", command)
-        uploads = [step for step in _steps(self.jobs["measure"])
-                   if (step["uses"] or "").startswith(
+        workflow = yaml.safe_load(RATCHET_WORKFLOW.read_text(encoding="utf-8"))
+        uploads = [step for step in workflow["jobs"]["measure"]["steps"]
+                   if step.get("uses", "").startswith(
                        "actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 2, uploads)
-        names = [_child_value(step["with"], "name") for step in uploads]
+        self.assertEqual(len(uploads), 3, uploads)
+        names = [step["with"]["name"] for step in uploads]
         self.assertCountEqual(
-            names, ["coverage-json", "coverage-floor-candidate"])
+            names, ["coverage-json", "coverage-floor-candidate",
+                    "ratchet-push"])
 
-    def test_the_climbable_floor_is_announced_after_computation(self):
-        # The notice and summary belong only to the strict-climb branch.
+    def _stage_step(self):
         steps = _steps(self.jobs["measure"])
         names = [step["name"] for step in steps]
-        announce_name = "Announce a climbable floor"
-        self.assertEqual(names.count(announce_name), 1)
-        self.assertEqual(names.index(announce_name),
+        stage_name = "Stage a climbable floor"
+        self.assertEqual(names.count(stage_name), 1)
+        self.assertEqual(names.index(stage_name),
                          names.index("Compute the candidate floor") + 1)
-        step = steps[names.index(announce_name)]
+        return next(step for step in steps if step["name"] == stage_name)
+
+    @REQUIRES_POSIX_SHELL
+    @unittest.skipUnless(shutil.which("jq"), "the staging step uses jq")
+    def test_climbed_floor_step_stages_the_candidate_and_measured_sha(self):
+        workflow = yaml.safe_load(RATCHET_WORKFLOW.read_text(encoding="utf-8"))
+        stage = next(step for step in workflow["jobs"]["measure"]["steps"]
+                     if step.get("name") == "Stage a climbable floor")
+        with tempfile.TemporaryDirectory(prefix="ghw-coverage-stage-") as tmp:
+            root = Path(tmp)
+            candidate = json.loads((REPO_ROOT / "gate/coverage-floor.json")
+                                   .read_text(encoding="utf-8"))
+            committed = json.loads(json.dumps(candidate))
+            candidate["floor"] = candidate["measured"] = \
+                committed["floor"] + 0.1
+            (root / "candidate-coverage-floor.json").write_text(
+                json.dumps(candidate), encoding="utf-8")
+            (root / "gate").mkdir()
+            (root / "gate/coverage-floor.json").write_text(
+                json.dumps(committed), encoding="utf-8")
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+            summary = root / "summary.md"
+            output = root / "output.txt"
+            environment = dict(
+                os.environ,
+                GITHUB_SHA="a" * 40,
+                GITHUB_STEP_SUMMARY=str(summary),
+                GITHUB_OUTPUT=str(output),
+                RUNNER_TEMP=str(runner_temp))
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", stage["run"]],
+                cwd=root, env=environment, capture_output=True, text=True,
+                check=False, timeout=10)
+            staged = runner_temp / "ratchet-data"
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("changed=true", output.read_text(encoding="utf-8"))
+            self.assertEqual((staged / "base.txt").read_text(encoding="utf-8"),
+                             "a" * 40 + "\n")
+            self.assertEqual(json.loads((staged / "coverage-floor.json")
+                                        .read_text(encoding="utf-8")),
+                             candidate)
+            self.assertTrue(summary.is_file())
+
+    @REQUIRES_POSIX_SHELL
+    @unittest.skipUnless(shutil.which("jq"), "the staging step uses jq")
+    def test_a_floor_that_did_not_climb_stages_no_artifact(self):
+        workflow = yaml.safe_load(RATCHET_WORKFLOW.read_text(encoding="utf-8"))
+        stage = next(step for step in workflow["jobs"]["measure"]["steps"]
+                     if step.get("name") == "Stage a climbable floor")
+        with tempfile.TemporaryDirectory(prefix="ghw-coverage-no-stage-") as tmp:
+            root = Path(tmp)
+            committed = json.loads((REPO_ROOT / "gate/coverage-floor.json")
+                                   .read_text(encoding="utf-8"))
+            (root / "candidate-coverage-floor.json").write_text(
+                json.dumps(committed), encoding="utf-8")
+            (root / "gate").mkdir()
+            (root / "gate/coverage-floor.json").write_text(
+                json.dumps(committed), encoding="utf-8")
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir()
+            environment = dict(
+                os.environ,
+                GITHUB_SHA="a" * 40,
+                GITHUB_STEP_SUMMARY=str(root / "summary.md"),
+                GITHUB_OUTPUT=str(root / "output.txt"),
+                RUNNER_TEMP=str(runner_temp))
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", stage["run"]],
+                cwd=root, env=environment, capture_output=True, text=True,
+                check=False, timeout=10)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("changed=false", (root / "output.txt").read_text(
+                encoding="utf-8"))
+            self.assertFalse((runner_temp / "ratchet-data").exists())
+
+    def test_climbed_floor_upload_is_the_cross_workflow_artifact(self):
+        step = self._stage_step()
         command = _command(step)
         self.assertIn("jq -r '.floor' candidate-coverage-floor.json", command)
         self.assertIn("jq -r '.floor' gate/coverage-floor.json", command)
@@ -700,20 +789,28 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         self.assertIn("$GITHUB_STEP_SUMMARY", command)
         self.assertIn("$candidate", command)
         self.assertIn("$committed", command)
-        self.assertIn("coverage-floor-candidate", command)
-        self.assertIn("pull request", command)
-        self.assertIn("CONTRIBUTING.md", command)
+        self.assertIn('stage="$RUNNER_TEMP/ratchet-data"', command)
+        self.assertIn('"$stage/coverage-floor.json"', command)
+        self.assertIn('"$GITHUB_SHA"', command)
 
         lines = _run_lines(step)
-        announce_branch = lines.index('if [ "$climbed" = 1 ]; then')
-        quiet_branch = lines.index("else", announce_branch)
+        climbed_branch = lines.index('if [ "$climbed" = 1 ]; then')
+        quiet_branch = lines.index("else", climbed_branch)
         summary_writes = [index for index, line in enumerate(lines)
                           if '>> "$GITHUB_STEP_SUMMARY"' in line]
         self.assertEqual(len(summary_writes), 1)
-        self.assertGreater(summary_writes[0], announce_branch)
+        self.assertGreater(summary_writes[0], climbed_branch)
         self.assertLess(summary_writes[0], quiet_branch)
         self.assertFalse(any("GITHUB_STEP_SUMMARY" in line
                              for line in lines[quiet_branch + 1:]))
+
+        upload = next(step for step in _steps(self.jobs["measure"])
+                      if _child_value(step["with"], "name") == "ratchet-push")
+        self.assertEqual(_child_value(upload["with"], "retention-days"), "1")
+        self.assertEqual(_child_value(upload["with"], "if-no-files-found"),
+                         "error")
+        self.assertIn("steps.stage.outputs.changed == 'true'",
+                      " ".join(line for _at, line in upload["body"]))
 
     def test_every_action_is_pinned_to_a_sha_with_a_version_comment(self):
         # Prose is not a pin: a `# v1.2.3` comment with no SHA beside it is

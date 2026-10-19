@@ -169,9 +169,11 @@ The other workflow files in `.github/workflows/` are:
   credential using digest-pinned Gitleaks 8.30.1 with `--redact`. Its daily cron
   catches commits no workflow saw, and the aggregate check waits for its
   `gitleaks` job on the head SHA.
-- `coverage-ratchet.yml` — measures coverage on `main` and announces when
-  measured coverage exceeds the committed floor. The floor only moves
-  through a pull request.
+- `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
+  higher floor for `ratchet-push.yml` after the successful run.
+- `ratchet-push.yml` — validates the coverage and speed artifacts as data,
+  then uses the protected `main-push` deploy key to commit a tightened record
+  to `main`.
 - `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
@@ -219,17 +221,20 @@ pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
 workflows, so leaving them out reported coverage for a smaller program than
 the one that ships. The floor lives in `gate/coverage-floor.json` as committed data. When measured coverage exceeds it,
-`coverage-ratchet.yml` announces the climbable floor with an annotation and step
-summary. Raising it is a deliberate pull request: download the
-`coverage-floor-candidate` artifact, replace `gate/coverage-floor.json`, and open a
-pull request, or run `scripts/ci/coverage_ratchet.py raise` locally. The floor
-is never lowered — no code path in `scripts/ci/coverage_ratchet.py` can write a
-smaller number than it read. Raise coverage by writing tests; never by editing
-the floor. Before you add or remove a source module, account for the changed
-file count: both `gate` and `raise` refuse a measurement whose file count differs
-from the committed record. The PR gate in `tests.yml` refuses that mismatch
-before merge, even when coverage exceeds the floor, until the file count is
-re-measured and committed deliberately.
+`coverage-ratchet.yml` stages the measured floor and the SHA it measured. After
+the full workflow succeeds, `ratchet-push.yml` validates the artifact and
+commits the strictly higher floor to `main`. The `coverage-floor-candidate`
+artifact remains available to inspect; `scripts/ci/coverage_ratchet.py raise`
+still only writes a candidate at or above the value it read. Raise coverage by
+writing tests; never edit a floor to fit a result.
+
+Adding or removing a source module moves the measured population. The `files`
+tripwire then fails until a person re-derives `gate/coverage-floor.json` for the
+new population, including its file count and basis. Both `gate` and `raise`
+refuse a measurement whose file count differs from the committed record, so the
+automatic push cannot hide that change. The declared unit-suite raise route
+above also stays human-reviewed: it moves speed maxima UP and must never be
+automated.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
@@ -248,6 +253,11 @@ has both *reported* and passed; a gate that never reports stops the release
 rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
 measurement workflows that were already here.
+
+A successful main `tests` run also stages any entry or wall maximum that its
+measured value strictly beats, and `ratchet-push.yml` validates and commits
+that data. The declared unit-suite raise path above remains the only route that
+moves speed maxima UP.
 
 The measured Ubuntu/Python 3.13 cell in `tests.yml` installs the pinned
 Nitjsefnie-OSC/git-fame build and requires its pin checks; if the binary is

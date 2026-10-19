@@ -180,12 +180,13 @@ jobs:
         # and `analyze` reports its matrix name, "analyze (python)". Those
         # six trigger on a VERSION push through tests.yml's unfiltered push.
         # The new `gitleaks` entry reports its job name and secrets.yml's
-        # push-to-main trigger also includes that commit. Deliberately
-        # The following workflows remain deliberately absent, each for a
-        # reason a VERSION push would not change: the actionlint job
-        # (allow-lists .github/workflows/**), claim.yml (issue_comment),
-        # pr-gate.yml (pull_request_target), and targeted-blame-audit.yml
-        # plus the two gitfame-* measurements (schedule or dispatch only).
+        # push-to-main trigger also includes that commit. Deliberately absent
+        # from the manifest are the actionlint job (allow-lists
+        # .github/workflows/**), claim.yml (issue_comment), pr-gate.yml
+        # (pull_request_target), ratchet-push.yml (workflow_run data-push,
+        # not a gate on the release commit's quality), and
+        # targeted-blame-audit.yml plus the two gitfame-* measurements
+        # (schedule or dispatch only).
         # A workflow added to the manifest must be one a VERSION push
         # schedules, or the release waits 45 minutes for a check that will
         # never arrive.

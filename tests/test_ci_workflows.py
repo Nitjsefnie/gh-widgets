@@ -1146,6 +1146,347 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertEqual(writes[0][writes[0].index("-X") + 1], "POST")
 
 
+class TestRatchetPushWorkflow(unittest.TestCase):
+    """The artifact push job stays data-only and main-scoped."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path = WORKFLOWS / "ratchet-push.yml"
+        cls.text = cls.path.read_text(encoding="utf-8")
+        cls.workflow = yaml.safe_load(cls.text)
+        cls.trigger_key = "on" if "on" in cls.workflow else True
+        cls.job = cls.workflow["jobs"]["push"]
+        cls.steps = cls.job["steps"]
+
+    def _step(self, name):
+        return next(step for step in self.steps if step.get("name") == name)
+
+    def _validator(self):
+        run = self._step("Validate and push the ratchet record")["run"]
+        marker = 'document_name="$(python3 - "$data" "$repo" <<\'PY\'\n'
+        start = run.index(marker) + len(marker)
+        end = run.index("\nPY\n)", start)
+        return run[start:end]
+
+    def _artifact_preflight(self):
+        run = self._step("Validate and push the ratchet record")["run"]
+        marker = 'document_name="$(python3 - "$data" <<\'PY\'\n'
+        start = run.index(marker) + len(marker)
+        end = run.index("\nPY\n)", start)
+        return run[start:end]
+
+    @staticmethod
+    def _run_validator(script, data, repo):
+        return subprocess.run(
+            [sys.executable, "-c", script, str(data), str(repo)],
+            capture_output=True, text=True, check=False)
+
+    def test_workflow_run_trigger_and_push_guard_are_exact(self):
+        self.assertEqual(self.workflow[self.trigger_key]["workflow_run"], {
+            "workflows": ["tests", "coverage-ratchet"],
+            "types": ["completed"],
+        })
+        self.assertRegex(
+            self.text,
+            r"(?m)^  workflow_run:  # zizmor: ignore\[dangerous-triggers\]$")
+        self.assertEqual(self.workflow["permissions"], {})
+        self.assertEqual(self.workflow["concurrency"], {
+            "group": "ratchet-push", "cancel-in-progress": False,
+        })
+        self.assertEqual(
+            " ".join(self.job["if"].split()),
+            "github.event.workflow_run.event == 'push' && "
+            "github.event.workflow_run.head_branch == 'main' && "
+            "github.event.workflow_run.conclusion == 'success' && "
+            "github.event.workflow_run.head_repository.full_name == "
+            "github.repository")
+        self.assertEqual(self.job["environment"], "main-push")
+        self.assertEqual(self.job["timeout-minutes"], 15)
+        self.assertEqual(self.job["permissions"], {"actions": "read"})
+
+    def test_only_the_triggering_runs_ratchet_artifact_is_downloaded(self):
+        listing = self._step("List the triggering run's artifacts")
+        self.assertIn("Cache-Control: no-cache", listing["run"])
+        self.assertIn("--paginate", listing["run"])
+        self.assertIn("select(.expired != true)", listing["run"])
+        self.assertIn("ratchet-push", listing["run"])
+        self.assertEqual(listing["env"]["RUN_ID"],
+                         "${{ github.event.workflow_run.id }}")
+
+        downloads = [step for step in self.steps
+                     if step.get("uses", "").startswith(
+                         "actions/download-artifact@")]
+        self.assertEqual(len(downloads), 1)
+        self.assertEqual(downloads[0]["with"]["name"], "ratchet-push")
+        self.assertEqual(downloads[0]["with"]["run-id"],
+                         "${{ github.event.workflow_run.id }}")
+        self.assertEqual(downloads[0]["with"]["github-token"],
+                         "${{ secrets.GITHUB_TOKEN }}")
+
+    @REQUIRES_POSIX_SHELL
+    def test_artifact_listing_executes_the_paginated_nonexpired_lookup(self):
+        listing = self._step("List the triggering run's artifacts")
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-list-") as tmp:
+            root = Path(tmp)
+            binary = root / "bin"
+            binary.mkdir()
+            calls = root / "gh-arguments.txt"
+            gh = binary / "gh"
+            gh.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$@\" > \"$GH_ARGUMENTS\"\n"
+                "printf '%s\\n' ratchet-push\n", encoding="utf-8")
+            gh.chmod(0o755)
+            output = root / "output.txt"
+            environment = dict(
+                os.environ,
+                PATH=f"{binary}{os.pathsep}{os.environ['PATH']}",
+                GH_ARGUMENTS=str(calls),
+                GH_TOKEN="fixture-" + "token",
+                REPO="owner/repo",
+                RUN_ID="12345678",
+                GITHUB_OUTPUT=str(output))
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", listing["run"]],
+                cwd=root, env=environment, capture_output=True, text=True,
+                check=False, timeout=10)
+            output_text = output.read_text(encoding="utf-8")
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("present=true", output_text)
+        self.assertEqual(call_lines, [
+            "api", "-H", "Cache-Control: no-cache", "--paginate",
+            "repos/owner/repo/actions/runs/12345678/artifacts", "--jq",
+            ".artifacts[] | select(.expired != true) | .name",
+        ])
+
+    def test_privileged_job_checks_out_and_runs_no_repository_code(self):
+        self.assertFalse(any(step.get("uses", "").startswith(
+            "actions/checkout@") for step in self.steps))
+        self.assertEqual(
+            [step["uses"].split("@", maxsplit=1)[0]
+             for step in self.steps if "uses" in step],
+            ["actions/download-artifact"])
+        for step in self.steps:
+            run = step.get("run", "")
+            self.assertNotIn("scripts/ci/", run)
+            self.assertNotIn("pip install", run)
+            self.assertNotIn("node scripts/", run)
+        push = self._step("Validate and push the ratchet record")
+        self.assertIn("git init", push["run"])
+        self.assertIn("git -C \"$repo\" fetch --quiet origin main", push["run"])
+        self.assertIn("StrictHostKeyChecking=yes", push["run"])
+        self.assertIn("ssh-agent", push["run"])
+        self.assertIn("trap 'kill \"$SSH_AGENT_PID\"", push["run"])
+        self.assertNotIn("GITHUB_TOKEN", push.get("env", {}))
+        self.assertIn(
+            "git -C \"$repo\" config user.name 'github-actions[bot]'",
+            push["run"])
+        self.assertIn(
+            "git -C \"$repo\" config user.email "
+            "'41898282+github-actions[bot]@users.noreply.github.com'",
+            push["run"])
+        self.assertIn(
+            'git -C "$repo" commit -m "ci(ratchet): tighten the recorded '
+            'thresholds from run $RUN_ID (automated)"', push["run"])
+        self.assertIn(
+            'git -C "$repo" push origin HEAD:refs/heads/main', push["run"])
+
+    @REQUIRES_POSIX_SHELL
+    def test_empty_deploy_key_fails_loudly_before_ssh(self):
+        push = self._step("Validate and push the ratchet record")
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-empty-key-") as tmp:
+            directory = Path(tmp)
+            environment = dict(
+                os.environ,
+                MASTER_PUSH_DEPLOY_KEY="",
+                REPO="owner/repo",
+                RUN_ID="12345678",
+                RUNNER_TEMP=str(directory),
+            )
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", push["run"]],
+                cwd=directory, env=environment, capture_output=True,
+                text=True, check=False, timeout=10)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("MASTER_PUSH_DEPLOY_KEY is empty", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_artifact_preflight_accepts_one_sha_line_and_rejects_extra_files(self):
+        script = self._artifact_preflight()
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-preflight-") as tmp:
+            data = Path(tmp) / "ratchet-data"
+            data.mkdir()
+            (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
+            (data / "coverage-floor.json").write_text("{}", encoding="utf-8")
+            accepted = subprocess.run(
+                [sys.executable, "-c", script, str(data)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(accepted.returncode, 0,
+                             accepted.stdout + accepted.stderr)
+            self.assertEqual(accepted.stdout.strip(), "coverage-floor.json")
+
+            (data / "unexpected.txt").write_text("data", encoding="utf-8")
+            refused = subprocess.run(
+                [sys.executable, "-c", script, str(data)],
+                capture_output=True, text=True, check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("exactly base.txt", refused.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_stale_artifact_drops_green_with_notice_and_summary(self):
+        run = self._step("Validate and push the ratchet record")["run"]
+        start = run.index('if [ "$base" != "$fetched" ]; then')
+        end = run.index('document_name="$(python3', start)
+        staleness = run[start:end]
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-stale-") as tmp:
+            directory = Path(tmp)
+            summary = directory / "summary.md"
+            script = "\n".join((
+                "set -euo pipefail",
+                'base="' + "a" * 40 + '"',
+                'fetched="' + "b" * 40 + '"',
+                'RUN_ID="12345678"',
+                f'GITHUB_STEP_SUMMARY="{summary}"',
+                staleness,
+                "echo unreachable",
+            ))
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", script],
+                cwd=directory, capture_output=True, text=True,
+                check=False, timeout=10)
+            summary_text = summary.read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("::notice::Main moved", result.stdout)
+        self.assertIn("Dropped ratchet artifact", summary_text)
+        self.assertNotIn("unreachable", result.stdout)
+
+    def _run_rejected_push(self, remote_main):
+        run = self._step("Validate and push the ratchet record")["run"]
+        start = run.index(
+            'if git -C "$repo" push origin HEAD:refs/heads/main; then')
+        fragment = run[start:]
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-push-reject-") as tmp:
+            root = Path(tmp)
+            binary = root / "bin"
+            binary.mkdir()
+            stub = binary / "git"
+            stub.write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  *'push origin HEAD:refs/heads/main') exit 1 ;;\n"
+                "  *'fetch --quiet origin main') exit 0 ;;\n"
+                "  *'rev-parse FETCH_HEAD') printf '%s\\n' \"$REMOTE_MAIN\" ;;\n"
+                "  *) echo \"unexpected git call: $*\" >&2; exit 90 ;;\n"
+                "esac\n", encoding="utf-8")
+            stub.chmod(0o755)
+            summary = root / "summary.md"
+            script = "\n".join((
+                "set -euo pipefail",
+                'repo="ratchet-repo"',
+                'fetched="' + "a" * 40 + '"',
+                fragment,
+            ))
+            environment = dict(
+                os.environ,
+                PATH=f"{binary}{os.pathsep}{os.environ['PATH']}",
+                REMOTE_MAIN=remote_main,
+                GITHUB_STEP_SUMMARY=str(summary),
+            )
+            result = subprocess.run(
+                ["bash", "-e", "-o", "pipefail", "-c", script],
+                cwd=root, env=environment, capture_output=True, text=True,
+                check=False, timeout=10)
+            summary_text = (summary.read_text(encoding="utf-8")
+                            if summary.is_file() else "")
+        return result, summary_text
+
+    @REQUIRES_POSIX_SHELL
+    def test_rejected_push_after_main_moves_drops_green(self):
+        result, summary = self._run_rejected_push("b" * 40)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("::notice::Main moved", result.stdout)
+        self.assertIn("Dropped ratchet commit", summary)
+
+    @REQUIRES_POSIX_SHELL
+    def test_rejected_push_while_main_stands_still_fails(self):
+        result, summary = self._run_rejected_push("a" * 40)
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("rejected while main stood still", result.stderr)
+        self.assertEqual(summary, "")
+
+    @REQUIRES_POSIX_SHELL
+    def test_inline_data_validator_accepts_tightening_and_rejects_looseners(self):
+        script = self._validator()
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-validator-") as tmp:
+            root = Path(tmp)
+            data = root / "artifact"
+            repo = root / "main"
+            (data).mkdir()
+            (repo / "gate").mkdir(parents=True)
+
+            coverage = json.loads((REPO_ROOT / "gate/coverage-floor.json")
+                                  .read_text(encoding="utf-8"))
+            coverage_candidate = dict(coverage)
+            coverage_candidate["floor"] = coverage["floor"] + 0.1
+            coverage_candidate["measured"] = coverage_candidate["floor"]
+            coverage_candidate["measured_commit"] = "a" * 40
+            coverage_candidate["measured_at"] = "2026-10-19T00:00:00Z"
+            (repo / "gate/coverage-floor.json").write_text(
+                json.dumps(coverage), encoding="utf-8")
+            (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
+            (data / "coverage-floor.json").write_text(
+                json.dumps(coverage_candidate), encoding="utf-8")
+            accepted = self._run_validator(script, data, repo)
+            self.assertEqual(accepted.returncode, 0,
+                             accepted.stdout + accepted.stderr)
+            self.assertEqual(accepted.stdout.strip(), "coverage-floor.json")
+
+            coverage_candidate["floor"] = coverage_candidate["measured"] = 101
+            (data / "coverage-floor.json").write_text(
+                json.dumps(coverage_candidate), encoding="utf-8")
+            refused = self._run_validator(script, data, repo)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("at most 100", refused.stderr)
+
+            coverage_candidate["floor"] = coverage_candidate["measured"] = \
+                coverage["floor"] + 0.1
+            coverage_candidate["measured_commit"] = "b" * 40
+            (data / "coverage-floor.json").write_text(
+                json.dumps(coverage_candidate), encoding="utf-8")
+            refused = self._run_validator(script, data, repo)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("differs from base.txt", refused.stderr)
+
+            baseline = json.loads((REPO_ROOT / "gate/speed-baseline.json")
+                                  .read_text(encoding="utf-8"))
+            speed_candidate = json.loads(json.dumps(baseline))
+            unit = speed_candidate["populations"]["unit-suite"]
+            unit["entries"]["counter::unit-suite"]["max"] -= 0.001
+            (repo / "gate/speed-baseline.json").write_text(
+                json.dumps(baseline), encoding="utf-8")
+            (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
+            (data / "coverage-floor.json").unlink()
+            (data / "speed-baseline.json").write_text(
+                json.dumps(speed_candidate), encoding="utf-8")
+            accepted = self._run_validator(script, data, repo)
+            self.assertEqual(accepted.returncode, 0,
+                             accepted.stdout + accepted.stderr)
+            self.assertEqual(accepted.stdout.strip(), "speed-baseline.json")
+
+            recorded_max = baseline["populations"]["unit-suite"]["entries"]
+            recorded_max = recorded_max["counter::unit-suite"]["max"]
+            unit["entries"]["counter::unit-suite"]["max"] = \
+                recorded_max + 0.001
+            (data / "speed-baseline.json").write_text(
+                json.dumps(speed_candidate), encoding="utf-8")
+            refused = self._run_validator(script, data, repo)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("loosened", refused.stderr)
+
+
 class TestActionFamiliesShareOneRef(unittest.TestCase):
     """One revision per action family across the workflows, derived from them.
 

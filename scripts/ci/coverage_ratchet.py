@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""The coverage ratchet: a committed floor raised by pull request, never lowered.
+"""The coverage ratchet: a committed floor automatically raised on main.
 
 The gate used to be a hand-edited `--fail-under=81` literal with a comment
 telling the next human to raise it by hand, which is a ratchet nobody ratchets:
 it rots until it is either removed or quietly ignored. Here the floor is
 committed DATA (gate/coverage-floor.json), it only ever moves up, and CI measures
-and announces when it can climb. A deliberate pull request moves the floor.
+and stages a strict climb for ratchet-push.yml after the successful main run.
 
 TWO SUBCOMMANDS, ONE MEASUREMENT. Both take the file `python -m coverage json`
 writes, so neither this script nor its tests ever shells out to coverage:
@@ -17,10 +17,10 @@ writes, so neither this script nor its tests ever shells out to coverage:
 the measured file count to match the committed record. With matching counts,
 measured >= floor is a pass; anything less exits 1 naming the two numbers.
 
-`raise` produces a candidate floor file for a pull request: floor := measured,
-but ONLY when measured is strictly above the floor already committed. The main
-workflow runs it against a copy of the committed file and uploads the candidate
-as `coverage-floor-candidate`; a person reviews and commits the floor change.
+`raise` produces a candidate floor file: floor := measured, but ONLY when
+measured is strictly above the floor already committed. The main workflow runs
+it against a copy of the committed file, keeps the `coverage-floor-candidate`
+artifact for review, and stages the strict climb for ratchet-push.yml.
 There is no branch anywhere in this file that writes a smaller number than it
 read, so the one direction a ratchet must never move cannot be reached by
 adding a flag.
