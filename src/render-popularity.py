@@ -161,7 +161,8 @@ def fetch_scores(token):
         outsiders = outsider_commits(repository, user, emails)
         score = (repository['stargazers_count'] * 50 + repository['forks_count'] * 40
                  + outsiders * 5 + traffic['clones'] * 2 + traffic['views'])
-        scores.append((name, score, repository['stargazers_count'], repository['forks_count']))
+        scores.append((name, score, repository['stargazers_count'], repository['forks_count'],
+                       traffic['views']))
     return user, scores
 # pylint: enable=too-many-locals
 
@@ -170,8 +171,8 @@ def rank_repositories(scores):
     """Return the five strongest rows, breaking ties by canonical repo name."""
     ranked = sorted(scores, key=lambda item: (-item[1], item[0].lower(), item[0]))[:5]
     top = ranked[0][1] if ranked else 0
-    return [(name, f'{raw * 10 / top if top else 0:.2f}', stars, forks)
-            for name, raw, stars, forks in ranked]
+    return [(name, f'{raw * 10 / top if top else 0:.2f}', stars, forks, views)
+            for name, raw, stars, forks, views in ranked]
 
 
 def render_popularity(C, user, scores):
@@ -183,13 +184,15 @@ def render_popularity(C, user, scores):
   <text x="20" y="52" fill="{C['dim']}" font-size="11">popularity of my public repositories</text>
   <line x1="20" y1="64" x2="500" y2="64" stroke="{C['border']}"/>"""
     table_rows = [common.TableRow(name, float(score),
-                                  (common.fmt_short(stars), common.fmt_short(forks)))
-                  for name, score, stars, forks in rows]
+                                  (common.fmt_short(stars), common.fmt_short(views),
+                                   common.fmt_short(forks)))
+                  for name, score, stars, forks, views in rows]
     parts, y = common.render_score_table(
-        C, 88, table_rows, [(300, 'stars', C['cyan']), (390, 'forks', C['gold'])],
+        C, 88, table_rows,
+        [(290, 'stars', C['cyan']), (340, 'views', C['dim']), (390, 'forks', C['gold'])],
         score_label='popularity', accent=C['green'], empty='no public repositories')
     body += "\n  " + "\n  ".join(parts)
-    summary = '; '.join(f'{name}: {score}' for name, score, _, _ in rows) or 'no public repositories'
+    summary = '; '.join(f'{name}: {score}' for name, score, _, _, _ in rows) or 'no public repositories'
     desc = (f'Top repositories for {login}. {summary}. '
             'Scores relative to the leader; traffic covers the last 14 days.')
     return common.base_card(C, 520, y + 10, body, card='popularity',
