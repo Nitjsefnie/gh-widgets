@@ -695,12 +695,8 @@ class TestSpeedRatchetTightening(unittest.TestCase):
                               check=False)
 
     def test_workflow_helper_derives_the_main_push_condition(self):
-        condition_reader = getattr(self.steps, "step_condition", None)
-        self.assertTrue(callable(condition_reader),
-                        "workflow step conditions must be derived beside "
-                        "their executed run blocks")
         self.assertEqual(
-            condition_reader("Stage a tightened speed baseline"),
+            self.steps.step_condition("Stage a tightened speed baseline"),
             "${{ success() && github.event_name == 'push' && "
             "github.ref == 'refs/heads/main' }}")
 
