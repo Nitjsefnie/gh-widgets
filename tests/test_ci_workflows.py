@@ -1256,6 +1256,12 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         ])
 
     def test_privileged_job_checks_out_and_runs_no_repository_code(self):
+        self.assertFalse(any(step.get("uses", "").startswith(
+            "actions/checkout@") for step in self.steps))
+        self.assertEqual(
+            [step["uses"].split("@", maxsplit=1)[0]
+             for step in self.steps if "uses" in step],
+            ["actions/download-artifact"])
         for step in self.steps:
             run = step.get("run", "")
             self.assertNotIn("scripts/ci/", run)
