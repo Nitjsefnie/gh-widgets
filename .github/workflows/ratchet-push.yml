@@ -300,7 +300,7 @@ jobs:
               if type(new["missing"]) is not int \
                       or not 0 <= new["missing"] <= new["statements"]:
                   refuse("coverage missing must be between zero and statements")
-              # Match coverage_ratchet.round_down on the producer's percentage.
+              # Match coverage_ratchet.round_down on the measured percentage.
               percent = 100 * (new["statements"] - new["missing"]) / new["statements"]
               if new["measured"] != math.floor(percent * 10) / 10:
                   refuse("coverage measured is inconsistent with its counts")
@@ -373,7 +373,7 @@ jobs:
               new = object_at(source)
               if source.read_bytes() != (json.dumps(new, sort_keys=True,
                                                     indent=2) + "\n").encode("utf-8"):
-                  refuse("comment-share.json does not use the action writer's serialization")
+                  refuse("comment-share.json does not use the action writer\u0027s serialization")
               for path, pair in new.items():
                   relative = PurePosixPath(path)
                   if not path or relative.is_absolute() or ".." in relative.parts \
