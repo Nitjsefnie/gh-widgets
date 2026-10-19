@@ -27,6 +27,7 @@
 # ---- repository root — public boundary, docs and project config ----------
 !/ghwidgets_data.py
 !/.gitignore
+!/.gitattributes
 !/.pylintrc
 !/.gitleaks.toml
 !/AGENTS.md

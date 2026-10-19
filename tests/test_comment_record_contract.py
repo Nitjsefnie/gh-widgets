@@ -7,6 +7,7 @@ compiled, avoiding unrelated measurement imports and network dependencies.
 import ast
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -39,6 +40,20 @@ def consumer_decoder():
 
 
 class TestCommentRecordContract(unittest.TestCase):
+    def test_git_checkout_preserves_reference_bytes_with_autocrlf(self):
+        with tempfile.TemporaryDirectory(prefix="reference checkout ") as tmp:
+            root = Path(tmp)
+            relative = "tests/fixtures/comment-ratchet-v1-policy.txt"
+            result = subprocess.run(
+                ["git", "-c", "core.autocrlf=true", "checkout-index",
+                 "--prefix=" + root.as_posix() + "/", "--", relative],
+                cwd=ROOT, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            raw = (root / relative).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                             "8adcd10d222f8708e43fc445a2527a3813ed2e5a503fef15be6c45391ed3bd6f")
+            self.assertNotIn(b"\r\n", raw)
+
     def test_inline_and_pinned_consumer_agree_on_canonical_document_bytes(self):
         decoder = consumer_decoder()
         case = workflow_tests.TestRatchetPushWorkflow()
