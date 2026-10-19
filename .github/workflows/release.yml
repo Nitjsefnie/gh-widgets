@@ -184,7 +184,8 @@ jobs:
         # from the manifest are the actionlint job (allow-lists
         # .github/workflows/**), claim.yml (issue_comment), pr-gate.yml
         # (pull_request_target), ratchet-push.yml (workflow_run data-push,
-        # not a gate on the release commit's quality), and
+        # not a gate on the release commit's quality), comment-share.yml
+        # (VERSION pushes run tighten only; its check leg is PR-only), and
         # targeted-blame-audit.yml plus the two gitfame-* measurements
         # (schedule or dispatch only).
         # A workflow added to the manifest must be one a VERSION push

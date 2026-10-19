@@ -1,7 +1,8 @@
 name: ratchet push
 
-# The privileged half of the coverage and speed ratchets. The measuring
-# workflows run repository code with read-only access and publish only a
+# The privileged half of the coverage, speed and comment-share ratchets:
+# gate/coverage-floor.json, gate/speed-baseline.json, .github/comment-share.json.
+# Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
 #
@@ -13,7 +14,7 @@ name: ratchet push
 # the job token. It checks out no repository and runs no repository code.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    workflows: [tests, coverage-ratchet]
+    workflows: [tests, coverage-ratchet, comment share]
     types: [completed]
 
 permissions: {}
@@ -114,6 +115,8 @@ jobs:
               document = "coverage-floor.json"
           elif names == speed:
               document = "speed-baseline.json"
+          elif names == {"base.txt", "comment-share.json"}:
+              document = "comment-share.json"
           else:
               refuse("expected exactly base.txt and one known ratchet record")
           try:
@@ -218,9 +221,16 @@ jobs:
                   refuse("coverage floor must be at most 100")
               if not number(old["floor"]) or new["floor"] <= old["floor"]:
                   refuse("coverage floor did not strictly improve")
-              for key in ("statements", "missing", "files"):
+              for key in ("statements", "files"):
                   if type(new[key]) is not int or new[key] <= 0:
                       refuse(f"coverage {key} must be a positive integer")
+              if type(new["missing"]) is not int \
+                      or not 0 <= new["missing"] <= new["statements"]:
+                  refuse("coverage missing must be between zero and statements")
+              # Match coverage_ratchet.round_down on the producer's percentage.
+              percent = 100 * (new["statements"] - new["missing"]) / new["statements"]
+              if new["measured"] != math.floor(percent * 10) / 10:
+                  refuse("coverage measured is inconsistent with its counts")
               if type(old["files"]) is not int or new["files"] != old["files"]:
                   refuse("coverage files count differs from fetched main")
           elif names == {"base.txt", "speed-baseline.json"}:
@@ -282,14 +292,39 @@ jobs:
                           lowered = lowered or new_entry["max"] < old_entry["max"]
               if not lowered:
                   refuse("speed baseline contains no strict maximum reduction")
+          elif names == {"base.txt", "comment-share.json"}:
+              name = "comment-share.json"
+              source = data / name
+              old_path = repo / ".github" / name
+              old = object_at(old_path) if old_path.exists() else {}
+              new = object_at(source)
+              if source.read_bytes() != (json.dumps(new, sort_keys=True,
+                                                    indent=2) + "\n").encode("utf-8"):
+                  refuse("comment-share.json does not use the action writer's serialization")
+              for path, pair in new.items():
+                  if type(pair) is not list or len(pair) != 2 \
+                          or any(type(value) is not int or value < 0 for value in pair) \
+                          or pair[0] > pair[1]:
+                      refuse(f"{path}: expected non-negative [comments, total], comments <= total")
+                  if path in old:
+                      comments, total = pair
+                      recorded_comments, recorded_total = old[path]
+                      if comments * recorded_total > recorded_comments * total:
+                          refuse(f"{path}: comment share rose above fetched main")
+              # New paths and graduated/deleted drops are allowed: like the
+              # coverage counts, they come from our own successful main run.
           else:
               refuse("the artifact shape changed after its base check")
           print(name)
           PY
           )"
 
-          cp -- "$data/$document_name" "$repo/gate/$document_name"
-          git -C "$repo" add -- "gate/$document_name"
+          record_path="gate/$document_name"
+          if [ "$document_name" = comment-share.json ]; then
+            record_path=".github/$document_name"
+          fi
+          cp -- "$data/$document_name" "$repo/$record_path"
+          git -C "$repo" add -- "$record_path"
           if git -C "$repo" diff --cached --quiet; then
             echo "validated ratchet artifact produced no change" >&2
             exit 1

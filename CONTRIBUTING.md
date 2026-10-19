@@ -153,7 +153,8 @@ the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
 costs 12.8× the work it measures. The gate is therefore a **step-change
 detector, not a regression detector** — it catches a gross step change and
 the gross wall smoke bound; it will not catch a 20 % regression anywhere,
-and it does not catch a doubling either. The baseline records an observed
+and whether it catches a doubling is derived from the current record.
+The baseline records an observed
 **range** per entry rather than a single number, because these counters are
 not deterministic and a budget wide enough to cover their spread would be a
 gate that cannot fire.
@@ -171,9 +172,10 @@ The other workflow files in `.github/workflows/` are:
   `gitleaks` job on the head SHA.
 - `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
   higher floor for `ratchet-push.yml` after the successful run.
-- `ratchet-push.yml` — validates the coverage and speed artifacts as data,
+- `ratchet-push.yml` — validates the coverage, speed and comment-share artifacts as data,
   then uses the protected `main-push` deploy key to commit a tightened record
   to `main`.
+- `comment-share.yml` — checks per-file comment shares and stages tightened records.
 - `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
@@ -258,6 +260,25 @@ A successful main `tests` run also stages any entry or wall maximum that its
 measured value strictly beats, and `ratchet-push.yml` validates and commits
 that data. The declared unit-suite raise path above remains the only route that
 moves speed maxima UP.
+
+All three staging steps skip a landed window that changed only
+`gate/coverage-floor.json`, `gate/speed-baseline.json` and/or
+`.github/comment-share.json`. This ends the feedback after one follow-up run,
+regardless of CPU noise. Coverage would already no-op on an unchanged measured
+floor; its skip is uniform with the other producers. Unknown comparisons and
+missing/new-branch before SHAs stage normally; the push still checks staleness.
+
+### Comment share
+
+`comment-share.yml` runs the pinned comment-ratchet action at its default 15%
+target. Pull requests compare each tracked source file's exact comment byte
+share with the base record; main pushes tighten `.github/comment-share.json`.
+The successful run stages changes for `ratchet-push.yml` to validate and land.
+For adoption, when the base has no record, the action checks the head seed
+against exactly what tighten-from-scratch writes. Generate that seed with the
+pinned action's tighten on the proposed tree; equivalent fractions, missing
+entries and extra entries fail the fallback. After adoption the base record
+binds every check. The reported check name is the job key `comment-share`.
 
 The measured Ubuntu/Python 3.13 cell in `tests.yml` installs the pinned
 Nitjsefnie-OSC/git-fame build and requires its pin checks; if the binary is

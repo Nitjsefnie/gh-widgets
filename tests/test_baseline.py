@@ -724,33 +724,23 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 for name, population in loaded["populations"].items()}
 
     def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
-        """The gate's stated power, computed from the committed numbers.
-
-        This pins the honest answer, which is uncomfortable and which a
-        tolerance chosen to look better would have hidden. The envelopes span
-        every window the cell has shown, including the busy ones, so at
-        these tolerances a doubled workload is caught on NO ENTRY — which is
-        what re-deriving against this tree's own 44.5% spread bought. Going
-        tighter would mean going below each entry's own observed spread, and
-        a ceiling the fastest machine already clears fires on ordinary pool
-        variation. Nothing is tuned.
-
-        It also pins the ANSWER, not just the property, so that changing an
-        envelope or a tolerance has to be a deliberate act here.
-        """
+        """Derive doubling detection from the current automatically tightened record."""
         loaded = self._load()
-        ceilings = self.ceilings(loaded)
-        caught, missed = set(), set()
         for name, population in loaded["populations"].items():
-            for node, envelope in population["entries"].items():
-                doubled = envelope["min"] * 2
-                (caught if doubled > ceilings[name][node] else missed).add(
-                    node)
-        self.assertEqual(caught, set())
-        self.assertEqual(missed,
-                         {"counter::unit-suite", "e2e::bench.render",
-                          "e2e::bench.render-impact",
-                          "e2e::bench.render-responsiveness"})
+            entries = population["entries"]
+            doubled = {node: envelope["min"] * 2
+                       for node, envelope in entries.items()}
+            maxima = {node: envelope["max"]
+                      for node, envelope in entries.items()}
+            expected = {node for node, envelope in entries.items()
+                        if 2 * envelope["min"] > envelope["max"]
+                        * (1 + population["tolerance"])}
+            reported = cd.over_tolerance(maxima, doubled,
+                                         population["tolerance"])
+            with self.subTest(population=name, caught=sorted(expected)):
+                self.assertEqual(set(reported), expected)
+                for node, values in reported.items():
+                    self.assertEqual(values, (maxima[node], doubled[node]))
 
     def test_the_smoke_ceilings_are_computed_not_transcribed(self):
         """The four wall ceilings, against the constant the gate really uses.

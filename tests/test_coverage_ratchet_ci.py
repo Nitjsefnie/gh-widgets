@@ -1,5 +1,3 @@
-
-
 """Invariants over coverage-ratchet.yml — the release-gate surface.
 
     python3 -m unittest discover -v
@@ -13,7 +11,6 @@ It also owns the small structural reader those cases are written against.
 
 These checks are regression tripwires, not a sandbox. The permission reader
 decodes simple YAML keys with optional quotes and fails closed outside that
-subset. The shell reader removes backslash-plus-whitespace splices without
 subset. The shell reader removes backslash-plus-whitespace splices without
 inserting spaces, then uses POSIX `shlex.split` and rejects any step that
 mentions the decoded word `gh`. It also catches that word when an unquoted
@@ -756,11 +753,21 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                         "false")
         self.assertEqual(seen, 1)
 
-    def test_no_step_mentions_gh_or_sets_gh_token(self):
-        # Check the whole workflow so job-level or top-level env cannot restore
-        # a token that the individual step bodies do not declare.
+    def test_only_staging_gets_a_read_token_for_the_compare_api(self):
+        # The shared Python transport performs one read-only compare lookup.
+        # Bind the token to that caller; measuring and gating inherit none.
         self.assertEqual(_step_gh_words(self.text), [])
-        self.assertNotIn("GH_TOKEN", self.text)
+        document = yaml.safe_load(self.text)
+        locations = []
+        self.assertNotIn("GH_TOKEN", document.get("env", {}))
+        for job_id, job in document["jobs"].items():
+            self.assertNotIn("GH_TOKEN", job.get("env", {}))
+            for step in job["steps"]:
+                if "GH_TOKEN" in step.get("env", {}):
+                    locations.append((job_id, step.get("name"),
+                                      step["env"]["GH_TOKEN"]))
+        self.assertEqual(locations, [("measure", "Stage a climbable floor",
+                                     "${{ github.token }}")])
 
     def test_each_gh_word_spacing_spelling_is_caught(self):
         # Shell continuations are removed before shlex decodes each word.

@@ -47,6 +47,10 @@ REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
 AUDIT_CRON = "12 4 * * *"
 CODEQL_CRON = "47 3 * * 3"
+RATCHET_DATA = frozenset({
+    "gate/coverage-floor.json", "gate/speed-baseline.json",
+    ".github/comment-share.json",
+})
 
 
 def github_path_matches(pattern: str, path: str) -> bool:
@@ -392,10 +396,41 @@ def _write_outputs(decisions: dict[str, str], output_path: str) -> int:
     return 0
 
 
+def ratchet_data_only(environment: dict[str, str],
+                      transport: Transport | None = None) -> bool:
+    """Stop automatic push cascades only for a known data-only landed window.
+
+    Missing/new-branch before SHAs and uncertain API answers stage normally.
+    Reuse the gate detector's no-cache transport, compare cap and rename
+    handling: a rename from source into a record is still a source change.
+    """
+    before = environment.get("RATCHET_BEFORE", "")
+    head = environment.get("GITHUB_SHA", "")
+    if not before or before == "0" * 40:
+        return False
+    try:
+        paths, capped = changed_files(
+            transport or GhTransport(environment),
+            environment.get("GITHUB_REPOSITORY", ""), event="push", sha=head,
+            default_branch="main",
+            payload={"before": before, "after": head,
+                     "ref": "refs/heads/main"})
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        print(f"Ratchet window {before}...{head} unknown ({exc}); "
+              "staging normally")
+        return False
+    if paths and not capped and paths <= RATCHET_DATA:
+        print(f"::notice::Skipping ratchet staging for data-only landed "
+              f"window {before}...{head}")
+        return True
+    return False
+
+
 def main(argv: list[str] | None = None, *, transport: Transport | None = None,
          environ: dict[str, str] | None = None) -> int:
-    del argv
     environment = dict(os.environ if environ is None else environ)
+    if (sys.argv[1:] if argv is None else argv) == ["--ratchet-data-only"]:
+        return 0 if ratchet_data_only(environment, transport) else 1
     event, decisions, changed, capped, fallback = _detect(environment, transport)
     for name, decision in decisions.items():
         reason = _reason(event, name, decision, changed=changed,

@@ -32,6 +32,10 @@ class TestCoverageRatchetStaging(unittest.TestCase):
     def test_climb_stages_the_candidate_floor_and_measured_sha(self):
         with tempfile.TemporaryDirectory(prefix="ghw-coverage-stage-") as tmp:
             root = Path(tmp)
+            scripts = root / "scripts/ci"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(REPO_ROOT / "scripts/ci/changes_detect.py",
+                            scripts / "changes_detect.py")
             candidate = json.loads(json.dumps(self.floor))
             candidate["floor"] = candidate["measured"] = \
                 self.floor["floor"] + 0.1
@@ -71,6 +75,10 @@ class TestCoverageRatchetStaging(unittest.TestCase):
     def test_equal_floor_stages_nothing(self):
         with tempfile.TemporaryDirectory(prefix="ghw-coverage-no-stage-") as tmp:
             root = Path(tmp)
+            scripts = root / "scripts/ci"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(REPO_ROOT / "scripts/ci/changes_detect.py",
+                            scripts / "changes_detect.py")
             (root / "candidate-coverage-floor.json").write_text(
                 json.dumps(self.floor), encoding="utf-8")
             (root / "gate").mkdir()

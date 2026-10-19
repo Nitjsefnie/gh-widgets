@@ -392,7 +392,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         """
         root = self.temp_root("ghw-raise-compose-")
         (root / "head" / "scripts" / "ci").mkdir(parents=True)
-        for name in ("compare_counters.py", "baseline.py", "counter.py"):
+        for name in ("compare_counters.py", "baseline.py", "counter.py", "changes_detect.py"):
             shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name,
                             root / "head" / "scripts" / "ci" / name)
         comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
@@ -765,7 +765,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         scripts = head / "scripts" / "ci"
         scripts.mkdir(parents=True)
         for name in ("speed_ratchet.py", "compare_counters.py", "baseline.py",
-                     "counter.py"):
+                     "counter.py", "changes_detect.py"):
             shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name,
                             scripts / name)
         (head / "gate").mkdir()
@@ -786,6 +786,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
                   if output_path.is_file() else "")
         return result, output, head
 
+    @REQUIRES_POSIX_SHELL
     def test_main_push_step_stages_the_tightened_record_and_measured_base(self):
         self._write_reports()
 
@@ -804,6 +805,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
                                     .read_text(encoding="utf-8")),
                          self.baseline)
 
+    @REQUIRES_POSIX_SHELL
     def test_main_push_step_stages_nothing_when_no_maximum_tightens(self):
         renderer = {node: self.baseline["populations"]["renderer-workloads"]
                     ["entries"][node]["max"] for node in WORKLOAD_NODES}
@@ -929,14 +931,31 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         spec.loader.exec_module(loaded)
         self.assertEqual(loaded.read_baseline(self.output_path)["schema"], 3)
 
-    def test_a_head_below_the_recorded_minimum_refuses_the_invalid_range(self):
+    def test_a_head_below_the_recorded_minimum_explains_a_successful_noop(self):
+        before = self.baseline_path.read_bytes()
         self._write_reports(unit=4.0)
 
         result = self._run()
 
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("min", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("below the recorded minimum", result.stdout)
         self.assertFalse(self.output_path.exists())
+        self.assertEqual(self.baseline_path.read_bytes(), before)
+
+    @REQUIRES_POSIX_SHELL
+    def test_main_push_below_minimum_leaves_the_document_and_artifact_alone(self):
+        self._write_reports(unit=4.0)
+
+        result, output, head = self._run_tighten_step()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("below the recorded minimum", result.stdout)
+        self.assertIn("changed=false", output)
+        self.assertEqual((head / "gate/speed-baseline.json").read_bytes(),
+                         self.baseline_path.read_bytes())
+        self.assertFalse((self.root / "ratchet-data/base.txt").exists())
+        self.assertFalse((self.root / "ratchet-data/speed-baseline.json")
+                         .exists())
 
 
 if __name__ == "__main__":
