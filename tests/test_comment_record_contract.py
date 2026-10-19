@@ -24,9 +24,10 @@ def consumer_decoder():
     expected = "8adcd10d222f8708e43fc445a2527a3813ed2e5a503fef15be6c45391ed3bd6f"
     if hashlib.sha256(raw).hexdigest() != expected:
         raise AssertionError("the pinned consumer fixture changed")
-    nodes = [node for node in ast.parse(raw).body
-             if isinstance(node, ast.FunctionDef)
-             and node.name in {"relative_path", "decode_records"}]
+    nodes: list[ast.stmt] = [
+        node for node in ast.parse(raw).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"relative_path", "decode_records"}]
     if len(nodes) != 2:
         raise AssertionError("the pinned consumer decoder functions are absent")
     namespace: dict[str, Any] = {"json": json, "PurePosixPath": PurePosixPath}
