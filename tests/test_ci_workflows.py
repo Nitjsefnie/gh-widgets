@@ -1510,14 +1510,16 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                      ([], 1, "not a JSON object")]
             for document, status, message in cases:
                 with self.subTest(document=document):
-                    path.write_text(json.dumps(document, sort_keys=True,
-                                               indent=2) + "\n")
+                    canonical = (json.dumps(document, sort_keys=True,
+                                            indent=2) + "\n").encode("utf-8")
+                    path.write_bytes(canonical)
+                    self.assertEqual(path.read_bytes(), canonical)
                     result = self._run_validator(script, data, repo)
                     self.assertEqual(result.returncode, status, result.stderr)
                     self.assertIn(message, result.stderr)
             for serialized in (json.dumps(accepted),
                                json.dumps(accepted, sort_keys=True, indent=2)):
-                path.write_text(serialized)
+                path.write_bytes(serialized.encode("utf-8"))
                 result = self._run_validator(script, data, repo)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("serialization", result.stderr)
