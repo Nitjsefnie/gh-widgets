@@ -709,8 +709,9 @@ def render_score_table(C, y, rows, columns, *, score_label, accent, empty,
                        top_n=None, relative=False):
     """Draw the family's headers, supporting cells and ten-point score bars.
 
-    Columns are (x, heading, color); TableRow.values are trusted display text.
-    Keep cells verbatim, including the legacy responsiveness "<1 min" label.
+    Columns are (x, heading, color); TableRow.values are display text.
+    Cells pass through xml_escape: the legacy responsiveness "<1 min" label
+    lands as "&lt;1 min", still readable as "under 1 min" in the rendered card.
     Relative scores anchor to every input row, before the optional top-N cut.
     Already-scaled scores retain their exact value for display.
     """
@@ -731,7 +732,7 @@ def render_score_table(C, y, rows, columns, *, score_label, accent, empty,
         label = row.repo if len(row.repo) <= 34 else row.repo[:33] + "…"
         parts.append(
             f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">{xml_escape(label)}</text>'
-            + ''.join(f'<text x="{x}" y="{y}" text-anchor="end" fill="{color}" font-size="11">{value}</text>'
+            + ''.join(f'<text x="{x}" y="{y}" text-anchor="end" fill="{color}" font-size="11">{xml_escape(value)}</text>'
                       for (x, _, color), value in zip(columns, row.values))
             + f'<text x="500" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{scaled:.2f}</text>'
             f'<rect x="20" y="{y + 5}" width="480" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
