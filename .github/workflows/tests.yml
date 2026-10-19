@@ -936,6 +936,56 @@ jobs:
             exit 1
           fi
 
+      - name: Stage a tightened speed baseline
+        id: tighten
+        # The comparison must pass first, and only default-branch push
+        # measurements may produce data for the privileged ratchet-push job.
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        working-directory: head
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/ratchet-data"
+          mkdir -p "$stage"
+          renderer_reports=()
+          for report in "$REPORTS"/bench-head-*.xml; do
+            if [ ! -f "$report" ]; then
+              echo "::error::renderer report is missing: $report" >&2
+              exit 1
+            fi
+            renderer_reports+=(--renderer-report "$report")
+          done
+          python3 scripts/ci/speed_ratchet.py \
+            --baseline "$BASELINE" \
+            --output "$stage/speed-baseline.json" \
+            --unit-report "$REPORTS/unit-1.xml" \
+            --unit-report "$REPORTS/unit-2.xml" \
+            --unit-population-file "$REPORTS/unit-population.txt" \
+            "${renderer_reports[@]}" \
+            --renderer-population-file "$REPORTS/renderer-population.txt"
+          if [ -f "$stage/speed-baseline.json" ]; then
+            printf '%s\n' "$GITHUB_SHA" > "$stage/base.txt"
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'No speed maximum tightened; nothing to stage.'
+          fi
+
+      - name: Upload the tightened speed baseline
+        if: >-
+          success() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.tighten.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ratchet-push
+          path: |
+            ${{ runner.temp }}/ratchet-data/base.txt
+            ${{ runner.temp }}/ratchet-data/speed-baseline.json
+          retention-days: 1
+          if-no-files-found: error
+
       - name: The committed baseline only ratchets down
         # The comparator refuses a head counter above its baseline, but
         # nothing there stops a commit from EDITING the baseline upwards in

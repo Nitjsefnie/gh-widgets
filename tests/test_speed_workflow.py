@@ -702,6 +702,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         "Collect the unit-test population",
         "Run renderer workloads",
         "Compare",
+        "Stage a tightened speed baseline",
         "The committed baseline only ratchets down",
     )
 

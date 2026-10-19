@@ -88,6 +88,15 @@ class StepRunner:
         end = text.index("\n      - ", start + 10)
         return text[start:end]
 
+    def step_condition(self, step_name):
+        """The step's one-line ``if:`` expression, or None when it has none."""
+        declarations = [line.split(":", 1)[1].strip()
+                        for line in self.step_text(step_name).splitlines()
+                        if line.startswith("        if:")]
+        if len(declarations) > 1:
+            raise ValueError(f"{step_name!r} declares more than one if condition")
+        return declarations[0] if declarations else None
+
     def step_run(self, step_name):
         """One named step as the JOB runs it: (env, working-directory, body).
 
