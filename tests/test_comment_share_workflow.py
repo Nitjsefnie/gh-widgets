@@ -37,6 +37,5 @@ class TestCommentShareWorkflow(unittest.TestCase):
         self.assertEqual(upload["if"], "steps.stage.outputs.changed == 'true'")
 
 
-
 if __name__ == "__main__":
     unittest.main()
