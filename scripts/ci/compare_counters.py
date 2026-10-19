@@ -525,17 +525,11 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         f"- This commit: **{_format_counter(result['head_total'])}**",
         "",
         "**The gate this is: a step-change detector, not a regression "
-        "detector.** The baseline holds the range each entry was observed "
-        "over, so a head value has to clear the worst machine observed "
-        "**The gate this is: a step-change detector, not a regression "
-        "detector.** The baseline holds the range each entry was observed "
-        "over, so a head value has to clear the worst machine observed "
-        "before it fails — and on this cell that range is wide enough that "
-        "it does NOT catch a doubling of any entry, let alone a 20% "
-        "regression. It catches a gross step change. Do not read the phrase "
-        "\"load-invariant counter\" as \"a sharp budget\": it means the "
-        "machine's load does not reach the number, not that the number is "
-        "sensitive.",
+        "detector.** Each ceiling is the current recorded maximum times "
+        "(1 + tolerance). Automatic tightening can change which entries "
+        "catch a doubling; the committed-baseline control derives that "
+        "property from the current record. CPU noise still limits the "
+        "smaller changes this gate can detect.",
         "",
         "_No elapsed time appears in this report, deliberately: a "
         "multi-tenant runner makes a duration a measure of the machine. It "

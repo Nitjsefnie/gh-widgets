@@ -1183,7 +1183,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_workflow_run_trigger_and_push_guard_are_exact(self):
         self.assertEqual(self.workflow[self.trigger_key]["workflow_run"], {
-            "workflows": ["tests", "coverage-ratchet"],
+            "workflows": ["tests", "coverage-ratchet", "comment share"],
             "types": ["completed"],
         })
         self.assertRegex(
@@ -1275,7 +1275,11 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         push = self._step("Validate and push the ratchet record")
         self.assertIn("git init", push["run"])
         self.assertIn("git -C \"$repo\" fetch --quiet origin main", push["run"])
-        self.assertIn("StrictHostKeyChecking=yes", push["run"])
+        exports = [shlex.split(line)[1] for line in push["run"].splitlines()
+                   if line.startswith("export GIT_SSH_COMMAND=")]
+        self.assertEqual(exports, [
+            "GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=yes "
+            "-o UserKnownHostsFile=$known_hosts -o BatchMode=yes"])
         self.assertIn("ssh-agent", push["run"])
         self.assertIn("trap 'kill \"$SSH_AGENT_PID\"", push["run"])
         self.assertNotIn("GITHUB_TOKEN", push.get("env", {}))
@@ -1429,8 +1433,10 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
             coverage = json.loads((REPO_ROOT / "gate/coverage-floor.json")
                                   .read_text(encoding="utf-8"))
+            coverage.update(statements=100, missing=2, floor=98, measured=98)
             coverage_candidate = dict(coverage)
-            coverage_candidate["floor"] = coverage["floor"] + 0.1
+            coverage_candidate["missing"] = 0
+            coverage_candidate["floor"] = 100
             coverage_candidate["measured"] = coverage_candidate["floor"]
             coverage_candidate["measured_commit"] = "a" * 40
             coverage_candidate["measured_at"] = "2026-10-19T00:00:00Z"
@@ -1443,6 +1449,18 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             self.assertEqual(accepted.returncode, 0,
                              accepted.stdout + accepted.stderr)
             self.assertEqual(accepted.stdout.strip(), "coverage-floor.json")
+
+            for missing, percent, message in (
+                    (coverage_candidate["statements"] + 1, 99,
+                     "between zero and statements"),
+                    (0, 99, "inconsistent with its counts")):
+                coverage_candidate["missing"] = missing
+                coverage_candidate["floor"] = coverage_candidate["measured"] = percent
+                (data / "coverage-floor.json").write_text(
+                    json.dumps(coverage_candidate), encoding="utf-8")
+                refused = self._run_validator(script, data, repo)
+                self.assertEqual(refused.returncode, 1)
+                self.assertIn(message, refused.stderr)
 
             coverage_candidate["floor"] = coverage_candidate["measured"] = 101
             (data / "coverage-floor.json").write_text(
@@ -1460,15 +1478,22 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             self.assertEqual(refused.returncode, 1)
             self.assertIn("differs from base.txt", refused.stderr)
 
+    def test_inline_speed_validator_accepts_tightening_and_refuses_looseners(self):
+        script = self._validator()
+        with tempfile.TemporaryDirectory(prefix="ghw-speed-validator-") as tmp:
+            data, repo = Path(tmp) / "artifact", Path(tmp) / "main"
+            data.mkdir()
+            (repo / "gate").mkdir(parents=True)
             baseline = json.loads((REPO_ROOT / "gate/speed-baseline.json")
                                   .read_text(encoding="utf-8"))
+            recorded_range = baseline["populations"]["unit-suite"]["entries"]["counter::unit-suite"]
+            recorded_range["max"] = recorded_range["min"] + 1
             speed_candidate = json.loads(json.dumps(baseline))
             unit = speed_candidate["populations"]["unit-suite"]
             unit["entries"]["counter::unit-suite"]["max"] -= 0.001
             (repo / "gate/speed-baseline.json").write_text(
                 json.dumps(baseline), encoding="utf-8")
             (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
-            (data / "coverage-floor.json").unlink()
             (data / "speed-baseline.json").write_text(
                 json.dumps(speed_candidate), encoding="utf-8")
             accepted = self._run_validator(script, data, repo)
@@ -1485,6 +1510,39 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             refused = self._run_validator(script, data, repo)
             self.assertEqual(refused.returncode, 1)
             self.assertIn("loosened", refused.stderr)
+
+    def test_comment_share_validator_uses_exact_bytes_and_integer_shares(self):
+        script = self._validator()
+        old = {"same.py": [1, 3], "down.py": [1, 3], "gone.py": [1, 2]}
+        accepted = {"same.py": [2, 6], "down.py": [1, 4], "new.py": [1, 5]}
+        with tempfile.TemporaryDirectory() as tmp:
+            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
+            data.mkdir()
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github/comment-share.json").write_text(json.dumps(old))
+            (data / "base.txt").write_text("a" * 40 + "\n")
+            path = data / "comment-share.json"
+            cases = [(accepted, 0, ""), ({}, 0, ""),
+                     ({"new.py": [0, 0]}, 0, ""),
+                     ({"same.py": [334, 1000]}, 1, "rose"),
+                     ({"new.py": [-1, 3]}, 1, "non-negative"),
+                     ({"new.py": [True, 3]}, 1, "non-negative"),
+                     ({"new.py": [4, 3]}, 1, "comments <= total"),
+                     ({"new.py": [1, 3, 5]}, 1, "non-negative"),
+                     ([], 1, "not a JSON object")]
+            for document, status, message in cases:
+                with self.subTest(document=document):
+                    path.write_text(json.dumps(document, sort_keys=True,
+                                               indent=2) + "\n")
+                    result = self._run_validator(script, data, repo)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertIn(message, result.stderr)
+            for serialized in (json.dumps(accepted),
+                               json.dumps(accepted, sort_keys=True, indent=2)):
+                path.write_text(serialized)
+                result = self._run_validator(script, data, repo)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("serialization", result.stderr)
 
 
 class TestActionFamiliesShareOneRef(unittest.TestCase):

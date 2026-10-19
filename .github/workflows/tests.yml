@@ -945,8 +945,14 @@ jobs:
         working-directory: head
         env:
           GITHUB_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RATCHET_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          if python3 scripts/ci/changes_detect.py --ratchet-data-only; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           stage="$RUNNER_TEMP/ratchet-data"
           mkdir -p "$stage"
           renderer_reports=()
@@ -1067,7 +1073,7 @@ jobs:
                    "verified — failing closed" >&2
               exit 1
             fi
-            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            if [ -z "${BEFORE_SHA//0/}" ]; then
               echo "::error::a newly created main ref has no previous tip;" \
                    "the landed range cannot be verified — failing closed" >&2
               exit 1

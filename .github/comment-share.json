@@ -1,0 +1,246 @@
+{
+  ".github/dependabot.yml": [
+    1353,
+    1857
+  ],
+  ".github/workflows/audit.yml": [
+    2402,
+    4218
+  ],
+  ".github/workflows/claim.yml": [
+    1399,
+    1955
+  ],
+  ".github/workflows/codeql.yml": [
+    2049,
+    2855
+  ],
+  ".github/workflows/coverage-comment.yml": [
+    2998,
+    8095
+  ],
+  ".github/workflows/coverage-ratchet.yml": [
+    4744,
+    7967
+  ],
+  ".github/workflows/gitfame-pool-probe.yml": [
+    1580,
+    5228
+  ],
+  ".github/workflows/gitfame-resync-memory.yml": [
+    3185,
+    17409
+  ],
+  ".github/workflows/pr-gate.yml": [
+    615,
+    1271
+  ],
+  ".github/workflows/release.yml": [
+    7453,
+    13754
+  ],
+  ".github/workflows/scorecard.yml": [
+    593,
+    1587
+  ],
+  ".github/workflows/secrets.yml": [
+    716,
+    1507
+  ],
+  ".github/workflows/targeted-blame-audit.yml": [
+    1653,
+    4050
+  ],
+  ".github/workflows/tests.yml": [
+    33869,
+    53181
+  ],
+  "ghwidgets_data.py": [
+    2111,
+    12711
+  ],
+  "install.sh": [
+    3252,
+    8784
+  ],
+  "scripts/bench/bench_platform.py": [
+    1408,
+    2121
+  ],
+  "scripts/bench/e2e_bench.py": [
+    3980,
+    15773
+  ],
+  "scripts/bench/sitecustomize.py": [
+    930,
+    5691
+  ],
+  "scripts/ci/baseline.py": [
+    5344,
+    12246
+  ],
+  "scripts/ci/commit_scopes.py": [
+    6658,
+    12714
+  ],
+  "scripts/ci/compare_counters.py": [
+    11818,
+    32639
+  ],
+  "scripts/ci/counter.py": [
+    12379,
+    19557
+  ],
+  "scripts/ci/counter_platform.py": [
+    363,
+    859
+  ],
+  "scripts/ci/coverage_ratchet.py": [
+    5695,
+    12874
+  ],
+  "scripts/ci/diff_coverage.py": [
+    4405,
+    11806
+  ],
+  "scripts/ci/gate_base_freshness.py": [
+    12221,
+    26305
+  ],
+  "scripts/ci/ratchet_declarations.py": [
+    1243,
+    6273
+  ],
+  "scripts/ci/speed_ratchet.py": [
+    2729,
+    8304
+  ],
+  "scripts/ci/speed_workflow_steps.py": [
+    2664,
+    5671
+  ],
+  "scripts/format.sh": [
+    321,
+    537
+  ],
+  "scripts/install-hooks.sh": [
+    85,
+    312
+  ],
+  "scripts/pre-push": [
+    212,
+    408
+  ],
+  "scripts/resolve-repo-pins.py": [
+    1126,
+    3686
+  ],
+  "scripts/secrecy-check.sh": [
+    918,
+    2549
+  ],
+  "src/ghwidgets_cache.py": [
+    3570,
+    6913
+  ],
+  "src/ghwidgets_common.py": [
+    9237,
+    24209
+  ],
+  "src/ghwidgets_journal.py": [
+    2106,
+    2713
+  ],
+  "src/impact_clone.py": [
+    4747,
+    12776
+  ],
+  "src/impact_loc.py": [
+    5472,
+    19375
+  ],
+  "src/render-impact.py": [
+    7197,
+    20945
+  ],
+  "src/render-responsiveness.py": [
+    10603,
+    19236
+  ],
+  "src/render.py": [
+    10438,
+    31895
+  ],
+  "tests/__init__.py": [
+    68,
+    163
+  ],
+  "tests/test_baseline.py": [
+    7497,
+    29630
+  ],
+  "tests/test_compare_counters.py": [
+    3076,
+    15728
+  ],
+  "tests/test_counter.py": [
+    7747,
+    23305
+  ],
+  "tests/test_coverage_ratchet.py": [
+    6987,
+    25715
+  ],
+  "tests/test_coverage_ratchet_ci.py": [
+    8872,
+    30823
+  ],
+  "tests/test_impact.py": [
+    5834,
+    35685
+  ],
+  "tests/test_impact_fallback.py": [
+    2647,
+    7319
+  ],
+  "tests/test_impact_retry.py": [
+    903,
+    3425
+  ],
+  "tests/test_owner_locks.py": [
+    624,
+    788
+  ],
+  "tests/test_pins.py": [
+    530,
+    2895
+  ],
+  "tests/test_release_workflow.py": [
+    11544,
+    34664
+  ],
+  "tests/test_render.py": [
+    6730,
+    39279
+  ],
+  "tests/test_responsiveness.py": [
+    5654,
+    29409
+  ],
+  "tests/test_secrecy_check.py": [
+    5313,
+    12786
+  ],
+  "tests/test_speed_text.py": [
+    920,
+    2665
+  ],
+  "tests/test_speed_workflow.py": [
+    13642,
+    46883
+  ],
+  "tests/test_version.py": [
+    2418,
+    6287
+  ]
+}

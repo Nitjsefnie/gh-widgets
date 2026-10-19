@@ -10,17 +10,18 @@ written to the requested output.
 
 There is deliberately no hysteresis. CPU time is noisy, and any positive
 hysteresis below the pool's observed spread either dead-letters the tighten
-or selects a noise-sensitive threshold. Reports serialize six decimal
-places, so strict improvements move each recorded maximum down a finite
-grid: after a bounded number of pushes it reaches a fixed point, which
-future runs rarely beat because the ceiling has reached the low tail already
-observed. The gate stays green throughout because its ceiling is
+or selects a noise-sensitive threshold. Fresh noisy samples can keep finding
+lower values. The staging callers therefore skip a landed window containing
+only the three ratchet data records: an automated push gets one follow-up
+run, which stages nothing, regardless of noise. Ordinary source pushes can
+still tighten. The gate's ceiling is
 ``max * (1 + tolerance)`` and every tighten sets ``max`` to a passing head
 value.
 
 If a head value falls below the recorded ``min``, lowering ``max`` alone
 would make an invalid envelope. Since ``min`` is carried unchanged, the
-candidate fails baseline validation and nothing is written.
+whole operation explains the need for re-derivation and exits successfully
+without writing anything. Downward movement is not a regression.
 
 The authored explanation and measurement identity are not re-stamped by this
 tool. Provenance for an automated move is the ratchet commit message, which
@@ -177,6 +178,16 @@ def _write_validated(path: Path, candidate: dict) -> None:
             os.unlink(temp_name)
 
 
+def _below_minimum(candidate: dict) -> str | None:
+    """Name an envelope that needs human re-derivation instead of tightening."""
+    for population in candidate["populations"].values():
+        for map_name in ("entries", "wall"):
+            for node, envelope in population[map_name].items():
+                if envelope["max"] < envelope["min"]:
+                    return node
+    return None
+
+
 def update(path: Path, output: Path | None, unit_reports: list[Path],
            unit_population: Path, renderer_reports: list[Path],
            renderer_population: Path) -> list[str]:
@@ -187,6 +198,10 @@ def update(path: Path, output: Path | None, unit_reports: list[Path],
             ("renderer-workloads", renderer_reports, renderer_population)))
 
     candidate, changes = tighten(document, measurements)
+    if below := _below_minimum(candidate):
+        print(f"{below}: head is below the recorded minimum; "
+              "re-derive the envelope; nothing to tighten")
+        return []
     if not changes:
         print("no speed maximum beat its recorded value: nothing to tighten")
         return []

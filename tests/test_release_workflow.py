@@ -764,14 +764,15 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         self.assertEqual([name for name, _, _ in entries], self.MANIFEST)
 
         # The workflows deliberately NOT in the manifest: the ones a
-        # VERSION push does not schedule, and this one, which cannot wait
+        # VERSION push does not schedule, the tighten-only comment-share push,
+        # and this one, which cannot wait
         # on itself. Hoisted so the completeness check below and the
         # per-file checks agree on one literal rather than two copies.
         excluded = {"claim.yml", "pr-gate.yml", "audit.yml", "codeql.yml",
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
                     "gitfame-resync-memory.yml", "release.yml",
                     "scorecard.yml", "coverage-comment.yml",
-                    "ratchet-push.yml"}
+                    "ratchet-push.yml", "comment-share.yml"}
 
         for name, workflow_file, job in entries:
             with self.subTest(gate=name):
@@ -809,7 +810,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self.assertNotIn("paths:", "\n".join(push))
                 self.assertNotIn("VERSION", "\n".join(push))
 
-        for workflow_file in excluded - {"release.yml"}:
+        for workflow_file in excluded - {"release.yml", "comment-share.yml"}:
             with self.subTest(excluded=workflow_file):
                 path = WORKFLOWS / workflow_file
                 self.assertTrue(path.is_file(), f"missing excluded {workflow_file}")
