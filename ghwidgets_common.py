@@ -113,7 +113,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 10
+COMMON_VERSION = 11
 
 
 def _read_repo_version() -> str:
@@ -700,6 +700,44 @@ def xml_color(value, fallback="#888888"):
     """
     return (value if re.fullmatch(
         r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", str(value)) else fallback)
+
+
+TableRow = namedtuple("TableRow", "repo score values")
+
+
+def render_score_table(C, y, rows, columns, *, score_label, accent, empty,
+                       top_n=None, relative=False):
+    """Draw the family's headers, supporting cells and ten-point score bars.
+
+    Columns are (x, heading, color); TableRow.values are trusted display text.
+    Keep cells verbatim, including the legacy responsiveness "<1 min" label.
+    Relative scores anchor to every input row, before the optional top-N cut.
+    Already-scaled scores retain their exact value for display.
+    """
+    parts = [
+        f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
+        + ''.join(f'<text x="{x}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">{xml_escape(label)}</text>'
+                  for x, label, _ in columns)
+        + f'<text x="500" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">{xml_escape(score_label)}</text>']
+    y += 17
+    top = rows if top_n is None else rows[:top_n]
+    if not top:
+        parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
+                     f'{xml_escape(empty)}</text>')
+        return parts, y + 16
+    best = (max(row.score for row in rows) or 1) if relative else 10.0
+    for row in top:
+        scaled = row.score / best * 10.0 if relative else row.score
+        label = row.repo if len(row.repo) <= 34 else row.repo[:33] + "…"
+        parts.append(
+            f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">{xml_escape(label)}</text>'
+            + ''.join(f'<text x="{x}" y="{y}" text-anchor="end" fill="{color}" font-size="11">{value}</text>'
+                      for (x, _, color), value in zip(columns, row.values))
+            + f'<text x="500" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{scaled:.2f}</text>'
+            f'<rect x="20" y="{y + 5}" width="480" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
+            f'<rect x="20" y="{y + 5}" width="{max(row.score / best * 480, 2):.1f}" height="3" rx="1.5" fill="{accent}"/>')
+        y += 22
+    return parts, y
 
 
 def base_card(C, w, h, body, *, card, title, desc):
