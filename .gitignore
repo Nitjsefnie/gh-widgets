@@ -29,6 +29,7 @@
 !/.gitignore
 !/.pylintrc
 !/.gitleaks.toml
+!/AGENTS.md
 !/CLAUDE.md
 !/CONTRIBUTING.md
 !/LICENSE
