@@ -1,7 +1,7 @@
 """Pair the inline record validator with the pinned action's actual decoder.
 
-The fixture is the unmodified comment_baseline.py at comment-ratchet
-721426819be9e05deb76d56364f671b87fa05fbf. Only its two decoder functions are
+The fixture is the unmodified comment_baseline.py from the adopted action
+version. Only its two decoder functions are
 compiled, avoiding unrelated measurement imports and network dependencies.
 """
 import ast
@@ -32,7 +32,7 @@ def consumer_decoder():
     namespace: dict[str, Any] = {"json": json, "PurePosixPath": PurePosixPath}
     # Execute the hash-verified upstream functions, not a hand-written oracle.
     # pylint: disable-next=exec-used
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), "pinned-consumer", "exec"),
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(ROOT / "tests/fixtures/comment-ratchet-v1-policy.txt"), "exec"),
          namespace)
     return namespace["decode_records"]
 
