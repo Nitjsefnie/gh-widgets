@@ -54,12 +54,16 @@
 # ---- gate/ — committed coverage and speed records ------------------------
 !/gate/
 /gate/*
-!/gate/*.json
+!/gate/coverage-floor.json
+!/gate/speed-baseline.json
 
 # ---- requirements/ — pinned development and CI toolchains ----------------
 !/requirements/
 /requirements/*
-!/requirements/*.txt
+!/requirements/dev.txt
+!/requirements/test.txt
+!/requirements/pip-audit.txt
+!/requirements/zizmor.txt
 
 # ---- .github/ — CI workflows, dependabot, issue and PR templates ----------
 !/.github/
