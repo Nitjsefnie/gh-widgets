@@ -8,9 +8,9 @@
 # overlapping with it.
 #
 # Order is load-bearing: render-impact.py refreshes the shared impact cache
-# that render-responsiveness.py then reads. Star history is independent.
+# that render-responsiveness.py then reads. Star history and popularity are independent.
 #
-# A unit has ONE environment block but four renderers using THREE caches, so the
+# A unit has ONE environment block but five renderers using THREE caches, so the
 # split is deliberate: CACHE_FILE= below is the profile cache, and the two
 # renderers that share the impact cache get it as an explicit --cache-file flag
 # (the flag overrides the env var). render.py has NO --cache-file flag at all —
@@ -51,9 +51,12 @@ UMask=0077
 ExecStart=/bin/bash -c 'set -o pipefail; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py'
 ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
+# Popularity has no cache and no --resync: every run clones and reads traffic.
+ExecStart=/usr/local/bin/render-popularity.py
+# Star history also has no --resync; its cache is a failed-fetch fallback.
 ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
 
-# Covers all four in sequence. The blame pass dominates: it re-clones and
+# Covers all five in sequence. The blame pass dominates: it re-clones and
 # re-blames every external repo whose default-branch HEAD moved.
 TimeoutStartSec=5400
 Nice=12
@@ -66,7 +69,7 @@ StandardError=journal
 #
 # Both are worth having here: the blame pass full-clones every external repo
 # whose HEAD moved, so this unit is unusually heavy on both disk and network
-# for something that renders four SVGs.
+# for something that renders every card.
 #
 # Caveats, so the numbers are not over-read:
 #   IOAccounting counts actual block-device I/O via the cgroup io controller,
