@@ -1,6 +1,5 @@
 """Offline popularity acquisition, classification, ranking and SVG tests."""
 import contextlib
-import hashlib
 import importlib.util
 import io
 import json
@@ -174,18 +173,20 @@ class Authors(unittest.TestCase):
 class Ranking(unittest.TestCase):
     def test_rescale_ties_single_and_zero(self):
         for scores, expected in (
-                ([('b/r', 20), ('a/r', 20), ('c/r', 3)],
-                 [('a/r', '10.00'), ('b/r', '10.00'), ('c/r', '1.50')]),
-                ([('only/r', 3)], [('only/r', '10.00')]),
-                ([('b/r', 0), ('a/r', 0)], [('a/r', '0.00'), ('b/r', '0.00')]),
+                ([('b/r', 20, 2, 3), ('A/r', 20, 4, 5), ('a/r', 20, 6, 7), ('c/r', 3, 8, 9)],
+                 [('A/r', '10.00', 4, 5), ('a/r', '10.00', 6, 7),
+                  ('b/r', '10.00', 2, 3), ('c/r', '1.50', 8, 9)]),
+                ([('only/r', 3, 1, 0)], [('only/r', '10.00', 1, 0)]),
+                ([('b/r', 0, 0, 0), ('a/r', 0, 0, 0)],
+                 [('a/r', '0.00', 0, 0), ('b/r', '0.00', 0, 0)]),
                 ([], [])):
             self.assertEqual(popularity.rank_repositories(scores), expected)
 
     def test_top_five_cut(self):
-        scores = [(f'o/r{i}', i) for i in range(7)]
+        scores = [(f'o/r{i}', i, i, 0) for i in range(7)]
         self.assertEqual(popularity.rank_repositories(scores), [
-            ('o/r6', '10.00'), ('o/r5', '8.33'), ('o/r4', '6.67'),
-            ('o/r3', '5.00'), ('o/r2', '3.33')])
+            ('o/r6', '10.00', 6, 0), ('o/r5', '8.33', 5, 0), ('o/r4', '6.67', 4, 0),
+            ('o/r3', '5.00', 3, 0), ('o/r2', '3.33', 2, 0)])
 
 
 class Acquisition(unittest.TestCase):
@@ -213,9 +214,9 @@ class Acquisition(unittest.TestCase):
                 mock.patch.object(popularity, 'rest_pages', side_effect=[[], repositories]), \
                 mock.patch.object(popularity, 'outsider_commits', side_effect=outsiders):
             _, scores = popularity.fetch_scores('t')
-        self.assertEqual(scores, [('Owner/Stars', 200), ('Owner/Forks', 200),
-                                  ('Owner/Outsiders', 15), ('Owner/Cloners', 14),
-                                  ('Owner/Visitors', 11)])
+        self.assertEqual(scores, [('Owner/Stars', 200, 4, 0), ('Owner/Forks', 200, 0, 5),
+                                  ('Owner/Outsiders', 15, 0, 0), ('Owner/Cloners', 14, 0, 0),
+                                  ('Owner/Visitors', 11, 0, 0)])
 
     def test_fetched_profile_email_excludes_old_git_name_without_replacing_emails(self):
         user = {**USER, 'email': 'Owner@Example.ORG'}
@@ -232,7 +233,7 @@ class Acquisition(unittest.TestCase):
                 mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=pages), \
                 mock.patch.object(popularity.subprocess, 'run', side_effect=git):
             _, scores = popularity.fetch_scores('t')
-        self.assertEqual(scores, [('Owner/Repo', 0)])
+        self.assertEqual(scores, [('Owner/Repo', 0, 0, 0)])
 
     def test_owned_and_org_pages_filter_deduplicate_and_score_uniques(self):
         urls = []
@@ -263,7 +264,8 @@ class Acquisition(unittest.TestCase):
                 mock.patch.object(popularity, 'outsider_commits', return_value=4):
             user, scores = popularity.fetch_scores('t')
         self.assertEqual(user, USER)
-        self.assertEqual(scores, [('Owner/Repo', 265), ('Owner/Second', 265), ('Org/Repo', 265)])
+        self.assertEqual(scores, [('Owner/Repo', 265, 2, 3), ('Owner/Second', 265, 2, 3),
+                                  ('Org/Repo', 265, 2, 3)])
         self.assertIn('/org-page2', urls)
         self.assertIn('/repo-page2', urls)
         self.assertEqual(len([url for url in urls if '/traffic/' in url]), 6)
@@ -318,11 +320,9 @@ class Acquisition(unittest.TestCase):
 class CardAndCLI(unittest.TestCase):
     def test_full_render_pins_rows_chrome_and_accessibility(self):
         svg = popularity.render_popularity(popularity.THEMES['tokyonight'], USER,
-                                           [('Owner/Repo', 100), ('Org/Other', 25)])
-        self.assertEqual(hashlib.sha256(svg.encode()).hexdigest(),
-                         '9b55555a9c3d854f83f338b88cd04f25e62ee87ca749624825f59446f810015a')
+                                           [('Owner/Repo', 100, 2400, 12), ('Org/Other', 25, 0, 1200000)])
         root = ET.fromstring(svg)
-        self.assertEqual(root.attrib['viewBox'], '0 0 520 288')
+        self.assertEqual(root.attrib['viewBox'], '0 0 520 159')
         self.assertEqual(root.attrib['role'], 'img')
         self.assertEqual(root.attrib['aria-labelledby'], 'popularity-title popularity-desc')
         self.assertEqual(root.findtext('{*}title'), 'Repository popularity for Owner')
@@ -331,24 +331,44 @@ class CardAndCLI(unittest.TestCase):
                          'Scores relative to the leader; traffic covers the last 14 days.')
         self.assertEqual([(node.attrib['x'], node.attrib['y'], node.text)
                           for node in root.findall('{*}text')], [
-                              ('20', '34', 'repo popularity'), ('500', '34', '2 repos'),
-                              ('20', '54', 'Owner - top 5 / relative score'),
-                              ('24', '92', '1'), ('52', '92', 'Owner/Repo'),
-                              ('500', '92', '10.00'), ('24', '126', '2'),
-                              ('52', '126', 'Org/Other'), ('500', '126', '2.50'),
-                              ('20', '266', 'traffic: 14-day uniques / leader = 10.00')])
+                              ('20', '34', 'repo popularity'),
+                              ('20', '52', 'popularity of my public repositories'),
+                              ('20', '88', 'repo'), ('300', '88', 'stars'),
+                              ('390', '88', 'forks'), ('500', '88', 'popularity'),
+                              ('20', '105', 'Owner/Repo'), ('300', '105', '2.4k'),
+                              ('390', '105', '12'), ('500', '105', '10.00'),
+                              ('20', '127', 'Org/Other'), ('300', '127', '0'),
+                              ('390', '127', '1.2M'), ('500', '127', '2.50')])
+        texts = root.findall('{*}text')
+        self.assertEqual({key: texts[0].get(key) for key in ('fill', 'font-size', 'font-weight')},
+                         {'fill': '#e0af68', 'font-size': '14', 'font-weight': '600'})
+        self.assertEqual(texts[1].get('font-size'), '11')
+        self.assertEqual(texts[1].get('fill'), '#7a82a2')
+        self.assertTrue(all(node.get('font-size') == '10' for node in texts[2:6]))
+        for node in (texts[9], texts[13]):
+            self.assertEqual(node.get('font-weight'), '500')
+            self.assertEqual(node.get('font-size'), '11')
+        bars = [node.attrib for node in root.findall('{*}rect') if node.get('height') == '3']
+        self.assertEqual(bars, [
+            {'x': '20', 'y': '110', 'width': '480', 'height': '3', 'rx': '1.5',
+             'fill': '#2a2e42', 'fill-opacity': '0.35'},
+            {'x': '20', 'y': '110', 'width': '480.0', 'height': '3', 'rx': '1.5', 'fill': '#9ece6a'},
+            {'x': '20', 'y': '132', 'width': '480', 'height': '3', 'rx': '1.5',
+             'fill': '#2a2e42', 'fill-opacity': '0.35'},
+            {'x': '20', 'y': '132', 'width': '120.0', 'height': '3', 'rx': '1.5', 'fill': '#9ece6a'}])
 
     def test_themes_empty_and_escaping(self):
         for colors in popularity.THEMES.values():
             svg = popularity.render_popularity(colors, USER, [])
-            ET.fromstring(svg)
-            self.assertIn('no public repositories', svg)
+            root = ET.fromstring(svg)
+            self.assertEqual(root.get('height'), '131')
+            self.assertEqual(root.findall('{*}text')[-1].text, 'no public repositories')
             self.assertIn(colors['bg'], svg)
         svg = popularity.render_popularity(popularity.THEMES['tokyonight'],
-                                           {**USER, 'login': '<&'}, [('o/<' + 'x' * 90, 1)])
+                                           {**USER, 'login': '<&'}, [('o/<' + 'x' * 90, 1, 0, 0)])
         ET.fromstring(svg)
         self.assertIn('&lt;&amp;', svg)
-        self.assertIn('...', svg)
+        self.assertIn('o/&lt;' + 'x' * 30 + '…', svg)
 
     def test_main_writes_fresh_and_preserves_previous_on_failure(self):
         with tempfile.TemporaryDirectory() as directory:

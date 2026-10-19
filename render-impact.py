@@ -97,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 10
+REQUIRED_COMMON = 11
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -113,7 +113,6 @@ THEMES = common.THEMES
 gql = common.gql
 save_cache = common.save_cache
 fmt_short = common.fmt_short
-xml_escape = common.xml_escape
 atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
@@ -407,57 +406,20 @@ def loc_table(ourloc, knobs):
 
 
 CARD_W = 520
-COL_MINE = 290   # mine, right-anchored
-COL_TOTAL = 340  # total, right-anchored
-COL_SHARE = 390  # share, right-anchored
-COL_SCORE = 500  # impact score, right-anchored (long header clears share)
-BAR_X = 20
-BAR_MAX_W = CARD_W - 2 * BAR_X  # full width = strongest undecayed raw score
-SCORE_MAX = 10.0  # display anchor for the strongest undecayed raw score
-REPO_CHARS = 34  # owner/name truncation budget
-
-
-def truncate(s, n):
-    return s if len(s) <= n else s[:n - 1] + "…"
 
 
 def render_section(C, y, title, rows, accent, top_n=TOP_N):
     parts = [f'<text x="20" y="{y}" fill="{accent}" font-size="11" '
              f'font-weight="600">{title}</text>']
-    y += 16
-    parts.append(
-        f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
-        f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">mine</text>'
-        f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">total</text>'
-        f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">share</text>'
-        f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">impact score</text>')
-    y += 17
-    top = rows[:top_n]
-    if not top:
-        parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
-                     f'no external contributions yet</text>')
-        y += 16
-        return parts, y
-    # Every row anchors this, not just the rendered ones, so a repo dropping
-    # out of the rendered slice — or `-n` changing how many that is — cannot
-    # rescale the rows that stay.
-    best = max(row.score for row in rows) or 1
-    for row in top:
-        bar_w = max(row.score / best * BAR_MAX_W, 2)
-        scaled = row.score / best * SCORE_MAX
-        parts.append(
-            f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">'
-            f'{xml_escape(truncate(row.repo, REPO_CHARS))}</text>'
-            f'<text x="{COL_MINE}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{row.ours}</text>'
-            f'<text x="{COL_TOTAL}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="11">{fmt_short(row.total)}</text>'
-            f'<text x="{COL_SHARE}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{row.share:.1f}%</text>'
-            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{accent}" font-size="11" font-weight="500">{scaled:.2f}</text>'
-            # Rating bar uses the same undecayed 10-point anchor as the label,
-            # so a stale leader's bar can visibly stop short of full width.
-            f'<rect x="{BAR_X}" y="{y + 5}" width="{BAR_MAX_W}" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
-            f'<rect x="{BAR_X}" y="{y + 5}" width="{bar_w:.1f}" height="3" rx="1.5" fill="{accent}"/>')
-        y += 22
-    return parts, y
+    table_rows = [common.TableRow(
+        row.repo, row.score, (row.ours, fmt_short(row.total), f'{row.share:.1f}%'))
+        for row in rows]
+    table, y = common.render_score_table(
+        C, y + 16, table_rows,
+        [(290, 'mine', C['cyan']), (340, 'total', C['dim']), (390, 'share', C['gold'])],
+        score_label='impact score', accent=accent, empty='no external contributions yet',
+        top_n=top_n, relative=True)
+    return parts + table, y
 
 
 def render_impact(C, pr_rows, issue_rows, loc_rows, top_n=TOP_N):

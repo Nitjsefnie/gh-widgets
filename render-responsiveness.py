@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 10
+REQUIRED_COMMON = 11
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -115,7 +115,6 @@ STALE_AFTER_H = 24        # cache older than this earns the stamp
 FONT = common.FONT
 THEMES = common.THEMES
 gql = common.gql
-xml_escape = common.xml_escape
 atomic_write_text = common.atomic_write_text
 base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
@@ -342,18 +341,7 @@ def fmt_duration(hours):
 
 
 CARD_W = 520
-COL_N = 300        # merged + still-open PRs, right-anchored
-COL_TIME = 390     # mean wait, right-anchored
-COL_SCORE = 500    # responsiveness score, right-anchored
-BAR_X = 20
-BAR_MAX_W = CARD_W - 2 * BAR_X  # rating bar at 100% = top score
 SCORE_MAX = 10.0  # displayed score of the leader; the rest scale to it
-REPO_CHARS = 34  # owner/name truncation budget
-ROW_H = 22
-
-
-def truncate(s, n):
-    return s if len(s) <= n else s[:n - 1] + "…"
 
 
 def plural(n, word):
@@ -361,30 +349,11 @@ def plural(n, word):
 
 
 def render_rows(C, y, scored):
-    parts = [
-        f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="10">repo</text>'
-        f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">PRs</text>'
-        f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">avg wait</text>'
-        f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["dim"]}" font-size="10">responsiveness</text>']
-    y += 17
-    if not scored:
-        parts.append(f'<text x="20" y="{y}" fill="{C["dim"]}" font-size="11">'
-                     f'no external PRs yet</text>')
-        return parts, y + 16
-    for row in scored:
-        bar_w = max(row.score / SCORE_MAX * BAR_MAX_W, 2)
-        parts.append(
-            f'<text x="20" y="{y}" fill="{C["fg"]}" font-size="11">'
-            f'{xml_escape(truncate(row.repo, REPO_CHARS))}</text>'
-            f'<text x="{COL_N}" y="{y}" text-anchor="end" fill="{C["cyan"]}" font-size="11">{row.n}</text>'
-            f'<text x="{COL_TIME}" y="{y}" text-anchor="end" fill="{C["gold"]}" font-size="11">{fmt_duration(row.hours)}</text>'
-            f'<text x="{COL_SCORE}" y="{y}" text-anchor="end" fill="{C["green"]}" font-size="11" font-weight="500">{row.score:.2f}</text>'
-            # rating bar: length = score normalized to the leader (row #1 =
-            # full width), same Dota-hero-stats style as the impact card
-            f'<rect x="{BAR_X}" y="{y + 5}" width="{BAR_MAX_W}" height="3" rx="1.5" fill="{C["border"]}" fill-opacity="0.35"/>'
-            f'<rect x="{BAR_X}" y="{y + 5}" width="{bar_w:.1f}" height="3" rx="1.5" fill="{C["green"]}"/>')
-        y += ROW_H
-    return parts, y
+    rows = [common.TableRow(row.repo, row.score, (row.n, fmt_duration(row.hours)))
+            for row in scored]
+    return common.render_score_table(
+        C, y, rows, [(300, 'PRs', C['cyan']), (390, 'avg wait', C['gold'])],
+        score_label='responsiveness', accent=C['green'], empty='no external PRs yet')
 
 
 def render_responsiveness(C, scored):

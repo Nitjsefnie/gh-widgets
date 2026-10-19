@@ -684,15 +684,29 @@ class CacheShape(unittest.TestCase):
         self.assertNotIn("ours", loaded["ourloc"]["outside/project"])
 
 
+class ScoreTable(unittest.TestCase):
+    def test_headers_rows_bars_empty_anchor_cut_and_truncation(self):
+        for rows, options, expected, y in (
+                ([common.TableRow('a<&', 2.5, ['<1 min']), common.TableRow('hidden', 10, ['99'])], {'top_n': 1, 'relative': True}, ['<text x="20" y="105" fill="#c0caf5" font-size="11">a&lt;&amp;</text><text x="300" y="105" text-anchor="end" fill="#7aa2f7" font-size="11"><1 min</text><text x="500" y="105" text-anchor="end" fill="#9ece6a" font-size="11" font-weight="500">2.50</text><rect x="20" y="110" width="480" height="3" rx="1.5" fill="#2a2e42" fill-opacity="0.35"/><rect x="20" y="110" width="120.0" height="3" rx="1.5" fill="#9ece6a"/>'], 127),
+                ([common.TableRow('x' * 34, 3.145, ['7']), common.TableRow('y' * 35, 0, ['0'])], {}, ['<text x="20" y="105" fill="#c0caf5" font-size="11">xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</text><text x="300" y="105" text-anchor="end" fill="#7aa2f7" font-size="11">7</text><text x="500" y="105" text-anchor="end" fill="#9ece6a" font-size="11" font-weight="500">3.15</text><rect x="20" y="110" width="480" height="3" rx="1.5" fill="#2a2e42" fill-opacity="0.35"/><rect x="20" y="110" width="151.0" height="3" rx="1.5" fill="#9ece6a"/>', '<text x="20" y="127" fill="#c0caf5" font-size="11">yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…</text><text x="300" y="127" text-anchor="end" fill="#7aa2f7" font-size="11">0</text><text x="500" y="127" text-anchor="end" fill="#9ece6a" font-size="11" font-weight="500">0.00</text><rect x="20" y="132" width="480" height="3" rx="1.5" fill="#2a2e42" fill-opacity="0.35"/><rect x="20" y="132" width="2.0" height="3" rx="1.5" fill="#9ece6a"/>'], 149),
+                ([], {}, ['<text x="20" y="105" fill="#7a82a2" font-size="11">nothing here</text>'], 121),
+                ([common.TableRow('cut', 1, ['1'])], {'top_n': 0}, ['<text x="20" y="105" fill="#7a82a2" font-size="11">nothing here</text>'], 121),
+                ([common.TableRow('zero', 0, ['0'])], {'relative': True}, ['<text x="20" y="105" fill="#c0caf5" font-size="11">zero</text><text x="300" y="105" text-anchor="end" fill="#7aa2f7" font-size="11">0</text><text x="500" y="105" text-anchor="end" fill="#9ece6a" font-size="11" font-weight="500">0.00</text><rect x="20" y="110" width="480" height="3" rx="1.5" fill="#2a2e42" fill-opacity="0.35"/><rect x="20" y="110" width="2.0" height="3" rx="1.5" fill="#9ece6a"/>'], 127)):
+            with self.subTest(options=options, rows=rows):
+                result = common.render_score_table(common.THEMES['tokyonight'], 88, rows, [(300, 'count', '#7aa2f7')], score_label='rating', accent='#9ece6a', empty='nothing here', **options)
+                self.assertEqual(result, (['<text x="20" y="88" fill="#7a82a2" font-size="10">repo</text><text x="300" y="88" text-anchor="end" fill="#7a82a2" font-size="10">count</text><text x="500" y="88" text-anchor="end" fill="#7a82a2" font-size="10">rating</text>'] + expected, y))
+
+
 class VersionContract(unittest.TestCase):
     def test_every_script_pins_the_current_version(self):
         # A partial copy to /usr/local/bin must fail loudly, which only works
         # if the scripts' REQUIRED_COMMON tracks COMMON_VERSION.
         here = Path(__file__).parent
         for name in ("render.py", "render-impact.py",
-                     "render-responsiveness.py", "render-stars.py"):
+                     "render-responsiveness.py", "render-stars.py",
+                     "render-popularity.py"):
             src = (here / name).read_text()
-            self.assertIn(f"REQUIRED_COMMON = {common.COMMON_VERSION}", src,
+            self.assertIn(f"REQUIRED_COMMON = {common.COMMON_VERSION}", src.splitlines(),
                           f"{name} does not pin COMMON_VERSION")
 
 
