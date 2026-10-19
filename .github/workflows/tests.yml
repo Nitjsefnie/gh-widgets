@@ -12,13 +12,14 @@ name: tests
 #   now. The pinned requirement remains available to local pytest runs.
 #
 # The changes job owns path applicability, so workflow triggers stay
-# unfiltered by paths. Push is unfiltered by branch so working branches
-# without an open pull request still receive CI.
+# unfiltered by paths. Push runs only on main; working branches receive CI
+# by opening a pull request, including a draft pull request.
 
 on:
   push:
-    # Deliberately no branch or path filter: changes classifies paths,
-    # and branches without a pull request still receive CI.
+    # Main pushes run CI; open a (draft) pull request for working branches.
+    # Paths stay unfiltered here: changes owns path applicability.
+    branches: [main]
   pull_request:
     # Read-only by construction: pull_request tokens are read-only on a
     # fork, and every checkout below disables persisted credentials.
