@@ -215,10 +215,18 @@ jobs:
                   refuse("coverage measured_at must be a non-empty string")
               if not number(new["floor"]) or not number(new["measured"]):
                   refuse("coverage floor and measured must be finite numbers")
-              if new["floor"] != new["measured"]:
-                  refuse("coverage floor must equal measured")
-              if new["floor"] > 100:
-                  refuse("coverage floor must be at most 100")
+              measured_tenths = round(new["measured"] * 10)
+              floor_tenths = round(new["floor"] * 10)
+              if measured_tenths / 10 != new["measured"] \
+                      or floor_tenths / 10 != new["floor"]:
+                  refuse("coverage floor and measured must have one decimal")
+              if measured_tenths - floor_tenths != 15:
+                  refuse("coverage must retain the 1.5-point fixed gap")
+              if new["measured"] > 100:
+                  refuse("coverage measured must be at most 100")
+              if not number(old["measured"]) \
+                      or measured_tenths <= round(old["measured"] * 10) + 15:
+                  refuse("coverage measured did not beat the 1.5-point hysteresis")
               if not number(old["floor"]) or new["floor"] <= old["floor"]:
                   refuse("coverage floor did not strictly improve")
               for key in ("statements", "files"):

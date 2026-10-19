@@ -1,8 +1,10 @@
 name: coverage-ratchet
 
-# Measures coverage against the committed floor and stages a candidate when
-# the measured floor is higher. ratchet-push.yml lands a strictly higher
-# candidate after this workflow succeeds; no automated path lowers the floor.
+# Measures coverage against the committed floor. A new measurement must beat
+# recorded measured by MORE than 1.5 points before raise writes a candidate,
+# whose floor keeps a fixed 1.5-point gap below that new measurement. Making
+# the automated floor equal measured would turn a 0.1-point dip red.
+# ratchet-push.yml lands only a strictly higher floor after this run succeeds.
 # The old hand-edited fail-under literal in tests.yml rotted until it was
 # deleted or ignored; this workflow keeps the comparison tied to committed data.
 #
@@ -156,6 +158,9 @@ jobs:
         id: stage
         # A moved population still fails the `files` tripwire above. A human
         # re-derives that record before any candidate can be staged.
+        # Raise already enforces >1.5 points above recorded measured and the
+        # fixed gap; this step uploads only an actual floor climb. A smaller
+        # improvement leaves the candidate byte-identical and stages nothing.
         env:
           GH_TOKEN: ${{ github.token }}
           RATCHET_BEFORE: ${{ github.event.before }}
