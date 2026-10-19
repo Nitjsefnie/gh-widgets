@@ -17,13 +17,16 @@ writes, so neither this script nor its tests ever shells out to coverage:
 the measured file count to match the committed record. With matching counts,
 measured >= floor is a pass; anything less exits 1 naming the two numbers.
 
-`raise` produces a candidate floor file: floor := measured, but ONLY when
-measured is strictly above the floor already committed. The main workflow runs
-it against a copy of the committed file, keeps the `coverage-floor-candidate`
-artifact for review, and stages the strict climb for ratchet-push.yml.
-There is no branch anywhere in this file that writes a smaller number than it
-read, so the one direction a ratchet must never move cannot be reached by
-adding a flag.
+`raise` follows the fleet calibration rule: recorded `measured` rises only
+when the new measurement beats it by MORE than RAISE_HYSTERESIS (1.5 points).
+A raise writes floor := measured - CALIBRATION_GAP (also 1.5 points). Setting
+the automated floor equal to measured would turn any 0.1-point dip red.
+Lower or within-hysteresis measurements leave every byte untouched. Recorded
+`measured` is the last measurement that raised or re-derived the record.
+The main workflow runs this against a copy, keeps the
+`coverage-floor-candidate` artifact, and stages only a strictly higher floor.
+Neither the floor nor recorded measured can move down through this writer;
+the one direction a ratchet must never move cannot be reached by adding a flag.
 
 Both subcommands refuse outright when the measurement covers a different
 NUMBER OF FILES than the committed record does. A percentage is a ratio, so adding one
@@ -58,6 +61,8 @@ from typing import NamedTuple, TypeGuard
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_FLOOR_FILE = REPO_ROOT / "gate/coverage-floor.json"
 SUPPORTED_SCHEMA = 1
+RAISE_HYSTERESIS = 1.5
+CALIBRATION_GAP = 1.5
 
 # The keys a human owns. `raise` copies the committed document and overwrites
 # only the numbers and the provenance, so these four survive a raise
@@ -298,21 +303,30 @@ def raise_floor(measurement: Measurement, floor_path: Path,
                 commit: str | None = None) -> int:
     """Move the floor up over a matching population, never down. 0 either way.
 
-    With comparable file counts, `measured <= floor` exits without writing.
-    Every other key in the document is carried over from what was committed,
+    With comparable file counts, only a measurement more than the hysteresis
+    above recorded `measured` can raise; the new floor keeps the fixed gap.
+    Authored keys are carried over from what was committed,
     so a raise cannot rewrite the population it measured, the cell it was
     measured on, or the reason the floor exists.
     """
     document = read_committed(floor_path)
     _check_population(measurement, document, floor_path)
     floor = float(document["floor"])
-    if measurement.percent <= floor:
-        print(f"floor stays at {floor}: measured {measurement.percent} is not "
-              "above it, and a ratchet only moves in one direction")
+    if not _is_number(document["measured"]) or not math.isfinite(document["measured"]):
+        raise RatchetError(f"{floor_path} measured must be a finite number")
+    # The measurement grid is tenths; subtraction in floats can lose a tenth.
+    measured = round(measurement.percent * 10)
+    recorded = round(document["measured"] * 10)
+    new_floor = (measured - round(CALIBRATION_GAP * 10)) / 10
+    if measured <= recorded + round(RAISE_HYSTERESIS * 10) or new_floor <= floor:
+        print(f"floor stays at {floor}: measured {measurement.percent} does not "
+              f"justify a climb beyond recorded {document['measured']} with "
+              f"{RAISE_HYSTERESIS}-point hysteresis; "
+              "a ratchet only moves in one direction")
         return 0
 
     raised = dict(document)
-    raised["floor"] = measurement.percent
+    raised["floor"] = new_floor
     raised["measured"] = measurement.percent
     raised["statements"] = measurement.statements
     raised["missing"] = measurement.missing
@@ -325,8 +339,9 @@ def raise_floor(measurement: Measurement, floor_path: Path,
     # escape on the first raise and make the diff unreadable.
     _atomic_write(floor_path,
                   json.dumps(raised, indent=2, ensure_ascii=False) + "\n")
-    print(f"raised the floor {floor} -> {measurement.percent} "
-          f"({measurement.statements - measurement.missing}/"
+    print(f"raised the floor {floor} -> {new_floor} "
+          f"(measured {measurement.percent}, fixed gap {CALIBRATION_GAP}; "
+          f"{measurement.statements - measurement.missing}/"
           f"{measurement.statements} statements over "
           f"{measurement.files} file(s), commit {raised['measured_commit']})")
     return 0
@@ -339,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     for name, help_text in (("gate", "fail if coverage is below the floor"),
-                            ("raise", "move the floor up to the measurement")):
+                            ("raise", "raise beyond hysteresis with a fixed gap")):
         sub = subcommands.add_parser(name, help=help_text)
         sub.add_argument("--coverage-json", required=True, metavar="PATH",
                          help="the file `coverage json -o` writes")

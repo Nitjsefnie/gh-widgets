@@ -1421,62 +1421,40 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertIn("rejected while main stood still", result.stderr)
         self.assertEqual(summary, "")
 
-    @REQUIRES_POSIX_SHELL
-    def test_inline_data_validator_accepts_tightening_and_rejects_looseners(self):
+    def test_inline_coverage_validator_enforces_hysteresis_gap_and_counts(self):
         script = self._validator()
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-validator-") as tmp:
-            root = Path(tmp)
-            data = root / "artifact"
-            repo = root / "main"
-            (data).mkdir()
+        with tempfile.TemporaryDirectory(prefix="ghw-coverage-validator-") as tmp:
+            data, repo = Path(tmp) / "artifact", Path(tmp) / "main"
+            data.mkdir()
             (repo / "gate").mkdir(parents=True)
-
-            coverage = json.loads((REPO_ROOT / "gate/coverage-floor.json")
-                                  .read_text(encoding="utf-8"))
-            coverage.update(statements=100, missing=2, floor=98, measured=98)
-            coverage_candidate = dict(coverage)
-            coverage_candidate["missing"] = 0
-            coverage_candidate["floor"] = 100
-            coverage_candidate["measured"] = coverage_candidate["floor"]
-            coverage_candidate["measured_commit"] = "a" * 40
-            coverage_candidate["measured_at"] = "2026-10-19T00:00:00Z"
-            (repo / "gate/coverage-floor.json").write_text(
-                json.dumps(coverage), encoding="utf-8")
-            (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
-            (data / "coverage-floor.json").write_text(
-                json.dumps(coverage_candidate), encoding="utf-8")
-            accepted = self._run_validator(script, data, repo)
-            self.assertEqual(accepted.returncode, 0,
-                             accepted.stdout + accepted.stderr)
-            self.assertEqual(accepted.stdout.strip(), "coverage-floor.json")
-
-            for missing, percent, message in (
-                    (coverage_candidate["statements"] + 1, 99,
-                     "between zero and statements"),
-                    (0, 99, "inconsistent with its counts")):
-                coverage_candidate["missing"] = missing
-                coverage_candidate["floor"] = coverage_candidate["measured"] = percent
-                (data / "coverage-floor.json").write_text(
-                    json.dumps(coverage_candidate), encoding="utf-8")
-                refused = self._run_validator(script, data, repo)
-                self.assertEqual(refused.returncode, 1)
-                self.assertIn(message, refused.stderr)
-
-            coverage_candidate["floor"] = coverage_candidate["measured"] = 101
-            (data / "coverage-floor.json").write_text(
-                json.dumps(coverage_candidate), encoding="utf-8")
-            refused = self._run_validator(script, data, repo)
-            self.assertEqual(refused.returncode, 1)
-            self.assertIn("at most 100", refused.stderr)
-
-            coverage_candidate["floor"] = coverage_candidate["measured"] = \
-                coverage["floor"] + 0.1
-            coverage_candidate["measured_commit"] = "b" * 40
-            (data / "coverage-floor.json").write_text(
-                json.dumps(coverage_candidate), encoding="utf-8")
-            refused = self._run_validator(script, data, repo)
-            self.assertEqual(refused.returncode, 1)
-            self.assertIn("differs from base.txt", refused.stderr)
+            coverage = json.loads((REPO_ROOT / "gate/coverage-floor.json").read_text())
+            coverage.update(statements=1000, missing=154, floor=84.6, measured=84.6)
+            (repo / "gate/coverage-floor.json").write_text(json.dumps(coverage))
+            (data / "base.txt").write_text("a" * 40 + "\n")
+            candidate = {**coverage, "measured_commit": "a" * 40,
+                         "measured_at": "2026-10-19T00:00:00Z",
+                         "floor": 98.5, "measured": 100, "missing": 0}
+            cases = (
+                ({}, 0, ""),
+                ({"floor": 84.7, "measured": 86.2, "missing": 138}, 0, ""),
+                ({"floor": 86.2, "measured": 86.2}, 1, "fixed gap"),
+                ({"floor": 84.4, "measured": 85.9}, 1, "hysteresis"),
+                ({"floor": 84.6, "measured": 86.1}, 1, "hysteresis"),
+                ({"floor": 84.8, "measured": 86.2}, 1, "fixed gap"),
+                ({"floor": 84.71, "measured": 86.21}, 1, "one decimal"),
+                ({"missing": 1001}, 1, "between zero and statements"),
+                ({"floor": 97.5, "measured": 99}, 1, "inconsistent with its counts"),
+                ({"floor": 99.5, "measured": 101}, 1, "at most 100"),
+                ({"measured_commit": "b" * 40}, 1, "differs from base.txt"),
+            )
+            for changes, status, message in cases:
+                with self.subTest(changes=changes):
+                    (data / "coverage-floor.json").write_text(json.dumps({**candidate, **changes}))
+                    result = self._run_validator(script, data, repo)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertIn(message, result.stderr)
+                    if status == 0:
+                        self.assertEqual(result.stdout.strip(), "coverage-floor.json")
 
     def test_inline_speed_validator_accepts_tightening_and_refuses_looseners(self):
         script = self._validator()

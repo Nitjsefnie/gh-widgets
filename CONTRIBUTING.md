@@ -222,12 +222,19 @@ is the only instruction here that has no local substitute.
 pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
 workflows, so leaving them out reported coverage for a smaller program than
-the one that ships. The floor lives in `gate/coverage-floor.json` as committed data. When measured coverage exceeds it,
-`coverage-ratchet.yml` stages the measured floor and the SHA it measured. After
+the one that ships. The floor lives in `gate/coverage-floor.json` as committed data.
+The recorded `measured` is the last measurement that raised or re-derived the
+record. `raise` writes only when a new measurement beats recorded `measured`
+by MORE than the 1.5-point hysteresis, and sets `floor = measured - 1.5`, the
+fixed calibration gap. An automated floor equal to measured would turn any
+0.1-point dip red. Lower and within-hysteresis measurements leave the record
+untouched. `coverage-ratchet.yml` stages only a strictly higher candidate floor
+and the SHA it measured. After
 the full workflow succeeds, `ratchet-push.yml` validates the artifact and
 commits the strictly higher floor to `main`. The `coverage-floor-candidate`
 artifact remains available to inspect; `scripts/ci/coverage_ratchet.py raise`
-still only writes a candidate at or above the value it read. Raise coverage by
+keeps this hysteresis and fixed gap. The current 84.6/84.6 record needs no hand
+edit: the first qualifying 86.2 measurement yields an 84.7 floor. Raise coverage by
 writing tests; never edit a floor to fit a result.
 
 Adding or removing a source module moves the measured population. The `files`

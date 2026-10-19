@@ -52,13 +52,8 @@ def _report(percent=72.0, statements=2910, missing=705, files=13):
     """A `coverage json` report shaped like the one coverage really writes.
 
     SYNTHETIC. These defaults are not the repository's coverage and are never
-    compared against `coverage-floor.json` — the only document those numbers
-    could contradict is the real one, and it is read from disk by the cases in
-    TestTheCommittedFileIsTheOneTheGateReads. They match the current population
-    (13 files, 2910 statements, 705 missing) so that a reader skimming this file
-    for "what does the repository measure" finds the current figures rather
-    than figures from three generations ago, which is what a stale fixture
-    here looks like to anyone who has not been told otherwise.
+    compared against `coverage-floor.json`. Real repository measurements are
+    read by TestTheCommittedFileIsTheOneTheGateReads, not these fixtures.
     """
     names = [f"module_{index}.py" for index in range(files)]
     return {
@@ -259,8 +254,8 @@ class TestRaiseNeverLowers(_Case):
         self.assertEqual(err, "")
 
     def test_a_measurement_equal_to_the_floor_writes_nothing(self):
-        # "Strictly above" is the condition. Equal is not above, and a
-        # rewrite on an equal measurement would make every run a commit.
+        # Equal recorded measured cannot clear the hysteresis; rewriting it
+        # would make every run a commit.
         self.write_committed(floor=71.9)
         before = self.floor_path.read_bytes()
         self.write_report(percent=71.9)
@@ -269,16 +264,42 @@ class TestRaiseNeverLowers(_Case):
         self.assertEqual(self.floor_path.read_bytes(), before)
 
     def test_no_sequence_of_raises_can_walk_the_floor_down(self):
-        # The real property: whatever order the measurements arrive in, the
-        # committed floor is the MAXIMUM of everything ever handed to raise.
-        floor = 50.0
+        self.write_committed(floor=50.0, measured=50.0)
         for percent in (80.0, 60.0, 75.0, 40.0, 90.0, 90.0):
-            self.write_committed(floor=floor)
+            previous = self.committed()["floor"]
             self.write_report(percent=percent)
             code, _, _ = self.run_verb("raise", commit=SHA)
             self.assertEqual(code, 0)
-            floor = self.committed()["floor"]
-        self.assertEqual(floor, 90.0)
+            self.assertGreaterEqual(self.committed()["floor"], previous)
+        self.assertEqual(self.committed()["floor"], 88.5)
+        self.assertEqual(self.committed()["measured"], 90.0)
+
+    def test_a_raise_keeps_the_fixed_gap_instead_of_floor_equal_measured(self):
+        self.write_committed(floor=84.6, measured=84.6)
+        self.write_report(percent=86.2, statements=1000, missing=138)
+
+        code, out, err = self.run_verb("raise", commit=SHA)
+
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.committed()["measured"], 86.2)
+        self.assertEqual(self.committed()["floor"], 84.7)
+        self.write_report(percent=86.1, statements=1000, missing=139)
+        code, out, err = self.run_verb("gate")
+        self.assertEqual(code, 0, out + err)
+
+    def test_within_hysteresis_never_writes_even_above_the_recorded_floor(self):
+        for floor in (84.6, 83.1):
+            for percent in (84.5, 84.6, 84.7, 85.9, 86.1):
+                with self.subTest(floor=floor, measured=percent):
+                    self.write_committed(floor=floor, measured=84.6)
+                    before = self.floor_path.read_bytes()
+                    self.write_report(percent=percent)
+
+                    code, out, err = self.run_verb("raise", commit=SHA)
+
+                    self.assertEqual(code, 0, out + err)
+                    self.assertEqual(self.floor_path.read_bytes(), before)
+                    self.assertIn("hysteresis", out)
 
 
 class TestAMovedPopulationIsRefused(_Case):
@@ -401,7 +422,7 @@ class TestRaisePreservesTheHumanKeys(_Case):
                 self.assertEqual(self.after[key], self.before[key])
 
     def test_the_numbers_and_provenance_are_rewritten(self):
-        self.assertEqual(self.after["floor"], 88.0)
+        self.assertEqual(self.after["floor"], 86.5)
         self.assertEqual(self.after["measured"], 88.0)
         self.assertEqual(self.after["statements"], 3000)
         self.assertEqual(self.after["missing"], 360)
@@ -423,13 +444,13 @@ class TestRaiseThenGateRoundTrip(_Case):
         self.assertEqual(code, 0)
         code, out, err = self.run_verb("gate")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("measured 83.2 against a floor of 83.2", out)
+        self.assertIn("measured 83.2 against a floor of 81.7", out)
 
     def test_a_fresh_gate_still_reads_green_after_a_raise(self):
         self.write_committed(floor=10.0, measured=10.0)
         self.write_report(percent=83.25, statements=400, missing=67)
         self.run_verb("raise", commit=SHA)
-        self.assertEqual(ratchet.read_committed(self.floor_path)["floor"], 83.2)
+        self.assertEqual(ratchet.read_committed(self.floor_path)["floor"], 81.7)
         code, _, _ = self.run_verb("gate")
         self.assertEqual(code, 0)
 
@@ -485,6 +506,16 @@ class TestAMalformedCommittedFileIsRefused(_Case):
         self.assertEqual(code, 2)
         self.assertIn("floor", err)
 
+    def test_raise_refuses_an_invalid_recorded_measurement_before_comparing(self):
+        for measured in ("84.6", True, None, float("inf")):
+            with self.subTest(measured=measured):
+                self.write_committed(measured=measured)
+                before = self.floor_path.read_bytes()
+                code, _, err = self.run_verb("raise", commit=SHA)
+                self.assertEqual(code, 2)
+                self.assertIn("measured must be a finite number", err)
+                self.assertEqual(self.floor_path.read_bytes(), before)
+
     def test_an_absent_committed_file_is_refused(self):
         self.floor_path.unlink(missing_ok=True)
         code, _, err = self.run_verb("gate")
@@ -529,7 +560,7 @@ class TestTheWriteIsAtomicAndPrivate(_Case):
         for path in litter:
             path.write_text('{"floor": 0.0}\x00', encoding="utf-8")
         self.run_verb("raise", commit=SHA)
-        self.assertEqual(self.committed()["floor"], 88.0)
+        self.assertEqual(self.committed()["floor"], 86.5)
         self.assertEqual(set(self.root.glob(".*.tmp")), set(litter))
 
     def test_the_writer_asks_for_a_world_readable_mode(self):
