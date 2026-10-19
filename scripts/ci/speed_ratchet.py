@@ -80,9 +80,14 @@ def _read_head(reports: list[Path], population: dict, name: str) -> tuple:
     try:
         scans = [compare.scan_junit(path) for path in reports]
         head = compare.fold_scans(scans)
-        metric = compare._resolve_metric(reports, name)
-        compare._check_metric(population["metric"], metric)
-        wall = compare._fold_wall(reports)
+        # These use the same comparator helpers that `_compare` uses so this
+        # writer cannot fold or qualify a different head value.
+        metric = compare._resolve_metric(  # pylint: disable=protected-access
+            reports, name)
+        compare._check_metric(  # pylint: disable=protected-access
+            population["metric"], metric)
+        wall = compare._fold_wall(  # pylint: disable=protected-access
+            reports)
     except (compare.ComparisonError, OSError, ValueError) as exc:
         raise RatchetError(f"cannot read {name.replace('-', ' ')} reports: "
                            f"{exc}") from exc
@@ -108,6 +113,25 @@ def _check_recorded_entries(head: dict, recorded: dict, name: str) -> None:
             + ", ".join(unknown))
 
 
+def _tighten_map(recorded: dict, candidate: dict, head: dict,
+                 population: str, map_name: str) -> list[str]:
+    """Lower one map's maxima to passing head values, preserving its other fields."""
+    _check_recorded_entries(head, recorded, population)
+    changes = []
+    for node, head_value in head.items():
+        envelope = recorded.get(node)
+        if envelope is None or head_value >= envelope["max"]:
+            continue
+        candidate_envelope = candidate.get(node)
+        if candidate_envelope is None:
+            continue
+        candidate_envelope["max"] = head_value
+        changes.append(
+            f"{population}:{map_name}:{node} "
+            f"{envelope['max']} -> {head_value}")
+    return changes
+
+
 def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
     """Return a valid down-only candidate and the maxima it tightened.
 
@@ -118,26 +142,16 @@ def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
     """
     candidate = json.loads(json.dumps(document))
     changes = []
-    for name, (head_entries, head_wall) in measurements.items():
+    for name, head_values in measurements.items():
         recorded_population = baseline.read_population(document, name)
         candidate_population = candidate["populations"][name]
-        for map_name, head_values in (("entries", head_entries),
-                                      ("wall", head_wall)):
-            recorded = recorded_population[map_name]
-            _check_recorded_entries(head_values, recorded, name)
-            for node, head_value in head_values.items():
-                envelope = recorded.get(node)
-                if envelope is None or head_value >= envelope["max"]:
-                    continue
-                candidate_envelope = candidate_population[map_name].get(node)
-                if candidate_envelope is None:
-                    # This is the comparator's shared-set case: no recorded
-                    # wall envelope means there is no wall threshold to tighten.
-                    continue
-                candidate_envelope["max"] = head_value
-                changes.append(
-                    f"{name}:{map_name}:{node} "
-                    f"{envelope['max']} -> {head_value}")
+        entries, wall = head_values
+        changes.extend(_tighten_map(
+            recorded_population["entries"], candidate_population["entries"],
+            entries, name, "entries"))
+        changes.extend(_tighten_map(
+            recorded_population["wall"], candidate_population["wall"],
+            wall, name, "wall"))
     return candidate, changes
 
 
@@ -168,13 +182,9 @@ def update(path: Path, output: Path | None, unit_reports: list[Path],
            renderer_population: Path) -> list[str]:
     """Compute and optionally write one tighten; no-op leaves every file alone."""
     document = baseline.read_baseline(path)
-    measurements = {}
-    for name, reports, population_file in (
+    measurements = _read_measurements(document, (
             ("unit-suite", unit_reports, unit_population),
-            ("renderer-workloads", renderer_reports, renderer_population)):
-        recorded_population = baseline.read_population(document, name)
-        _check_population(recorded_population, population_file, name)
-        measurements[name] = _read_head(reports, recorded_population, name)
+            ("renderer-workloads", renderer_reports, renderer_population)))
 
     candidate, changes = tighten(document, measurements)
     if not changes:
@@ -186,6 +196,16 @@ def update(path: Path, output: Path | None, unit_reports: list[Path],
     for change in changes:
         print(f"tightened {change}")
     return changes
+
+
+def _read_measurements(document: dict, populations: tuple) -> dict:
+    """Read each report group and verify its collected population digest."""
+    measurements = {}
+    for name, reports, population_file in populations:
+        recorded_population = baseline.read_population(document, name)
+        _check_population(recorded_population, population_file, name)
+        measurements[name] = _read_head(reports, recorded_population, name)
+    return measurements
 
 
 def _parser() -> argparse.ArgumentParser:
