@@ -20,7 +20,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -851,6 +853,46 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.output_path.exists())
         self.assertEqual(self.baseline_path.read_bytes(), before)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_tightening_preserves_the_existing_records_permission_bits(self):
+        self.output_path = self.baseline_path
+        self._write_reports()
+        for mode in (0o600, 0o664):
+            with self.subTest(mode=oct(mode)):
+                self._write_baseline()
+                self.baseline_path.chmod(mode)
+
+                result = self._run()
+
+                self.assertEqual(result.returncode, 0,
+                                 result.stdout + result.stderr)
+                self.assertEqual(stat.S_IMODE(self.baseline_path.stat().st_mode),
+                                 mode)
+                updated = json.loads(self.baseline_path.read_text())
+                self.assertEqual(updated["populations"]["unit-suite"]["entries"]
+                                 [self.UNIT_NODE]["max"], 9.0)
+
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
+    def test_new_output_uses_the_process_creation_mode_and_restores_umask(self):
+        self._write_reports()
+        for mask, expected in ((0o077, 0o600), (0o027, 0o640)):
+            with self.subTest(umask=oct(mask)):
+                self.output_path.unlink(missing_ok=True)
+                previous = os.umask(mask)
+                try:
+                    result = self._run()
+                    probe = self.root / "creation-probe"
+                    probe.unlink(missing_ok=True)
+                    probe.write_bytes(b"probe")
+                finally:
+                    os.umask(previous)
+
+                self.assertEqual(result.returncode, 0,
+                                 result.stdout + result.stderr)
+                self.assertEqual(stat.S_IMODE(self.output_path.stat().st_mode),
+                                 expected)
+                self.assertEqual(stat.S_IMODE(probe.stat().st_mode), expected)
 
     def test_any_positive_improvement_tightens_without_hysteresis(self):
         self._write_reports(unit=9.999999)
