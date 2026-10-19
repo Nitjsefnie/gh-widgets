@@ -994,6 +994,69 @@ class LanguageColors(unittest.TestCase):
             self.assert_readable(theme, colors)
             self.assertEqual(colors, ['#FfCC00', '#00CCFF'])
 
+    def test_contrast_safe_pair_just_below_distance_threshold_is_adjusted(self):
+        source = ['#888888', '#bdbdbd']
+        distance = math.dist(*map(self.lab, source))
+        # This premise kills a lowered constant (e.g. 5), independently of output.
+        self.assertLess(distance, render.LANGUAGE_MIN_DELTA_E)
+        for theme in render.THEMES.values():
+            for color in source:
+                for surface in ('border', 'bg', 'bg2'):
+                    self.assertGreaterEqual(self.contrast(color, theme[surface]),
+                                            render.LANGUAGE_MIN_CONTRAST)
+            _, _, colors = self.rendered(theme, source)
+            self.assertNotEqual(colors, source)
+            self.assert_readable(theme, colors)
+
+    def test_contrast_safe_pair_just_above_distance_threshold_is_preserved(self):
+        source = ['#888888', '#bebebe']
+        distance = math.dist(*map(self.lab, source))
+        # This premise kills a raised constant; equality kills enforcement +1.
+        self.assertGreater(distance, render.LANGUAGE_MIN_DELTA_E)
+        for theme in render.THEMES.values():
+            for color in source:
+                for surface in ('border', 'bg', 'bg2'):
+                    self.assertGreaterEqual(self.contrast(color, theme[surface]),
+                                            render.LANGUAGE_MIN_CONTRAST)
+            _, _, colors = self.rendered(theme, source)
+            self.assertEqual(colors, ['#888888', '#bebebe'])
+            self.assert_readable(theme, colors)
+
+    @staticmethod
+    def unpainted_width(rect, following):
+        """Subtract every later rectangle, respecting SVG paint order."""
+        start = float(rect.attrib['x'])
+        intervals = [(start, start + float(rect.attrib['width']))]
+        for overlay in following:
+            left = float(overlay.attrib['x'])
+            right = left + float(overlay.attrib['width'])
+            intervals = [(a, min(b, left)) for a, b in intervals if a < left] + [
+                (max(a, right), b) for a, b in intervals if b > right]
+        return sum(b-a for a, b in intervals)
+
+    def test_unequal_shares_keep_visible_segments_and_splits_inside_track(self):
+        theme = render.THEMES['tokyonight']
+        for shares in ((99.6, .3, .1), (.1, .3, 99.6), (100, 1e-12, 1e-12),
+                       (0, 100, 0), (0, 0, 0)):
+            with self.subTest(shares=shares):
+                langs = [(name, pct, pct, color) for name, pct, color in zip(
+                    ('A', 'B', 'C'), shares, ('#FfCC00', '#00CCFF', '#ff00ff'))]
+                root = ET.fromstring(render.render_languages(theme, langs))
+                rects = [r for r in root.findall('.//{http://www.w3.org/2000/svg}rect')
+                         if r.get('y') == '88']
+                track = next(r for r in rects if r.get('fill') == theme['border'])
+                left = float(track.attrib['x'])
+                right = left + float(track.attrib['width'])
+                bars = [r for r in rects if r.get('fill') not in (theme['border'], theme['bg'])]
+                gaps = [r for r in rects if r.get('fill') == theme['bg']]
+                positive = sum(pct > 0 for pct in shares)
+                self.assertEqual(len(bars), positive)
+                self.assertEqual(len(gaps), max(0, positive - 1))
+                for rect in bars + gaps:
+                    self.assertGreater(self.unpainted_width(rect, rects[rects.index(rect)+1:]), 0)
+                    self.assertGreaterEqual(float(rect.attrib['x']), left)
+                    self.assertLessEqual(float(rect.attrib['x']) + float(rect.attrib['width']), right)
+
     def test_gap_has_background_fill_and_two_pixel_width(self):
         theme = render.THEMES['tokyonight']
         root, bars, _ = self.rendered(theme, ['#FfCC00', '#00CCFF'])

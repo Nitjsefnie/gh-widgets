@@ -111,8 +111,13 @@ LANGUAGE_MAX_STEPS = 50
 # Both neutrals pass 3:1 on all themes; their L* span exceeds twice delta-E 20,
 # so at least one is separated from any single finalized predecessor.
 LANGUAGE_FALLBACK_COLORS = ("#888888", "#ffffff")
-# A two-pixel background split remains visible between neighboring segments.
+# Prefer a two-pixel background split where neighboring segments have room.
 LANGUAGE_GAP = 2
+# Keep one full pixel of each positive-share segment after both splits.
+LANGUAGE_MIN_VISIBLE = 1
+# Reserve two pixels before distributing proportional space: even vanishing
+# shares can spare half a pixel per side for a visible one-pixel split.
+LANGUAGE_MIN_SEGMENT = 2
 
 
 def load_cache(path):
@@ -757,21 +762,31 @@ def language_legend(C, top):
     return "".join(legend)
 
 
+def language_bar_widths(top, width):
+    """Reserve visible space for positive shares, then divide the remainder."""
+    positive = [(pct, color) for _, _, pct, color in top if pct > 0]
+    pct_sum = sum(pct for pct, _ in positive) or 1
+    remainder = width - LANGUAGE_MIN_SEGMENT * len(positive)
+    return [(LANGUAGE_MIN_SEGMENT + pct / pct_sum * remainder, color)
+            for pct, color in positive]
+
+
 def render_languages(C, langs):
     top = language_colors(C, langs[:5])
-    pct_sum = sum(p for _, _, p, _ in top) or 1
     bar_x, bar_w, y = 20, 380, 88
     rects = []
     rect_x = bar_x
-    for _, _, pct, color in top:
-        seg = (pct / pct_sum) * bar_w
-        rects.append(f'<rect x="{rect_x:.1f}" y="{y}" width="{seg:.1f}" height="10" fill="{xml_color(color)}"/>')
+    segments = []
+    for seg, color in language_bar_widths(top, bar_w):
+        rects.append(f'<rect x="{rect_x:.3f}" y="{y}" width="{seg:.3f}" height="10" fill="{xml_color(color)}"/>')
+        segments.append((rect_x, seg))
         rect_x += seg
-    # Paint splits after all segments, centered on their shared boundaries.
-    split_x = bar_x
-    for _, _, pct, _ in top[:-1]:
-        split_x += pct / pct_sum * bar_w
-        rects.append(f'<rect x="{split_x - LANGUAGE_GAP/2:.1f}" y="{y}" width="{LANGUAGE_GAP}" height="10" fill="{C["bg"]}"/>')
+    # Each neighbor contributes at most half its spare width to this split.
+    # Two splits therefore leave MIN_VISIBLE, and each stays inside the track.
+    for left, right in zip(segments, segments[1:]):
+        seg = min(LANGUAGE_GAP, left[1] - LANGUAGE_MIN_VISIBLE,
+                  right[1] - LANGUAGE_MIN_VISIBLE)
+        rects.append(f'<rect x="{right[0] - seg/2:.3f}" y="{y}" width="{seg:.3f}" height="10" fill="{C["bg"]}"/>')
     body = f"""
   <text x="20" y="34" fill="{C['cyan']}" font-size="14" font-weight="600">top languages</text>
   <text x="20" y="52" fill="{C['dim']}" font-size="11">by bytes of code, public repos</text>
