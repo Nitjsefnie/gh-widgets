@@ -631,8 +631,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                     base.replace(marker, declaration + marker, 1))
 
     def test_permission_fixture_isolation_removes_each_declaration_form(self):
-        # Plant into a clean workflow and require exact restoration, including
-        # preserving the job and its unrelated fields.
         base = _without_job_permissions(self.text)
         marker = "    runs-on: ubuntu-latest"
         declarations = {
@@ -758,7 +756,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                                      "${{ github.token }}")])
 
     def test_each_gh_word_spacing_spelling_is_caught(self):
-        # Shell continuations are removed before shlex decodes each word.
         marker = "          cp gate/coverage-floor.json"
         self.assertIn(marker, self.text)
         plants = {
