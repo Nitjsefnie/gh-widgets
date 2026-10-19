@@ -40,7 +40,71 @@ def response(data, link='', status=200):
     return result
 
 
+def git_repository(path, author=None):
+    """Construct a real bare history without changing configured git identity."""
+    subprocess.run(['git', 'init', '--bare', '--initial-branch=trunk', str(path)],
+                   check=True, capture_output=True)
+    if author is not None:
+        tree = subprocess.run(['git', '-C', str(path), 'hash-object', '-t', 'tree',
+                               '-w', '--stdin'], input=b'', check=True,
+                              capture_output=True).stdout.strip()
+        commit = (b'tree ' + tree + b'\nauthor ' + author.encode('utf-8')
+                  + b' <real@example.org> 1 +0000\n'
+                  b'committer Fixture <fixture@example.org> 1 +0000\n\nfixture\n')
+        oid = subprocess.run(['git', '-C', str(path), 'hash-object', '-t', 'commit',
+                              '-w', '--stdin'], input=commit, check=True,
+                             capture_output=True).stdout.decode().strip()
+        subprocess.run(['git', '-C', str(path), 'update-ref', 'refs/heads/trunk', oid],
+                       check=True, capture_output=True)
+    return repo(clone_url=path.as_uri())
+
+
 class Authors(unittest.TestCase):
+    def test_real_empty_git_repository_counts_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = git_repository(Path(directory) / 'empty.git')
+            self.assertEqual(popularity.outsider_commits(repository, USER, set()), 0)
+
+    def test_real_nonempty_history_with_missing_default_branch_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'history.git'
+            repository = git_repository(path, 'Real Person')
+            repository['default_branch'] = 'missing'
+            with self.assertRaisesRegex(RuntimeError, 'Owner/Repo'):
+                popularity.outsider_commits(repository, USER, set())
+            subprocess.run(['git', '-C', str(path), 'symbolic-ref', 'HEAD',
+                            'refs/heads/missing'], check=True, capture_output=True)
+            with self.assertRaisesRegex(RuntimeError, 'Owner/Repo'):
+                popularity.outsider_commits(repository, USER, set())
+
+    def test_real_corrupt_repository_is_not_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'corrupt.git'
+            repository = git_repository(path, 'Real Person')
+            (path / 'refs' / 'heads' / 'trunk').write_bytes(b'1' * 40 + b'\n')
+            with self.assertRaisesRegex(RuntimeError, 'Owner/Repo'):
+                popularity.outsider_commits(repository, USER, set())
+
+    def test_real_git_unicode_line_separators_are_author_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for index, author in enumerate(('Real\u2028Person', 'Real\u0085Person')):
+                with self.subTest(author=author):
+                    repository = git_repository(Path(directory) / f'history{index}.git', author)
+                    self.assertEqual(popularity.outsider_commits(repository, USER, set()), 1)
+
+    def test_malformed_git_records_fail_with_repository_context(self):
+        for data in (b'no-fields\0', b'name\x1femail\x1fextra\0', b'name\x1femail'):
+            def git(command, data=data, **kwargs):
+                if 'log' in command:
+                    output = data.decode() if kwargs.get('text') else data
+                    return subprocess.CompletedProcess(command, 0, output, b'')
+                return subprocess.CompletedProcess(command, 0, b'refs', b'')
+
+            with self.subTest(data=data), mock.patch.object(
+                    popularity.subprocess, 'run', side_effect=git):
+                with self.assertRaisesRegex(RuntimeError, 'Owner/Repo.*malformed'):
+                    popularity.outsider_commits(repo(), USER, set())
+
     def test_exact_exclusions_and_real_outsiders(self):
         emails = popularity.common.our_emails('Owner', 42, ['work@example.org'])
         cases = [
@@ -66,19 +130,22 @@ class Authors(unittest.TestCase):
     def test_clone_default_branch_count_and_cleanup(self):
         paths = []
 
-        def git(command, **_kwargs):
+        def git(command, **kwargs):
             if command[1] == 'clone':
                 self.assertIn('--filter=blob:none', command)
                 self.assertIn('--single-branch', command)
-                self.assertEqual(command[command.index('--branch') + 1], 'trunk')
                 self.assertEqual(command[-2], 'https://github.com/Owner/Repo.git')
                 paths.append(Path(command[-1]))
                 self.assertTrue(paths[-1].parent.exists())
                 return subprocess.CompletedProcess(command, 0, '', '')
+            if command[3] == 'show-ref':
+                return subprocess.CompletedProcess(command, 0, b'refs', b'')
             self.assertEqual(command, ['git', '-C', str(paths[-1]), 'log',
-                                       '--format=%an%x1f%ae'])
+                                       '-z', '--format=%an%x1f%ae',
+                                       'refs/remotes/origin/trunk', '--'])
+            self.assertFalse(kwargs['text'])
             return subprocess.CompletedProcess(command, 0,
-                                               'Owner\x1fa@b\nReal\x1fr@e\nReal\x1fr@e\n', '')
+                                               b'Owner\x1fa@b\0Real\x1fr@e\0Real\x1fr@e\0', b'')
 
         with mock.patch.object(popularity.subprocess, 'run', side_effect=git):
             for _ in range(2):
@@ -122,6 +189,51 @@ class Ranking(unittest.TestCase):
 
 
 class Acquisition(unittest.TestCase):
+    def test_weighted_score_components_have_independent_inputs(self):
+        repositories = [repo('Owner/Stars', stargazers_count=4, forks_count=0),
+                        repo('Owner/Forks', stargazers_count=0, forks_count=5),
+                        repo('Owner/Outsiders', stargazers_count=0, forks_count=0),
+                        repo('Owner/Cloners', stargazers_count=0, forks_count=0),
+                        repo('Owner/Visitors', stargazers_count=0, forks_count=0)]
+
+        def fetch(_token, path):
+            if path == '/user':
+                return USER, ''
+            uniques = 0
+            if path == '/repos/Owner/Cloners/traffic/clones':
+                uniques = 7
+            if path == '/repos/Owner/Visitors/traffic/views':
+                uniques = 11
+            return {'count': 9999, 'uniques': uniques}, ''
+
+        def outsiders(repository, _user, _emails):
+            return 3 if repository['full_name'] == 'Owner/Outsiders' else 0
+
+        with mock.patch.object(popularity, 'rest', side_effect=fetch), \
+                mock.patch.object(popularity, 'rest_pages', side_effect=[[], repositories]), \
+                mock.patch.object(popularity, 'outsider_commits', side_effect=outsiders):
+            _, scores = popularity.fetch_scores('t')
+        self.assertEqual(scores, [('Owner/Stars', 200), ('Owner/Forks', 200),
+                                  ('Owner/Outsiders', 15), ('Owner/Cloners', 14),
+                                  ('Owner/Visitors', 11)])
+
+    def test_fetched_profile_email_excludes_old_git_name_without_replacing_emails(self):
+        user = {**USER, 'email': 'Owner@Example.ORG'}
+        repository = repo(stargazers_count=0, forks_count=0)
+        pages = [response(user), response([]), response([repository]),
+                 response({'uniques': 0}), response({'uniques': 0})]
+        git = [subprocess.CompletedProcess([], 0, '', ''),
+               subprocess.CompletedProcess([], 0, b'refs', b''),
+               subprocess.CompletedProcess([], 0,
+                                           b'Old Name\x1fowner@example.org\0'
+                                           b'Other Name\x1fwork@example.org\0'
+                                           b'Past Name\x1f42+Owner@users.noreply.github.com\0', b'')]
+        with mock.patch.dict(os.environ, {'GH_EXTRA_EMAILS': 'work@example.org'}), \
+                mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=pages), \
+                mock.patch.object(popularity.subprocess, 'run', side_effect=git):
+            _, scores = popularity.fetch_scores('t')
+        self.assertEqual(scores, [('Owner/Repo', 0)])
+
     def test_owned_and_org_pages_filter_deduplicate_and_score_uniques(self):
         urls = []
         fixtures = {
@@ -246,7 +358,8 @@ class CardAndCLI(unittest.TestCase):
                      response({'count': 999, 'uniques': 7}),
                      response({'count': 999, 'uniques': 11})]
             git = [subprocess.CompletedProcess([], 0, '', ''),
-                   subprocess.CompletedProcess([], 0, 'Real\x1freal@example.org\n', '')]
+                   subprocess.CompletedProcess([], 0, b'refs', b''),
+                   subprocess.CompletedProcess([], 0, b'Real\x1freal@example.org\0', b'')]
             with mock.patch.object(sys, 'argv', argv), mock.patch.object(
                     popularity.urllib.request, 'urlopen', side_effect=pages), \
                     mock.patch.object(popularity.subprocess, 'run', side_effect=git):

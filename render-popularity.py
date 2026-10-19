@@ -88,6 +88,18 @@ def is_outsider(name, email, user, emails):
                 or name in (user['login'], user['name']))
 
 
+def parse_authors(data, repository):
+    """Read git's NUL-terminated byte records without newline normalization."""
+    records = data.split(b'\0')
+    if records[-1]:
+        raise RuntimeError(f'{repository}: malformed git author record (missing NUL)')
+    for record in records[:-1]:
+        fields = record.split(b'\x1f')
+        if len(fields) != 2:
+            raise RuntimeError(f'{repository}: malformed git author record (expected two fields)')
+        yield tuple(field.decode('utf-8', errors='surrogateescape') for field in fields)
+
+
 def outsider_commits(repository, user, emails):
     """Count default-branch authors in a fresh blobless clone, then remove it."""
     name = repository['full_name']
@@ -95,16 +107,28 @@ def outsider_commits(repository, user, emails):
         clone = str(Path(directory) / 'repo')
         try:
             subprocess.run(['git', 'clone', '--filter=blob:none', '--single-branch',
-                            '--branch', repository['default_branch'], '--',
-                            repository['clone_url'], clone],
-                           check=True, capture_output=True, text=True, encoding='utf-8')
-            log = subprocess.run(['git', '-C', clone, 'log', '--format=%an%x1f%ae'],
-                                 check=True, capture_output=True, text=True, encoding='utf-8')
+                            '--', repository['clone_url'], clone],
+                           check=True, capture_output=True)
+            refs = subprocess.run(['git', '-C', clone, 'show-ref', '--head'],
+                                  check=False, capture_output=True)
+            if refs.returncode == 1 and not refs.stdout and not refs.stderr:
+                # A broken remote HEAD can also produce a clone with no refs.
+                subprocess.run(['git', '-C', clone, 'symbolic-ref', 'HEAD'],
+                               check=True, capture_output=True)
+                remote = subprocess.run(['git', 'ls-remote', '--', repository['clone_url']],
+                                        check=True, capture_output=True)
+                if remote.stdout:
+                    raise RuntimeError(f'{name}: empty clone but remote has history')
+                return 0
+            refs.check_returncode()
+            branch = 'refs/remotes/origin/' + repository['default_branch']
+            log = subprocess.run(['git', '-C', clone, 'log', '-z', '--format=%an%x1f%ae',
+                                  branch, '--'],
+                                 check=True, capture_output=True, text=False)
         except (OSError, subprocess.CalledProcessError) as exc:
-            raise RuntimeError(f'{name}: git clone/log failed: {exc}') from exc
+            raise RuntimeError(f'{name}: git clone/history failed: {exc}') from exc
         return sum(is_outsider(author, email, user, emails)
-                   for author, email in (line.split('\x1f', 1)
-                                         for line in log.stdout.splitlines()))
+                   for author, email in parse_authors(log.stdout, name))
 
 
 # The acquisition sequence keeps the eligible population and score inputs together.
@@ -113,6 +137,8 @@ def fetch_scores(token):
     """Acquire all eligible user/org repositories and their complete scores."""
     user, _ = rest(token, '/user')
     emails = common.our_emails(user['login'], user['id'])
+    if user.get('email'):
+        emails = emails | {user['email'].lower()}
     orgs = rest_pages(token, '/user/orgs?per_page=100')
     repositories = rest_pages(token, '/user/repos?affiliation=owner&per_page=100')
     for org in orgs:
