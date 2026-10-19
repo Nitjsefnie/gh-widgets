@@ -1501,7 +1501,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             (data / "base.txt").write_text("a" * 40 + "\n")
             path = data / "comment-share.json"
             cases = [(accepted, 0, ""), ({}, 0, ""),
-                     ({"new.py": [0, 0]}, 0, ""),
+                     ({"new.py": [0, 0]}, 1, "total > 0"),
                      ({"same.py": [334, 1000]}, 1, "rose"),
                      ({"new.py": [-1, 3]}, 1, "non-negative"),
                      ({"new.py": [True, 3]}, 1, "non-negative"),
