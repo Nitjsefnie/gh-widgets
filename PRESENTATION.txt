@@ -20,7 +20,7 @@ Contribution graphs reward noise. `impact.svg` asks a harder question: *of the w
 Live Code means what it says: `git clone` each candidate repo (full history — blame needs it), blame it, count the lines still surviving under my authorship, delete the clone.
 
 ## :tools: Stack
-Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. GraphQL throughout. One exception: `render-impact.py` shells out to `git` and `git-fame` for the blame pass.
+Python **3.9+**, **stdlib only** — no `requirements.txt`, nothing to install. GraphQL throughout. One exception: `src/render-impact.py` shells out to `git` and `git-fame` for the blame pass.
 
 ```
 ┌──────────────┬─────────────────────┬──────────────────┐
@@ -77,3 +77,8 @@ Two more things that keep a scheduled renderer from lying to you quietly:
 :shield: **Fail-soft, in the right direction.** A corrupt or schema-mismatched cache falls back to a full fetch; a failed live fetch with a good cache renders from cache and *shows you the cache timestamp* rather than breaking the image. A stat widget that silently serves stale numbers is worse than one that visibly does.
 
 :calendar: And the reason a full-year contribution query isn't one query: GitHub answers it with `RESOURCE_LIMITS_EXCEEDED`. A cold cache walks 12 sequential monthly windows; a warm one refetches only the trailing 7 days and merges onto the cached ones.
+
+Repository layout: src/ holds renderers and runtime helpers, tests/ holds the
+unittest package, gate/ holds coverage and speed records, and requirements/
+holds pinned development tools. ghwidgets_data.py remains at the root for
+pinned consumers. Run python3 -m unittest discover -v from the repository root.

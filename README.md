@@ -60,18 +60,18 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 ### Why `install.sh` rather than `cp`
 
 `install.sh` stages an eleven-file deployment set: the five renderer entry
-points, `render-impact.py`'s `impact_loc.py` sibling and its `impact_clone.py`
-dependency, their shared `ghwidgets_common.py` runtime dependency and its
-`ghwidgets_cache.py` and `ghwidgets_journal.py` siblings, and the separately
+points, `src/render-impact.py`'s `src/impact_loc.py` sibling and its `src/impact_clone.py`
+dependency, their shared `src/ghwidgets_common.py` runtime dependency and its
+`src/ghwidgets_cache.py` and `src/ghwidgets_journal.py` siblings, and the separately
 installed `ghwidgets_data.py` public API for pinned consumers.
-The renderers assert `ghwidgets_common.py`'s `COMMON_VERSION` on startup;
+The renderers assert `src/ghwidgets_common.py`'s `COMMON_VERSION` on startup;
 they do not import `ghwidgets_data.py`. The installer moves the complete set
 into place and starts every entry point to prove the renderer deployment is
 coherent. A hand-rolled copy that omits a shared module can leave a
 renderer refusing to run, deliberately preventing rendering from a stale
 shared module.
 
-Note the rename: `render.py` installs as `render-gh-widgets.py` (the name the
+Note the rename: `src/render.py` installs as `render-gh-widgets.py` (the name the
 units use). The scripts find their sibling modules relative to their own path,
 so the rename is safe.
 
@@ -94,7 +94,7 @@ the stats card.
 | `GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
 | `GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account belongs to (`gh api user/orgs`); private repos are filtered out. |
 
-## Tuning the impact score (`render-impact.py`)
+## Tuning the impact score (`src/render-impact.py`)
 
 Each table ranks repos by `WilsonLowerBound(mine/total, z) * mine**gamma`. The
 defaults are the validated values; override only if you know why.
@@ -130,7 +130,7 @@ An unparseable value aborts the run rather than silently reverting to the
 default — a mis-typed knob that quietly renders wrong numbers is worse than a
 failed run.
 
-## Tuning the responsiveness score (`render-responsiveness.py`)
+## Tuning the responsiveness score (`src/render-responsiveness.py`)
 
 The board ranks repos by `n**gamma * 1/(1 + t/half_life)`, where `n` is your
 PRs in the repo that are merged or **still open**, and `t` is the
@@ -152,8 +152,8 @@ Same contract as the impact knobs: an unparseable value aborts the run.
 ## Usage (manual run)
 
 ```sh
-GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
-GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
+GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./src/render.py
+GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./src/render.py
 ```
 
 ## Public snapshots
@@ -278,7 +278,7 @@ Four built-in palettes. Pick one in `THEME=` or via `--theme`:
 - `gruvbox`
 - `github-dark`
 
-Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
+Adding a new theme is ~12 lines — just add a dict to `THEMES` in `src/ghwidgets_common.py`.
 
 ## Embedding
 
@@ -294,7 +294,7 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
 caches images for ~10 minutes, so README updates lag by that much).
-## Repository star history (`render-stars.py`)
+## Repository star history (`src/render-stars.py`)
 
 The cumulative step line plots dates from the first star to render time and
 shows the current total. It uses the shared card, fonts, and four theme
@@ -302,8 +302,8 @@ palettes; the existing palettes are all dark themes.
 
 ```sh
 GH_STAR_REPOS=Nitjsefnie/Overflow GH_TOKEN_FILE=/etc/gh-widget.token \
-  OUT_DIR=./widgets ./render-stars.py
-./render-stars.py --repos owner/one,owner/two --token-file /path/to/token \
+  OUT_DIR=./widgets ./src/render-stars.py
+./src/render-stars.py --repos owner/one,owner/two --token-file /path/to/token \
   --out-dir ./widgets --cache-file ./stars-cache.json --theme catppuccin
 ```
 
@@ -343,15 +343,15 @@ After deployment, embed Overflow's widget with:
 <img src="https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg" width="720" alt="Overflow star history" />
 ```
 
-## Repository popularity (`render-popularity.py`)
+## Repository popularity (`src/render-popularity.py`)
 
 `popularity.svg` ranks your public, non-fork, non-archived repositories and
 those owned by every organization returned by the token's `GET /user/orgs`
 membership list. It uses the shared card, fonts, accessibility and four themes.
 
 ```sh
-GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./render-popularity.py
-./render-popularity.py --token-file /path/to/token --out-dir ./widgets --theme catppuccin
+GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./src/render-popularity.py
+./src/render-popularity.py --token-file /path/to/token --out-dir ./widgets --theme catppuccin
 ```
 
 The score is `stars × 50 + forks × 40 + outsider commits × 5 + unique cloners × 2 + unique visitors`.
@@ -449,19 +449,19 @@ one or two samples is not an estimate of anything. The excluded tail is
 along with the number of rows the top-N cut hides.
 
 It fetches its own PR data — one paginated GraphQL connection, the same one
-`render.py` uses — so it needs a token; it runs in sequence after
-`render-impact.py` in the same service rather than on a schedule of its own
+`src/render.py` uses — so it needs a token; it runs in sequence after
+`src/render-impact.py` in the same service rather than on a schedule of its own
 (`units/gh-widgets.service` runs all four renderers as sequential
 `ExecStart` lines on an hourly timer; the weekly resync unit runs the same
 sequence, with `--resync` on `render-gh-widgets.py` and `render-impact.py`
 only — `render-responsiveness.py` takes none, since re-running it after the
 impact resync is its resync — and the order is load-bearing:
-`render-impact.py` refreshes the shared cache `render-responsiveness.py`
+`src/render-impact.py` refreshes the shared cache `src/render-responsiveness.py`
 then reads).
 It shares that script's cache,
 because that is where the account's authored PRs already live: it **merges**
 its half in and leaves every other section alone, above all `ourloc`, the
-git-blame result `render-impact.py` produces. Both writers take a lock
+git-blame result `src/render-impact.py` produces. Both writers take a lock
 around the file and write it via a temp file plus `os.replace`, so the two can
 overlap without either observing or leaving a half-written cache. A failed
 fetch renders from the cache and says so, exactly like the other two.
@@ -508,7 +508,7 @@ the commits first:
 
 ```sh
 scripts/resolve-repo-pins.py --user <login> --out pins.json
-IMPACT_REPO_PINS=pins.json BLAME_METHOD=both render-impact.py --resync
+IMPACT_REPO_PINS=pins.json BLAME_METHOD=both python3 src/render-impact.py --resync
 ```
 
 The manifest is `{repo: {branch, head}}`, resolved from the same query the

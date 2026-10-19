@@ -5,7 +5,7 @@
 #
 # This is a DEVELOPER step, run by hand before committing. CI does not
 # enforce formatting — the lint gate is for real defects, not style.
-# Tool versions are pinned in requirements-dev.txt.
+# Tool versions are pinned in requirements/dev.txt.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

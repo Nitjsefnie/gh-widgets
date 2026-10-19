@@ -130,3 +130,7 @@ The maintainer responds to a suspected or confirmed exposure in this order:
 Do not put a token, or any part of one, in an advisory, an issue, a commit, or
 a pull request — including in a "here is what leaked" reproduction. Describe
 the credential's identity (kind, scope, when last rotated) and not its value.
+
+Runtime sources are in `src/`; the public snapshot boundary
+`ghwidgets_data.py` remains at the repository root. Pinned audit toolchains
+are in `requirements/` (`pip-audit.txt` and `zizmor.txt`).

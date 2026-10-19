@@ -26,7 +26,7 @@ from pathlib import Path
 
 def load_renderer(path=None):
     """Load render-impact.py as a module, for its fetch functions."""
-    path = Path(path) if path else Path(__file__).resolve().parent.parent / "render-impact.py"
+    path = Path(path) if path else Path(__file__).resolve().parent.parent / "src/render-impact.py"
     spec = importlib.util.spec_from_file_location("render_impact", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"error: cannot load {path}")

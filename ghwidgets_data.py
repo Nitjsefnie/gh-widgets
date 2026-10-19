@@ -11,9 +11,14 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Optional, Union
 
-import ghwidgets_common
+# Source checkouts keep runtime siblings in src/; flat installs still resolve
+# the adjacent module when that directory does not exist.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+import ghwidgets_common  # noqa: E402; pylint: disable=wrong-import-position
 
 
 SCHEMA_VERSION: int = 1

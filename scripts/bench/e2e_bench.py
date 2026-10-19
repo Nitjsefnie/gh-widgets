@@ -20,12 +20,12 @@ from pathlib import Path
 
 
 WORKLOADS = (
-    ("render", "render.py",
+    ("render", "src/render.py",
      ("stats.svg", "streak.svg", "languages.svg", "external.svg"),
      "profile-cache.json"),
-    ("render-impact", "render-impact.py", ("impact.svg",),
+    ("render-impact", "src/render-impact.py", ("impact.svg",),
      "impact-cache.json"),
-    ("render-responsiveness", "render-responsiveness.py",
+    ("render-responsiveness", "src/render-responsiveness.py",
      ("responsiveness.svg",), "impact-cache.json"),
 )
 DEAD_PROXY = "http://127.0.0.1:9"

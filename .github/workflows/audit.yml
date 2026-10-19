@@ -56,16 +56,16 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # The runtime is pure stdlib, but the root toolchain manifests
-          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # The runtime is pure stdlib, but the toolchain manifests
+          # (requirements/*.txt) are what this pip cache keys on. The glob
           # covers every manifest, including the new ones.
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: requirements/*.txt
 
       - name: Install pip-audit
-        run: python -m pip install -r requirements-pip-audit.txt
+        run: python -m pip install -r requirements/pip-audit.txt
 
       - name: Audit dependencies
-        # Each root manifest gets its own pip-audit invocation. Combining
+        # Each manifest gets its own pip-audit invocation. Combining
         # them sends all --requirement files through one internal pip dry-run;
         # a hash-pinned manifest beside an unhashed one flips that resolution
         # into --require-hashes mode and fails on hashes the other manifest
@@ -86,9 +86,9 @@ jobs:
         # unreachable advisory feed.
         run: |
           shopt -s nullglob
-          manifests=(requirements*.txt)
+          manifests=(requirements/*.txt)
           if [ "${#manifests[@]}" -eq 0 ]; then
-            echo "no requirements*.txt manifest at the repository root; nothing to audit" >&2
+            echo "no requirements/*.txt manifest in requirements/; nothing to audit" >&2
             exit 1
           fi
 

@@ -129,14 +129,14 @@ jobs:
         # The renderer and suite are stdlib-only; coverage is needed on the
         # measured cell. pytest is pinned only so a local run of the same
         # files works; nothing in this workflow asks it for anything.
-        # Install requirements-test.txt on EVERY cell
+        # Install requirements/test.txt on EVERY cell
         # so every cell runs the whole suite with the same toolchain. Every
         # run block uses `python`, not `python3`: hosted Windows runners have
         # no python3 on PATH, and setup-python puts python on PATH on all
         # three OSes.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-test.txt
+          python -m pip install -r requirements/test.txt
 
       - name: Install the pinned git-fame
         if: matrix.measured == true
@@ -162,7 +162,7 @@ jobs:
             # reported a coverage number for a smaller program than the one
             # that ships. Only the tests themselves are left out — they are
             # the instrument, not the subject.
-            python -m coverage run --source=. --omit='test_*.py' \
+            python -m coverage run --source=. --omit='tests/*' \
               -m unittest discover -v
           else
             python -m unittest discover -v
@@ -197,7 +197,7 @@ jobs:
       - name: Coverage gate
         if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
         # A RATCHET, not a target — and the floor is committed data now, not a
-        # literal in this file: coverage-floor.json at the repository root
+        # literal in this file: gate/coverage-floor.json
         # carries it, coverage-ratchet.yml raises it automatically on main
         # whenever coverage climbs, and there is no code path that lowers it.
         # So this step only ever asks the question; it never answers it.
@@ -230,16 +230,16 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # The runtime is pure stdlib, but the root toolchain manifests
-          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # The runtime is pure stdlib, but the toolchain manifests
+          # (requirements/*.txt) are what this pip cache keys on. The glob
           # covers every manifest, including the new ones.
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: requirements/*.txt
 
       - name: Install linters
         id: install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements/dev.txt
 
       - name: pylint
         run: git ls-files '*.py' | xargs pylint
@@ -275,20 +275,20 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # The runtime is pure stdlib, but the root toolchain manifests
-          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # The runtime is pure stdlib, but the toolchain manifests
+          # (requirements/*.txt) are what this pip cache keys on. The glob
           # covers every manifest, including the new ones.
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: requirements/*.txt
 
       - name: Install pyright
         run: |
           python -m pip install --upgrade pip
           # The suite is stdlib unittest; its imports come from neither
-          # requirements-dev.txt nor requirements-test.txt.
+          # requirements/dev.txt nor requirements/test.txt.
           # Pyright includes "." and uses the exclusions in pyrightconfig.json.
           # Install both complete pinned requirements files so their third-party
           # tools are available for this check.
-          pip install -r requirements-dev.txt -r requirements-test.txt
+          pip install -r requirements/dev.txt -r requirements/test.txt
 
       - name: pyright
         run: pyright
@@ -312,16 +312,16 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # The runtime is pure stdlib, but the root toolchain manifests
-          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # The runtime is pure stdlib, but the toolchain manifests
+          # (requirements/*.txt) are what this pip cache keys on. The glob
           # covers every manifest, including the new ones.
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: requirements/*.txt
 
       - name: Install pip-audit
-        run: python -m pip install -r requirements-pip-audit.txt
+        run: python -m pip install -r requirements/pip-audit.txt
 
       - name: Audit dependencies
-        # Each root manifest gets its own pip-audit invocation. Combining
+        # Each manifest gets its own pip-audit invocation. Combining
         # them sends all --requirement files through one internal pip dry-run;
         # a hash-pinned manifest beside an unhashed one flips that resolution
         # into --require-hashes mode and fails on hashes the other manifest
@@ -342,9 +342,9 @@ jobs:
         # unreachable advisory feed.
         run: |
           shopt -s nullglob
-          manifests=(requirements*.txt)
+          manifests=(requirements/*.txt)
           if [ "${#manifests[@]}" -eq 0 ]; then
-            echo "no requirements*.txt manifest at the repository root; nothing to audit" >&2
+            echo "no requirements/*.txt manifest in requirements/; nothing to audit" >&2
             exit 1
           fi
 
@@ -394,7 +394,7 @@ jobs:
     #
     # WHAT IS JUDGED. Not elapsed time. `scripts/ci/counter.py` measures a
     # load-invariant COUNTER for the unit suite and for each renderer workload,
-    # and this job compares them against speed-baseline.json.
+    # and this job compares them against gate/speed-baseline.json.
     #
     # ONE INSTRUMENT FOR BOTH POPULATIONS: CPU SECONDS, from
     # `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
@@ -459,7 +459,7 @@ jobs:
     # expensive, rather than assuming nobody thought of them.
     #
     # THE BASELINE IS AN OBSERVED ENVELOPE, NOT A NUMBER. Each entry in
-    # speed-baseline.json records the RANGE it was actually seen over — a min, a
+    # gate/speed-baseline.json records the RANGE it was actually seen over — a min, a
     # max, and how many observations — and the gate fails only when a head value
     # exceeds `observed maximum x (1 + tolerance)`. The ratchet acts on that
     # recorded maximum, so an improvement lowers the ceiling and a regression has
@@ -518,7 +518,7 @@ jobs:
     # WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
     # on NO ENTRY — every one of these is `observed maximum x (1 + tolerance)`
     # against `2 x observed minimum`, recomputed by test_baseline.py from
-    # speed-baseline.json rather than written here, because a transcribed
+    # gate/speed-baseline.json rather than written here, because a transcribed
     # figure in this file has already been wrong twice. At the tolerances this
     # baseline actually ships, that is the suite missing by a fraction of a
     # second and all three renderer workloads missing by a wider margin. That
@@ -571,7 +571,7 @@ jobs:
     # landed above window 4's maximum. A raised ceiling lands through a
     # declared, derived raise in the ratchet step below — renderer raises and
     # undeclared raises stay refused. The figures and the dispatch run ids are
-    # in speed-baseline.json's basis.
+    # in gate/speed-baseline.json's basis.
     #
     # The population digests DO describe this tree, and they are checked on the
     # box by test_baseline.py before anything reaches a runner: adding a test
@@ -603,7 +603,7 @@ jobs:
     #
     # Install the pinned test toolchain before measuring. unittest discovery
     # imports every test_*.py module it collects, so the measuring environment
-    # needs the same requirements-test.txt as the unittest job. pytest is
+    # needs the same requirements/test.txt as the unittest job. pytest is
     # installed as part of that shared toolchain but unittest remains the
     # runner. If collection/import fails, the comparator reports an environment
     # failure rather than calling it a measured regression.
@@ -616,7 +616,7 @@ jobs:
 
     env:
       # NOT THE THRESHOLD. The budget that decides the gate is the per-entry
-      # `tolerance` inside each population of speed-baseline.json, and it is
+      # `tolerance` inside each population of gate/speed-baseline.json, and it is
       # re-derived whenever the cell or the instrument changes. This one
       # bounds the TOTAL across the shared population — a second, weaker net
       # for a case where every entry is under its own tolerance but the sum
@@ -641,7 +641,7 @@ jobs:
       # NOTHING A STEP WRITES GOES INSIDE THE CHECKOUT: reports and scratch
       # use $REPORTS or $RUNNER_TEMP, which are absolute and named as such.
       # There are exactly two roots in this file and they are named here.
-      BASELINE: speed-baseline.json
+      BASELINE: gate/speed-baseline.json
       REPO: ${{ github.workspace }}/head
       REPORTS: ${{ github.workspace }}/reports
 
@@ -660,7 +660,7 @@ jobs:
         working-directory: head
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-test.txt
+          python -m pip install -r requirements/test.txt
 
       - name: Probe the counter instrument
         id: probe
@@ -749,7 +749,7 @@ jobs:
         run: |
           mkdir -p "$REPORTS"
           python3 scripts/ci/compare_counters.py \
-            --print-population . > "$REPORTS/unit-population.txt"
+            --print-population tests > "$REPORTS/unit-population.txt"
           wc -l "$REPORTS/unit-population.txt"
 
       - name: Run renderer workloads
@@ -998,12 +998,18 @@ jobs:
           fi
           base_tip="$(git rev-parse FETCH_HEAD)"
           echo "Base branch tip: $base_tip"
-          if ! git cat-file -e "$base_tip:$BASELINE" 2>/dev/null; then
+          baseline_at_base="$BASELINE"
+          # The parent of the layout migration stores this same record at root.
+          if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null &&
+             git cat-file -e "$base_tip:speed-baseline.json" 2>/dev/null; then
+            baseline_at_base=speed-baseline.json
+          fi
+          if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null; then
             echo "No $BASELINE at the base tip, so there is nothing to" \
                  "ratchet against."
             exit 0
           fi
-          git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+          git show "$base_tip:$baseline_at_base" > "$RUNNER_TEMP/base-baseline.json"
           else
             if [ -z "$BEFORE_SHA" ]; then
               echo "::error::BEFORE_SHA is empty; the landed range cannot be" \
@@ -1026,12 +1032,17 @@ jobs:
               exit 1
             fi
             base_tip="$BEFORE_SHA"
-            if ! git cat-file -e "$base_tip:$BASELINE"; then
+            baseline_at_base="$BASELINE"
+            if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null &&
+               git cat-file -e "$base_tip:speed-baseline.json" 2>/dev/null; then
+              baseline_at_base=speed-baseline.json
+            fi
+            if ! git cat-file -e "$base_tip:$baseline_at_base"; then
               echo "::error::No $BASELINE at the previous main tip;" \
                    "failing closed" >&2
               exit 1
             fi
-            git show "$base_tip:$BASELINE" > "$RUNNER_TEMP/base-baseline.json"
+            git show "$base_tip:$baseline_at_base" > "$RUNNER_TEMP/base-baseline.json"
           fi
 
           # DECLARED REMOVALS, DERIVED FROM THE HARNESS. Retiring a renderer
@@ -1232,10 +1243,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # The runtime is pure stdlib, but the root toolchain manifests
-          # (requirements-*.txt) are what this pip cache keys on. The glob
+          # The runtime is pure stdlib, but the toolchain manifests
+          # (requirements/*.txt) are what this pip cache keys on. The glob
           # covers every manifest, including the new ones.
-          cache-dependency-path: requirements-*.txt
+          cache-dependency-path: requirements/*.txt
 
       - name: Install actionlint
         # Downloaded and checksum-verified rather than piped from the
@@ -1251,7 +1262,7 @@ jobs:
 
       - name: Install zizmor
         id: install_zizmor
-        run: python3 -m pip install --require-hashes -r requirements-zizmor.txt
+        run: python3 -m pip install --require-hashes -r requirements/zizmor.txt
 
       - name: actionlint
         id: actionlint
@@ -1359,7 +1370,7 @@ jobs:
           name: coverage-xml
 
       - name: Install the pinned statement analyzer
-        run: python3 -m pip install --requirement requirements-test.txt
+        run: python3 -m pip install --requirement requirements/test.txt
 
       - name: Measure the coverage of this change
         # HEAD is the merge tree checked out above and HEAD^1 is, by

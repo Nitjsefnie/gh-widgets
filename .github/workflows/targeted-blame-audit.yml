@@ -105,7 +105,7 @@ jobs:
           echo "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS"
           # pipefail is load-bearing: the renderer's exit code IS the verdict,
           # and tee would otherwise report the pipeline as successful.
-          python3 render-impact.py --resync \
+          python3 src/render-impact.py --resync \
             --cache-file /tmp/impact-cache.json 2>&1 | tee /tmp/audit.log
 
       - name: Prove the audit actually compared something

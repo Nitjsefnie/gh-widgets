@@ -4,7 +4,7 @@
 The gate used to be a hand-edited `--fail-under=81` literal with a comment
 telling the next human to raise it by hand, which is a ratchet nobody ratchets:
 it rots until it is either removed or quietly ignored. Here the floor is
-committed DATA (coverage-floor.json), it only ever moves up, and CI measures
+committed DATA (gate/coverage-floor.json), it only ever moves up, and CI measures
 and announces when it can climb. A deliberate pull request moves the floor.
 
 TWO SUBCOMMANDS, ONE MEASUREMENT. Both take the file `python -m coverage json`
@@ -56,7 +56,7 @@ from pathlib import Path
 from typing import NamedTuple, TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_FLOOR_FILE = REPO_ROOT / "coverage-floor.json"
+DEFAULT_FLOOR_FILE = REPO_ROOT / "gate/coverage-floor.json"
 SUPPORTED_SCHEMA = 1
 
 # The keys a human owns. `raise` copies the committed document and overwrites
