@@ -363,12 +363,17 @@ Outsider commits are counted from a fresh blobless, single-branch clone of
 each repository's **default branch**, removed after the count. An author is
 excluded when their lowercased email exactly matches one of your GitHub
 noreply addresses (with or without your numeric account id), an additive
-`GH_EXTRA_EMAILS` address, or any of `noreply@anthropic.com`,
+`GH_EXTRA_EMAILS` address, the public/profile email returned by `GET /user`,
+or any of `noreply@anthropic.com`,
 `noreply@openai.com`, `noreply@z.ai`, `noreply@openrouter.ai`, and
 `noreply@github.com`. Authors are also excluded when `[bot]` appears in
 their name or email (case-insensitive), or their name exactly matches the
 token account's name or login. All remaining commits count, including authors
 whose email is not linked to a GitHub account. Clone or log failures abort.
+Private owner addresses unavailable to the token can be added with
+`GH_EXTRA_EMAILS`; fetched addresses and noreply identities remain excluded.
+Empty repositories contribute zero outsider commits; missing branches in
+nonempty repositories and corrupt histories remain errors.
 
 Only the top five repositories appear, sorted by descending score and then
 case-insensitive owner/repository name (canonical casing breaks remaining
