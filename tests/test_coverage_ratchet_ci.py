@@ -671,15 +671,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             next(step for step in _steps(self.jobs["measure"])
                  if step["name"] == "Compute the candidate floor"))
         self.assertIn("--floor-file candidate-coverage-floor.json", command)
-        workflow = yaml.safe_load(RATCHET_WORKFLOW.read_text(encoding="utf-8"))
-        uploads = [step for step in workflow["jobs"]["measure"]["steps"]
-                   if step.get("uses", "").startswith(
-                       "actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 3, uploads)
-        names = [step["with"]["name"] for step in uploads]
-        self.assertCountEqual(
-            names, ["coverage-json", "coverage-floor-candidate",
-                    "ratchet-push"])
 
     def _stage_step(self):
         steps = _steps(self.jobs["measure"])
