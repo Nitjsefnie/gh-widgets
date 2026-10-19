@@ -18,6 +18,7 @@ wrong thing would have gone on passing.
 import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -37,6 +38,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
 HARNESS = REPO_ROOT / "scripts" / "bench" / "e2e_bench.py"
 SPEED_RATCHET = REPO_ROOT / "scripts" / "ci" / "speed_ratchet.py"
+
+
+def load_speed_ratchet():
+    """Import the new CLI by path so coverage exercises it in this process."""
+    spec = importlib.util.spec_from_file_location(
+        "ghw_speed_ratchet_test", SPEED_RATCHET)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {SPEED_RATCHET}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ghw_speed_ratchet_test"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+speed_ratchet = load_speed_ratchet()
 
 WORKLOAD_NODES = ("e2e::bench.render", "e2e::bench.render-impact",
                   "e2e::bench.render-responsiveness")
@@ -691,8 +707,32 @@ class TestSpeedRatchetTightening(unittest.TestCase):
             command.extend(("--unit-report", str(path)))
         for path in self.renderer_reports:
             command.extend(("--renderer-report", str(path)))
-        return subprocess.run(command, capture_output=True, text=True,
-                              check=False)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(
+                stderr):
+            status = speed_ratchet.main(command[2:])
+        return subprocess.CompletedProcess(command, status, stdout.getvalue(),
+                                           stderr.getvalue())
+
+    def test_command_line_entrypoint_runs_the_same_tighten(self):
+        self._write_reports()
+        command = [
+            sys.executable, str(SPEED_RATCHET),
+            "--baseline", str(self.baseline_path),
+            "--output", str(self.output_path),
+            "--unit-population-file", str(self.unit_population_path),
+            "--renderer-population-file", str(self.renderer_population_path),
+        ]
+        for path in self.unit_reports:
+            command.extend(("--unit-report", str(path)))
+        for path in self.renderer_reports:
+            command.extend(("--renderer-report", str(path)))
+
+        result = subprocess.run(command, capture_output=True, text=True,
+                                 check=False)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.output_path.is_file())
 
     def test_workflow_helper_derives_the_main_push_condition(self):
         self.assertEqual(
