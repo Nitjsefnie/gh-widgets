@@ -21,6 +21,7 @@ RENDERER_SOURCES = {
     "impact_loc.py": "impact_loc.py",
     "render-responsiveness.py": "render-responsiveness.py",
     "render-stars.py": "render-stars.py",
+    "render-popularity.py": "render-popularity.py",
     "ghwidgets_common.py": "ghwidgets_common.py",
     "ghwidgets_cache.py": "ghwidgets_cache.py",
     "ghwidgets_journal.py": "ghwidgets_journal.py",
@@ -99,7 +100,7 @@ def source_renderer_bytes(source_dir):
     "install.sh uses POSIX shell syntax and this class executes it directly",
 )
 class TestRendererInstall(unittest.TestCase):
-    """The ten deployment files install or roll back as one verified set."""
+    """The eleven deployment files install or roll back as one verified set."""
 
     def setUp(self):
         # pylint: disable=consider-using-with
@@ -144,10 +145,10 @@ class TestRendererInstall(unittest.TestCase):
         )
         assert_no_transaction_files(self, self.destination)
 
-    def test_failed_renderer_verification_restores_old_ten_file_set(self):
+    def test_failed_renderer_verification_restores_old_eleven_file_set(self):
         source_dir = self.root / "src"
         script = copy_installation(source_dir)
-        broken_renderer = source_dir / "render-stars.py"
+        broken_renderer = source_dir / "render-popularity.py"
         broken_renderer.write_text(
             broken_renderer.read_text(encoding="utf-8") + "\ndef broken(:\n",
             encoding="utf-8",

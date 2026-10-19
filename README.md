@@ -1,6 +1,6 @@
 # gh-widgets
 
-Self-hosted alternative to `github-readme-stats` and friends. Renders six
+Self-hosted alternative to `github-readme-stats` and friends. Renders seven
 profile SVGs and repository star-history SVGs on a cron — no JavaScript,
 no third-party service, no flakiness.
 
@@ -10,6 +10,7 @@ no third-party service, no flakiness.
 <img src="https://nitjsefni.eu/widgets/external.svg" width="720" alt="Pull requests: 533 opened, 456 merged, 81 repos (86% merged); issues: 204 opened, 166 maintainer-accepted, 62 repos (81% maintainer-accepted)." /><br/>
 <img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="Shown external repos: 10. Top live-code repo bamdadd/multicam-sim: 7,582 of 34,205 lines (22.2%)." /><br/>
 <img src="https://nitjsefni.eu/widgets/responsiveness.svg" width="720" alt="Measured external PRs: 275 across 10 shown repos; median per-repo average wait: 5.3 h." /><br/>
+<img src="https://nitjsefni.eu/widgets/popularity.svg" width="720" alt="Repository popularity: top five owned repositories, scored relative to the leader on a 0–10 scale." /><br/>
 
 ## Why
 
@@ -57,7 +58,7 @@ Then add the nginx snippet from `examples/nginx.conf` (CORS + cache-control).
 
 ### Why `install.sh` rather than `cp`
 
-`install.sh` stages a ten-file deployment set: the four renderer entry
+`install.sh` stages an eleven-file deployment set: the five renderer entry
 points, `render-impact.py`'s `impact_loc.py` sibling and its `impact_clone.py`
 dependency, their shared `ghwidgets_common.py` runtime dependency and its
 `ghwidgets_cache.py` and `ghwidgets_journal.py` siblings, and the separately
@@ -287,6 +288,7 @@ Adding a new theme is ~12 lines — just add a dict to `THEMES` in `render.py`.
 <img src="https://your-domain/widgets/external.svg"  width="720" alt="External contributions" />
 <img src="https://your-domain/widgets/impact.svg"    width="720" alt="External impact" />
 <img src="https://your-domain/widgets/responsiveness.svg" width="720" alt="External responsiveness" />
+<img src="https://your-domain/widgets/popularity.svg" width="720" alt="Repository popularity" />
 ```
 
 Works in GitHub READMEs (it goes through GitHub's camo proxy — note camo
@@ -338,6 +340,49 @@ After deployment, embed Overflow's widget with:
 
 ```html
 <img src="https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg" width="720" alt="Overflow star history" />
+```
+
+## Repository popularity (`render-popularity.py`)
+
+`popularity.svg` ranks your public, non-fork, non-archived repositories and
+those owned by every organization returned by the token's `GET /user/orgs`
+membership list. It uses the shared card, fonts, accessibility and four themes.
+
+```sh
+GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./render-popularity.py
+./render-popularity.py --token-file /path/to/token --out-dir ./widgets --theme catppuccin
+```
+
+The score is `stars × 50 + forks × 40 + outsider commits × 5 + unique cloners × 2 + unique visitors`.
+Cloners and visitors are the **14-day uniques** from GitHub's traffic API,
+not the raw checkout or view counts. Traffic requires push access to every
+eligible repository; an unreadable endpoint (including HTTP 403) fails the
+whole run with the repository named, leaving the previous SVG intact.
+
+Outsider commits are counted from a fresh blobless, single-branch clone of
+each repository's **default branch**, removed after the count. An author is
+excluded when their lowercased email exactly matches one of your GitHub
+noreply addresses (with or without your numeric account id), an additive
+`GH_EXTRA_EMAILS` address, or any of `noreply@anthropic.com`,
+`noreply@openai.com`, `noreply@z.ai`, `noreply@openrouter.ai`, and
+`noreply@github.com`. Authors are also excluded when `[bot]` appears in
+their name or email (case-insensitive), or their name exactly matches the
+token account's name or login. All remaining commits count, including authors
+whose email is not linked to a GitHub account. Clone or log failures abort.
+
+Only the top five repositories appear, sorted by descending score and then
+case-insensitive owner/repository name (canonical casing breaks remaining
+ties). Scores display as `raw × 10 / top raw` to two decimals: the leader is
+10.00, tied leaders share 10.00, and an all-zero population shows 0.00.
+Raw scores are never displayed.
+
+Every run fetches all API data and clones anew; there is no cache or
+`--resync`. `OUT_DIR`, `THEME`, `GH_TOKEN`, `GH_TOKEN_FILE` and their CLI
+flags work like the star-history renderer. Both services in `units/` run it
+after responsiveness. After deployment, embed it with:
+
+```html
+<img src="https://nitjsefni.eu/widgets/popularity.svg" width="720" alt="Repository popularity" />
 ```
 
 ## The `external` widget
