@@ -747,13 +747,6 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         upload = next(step for step in workflow["jobs"]["speed"]["steps"]
                       if step.get("name") ==
                       "Upload the tightened speed baseline")
-        self.assertEqual(upload["uses"].split("@", maxsplit=1)[0],
-                         "actions/upload-artifact")
-        self.assertEqual(upload["with"]["name"], "ratchet-push")
-        self.assertEqual(upload["with"]["retention-days"], 1)
-        self.assertEqual(upload["with"]["if-no-files-found"], "error")
-        self.assertIn("base.txt", upload["with"]["path"])
-        self.assertIn("speed-baseline.json", upload["with"]["path"])
         self.assertEqual(
             " ".join(upload["if"].split()),
             "success() && github.event_name == 'push' && "

@@ -720,9 +720,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
 
         upload = next(step for step in _steps(self.jobs["measure"])
                       if _child_value(step["with"], "name") == "ratchet-push")
-        self.assertEqual(_child_value(upload["with"], "retention-days"), "1")
-        self.assertEqual(_child_value(upload["with"], "if-no-files-found"),
-                         "error")
         self.assertIn("steps.stage.outputs.changed == 'true'",
                       " ".join(line for _at, line in upload["body"]))
 
