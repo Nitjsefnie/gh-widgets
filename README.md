@@ -11,6 +11,7 @@ no third-party service, no flakiness.
 <img src="https://nitjsefni.eu/widgets/impact.svg" width="720" alt="Shown external repos: 10. Top live-code repo bamdadd/multicam-sim: 7,582 of 34,205 lines (22.2%)." /><br/>
 <img src="https://nitjsefni.eu/widgets/responsiveness.svg" width="720" alt="Measured external PRs: 275 across 10 shown repos; median per-repo average wait: 5.3 h." /><br/>
 <img src="https://nitjsefni.eu/widgets/popularity.svg" width="720" alt="Repository popularity: top five owned repositories, scored relative to the leader on a 0–10 scale." /><br/>
+<img src="https://nitjsefni.eu/widgets/stars-nitjsefnie-overflow.svg" width="720" alt="Star history of Nitjsefnie/Overflow: 39 stars." /><br/>
 
 ## Why
 
@@ -153,6 +154,14 @@ Same contract as the impact knobs: an unparseable value aborts the run.
 ```sh
 GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./render.py
 GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./render.py
+```
+
+A star graph for any other repository comes from `render-stars.py`, which
+writes `stars-<owner>-<repo>.svg` for each repository in `GH_STAR_REPOS` (or
+`--repos`); see [Repository star history](#repository-star-history-render-starspy).
+
+```sh
+GH_STAR_REPOS=owner/repo GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./render-stars.py
 ```
 
 ## Public snapshots
