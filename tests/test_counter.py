@@ -12,8 +12,10 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 happens to land on.
 """
 import ast
+import contextlib
 import importlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -79,7 +81,12 @@ class TestPlatformLimits(unittest.TestCase):
             finally:
                 del sys.modules[spec.name]
         self.assertIsNone(module.resource)
-        self.assertEqual(module.METRICS, (module.CPU_METRIC,))
+        # The calibrated instrument (issue #190) is the second name the
+        # module defines; both must exist without `resource`, because the
+        # refusal for a missing facility happens at measurement time, not
+        # at import time.
+        self.assertEqual(module.METRICS,
+                         (module.CPU_METRIC, module.CALIBRATED_METRIC))
 
     @REQUIRES_BENCH
     def test_measuring_without_resource_refuses_rather_than_guessing(self):
@@ -212,7 +219,11 @@ class TestTheRemovedInstrument(unittest.TestCase):
     """
 
     def test_syscalls_is_no_longer_a_metric(self):
-        self.assertEqual(counter.METRICS, (counter.CPU_METRIC,))
+        # Two instruments, and `syscalls` is neither: raw CPU seconds and
+        # the calibration ratio (issue #190) are the only names a run can
+        # measure under.
+        self.assertEqual(counter.METRICS,
+                         (counter.CPU_METRIC, counter.CALIBRATED_METRIC))
 
     def test_an_environment_naming_the_removed_instrument_is_refused(self):
         with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
@@ -518,6 +529,136 @@ class TestMeasure(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             counter.measure([sys.executable, "-c", script],
                             metric=counter.CPU_METRIC, timeout=2)
+
+
+class TestCalibratedInstrument(unittest.TestCase):
+    """The ratio instrument issue #190 added, and the ways it must refuse.
+
+    Raw CPU seconds carry the runner pool's machine factor — the same tree
+    measured 27.70 and 54.25 CPU seconds across seven runs — so the
+    unit-suite population is judged on the suite's CPU seconds divided by a
+    pinned calibration workload's. The cases here pin the arithmetic, the
+    metric name, and the refusals: a broken, lying or vanished calibration
+    is refused rather than turned into a plausible ratio.
+    """
+
+    # A calibration that answers the pinned sum at interpreter-startup cost,
+    # so these cases test the instrument and not the workload's runtime.
+    CHEAP_CALIBRATION = [sys.executable, "-c", "print(24576)"]
+
+    @REQUIRES_BENCH
+    def test_the_ratio_is_suite_cpu_over_calibration_cpu(self):
+        measured = counter.measure_calibrated(
+            [sys.executable, "-c", "sum(range(200000))"],
+            calibration_command=self.CHEAP_CALIBRATION)
+
+        self.assertEqual(measured.metric, counter.CALIBRATED_METRIC)
+        self.assertGreater(measured.value, 0.0)
+        self.assertAlmostEqual(
+            measured.value, measured.suite_cpu / measured.calibration_cpu)
+        self.assertGreater(measured.suite_cpu, 0.0)
+        self.assertGreater(measured.calibration_cpu, 0.0)
+
+    @REQUIRES_BENCH
+    def test_a_failing_calibration_is_refused_not_divided_by(self):
+        with self.assertRaises(counter.CounterError) as raised:
+            counter.measure_calibrated(
+                [sys.executable, "-c", "pass"],
+                calibration_command=[sys.executable, "-c",
+                                     "raise SystemExit(3)"])
+        self.assertIn("exited 3", str(raised.exception))
+
+    @REQUIRES_BENCH
+    def test_a_lying_calibration_is_refused_not_divided_by(self):
+        # The pinned sum is what makes a broken cell a refusal: a
+        # calibrator that answers a different number is not a calibration.
+        with self.assertRaises(counter.CounterError) as raised:
+            counter.measure_calibrated(
+                [sys.executable, "-c", "pass"],
+                calibration_command=[sys.executable, "-c", "print(999)"])
+        self.assertIn("999", str(raised.exception))
+        self.assertIn(counter.CALIBRATION_OUTPUT, str(raised.exception))
+
+    @REQUIRES_BENCH
+    def test_a_calibration_measured_at_zero_is_refused(self):
+        # The calibration's own wall/cpu come from _run_child, so zero cost
+        # is forced rather than arranged: an instrument that divides by a
+        # zero denominator reports infinity as a regression.
+        cheap = (0, "24576\n", "", 0.1, 0.05)
+        zeroed = (0, "24576\n", "", 0.0, 0.0)
+        with mock.patch.object(counter, "_run_child",
+                               side_effect=[cheap, zeroed]):
+            with self.assertRaises(counter.CounterError) as raised:
+                counter.measure_calibrated([sys.executable, "-c", "pass"])
+        self.assertIn("zero cost", str(raised.exception))
+
+    @REQUIRES_BENCH
+    def test_a_timed_out_calibration_is_refused(self):
+        with self.assertRaises(counter.CounterError) as raised:
+            counter.measure_calibrated(
+                [sys.executable, "-c", "pass"],
+                calibration_command=[sys.executable, "-c",
+                                     "import time; time.sleep(30)"],
+                calibration_timeout=0.5)
+        self.assertIn("timeout", str(raised.exception))
+
+    @REQUIRES_BENCH
+    def test_the_suite_childs_own_verdict_travels(self):
+        # The calibration is not the thing under test; a failing measured
+        # command is recorded as one, exactly as measure() records it.
+        measured = counter.measure_calibrated(
+            [sys.executable, "-c", "raise SystemExit(7)"],
+            calibration_command=self.CHEAP_CALIBRATION)
+        self.assertEqual(measured.returncode, 7)
+        self.assertEqual(measured.metric, counter.CALIBRATED_METRIC)
+
+    @REQUIRES_BENCH
+    def test_a_calibrated_junit_names_the_ratio_metric(self):
+        measured = counter.measure_calibrated(
+            [sys.executable, "-c", "pass"],
+            calibration_command=self.CHEAP_CALIBRATION)
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "unit-1.xml"
+            counter.write_junit(path, "counter::unit-suite", measured)
+            suite = ET.parse(path).getroot()
+        self.assertEqual(suite.get("gh-metric"), counter.CALIBRATED_METRIC)
+        case = suite.find("testcase")
+        self.assertAlmostEqual(number(case, "time"), measured.value, places=5)
+
+    @REQUIRES_BENCH
+    def test_the_calibration_cli_prints_the_raw_parts(self):
+        # The ratio alone is unauditable; the log line carries the parts so
+        # a run's numbers can be recomputed from its own output.
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "unit-1.xml"
+            with mock.patch.object(counter, "CALIBRATION_COMMAND",
+                                   self.CHEAP_CALIBRATION):
+                stream = io.StringIO()
+                with contextlib.redirect_stdout(stream):
+                    status = counter.main(
+                        ["--calibrated", "--junit-file", str(path),
+                         "--name", "counter::unit-suite", "--",
+                         sys.executable, "-c", "sum(range(100000))"])
+            report = ET.parse(path).getroot()
+        self.assertEqual(status, 0)
+        self.assertEqual(report.get("gh-metric"), counter.CALIBRATED_METRIC)
+        self.assertIn("counter: calibration = ", stream.getvalue())
+        self.assertIn("suite raw ", stream.getvalue())
+
+    def test_the_ratio_metric_is_defined_next_to_the_raw_one(self):
+        self.assertEqual(counter.CALIBRATED_METRIC, "cpu_time_ratio")
+        self.assertEqual(counter.METRICS, (counter.CPU_METRIC,
+                                           counter.CALIBRATED_METRIC))
+
+    @REQUIRES_BENCH
+    def test_a_calibration_without_the_facility_refuses(self):
+        # Same refusal shape as measure(): no RUSAGE_CHILDREN, no number.
+        with mock.patch.object(counter, "resource", None):
+            with self.assertRaises(counter.CounterError) as raised:
+                counter.measure_calibrated(
+                    [sys.executable, "-c", "pass"],
+                    calibration_command=self.CHEAP_CALIBRATION)
+        self.assertIn("does not provide", str(raised.exception))
 
 
 class TestWriteJunit(unittest.TestCase):

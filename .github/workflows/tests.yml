@@ -397,11 +397,17 @@ jobs:
     # load-invariant COUNTER for the unit suite and for each renderer workload,
     # and this job compares them against gate/speed-baseline.json.
     #
-    # ONE INSTRUMENT FOR BOTH POPULATIONS: CPU SECONDS, from
+    # ONE FAMILY OF INSTRUMENTS, CPU SECONDS, from
     # `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
     # time, so steal time — the thing that makes a duration on a shared runner
     # meaningless — is excluded, which is what makes it valid under the ruling
-    # behind issue #81.
+    # behind issue #81. The RENDERER population is judged on raw CPU seconds.
+    # The UNIT-SUITE population is judged on the CALIBRATED ratio (issue
+    # #190): raw CPU seconds carried a 1.96x machine factor across seven runs
+    # of one tree — 27.70 to 54.25 — wider than any budget this gate can
+    # hold, so the suite's CPU seconds are divided by a fixed calibration
+    # workload's, run adjacently in the same job, and the factor cancels.
+    # counter.py's docstring carries the full account.
     #
     # READ THIS BEFORE THE NUMBERS BELOW, BECAUSE IT CHANGES WHAT THEY ARE WORTH:
     # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
@@ -665,8 +671,9 @@ jobs:
 
       - name: Probe the counter instrument
         id: probe
-        # Once per job. There is one instrument, so nothing is being chosen
-        # here — what this step exists for is the RECORD of why. It prints
+        # Once per job. Nothing is being chosen here — the per-population
+        # instruments are pinned in the measurement steps below. What this
+        # step exists for is the RECORD of why. It prints
         # perf_event_paranoid and yama ptrace_scope, the two kernel settings
         # that decide whether a deterministic counter is possible at all, so
         # a reader who sees CPU seconds in use can see the alternatives were
@@ -688,7 +695,12 @@ jobs:
 
       - name: Measure the unit suite
         # One CPU-second measurement of the whole suite per round, emitted as
-        # one JUnit suite each.
+        # one JUnit suite each — CALIBRATED since issue #190: the report's
+        # value is the suite's CPU seconds divided by the pinned calibration
+        # workload's, so the runner pool's machine factor (which took the
+        # same tree from 27.70 to 54.25 raw CPU seconds across seven runs)
+        # cancels instead of riding on the gate. The raw parts print to the
+        # log alongside the ratio.
         #
         # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
         # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
@@ -707,13 +719,17 @@ jobs:
         # why a non-zero code is reported here rather than swallowed.
         working-directory: head
         env:
-          GH_COUNTER_METRIC: cpu_time
+          # CALIBRATED, not raw: the unit-suite population is judged on the
+          # ratio instrument (see measure_calibrated in counter.py), and the
+          # baseline's unit-suite population records this metric name.
+          GH_COUNTER_METRIC: cpu_time_ratio
         run: |
           mkdir -p "$REPORTS"
           for round in $(seq 1 "$ROUNDS"); do
             echo "::group::unit suite round $round"
             status=0
             python3 scripts/ci/counter.py \
+              --calibrated \
               --junit-file "$REPORTS/unit-$round.xml" \
               --name 'counter::unit-suite' \
               --cwd "$REPO" \

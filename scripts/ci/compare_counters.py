@@ -85,6 +85,11 @@ METRIC_NOTES = {
         "CPU seconds, so steal time is excluded — but NOT deterministic, "
         "which is why its tolerance is the loose one and why this is a "
         "gross-regression net rather than a sensitive gate"),
+    "cpu_time_ratio": (
+        "the child's CPU seconds divided by a fixed calibration workload's, "
+        "measured adjacently in the same job — the runner pool's machine "
+        "factor multiplies both and cancels; still not deterministic, so "
+        "the envelope discipline applies unchanged"),
 }
 
 # A testcase carrying any of these children did not pass, and its value is not
