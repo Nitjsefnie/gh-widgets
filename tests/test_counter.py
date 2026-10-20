@@ -194,6 +194,9 @@ class TestCwdIsHonoured(unittest.TestCase):
             root = Path(td)
             (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
             report = Path(td) / "r.xml"
+            # Ambient-proof, as the raw CLI refuses the ambient ratio pin.
+            env = {k: v for k, v in os.environ.items()
+                   if k != counter.METRIC_ENV}
             result = subprocess.run(
                 [sys.executable,
                  str(REPO_ROOT / "scripts" / "ci" / "counter.py"),
@@ -202,7 +205,7 @@ class TestCwdIsHonoured(unittest.TestCase):
                  "--cwd", str(root),
                  "--", sys.executable, "-c",
                  "import os; print(sorted(os.listdir('.')))"],
-                capture_output=True, text=True, check=False)
+                capture_output=True, text=True, check=False, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("marker-only-here.txt", result.stdout)
 
@@ -441,14 +444,22 @@ class TestMetricChoice(unittest.TestCase):
         self.assertIn("cpu_time", str(caught.exception))
 
     def test_the_only_instrument_is_cpu_time(self):
-        self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
+        # Ambient-proof: the workflow's unit step pins cpu_time_ratio into
+        # this suite's environment, so a default assertion that read the
+        # ambient pin would fail in the one process that runs under it.
+        with mock.patch.dict(os.environ):
+            os.environ.pop(counter.METRIC_ENV, None)
+            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
 
     def test_it_needs_no_probe_to_get_there(self):
         # There is nothing to choose, so nothing is probed: an instrument
         # this file cannot use is not a reason to spend a process on every
         # call site.
         with mock.patch.object(counter, "_probe_lines") as probe:
-            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
+            with mock.patch.dict(os.environ):
+                os.environ.pop(counter.METRIC_ENV, None)
+                self.assertEqual(counter.choose_metric(),
+                                 counter.CPU_METRIC)
         probe.assert_not_called()
 
 
@@ -578,6 +589,40 @@ class TestCalibratedInstrument(unittest.TestCase):
                 calibration_command=[sys.executable, "-c", "print(999)"])
         self.assertIn("999", str(raised.exception))
         self.assertIn(counter.CALIBRATION_OUTPUT, str(raised.exception))
+
+    @REQUIRES_BENCH
+    def test_a_raw_measurement_refuses_the_ratio_label(self):
+        # The label/computation contract: raw CPU seconds must never carry
+        # cpu_time_ratio, or a raw number would pass the comparator's
+        # metric check while measuring something else.
+        with self.assertRaises(counter.CounterError) as raised:
+            counter.measure([sys.executable, "-c", "pass"],
+                            metric=counter.CALIBRATED_METRIC)
+        self.assertIn("ratio", str(raised.exception))
+        with mock.patch.dict(os.environ,
+                             {counter.METRIC_ENV: counter.CALIBRATED_METRIC}):
+            with self.assertRaises(counter.CounterError):
+                counter.measure([sys.executable, "-c", "pass"])
+
+    @REQUIRES_BENCH
+    def test_the_calibrated_wall_stays_the_childs_own_seconds(self):
+        # gh-wall's contract, and the smoke gate's, is elapsed seconds on
+        # both sides. Dividing it by the calibration would silently change
+        # the unit of a field the smoke consumer reads as seconds, so the
+        # wall travels undivided even while the counter is a ratio.
+        suite = (0, "out", "", 400.0, 6.0)
+        calib = (0, "24576\n", "", 10.0, 3.0)
+        with mock.patch.object(counter, "_run_child",
+                               side_effect=[suite, calib]):
+            measured = counter.measure_calibrated(
+                [sys.executable, "-c", "pass"])
+        self.assertEqual(measured.wall, 400.0)
+        self.assertEqual(measured.value, 2.0)
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "unit-1.xml"
+            counter.write_junit(path, "counter::unit-suite", measured)
+            case = ET.parse(path).getroot().find("testcase")
+        self.assertAlmostEqual(number(case, "gh-wall"), 400.0)
 
     @REQUIRES_BENCH
     def test_a_calibration_measured_at_zero_is_refused(self):
@@ -736,12 +781,18 @@ class TestCli(unittest.TestCase):
     def test_a_measured_command_exits_with_the_childs_code(self):
         with tempfile.TemporaryDirectory(prefix="ghw-counter-cli-") as td:
             report = Path(td) / "r.xml"
+            # Ambient-proof: under the workflow's unit step the ambient pin
+            # is cpu_time_ratio, which the raw CLI refuses (a raw number
+            # must not carry the ratio label); this case is about the exit
+            # code, so it runs under no pin at all.
+            env = {k: v for k, v in os.environ.items()
+                   if k != counter.METRIC_ENV}
             result = subprocess.run(
                 [sys.executable, str(REPO_ROOT / "scripts" / "ci" /
                                      "counter.py"),
                  "--junit-file", str(report), "--name", "counter::unit-suite",
                  "--", sys.executable, "-c", "import sys; sys.exit(7)"],
-                capture_output=True, text=True, check=False)
+                capture_output=True, text=True, check=False, env=env)
             self.assertEqual(result.returncode, 7, result.stderr)
             self.assertTrue(report.is_file())
             suite = ET.parse(report).getroot()

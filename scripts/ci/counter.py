@@ -396,6 +396,14 @@ def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
     `subprocess.run`, so nothing downstream grows a new failure path.
     """
     chosen = choose_metric(metric)
+    if chosen == CALIBRATED_METRIC:
+        # A label this function cannot earn: raw CPU seconds carrying the
+        # ratio name would pass the comparator's metric check while
+        # measuring something else. The ratio is measure_calibrated's.
+        raise CounterError(
+            f"{CALIBRATED_METRIC} is the calibrated instrument's label; "
+            "the raw path refuses it. Pass no metric for raw CPU seconds, "
+            "or call measure_calibrated for the ratio.")
     code, out, err, wall, cpu = _run_child(
         list(command), cwd, child_environment(env), timeout)
     return Measurement(cpu, chosen, wall, out, err, code)
@@ -419,13 +427,13 @@ class CalibratedMeasurement(NamedTuple):
     calibration_cpu: float
 
 
-def _checked_calibration(calib_command, calib_timeout, env) -> tuple:
+def _checked_calibration(calib_command, calib_timeout, env) -> float:
     """Run the calibration child, and refuse anything a ratio cannot sit on.
 
     A failed exit, a wrong pinned sum, a timeout, or a zero-cost measurement
     is a CounterError, never a division: a broken calibration turned into a
     plausible ratio is precisely the lie this instrument exists to prevent.
-    Returns (wall, cpu).
+    Returns the calibration's CPU seconds.
     """
     try:
         rc, out, _err, wall, cpu = _run_child(
@@ -450,7 +458,7 @@ def _checked_calibration(calib_command, calib_timeout, env) -> tuple:
         raise CounterError(
             "the calibration workload measured at zero cost, which is not "
             "a calibration; refusing to divide by it")
-    return wall, cpu
+    return cpu
 
 
 def measure_calibrated(command: Sequence[str], cwd=None, env=None,
@@ -482,11 +490,14 @@ def measure_calibrated(command: Sequence[str], cwd=None, env=None,
                      else list(calibration_command))
     calib_timeout = (CALIBRATION_TIMEOUT if calibration_timeout is None
                      else calibration_timeout)
-    calib_wall, calib_cpu = _checked_calibration(calib_command, calib_timeout,
-                                                 env)
+    calib_cpu = _checked_calibration(calib_command, calib_timeout, env)
+    # wall stays the measured child's OWN elapsed seconds: gh-wall's
+    # contract, and the smoke gate's, is seconds on both sides of the
+    # comparison, so the calibration divides the counter and only the
+    # counter.
     return CalibratedMeasurement(
         value=cpu / calib_cpu, metric=CALIBRATED_METRIC,
-        wall=wall / calib_wall, stdout=out, stderr=err, returncode=code,
+        wall=wall, stdout=out, stderr=err, returncode=code,
         suite_cpu=cpu, calibration_cpu=calib_cpu)
 
 
