@@ -7,7 +7,7 @@ WHAT THIS MODULE OWNS. Everything about `.github/workflows/coverage-ratchet.yml`
 and its coupling to `.github/workflows/release.yml`: what the workflow is allowed
 to run with read-only access, how its candidate floor is announced, what its
 check run is called, and what measured population in tests.yml has to be.
-It also owns the small structural reader those cases are written against.
+It also owns the structural reader those cases are written against.
 
 These checks are regression tripwires, not a sandbox. The permission reader
 decodes simple YAML keys with optional quotes and fails closed outside that
@@ -708,7 +708,7 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
                              for line in lines[quiet_branch + 1:]))
 
         upload = next(step for step in _steps(self.jobs["measure"])
-                      if _child_value(step["with"], "name") == "ratchet-push")
+                      if step["name"] == "Upload the tightened coverage floor")
         self.assertIn("steps.stage.outputs.changed == 'true'",
                       " ".join(line for _at, line in upload["body"]))
 
