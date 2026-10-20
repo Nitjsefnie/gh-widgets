@@ -306,7 +306,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
 
     # -- the RAISE derivation, executed --------------------------------------
 
-    def _raise_step(self, old_doc, new_doc, message="", extra=None, shallow=False):
+    def _raise_step(self, old_doc, new_doc, message="", extra=None):
         """Run the STEP's own declaration block against a carrier repository.
 
         Sliced out of the `speed` job in `tests.yml` from the declaration
@@ -326,13 +326,6 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         root = self.temp_root("ghw-raise-")
         fixture = CarrierFixture(root, old_doc)
         fixture.commit(message or "Change baseline", new_doc, extra)
-        if shallow:
-            remote = root / "remote.git"
-            fixture.git("clone", "--bare", str(fixture.head), str(remote))
-            fixture.git("remote", "add", "origin", remote.as_uri())
-            (fixture.head / ".git" / "shallow").write_text(
-                fixture.git("rev-parse", "HEAD").stdout + fixture.base + "\n",
-                encoding="utf-8")
         script = ("set -euo pipefail\n"
                   f'RUNNER_TEMP="{root}"\n'
                   'BASELINE="gate/speed-baseline.json"\n'
@@ -453,19 +446,6 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         result, _fixture = self._raise_step(old, new)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("has no declaration", result.stderr)
-
-    @REQUIRES_POSIX_SHELL
-    def test_raise_step_fetches_the_full_shallow_checkout_message_window(self):
-        old, new = document(), document()
-        new["populations"]["unit-suite"]["entries"][
-            "counter::unit-suite"] = envelope(14)
-        result, fixture = self._raise_step(old, new, CarrierFixture.MESSAGE,
-                                           shallow=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.split(), ["--ratchet-allow-raise",
-                                                 CarrierFixture.SLOT])
-        self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
-                         .stdout.strip(), "false")
 
     @REQUIRES_POSIX_SHELL
     def test_digest_move_with_test_changes_passes_the_step_and_ratchet(self):

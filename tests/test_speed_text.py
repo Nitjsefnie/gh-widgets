@@ -49,15 +49,11 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertIn("--side head", block)
         self.assertNotIn("--side base", block)
 
-    def test_the_ratchet_step_is_declared_against_the_base_ref(self):
+    def test_the_ratchet_step_compares_from_the_merge_base_parent(self):
         text = StepRunner.job_text()
         step = self._step_text("The committed baseline only ratchets down")
-        # `base.sha` trails the base tip and does not refresh on synchronize,
-        # so the comparison would be made against an OLDER, looser baseline —
-        # the one direction that is wrong here.
-        self.assertIn("github.event.pull_request.base.ref", step)
+        self.assertNotIn("github.event.pull_request.base.ref", step)
         self.assertNotIn("github.event.pull_request.base.sha", step)
-        self.assertIn("FETCH_HEAD", step)
         self.assertIn("--ratchet-baselines", step)
         self.assertIn("$base_tip:$baseline_at_base", step)
         self.assertIn("working-directory: head", step)

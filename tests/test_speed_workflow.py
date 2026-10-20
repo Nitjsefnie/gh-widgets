@@ -31,7 +31,7 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 
-from scripts.bench.bench_platform import REQUIRES_BENCH
+from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1232,6 +1232,135 @@ class CarrierFixture:
              str(self.base_path), "gate/speed-baseline.json",
              "--base", self.base if base is None else base, "--head", "HEAD"],
             cwd=self.head, capture_output=True, text=True, check=False)
+
+
+class TestPullRequestRatchet(unittest.TestCase):
+    """Judge the merge ref against its fixed base, even after main tightens."""
+
+    steps = StepRunner()
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.root = Path(stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="ghw-pr-ratchet-")))
+        self.fixture = CarrierFixture(self.root)
+        self.fixture.base_path.unlink()
+        bench = self.fixture.head / "scripts" / "bench"
+        bench.mkdir()
+        shutil.copyfile(REPO_ROOT / "scripts/bench/e2e_bench.py",
+                        bench / "e2e_bench.py")
+        renderer = {"metric": "cpu_time", "tolerance": 0.6,
+                    "population": "b" * 64,
+                    "entries": {"e2e::bench.render": envelope(1.0)},
+                    "wall": {}}
+        for doc in (self.fixture.old, self.fixture.new):
+            doc["populations"]["renderer-workloads"] = renderer
+        self.fixture.git("add", "scripts/bench/e2e_bench.py")
+        self.fixture.commit("Seed workload listing", self.fixture.old)
+        self.fixture.git("branch", "-M", "main")
+        self.fixture.base = self.fixture.git("rev-parse", "HEAD").stdout.strip()
+
+    def _merge_checkout(self, *, raise_baseline=False, shallow=False,
+                        message="PR change without a declaration"):
+        fixture = self.fixture
+        fixture.git("checkout", "-qb", "pr")
+        fixture.commit(message, fixture.new if raise_baseline else None,
+                       None if raise_baseline else {"program.py": "pass\n"})
+        fixture.git("checkout", "-qb", "merge", fixture.base)
+        fixture.git("merge", "--no-ff", "-qm", "Merge PR", "pr")
+        merge = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "main")
+        tightened = json.loads(json.dumps(fixture.old))
+        tightened["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope(9.0)
+        fixture.commit("Tighten main after the merge ref was built", tightened)
+        tip = fixture.git("rev-parse", "HEAD").stdout.strip()
+        ancestry = fixture.git("rev-list", merge).stdout.splitlines()
+        self.assertNotIn(tip, ancestry)
+        fixture.git("checkout", "-q", "merge")
+        remote = self.root / "remote.git"
+        fixture.git("clone", "--bare", str(fixture.head), str(remote))
+        subprocess.run(
+            ["git", "--git-dir", str(remote), "config",
+             "uploadpack.allowAnySHA1InWant", "true"],
+            capture_output=True, check=True)
+        if shallow:
+            fixture.head.rename(self.root / "source")
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "--branch", "merge",
+                 remote.as_uri(), str(fixture.head)],
+                capture_output=True, check=True)
+            self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
+                             .stdout.strip(), "true")
+            parent = subprocess.run(
+                ["git", "cat-file", "-e", fixture.base], cwd=fixture.head,
+                capture_output=True, check=False)
+            self.assertNotEqual(parent.returncode, 0)
+        else:
+            fixture.git("remote", "add", "origin", remote.as_uri())
+
+    def _pr_step(self):
+        declared, working_dir, block = self.steps.step_run(
+            "The committed baseline only ratchets down")
+        env = self.steps.env_for(declared, self.root,
+                                 EVENT_NAME="pull_request", BASE_REF="main")
+        return self.steps.bash(block, self.root, working_dir, env)
+
+    @REQUIRES_POSIX_SHELL
+    def test_mid_run_main_tightening_does_not_raise_the_pr_baseline(self):
+        self._merge_checkout()
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("has no declaration", result.stdout + result.stderr)
+        self.assertEqual(json.loads(self.fixture.base_path.read_text(
+            encoding="utf-8")), self.fixture.old)
+
+    @REQUIRES_POSIX_SHELL
+    def test_pr_raise_without_a_declaration_is_still_refused(self):
+        self._merge_checkout(raise_baseline=True)
+        result = self._pr_step()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("has no declaration", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_shallow_merge_fetches_the_missing_fixed_base(self):
+        self._merge_checkout(shallow=True)
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("has no declaration", result.stdout + result.stderr)
+        self.assertEqual(self.fixture.git("rev-parse", "--is-shallow-repository")
+                         .stdout.strip(), "false")
+        self.assertEqual(json.loads(self.fixture.base_path.read_text(
+            encoding="utf-8")), self.fixture.old)
+
+    @REQUIRES_POSIX_SHELL
+    def test_shallow_merge_keeps_the_full_declaration_window(self):
+        self._merge_checkout(raise_baseline=True, shallow=True,
+                             message=CarrierFixture.MESSAGE)
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Declared unit-suite raises:", result.stdout)
+        self.assertIn("no entry raised", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_one_parent_pr_checkout_fails_closed(self):
+        self._merge_checkout()
+        self.fixture.git("checkout", "-q", "pr")
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("two parents", result.stderr)
+        self.assertIn("failing closed", result.stderr)
+
+    @REQUIRES_POSIX_SHELL
+    def test_missing_shallow_origin_fails_closed(self):
+        self._merge_checkout(shallow=True)
+        self.fixture.git("remote", "set-url", "origin",
+                         str(self.root / "missing.git"))
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Could not fetch", result.stderr)
+        self.assertIn("failing closed", result.stderr)
 
 
 class TestCarrierDeclarationCLI(unittest.TestCase):
