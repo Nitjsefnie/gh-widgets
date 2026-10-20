@@ -31,34 +31,34 @@
       "entries": {
         "e2e::bench.render": {
           "min": 0.056494,
-          "max": 0.087719,
+          "max": 0.08619,
           "n": 16
         },
         "e2e::bench.render-impact": {
           "min": 0.955669,
-          "max": 1.343495,
+          "max": 1.340673,
           "n": 16
         },
         "e2e::bench.render-responsiveness": {
           "min": 0.058752,
-          "max": 0.081546,
+          "max": 0.080063,
           "n": 16
         }
       },
       "wall": {
         "e2e::bench.render": {
           "min": 0.057,
-          "max": 0.087,
+          "max": 0.086575,
           "n": 16
         },
         "e2e::bench.render-impact": {
           "min": 1.174,
-          "max": 1.514649,
+          "max": 1.473957,
           "n": 16
         },
         "e2e::bench.render-responsiveness": {
           "min": 0.059,
-          "max": 0.081889,
+          "max": 0.080371,
           "n": 16
         }
       }
