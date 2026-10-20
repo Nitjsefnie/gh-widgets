@@ -702,7 +702,9 @@ def main(argv: Optional[list] = None) -> int:
                              f"{CALIBRATED_METRIC} instead of raw "
                              f"{CPU_METRIC} — the runner pool's machine "
                              "factor multiplies both children and cancels "
-                             "in the ratio (issue #190)")
+                             "in the ratio; the workload mixes interpreter "
+                             "rounds, child spawns and small file I/O to "
+                             "represent the measured suite's own cost mix")
     parser.add_argument("--timeout", type=float, default=None,
                         help="seconds before the child's process group is "
                              "killed (default: none)")
