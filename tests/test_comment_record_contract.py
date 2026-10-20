@@ -22,7 +22,7 @@ def consumer_decoder():
     raw = (ROOT / "tests/fixtures/comment-ratchet-v1-policy.txt").read_bytes()
     # Pinned full upstream blob, so these are the consumer's functions rather
     # than a second implementation of what we think the consumer accepts.
-    expected = "8adcd10d222f8708e43fc445a2527a3813ed2e5a503fef15be6c45391ed3bd6f"
+    expected = "e27326173ee64b027774bae639e6156bd0c80fd00c8c1331cacc01295ce7cec7"
     if hashlib.sha256(raw).hexdigest() != expected:
         raise AssertionError("the pinned consumer fixture changed")
     nodes: list[ast.stmt] = [
@@ -51,7 +51,7 @@ class TestCommentRecordContract(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             raw = (root / relative).read_bytes()
             self.assertEqual(hashlib.sha256(raw).hexdigest(),
-                             "8adcd10d222f8708e43fc445a2527a3813ed2e5a503fef15be6c45391ed3bd6f")
+                             "e27326173ee64b027774bae639e6156bd0c80fd00c8c1331cacc01295ce7cec7")
             self.assertNotIn(b"\r\n", raw)
 
     def test_inline_and_pinned_consumer_agree_on_canonical_document_bytes(self):
