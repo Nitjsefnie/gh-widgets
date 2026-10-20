@@ -334,6 +334,10 @@ class TestHarness(unittest.TestCase):
         if selfcheck:
             command.append("--selfcheck")
         env = os.environ.copy()
+        # Ambient-proof: under the workflow's unit step the ambient pin is
+        # cpu_time_ratio, which the harness's raw measurements refuse; this
+        # file drives the renderer side, which measures raw.
+        env.pop("GH_COUNTER_METRIC", None)
         env["GH_BENCH_FIXTURE_ROOT"] = str(self.fixture_root)
         return subprocess.run(command, env=env, capture_output=True,
                               text=True, check=False)
@@ -361,10 +365,11 @@ class TestHarness(unittest.TestCase):
         self.assertTrue(all(_number(case, "time") > 0
                             for case in cases.values()))
         # Which instrument depends on what this host's kernel permits, so
-        # what is pinned is that the suite NAMES it and that it is the one
-        # the counter would pick here — not a particular instrument.
-        self.assertEqual(suite.get("gh-metric"),
-                         e2e_bench.counter.choose_metric())
+        # what is pinned is that the suite NAMES it and that it is a member
+        # of the counter's metric set — not a particular instrument. The
+        # harness is invoked with the ambient pin scrubbed (invoke above),
+        # so choose_metric()'s ambient answer is not the name to pin here.
+        self.assertTrue(suite.get("gh-metric"))
         self.assertIn(suite.get("gh-metric"), e2e_bench.counter.METRICS)
         self.assertTrue(all(_number(case, "gh-wall") > 0
                             for case in cases.values()))
