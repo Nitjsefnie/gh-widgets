@@ -82,9 +82,13 @@ belong in the gate, and neither does one that costs more than the thing it
 measures. Both were tried; both lost on numbers.
 
 ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in
-its own step, and exports the result as GH_COUNTER_METRIC; this file honours
-that variable and does not have to be asked. Two call sites in one comparison
-that picked different instruments would produce two incomparable numbers.
+its own step, and exports the result as GH_COUNTER_METRIC; the raw path
+honours that variable and does not have to be asked. Two call sites in one
+comparison that picked different instruments would produce two incomparable
+numbers. The calibrated path takes no env: --calibrated selects it, and
+under the unit step's ratio pin the raw path refuses rather than mislabel
+(a raw number under the ratio name would pass the comparator's metric
+check while measuring something else).
 
 THE PROBE RECORDS WHY THERE IS NO BETTER INSTRUMENT. It reports the metric
 in use together with perf_event_paranoid and yama ptrace_scope — the two
@@ -188,23 +192,42 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
 
-# THE CALIBRATION WORKLOAD. Fixed, interpreter-bound work — list and dict
-# building, integer arithmetic, sorting, no I/O, no randomness — pinned HERE
-# in source so the workload travels with the instrument that measures it and
-# a diff shows every change to it. ~2 CPU seconds on the cell: long enough
-# that startup noise is small against it (short measurements are the noisy
-# kind), short enough that two rounds cost seconds. Its output is
-# deterministic, so a broken calibrator shows up as a wrong answer rather
-# than as a plausible number.
+# THE CALIBRATION WORKLOAD. Fixed work whose cost MIX represents the
+# measured subject: the unit suite is roughly one quarter child-process CPU
+# (the offline git-fixture controls spawn real children per case), and a
+# pure-interpreter calibrator cancels the wrong fraction — three cell runs
+# on 2026-10-20 measured raw suite CPU falling 50% across machines while
+# an interpreter-only calibrator fell 50% from a different base, leaving
+# the ratio 31% apart (runs 39352515762, 39353675704, 39356149259). So the
+# program interleaves interpreter rounds with child spawns and small file
+# I/O, pinned HERE in source so the workload travels with the instrument
+# and a diff shows every change to it. ~1.5 CPU seconds on the cell: long
+# enough that startup noise is small against it, short enough that two
+# rounds cost seconds. Its output is deterministic, so a broken calibrator
+# shows up as a wrong answer rather than as a plausible number.
 _CALIBRATION_PROGRAM = """\
+import os, shutil, subprocess, sys, tempfile
 acc = 0
-for i in range(3000):
-    keys = [(j * 2654435761 + i * 97) & 0xFFFF for j in range(2048)]
-    table = {}
-    for j, k in enumerate(keys):
-        table[k] = (j ^ acc) & 0xFF
-    for k in sorted(table):
-        acc = (acc + k + table[k]) & 0xFFFF
+scratch = tempfile.mkdtemp()
+try:
+    path = os.path.join(scratch, "calibration")
+    for i in range(1400):
+        keys = [(j * 2654435761 + i * 97) & 0xFFFF for j in range(2048)]
+        table = {}
+        for j, k in enumerate(keys):
+            table[k] = (j ^ acc) & 0xFF
+        for k in sorted(table):
+            acc = (acc + k + table[k]) & 0xFFFF
+        if i % 56 == 0:
+            subprocess.run([sys.executable, "-c", "pass"],
+                           capture_output=True, check=False)
+            with open(path, "w") as handle:
+                handle.write("x" * 1024)
+            with open(path) as handle:
+                if len(handle.read()) != 1024:
+                    raise SystemExit(2)
+finally:
+    shutil.rmtree(scratch, ignore_errors=True)
 print(acc)
 """
 CALIBRATION_COMMAND = (sys.executable, "-c", _CALIBRATION_PROGRAM)
