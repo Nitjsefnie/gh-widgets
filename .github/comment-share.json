@@ -52,8 +52,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    33869,
-    53181
+    33853,
+    53184
   ],
   "ghwidgets_data.py": [
     2111,
@@ -85,11 +85,11 @@
   ],
   "scripts/ci/compare_counters.py": [
     11818,
-    32639
+    32871
   ],
   "scripts/ci/counter.py": [
-    12379,
-    19557
+    16950,
+    27553
   ],
   "scripts/ci/counter_platform.py": [
     363,
@@ -188,8 +188,8 @@
     15728
   ],
   "tests/test_counter.py": [
-    7747,
-    23305
+    9847,
+    30545
   ],
   "tests/test_coverage_ratchet.py": [
     6556,
@@ -240,8 +240,8 @@
     2665
   ],
   "tests/test_speed_workflow.py": [
-    13642,
-    46883
+    13720,
+    47169
   ],
   "tests/test_version.py": [
     2418,
