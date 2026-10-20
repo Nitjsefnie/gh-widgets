@@ -8,11 +8,25 @@ behind issue #81 is that paired wall-clock A/B is not a valid magnitude
 ANYWHERE — not on a shared box, and not in one job on a CI runner. So the
 quantity gated here is not an elapsed time.
 
-ONE INSTRUMENT: CPU SECONDS.
+ONE INSTRUMENT BECAME TWO: RAW AND CALIBRATED CPU SECONDS.
 `resource.getrusage(RUSAGE_CHILDREN)`, as a delta across one child. On-CPU
 time, so steal time — the thing that makes a duration on a shared runner
 meaningless — is excluded, which is what makes this valid under the ruling
 at all.
+
+THE SECOND INSTRUMENT EXISTS BECAUSE RAW CPU SECONDS STILL CARRY THE
+MACHINE. Steal is excluded, but the pool spans CPU models and load states:
+the same tree measured 27.70 and 54.25 CPU seconds across seven runs of
+2026-10-19 (issue #190), a 1.96x spread on identical code — wider than the
+30% budget the gate judges, which is why main went red on unchanged code.
+The calibrated instrument divides the child's CPU seconds by the CPU
+seconds of a fixed calibration workload run adjacently in the same job
+(measure_calibrated, below). The machine factor multiplies both children
+and cancels in the ratio; what remains is the suite's own cost. It is
+STILL not deterministic — the calibrator's own noise only partially
+cancels: measured on a loaded box, a moving 17.7% suite spread fell to
+7.1% in the ratio — which is why the baseline still records an envelope
+over it, not a point.
 
 THIS MODULE IS POSIX-ONLY, AND IT REFUSES RATHER THAN GUESSES. `resource`
 does not exist on Windows and `/proc` does not exist on macOS, and this
@@ -124,6 +138,8 @@ CLI:
 
     counter.py --probe
     counter.py --junit-file <path> --name <node-id> --cwd <dir> -- <cmd> ...
+    counter.py --calibrated --junit-file <path> --name counter::unit-suite \
+               --cwd <dir> -- <cmd> ...
 """
 from __future__ import annotations
 
@@ -148,14 +164,25 @@ except ImportError:  # POSIX only. Windows has no RUSAGE_CHILDREN, and this
 
 
 CPU_METRIC = "cpu_time"
-# The metric names this file is willing to record. There is exactly one, and
-# that is not an accident of implementation: see the docstring for the two
-# better instruments and the numbers that put them out. Anything else
+# The second instrument: the same CPU seconds, divided by the CPU seconds a
+# fixed calibration workload consumed adjacently in the same job. The runner
+# pool spans CPU models and load states, and raw CPU seconds carry that
+# machine factor: the same tree measured 27.70 and 54.25 CPU seconds across
+# seven runs on 2026-10-19 (issue #190), a 1.96x spread that no budget can
+# be written under. The ratio removes it: the machine factor multiplies the
+# suite and the calibrator alike, so it cancels, and what stays is the
+# suite's own cost. It is still not deterministic — the calibrator's own
+# noise and the suite's do not cancel — which is why it is an envelope
+# instrument like the first one, not a sharp budget.
+CALIBRATED_METRIC = "cpu_time_ratio"
+# The metric names this file is willing to record. There are exactly two,
+# and that is not an accident of implementation: see the docstring for the
+# two better instruments and the numbers that put them out. Anything else
 # arriving in GH_COUNTER_METRIC is a stale export from a shape this file has
 # left behind, and it is refused rather than measured — a number recorded
 # under a name this file does not define is the exact failure the baseline's
 # metric check exists to catch, and it should never get that far.
-METRICS = (CPU_METRIC,)
+METRICS = (CPU_METRIC, CALIBRATED_METRIC)
 METRIC_ENV = "GH_COUNTER_METRIC"
 # Read by the probe and printed next to the instrument, because a reader
 # deciding whether to trust a fallback needs to know whether it was the kernel
@@ -168,6 +195,50 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 # without depending on anything.
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
+
+# THE CALIBRATION WORKLOAD. A fixed, interpreter-bound program: list and dict
+# building, integer arithmetic and sorting, the same operations the unit
+# suite spends its time in, with no I/O, no randomness and no imports beyond
+# the interpreter itself. Its output is deterministic (8192), so a broken or
+# hijacked calibrator shows up as a wrong answer or a non-zero exit rather
+# than as a plausible number.
+#
+# It is pinned HERE, in source, rather than in a fixture file, so the
+# workload travels with the instrument that measures it and a diff shows
+# every change to it. It runs ~2 CPU seconds on the cell — long enough that
+# its own startup noise is small against it (short measurements are the
+# noisy kind; see the spread figures in this file's docstring), short enough
+# that two rounds of it add seconds, not minutes, to the job and to the
+# executed-step tests that run it for real.
+#
+# The machine factor this workload exists to cancel is the pool's spread of
+# CPU models and load states. Raw CPU seconds carry it: the same tree
+# measured 27.70 and 54.25 CPU seconds across seven runs (issue #190). The
+# factor multiplies the calibrator exactly as it multiplies the suite, so
+# the RATIO of the two is the suite's cost on a machine the pool happens to
+# hand the job — the quantity the gate always meant to judge.
+_CALIBRATION_PROGRAM = """\
+acc = 0
+for i in range(3000):
+    keys = [(j * 2654435761 + i * 97) & 0xFFFF for j in range(2048)]
+    table = {}
+    for j, k in enumerate(keys):
+        table[k] = (j ^ acc) & 0xFF
+    for k in sorted(table):
+        acc = (acc + k + table[k]) & 0xFFFF
+print(acc)
+"""
+CALIBRATION_COMMAND = (sys.executable, "-c", _CALIBRATION_PROGRAM)
+# The sum the pinned program must print. Pinning the expected output is what
+# makes a wrong calibrator a refusal rather than a plausible ratio: the
+# program is fixed arithmetic with a fixed answer, so a different answer
+# means the interpreter or the cell is broken, not that the suite got
+# slower. Changing the program means changing this with it.
+CALIBRATION_OUTPUT = "24576"
+# Generous: the calibrator is fixed work that takes seconds. A timeout here
+# means the cell itself is broken, and a broken calibration is refused, not
+# waited on.
+CALIBRATION_TIMEOUT = 300
 
 
 class CounterError(RuntimeError):
@@ -351,6 +422,98 @@ def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
     return Measurement(cpu, chosen, wall, out, err, code)
 
 
+class CalibratedMeasurement(NamedTuple):
+    """A calibrated Measurement, plus the raw parts the ratio came from.
+
+    The first six fields line up with `Measurement`, so anything that reads
+    a Measurement reads this. `value` is the RATIO, not seconds, and the
+    metric says so. The two raw figures travel with the ratio because the
+    ratio alone cannot be audited: a report that prints 13.4 without the
+    49.7-and-3.7 behind it is a number nobody can check, and an instrument
+    whose arithmetic cannot be recomputed from its own record is a black
+    box. The ratchet and the baseline re-derivations quote these parts.
+    """
+    value: float
+    metric: str
+    wall: float
+    stdout: str
+    stderr: str
+    returncode: int
+    suite_cpu: float
+    calibration_cpu: float
+
+
+def _checked_calibration(calib_command, calib_timeout, env) -> tuple:
+    """Run the calibration child, and refuse anything a ratio cannot sit on.
+
+    A failed exit, a wrong pinned sum, a timeout, or a zero-cost measurement
+    is a CounterError, never a division: a broken calibration turned into a
+    plausible ratio is precisely the lie this instrument exists to prevent.
+    Returns (wall, cpu).
+    """
+    try:
+        rc, out, _err, wall, cpu = _run_child(
+            list(calib_command), None, child_environment(env), calib_timeout)
+    except subprocess.TimeoutExpired:
+        raise CounterError(
+            "the calibration workload exceeded its "
+            f"{calib_timeout:g}s timeout; refusing to record a ratio "
+            "against a calibration that never finished") from None
+    if rc != 0:
+        raise CounterError(
+            f"the calibration workload exited {rc}; a ratio against a "
+            "calibration that failed is a number this instrument refuses "
+            "to invent")
+    if (out or "").strip() != CALIBRATION_OUTPUT.strip():
+        raise CounterError(
+            f"the calibration workload printed {out!r} where "
+            f"{CALIBRATION_OUTPUT!r} was pinned; a calibrator answering a "
+            "different sum is a broken cell, and a ratio against it would "
+            "be a number this instrument refuses to invent")
+    if cpu <= 0 or wall <= 0:
+        raise CounterError(
+            "the calibration workload measured at zero cost, which is not "
+            "a calibration; refusing to divide by it")
+    return wall, cpu
+
+
+def measure_calibrated(command: Sequence[str], cwd=None, env=None,
+                       timeout=None, calibration_command=None,
+                       calibration_timeout=None) -> CalibratedMeasurement:
+    """Run the command and the calibration workload, return their ratio.
+
+    The children run SEQUENTIALLY, suite first: `RUSAGE_CHILDREN` is a
+    running total (see `_child_cpu_seconds`), so two deltas around two
+    back-to-back children are each child's own cost, and nothing else is
+    reaped in between. The ratio is `suite_cpu / calibration_cpu`, recorded
+    under CALIBRATED_METRIC — the machine factor multiplies both children
+    alike and cancels in the division, which is the entire reason this
+    function exists (issue #190).
+
+    `calibration_command` / `calibration_timeout` default to the module's
+    pinned workload and are parameters ONLY so a test can substitute a
+    cheaper one; the workflow passes nothing and gets the real calibrator.
+
+    Raises the same trio `measure` raises — CounterError, TimeoutExpired,
+    OSError — plus the calibration refusals `_checked_calibration` names.
+    The measured command's own verdict is NOT refused here; it travels in
+    `returncode` exactly as `measure` carries it, and write_junit records
+    it as a failure.
+    """
+    code, out, err, wall, cpu = _run_child(
+        list(command), cwd, child_environment(env), timeout)
+    calib_command = (CALIBRATION_COMMAND if calibration_command is None
+                     else list(calibration_command))
+    calib_timeout = (CALIBRATION_TIMEOUT if calibration_timeout is None
+                     else calibration_timeout)
+    calib_wall, calib_cpu = _checked_calibration(calib_command, calib_timeout,
+                                                 env)
+    return CalibratedMeasurement(
+        value=cpu / calib_cpu, metric=CALIBRATED_METRIC,
+        wall=wall / calib_wall, stdout=out, stderr=err, returncode=code,
+        suite_cpu=cpu, calibration_cpu=calib_cpu)
+
+
 def population_digest(node_ids) -> str:
     """A stable digest of a test population: sha256 over the sorted ids.
 
@@ -405,7 +568,8 @@ def _node_parts(node_id: str):
     return classname, name
 
 
-def write_junit(path: Path, node_id: str, measurement: Measurement,
+def write_junit(path: Path, node_id: str,
+                measurement: "Measurement | CalibratedMeasurement",
                 command=None) -> None:
     """One testcase whose `time` is the COUNTER, not seconds. Read the module
     docstring before believing the attribute.
@@ -480,6 +644,33 @@ def _setting(path: Path) -> str:
         return "unavailable on this platform"
 
 
+def _measured_for_args(args, command) -> "Measurement | CalibratedMeasurement":
+    """The CLI's one measurement call, dispatched on --calibrated.
+
+    Both arms raise the same trio, so main's handler covers the flag
+    without growing a second error path for it.
+    """
+    if args.calibrated:
+        return measure_calibrated(command, cwd=args.cwd, timeout=args.timeout)
+    return measure(command, cwd=args.cwd, timeout=args.timeout)
+
+
+def _report_measurement(name, measurement) -> None:
+    """The CLI's stdout record of what was measured.
+
+    The calibrated parts print with the ratio so a run's log can be audited
+    without pulling the JUnit artifact: a ratio without the raw figures
+    behind it is a number nobody can recompute from the report it appears
+    in. The verdict line follows for every measurement.
+    """
+    if isinstance(measurement, CalibratedMeasurement):
+        print(f"counter: calibration = {measurement.calibration_cpu:.6f} "
+              f"{CPU_METRIC}; suite raw {measurement.suite_cpu:.6f} "
+              f"{CPU_METRIC}")
+    print(f"counter: {name} = {measurement.value:.6f} "
+          f"{measurement.metric}")
+
+
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
@@ -495,6 +686,13 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--name", metavar="NODE-ID",
                         help="node id for the testcase, e.g. "
                              "counter::unit-suite")
+    parser.add_argument("--calibrated", action="store_true",
+                        help="divide the measured child's CPU seconds by "
+                             "the pinned calibration workload's, and record "
+                             f"{CALIBRATED_METRIC} instead of raw "
+                             f"{CPU_METRIC} — the runner pool's machine "
+                             "factor multiplies both children and cancels "
+                             "in the ratio (issue #190)")
     parser.add_argument("--timeout", type=float, default=None,
                         help="seconds before the child's process group is "
                              "killed (default: none)")
@@ -520,7 +718,7 @@ def main(argv: Optional[list] = None) -> int:
         parser.error("--junit-file and --name are both required")
 
     try:
-        measurement = measure(command, cwd=args.cwd, timeout=args.timeout)
+        measurement = _measured_for_args(args, command)
     except CounterError as exc:
         print(f"counter: {exc}", file=sys.stderr)
         return 2
@@ -540,8 +738,7 @@ def main(argv: Optional[list] = None) -> int:
         sys.stdout.write(measurement.stdout)
     if measurement.stderr:
         sys.stderr.write(measurement.stderr)
-    print(f"counter: {args.name} = {measurement.value:.6f} "
-          f"{measurement.metric}")
+    _report_measurement(args.name, measurement)
     return measurement.returncode
 
 
