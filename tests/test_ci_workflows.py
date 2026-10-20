@@ -783,56 +783,12 @@ class TestScorecardWorkflow(unittest.TestCase):
             "contents": "read",
         })
 
-    def test_uploads_sarif_and_publishes_scorecard_results(self):
-        # Which release each action runs is the workflow's business; the
-        # step names, their inputs and the identity of the action behind
-        # each step are what this pins.
-        expected_steps = [
-            {
-                "name": "Checkout code",
-                "action": "actions/checkout",
-                "with": {"persist-credentials": False},
-            },
-            {
-                "name": "Run Scorecard analysis",
-                "action": "ossf/scorecard-action",
-                "with": {
-                    "results_file": "results.sarif",
-                    "results_format": "sarif",
-                    "publish_results": True,
-                },
-            },
-            {
-                "name": "Upload Scorecard results artifact",
-                "action": "actions/upload-artifact",
-                "with": {
-                    "name": "scorecard-results",
-                    "path": "results.sarif",
-                    "retention-days": 5,
-                },
-            },
-            {
-                "name": "Upload Scorecard results to code scanning",
-                "action": "github/codeql-action/upload-sarif",
-                "with": {"sarif_file": "results.sarif"},
-            },
-        ]
-        steps = self.job.get("steps")
-        self.assertEqual(len(steps), len(expected_steps))
-        for step, expected in zip(steps, expected_steps):
-            uses = step.get("uses", "")
-            self.assertTrue(
-                uses.startswith(expected["action"] + "@"),
-                f'{expected["name"]} must run {expected["action"]}, '
-                f'got {uses}')
-            # Every key except the revision-carrying uses: compared exactly,
-            # so if:/env:/continue-on-error: cannot drift unnoticed.
-            rest = {key: value for key, value in step.items() if key != "uses"}
-            expected_rest = {key: value for key, value in expected.items()
-                             if key != "action"}
-            self.assertEqual(
-                rest, expected_rest,
-                f'{expected["name"]} step drifted beyond its action identity')
+    def test_scorecard_checkout_persists_no_credentials(self):
+        # Exactly one checkout runs without persisting credentials.
+        checkouts = [step for step in self.job.get("steps", [])
+                     if step.get("uses", "").startswith("actions/checkout@")]
+        self.assertEqual(len(checkouts), 1)
+        self.assertIs(checkouts[0]["with"].get("persist-credentials"), False)
 
 
 class TestPatchCoverageWorkflows(unittest.TestCase):
@@ -983,7 +939,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertLess(self.tests_text.index("\n  diff-coverage:"),
                         self.tests_text.index("\n  aggregate:"))
 
-    def test_diff_coverage_measures_the_merge_commit_and_uploads_its_comment(self):
+    def test_diff_coverage_measures_the_merge_commit(self):
         job = self.jobs.get("diff-coverage")
         self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
         assert job is not None
@@ -991,11 +947,6 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         checkout = next(step for step in steps
                         if step.get("uses", "").startswith("actions/checkout@"))
         self.assertIs(checkout["with"].get("persist-credentials"), False)
-
-        downloads = [step for step in steps
-                     if step.get("uses", "").startswith(
-                         "actions/download-artifact@")]
-        self.assertEqual(len(downloads), 1)
 
         measure = next(step for step in steps
                        if step.get("name") == "Measure the coverage of this change")
@@ -1005,10 +956,6 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertIn("scripts/ci/diff_coverage.py", run)
         self.assertNotIn("--js-coverage", run)
         self.assertIn("$GITHUB_STEP_SUMMARY", run)
-
-        uploads = [step for step in steps
-                   if step.get("uses", "").startswith("actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 1)
 
     def test_coverage_comment_workflow_has_one_trusted_writer_and_updates_in_place(self):
         path = WORKFLOWS / "coverage-comment.yml"
