@@ -164,24 +164,16 @@ except ImportError:  # POSIX only. Windows has no RUSAGE_CHILDREN, and this
 
 
 CPU_METRIC = "cpu_time"
-# The second instrument: the same CPU seconds, divided by the CPU seconds a
-# fixed calibration workload consumed adjacently in the same job. The runner
-# pool spans CPU models and load states, and raw CPU seconds carry that
-# machine factor: the same tree measured 27.70 and 54.25 CPU seconds across
-# seven runs on 2026-10-19 (issue #190), a 1.96x spread that no budget can
-# be written under. The ratio removes it: the machine factor multiplies the
-# suite and the calibrator alike, so it cancels, and what stays is the
-# suite's own cost. It is still not deterministic — the calibrator's own
-# noise and the suite's do not cancel — which is why it is an envelope
-# instrument like the first one, not a sharp budget.
+# The second instrument: the suite's CPU seconds divided by a fixed
+# calibration workload's, run adjacently in the same job — the pool's
+# machine factor multiplies both children and cancels in the ratio. Why it
+# exists and what it does not fix is the docstring's second section.
 CALIBRATED_METRIC = "cpu_time_ratio"
-# The metric names this file is willing to record. There are exactly two,
-# and that is not an accident of implementation: see the docstring for the
-# two better instruments and the numbers that put them out. Anything else
-# arriving in GH_COUNTER_METRIC is a stale export from a shape this file has
-# left behind, and it is refused rather than measured — a number recorded
-# under a name this file does not define is the exact failure the baseline's
-# metric check exists to catch, and it should never get that far.
+# The metric names this file is willing to record. Anything else arriving in
+# GH_COUNTER_METRIC is a stale export from a shape this file has left
+# behind, and it is refused rather than measured — a number recorded under a
+# name this file does not define is the exact failure the baseline's metric
+# check exists to catch, and it should never get that far.
 METRICS = (CPU_METRIC, CALIBRATED_METRIC)
 METRIC_ENV = "GH_COUNTER_METRIC"
 # Read by the probe and printed next to the instrument, because a reader
@@ -196,27 +188,14 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
 
-# THE CALIBRATION WORKLOAD. A fixed, interpreter-bound program: list and dict
-# building, integer arithmetic and sorting, the same operations the unit
-# suite spends its time in, with no I/O, no randomness and no imports beyond
-# the interpreter itself. Its output is deterministic (8192), so a broken or
-# hijacked calibrator shows up as a wrong answer or a non-zero exit rather
+# THE CALIBRATION WORKLOAD. Fixed, interpreter-bound work — list and dict
+# building, integer arithmetic, sorting, no I/O, no randomness — pinned HERE
+# in source so the workload travels with the instrument that measures it and
+# a diff shows every change to it. ~2 CPU seconds on the cell: long enough
+# that startup noise is small against it (short measurements are the noisy
+# kind), short enough that two rounds cost seconds. Its output is
+# deterministic, so a broken calibrator shows up as a wrong answer rather
 # than as a plausible number.
-#
-# It is pinned HERE, in source, rather than in a fixture file, so the
-# workload travels with the instrument that measures it and a diff shows
-# every change to it. It runs ~2 CPU seconds on the cell — long enough that
-# its own startup noise is small against it (short measurements are the
-# noisy kind; see the spread figures in this file's docstring), short enough
-# that two rounds of it add seconds, not minutes, to the job and to the
-# executed-step tests that run it for real.
-#
-# The machine factor this workload exists to cancel is the pool's spread of
-# CPU models and load states. Raw CPU seconds carry it: the same tree
-# measured 27.70 and 54.25 CPU seconds across seven runs (issue #190). The
-# factor multiplies the calibrator exactly as it multiplies the suite, so
-# the RATIO of the two is the suite's cost on a machine the pool happens to
-# hand the job — the quantity the gate always meant to judge.
 _CALIBRATION_PROGRAM = """\
 acc = 0
 for i in range(3000):
@@ -426,12 +405,9 @@ class CalibratedMeasurement(NamedTuple):
     """A calibrated Measurement, plus the raw parts the ratio came from.
 
     The first six fields line up with `Measurement`, so anything that reads
-    a Measurement reads this. `value` is the RATIO, not seconds, and the
-    metric says so. The two raw figures travel with the ratio because the
-    ratio alone cannot be audited: a report that prints 13.4 without the
-    49.7-and-3.7 behind it is a number nobody can check, and an instrument
-    whose arithmetic cannot be recomputed from its own record is a black
-    box. The ratchet and the baseline re-derivations quote these parts.
+    a Measurement reads this. `value` is the RATIO, under CALIBRATED_METRIC.
+    The raw parts travel with it because a ratio without the figures behind
+    it is unauditable; the baseline's re-derivations quote them per run.
     """
     value: float
     metric: str

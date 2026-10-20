@@ -399,15 +399,10 @@ jobs:
     #
     # ONE FAMILY OF INSTRUMENTS, CPU SECONDS, from
     # `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
-    # time, so steal time — the thing that makes a duration on a shared runner
-    # meaningless — is excluded, which is what makes it valid under the ruling
-    # behind issue #81. The RENDERER population is judged on raw CPU seconds.
-    # The UNIT-SUITE population is judged on the CALIBRATED ratio (issue
-    # #190): raw CPU seconds carried a 1.96x machine factor across seven runs
-    # of one tree — 27.70 to 54.25 — wider than any budget this gate can
-    # hold, so the suite's CPU seconds are divided by a fixed calibration
-    # workload's, run adjacently in the same job, and the factor cancels.
-    # counter.py's docstring carries the full account.
+    # time, so steal time is excluded. The RENDERER population is judged on
+    # raw CPU seconds; the UNIT-SUITE population on the CALIBRATED ratio —
+    # counter.py's docstring and the baseline's `basis` carry the account:
+    # raw seconds carried a 1.96x machine factor on identical code.
     #
     # READ THIS BEFORE THE NUMBERS BELOW, BECAUSE IT CHANGES WHAT THEY ARE WORTH:
     # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
@@ -671,13 +666,9 @@ jobs:
 
       - name: Probe the counter instrument
         id: probe
-        # Once per job. Nothing is being chosen here — the per-population
-        # instruments are pinned in the measurement steps below. What this
-        # step exists for is the RECORD of why. It prints
+        # The RECORD of why CPU seconds are used: it prints
         # perf_event_paranoid and yama ptrace_scope, the two kernel settings
-        # that decide whether a deterministic counter is possible at all, so
-        # a reader who sees CPU seconds in use can see the alternatives were
-        # measured rather than assumed away.
+        # that decide whether a deterministic counter is possible at all.
         working-directory: head
         run: |
           python3 scripts/ci/counter.py --probe > "$RUNNER_TEMP/probe.env"
@@ -694,13 +685,8 @@ jobs:
             --root "$GH_BENCH_FIXTURE_ROOT"
 
       - name: Measure the unit suite
-        # One CPU-second measurement of the whole suite per round, emitted as
-        # one JUnit suite each — CALIBRATED since issue #190: the report's
-        # value is the suite's CPU seconds divided by the pinned calibration
-        # workload's, so the runner pool's machine factor (which took the
-        # same tree from 27.70 to 54.25 raw CPU seconds across seven runs)
-        # cancels instead of riding on the gate. The raw parts print to the
-        # log alongside the ratio.
+        # One calibrated measurement of the suite per round; the raw parts
+        # print beside the ratio.
         #
         # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
         # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
@@ -719,9 +705,7 @@ jobs:
         # why a non-zero code is reported here rather than swallowed.
         working-directory: head
         env:
-          # CALIBRATED, not raw: the unit-suite population is judged on the
-          # ratio instrument (see measure_calibrated in counter.py), and the
-          # baseline's unit-suite population records this metric name.
+          # The calibrated ratio; the baseline records it for the unit suite.
           GH_COUNTER_METRIC: cpu_time_ratio
         run: |
           mkdir -p "$REPORTS"

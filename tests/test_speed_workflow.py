@@ -364,20 +364,16 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def test_both_measurement_steps_pin_the_instrument(self):
         # Pinned rather than inherited: the instrument a population is judged
-        # by should be visible in the workflow, not buried in a fallback
-        # chain inside counter.py. The renderer population stays on raw CPU
-        # seconds; the unit suite is judged on the calibrated ratio
-        # (issue #190), and each pin names its own.
+        # by should be visible in the workflow. Renderers stay raw; the unit
+        # suite is judged on the calibrated ratio.
         self.assertEqual(self.steps.step_run("Measure the unit suite")[0]
                          ["GH_COUNTER_METRIC"], "cpu_time_ratio")
         self.assertEqual(self.steps.step_run("Run renderer workloads")[0]
                          ["GH_COUNTER_METRIC"], "cpu_time")
 
     def test_the_unit_suite_step_measures_calibrated(self):
-        # The step body passes --calibrated, so the report's value is the
-        # suite/calibration ratio and not raw seconds — the flag is the
-        # whole instrument change, and a step that lost it would compare
-        # ratios against a raw envelope or the other way round.
+        # Losing the flag compares ratios against a raw envelope, or the
+        # reverse.
         _env, _working_dir, block = self.steps.step_run(
             "Measure the unit suite")
         self.assertIn("--calibrated", block)
