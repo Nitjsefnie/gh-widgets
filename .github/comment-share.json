@@ -52,8 +52,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    33853,
-    53184
+    32886,
+    52380
   ],
   "ghwidgets_data.py": [
     2111,
@@ -236,12 +236,12 @@
     12786
   ],
   "tests/test_speed_text.py": [
-    920,
-    2665
+    771,
+    2490
   ],
   "tests/test_speed_workflow.py": [
-    13720,
-    47169
+    13784,
+    51949
   ],
   "tests/test_version.py": [
     2418,
