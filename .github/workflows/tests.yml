@@ -994,25 +994,16 @@ jobs:
           if-no-files-found: error
 
       - name: The committed baseline only ratchets down
-        # The comparator refuses a head counter above its baseline, but
-        # nothing there stops a commit from EDITING the baseline upwards in
-        # the same push. On a PR this step judges the baseline against the
-        # BASE BRANCH TIP's copy; on main's push it judges the landed window
-        # from github.event.before to HEAD.
+        # Compare the committed baseline with HEAD^1 on PRs, or with
+        # github.event.before on main pushes, so edits cannot raise it freely.
+        # HEAD^1 is the base this merge checkout was built on: it cannot move
+        # mid-run when main tightens (#195). A trailing base is lenient only
+        # about main's later tightens; each landed ratchet commit is judged
+        # by main's own push check. PR raises still need declarations against
+        # this same base_tip, whether the PR is current or behind main.
         #
-        # working-directory: head IS LOAD-BEARING. actions/checkout put the
-        # repository at head/, so a step with no working-directory runs one
-        # level above the only repository on the box and every git command
-        # here dies with "not a git repository" — reproduced, rc 128. This
-        # test suite EXECUTES this block against a real checkout at head/;
-        # a text assertion over a wrong working directory cannot catch it.
-        #
-        # NOT base.sha. That field is the base commit at PR open or last
-        # sync, and a synchronize does not refresh it, so it trails the base
-        # tip — which is exactly the direction that is wrong here, because a
-        # trailing commit carries an OLDER and therefore LOOSER baseline for
-        # the comparison to be lenient about. The base REF is fetched instead
-        # and its tip resolved from FETCH_HEAD at the moment the step runs.
+        # actions/checkout puts the repository at head/. Run every git command
+        # there; the executed-step tests exercise this working directory.
         #
         # On main's push, complete both tips' ancestry before checking the
         # landed window: shallow history can make merge-base lie without
@@ -1028,33 +1019,36 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
           WORKSPACE: ${{ github.workspace }}
         run: |
-          # A setup failure and a legitimate "there is nothing to ratchet
-          # against" must not look alike. The first guard below was written
-          # for the second and, written first, swallowed the first: with the
-          # working directory wrong, `git fetch` fails, the message printed,
-          # and the step exited ZERO. A control that cannot find the
-          # repository must go red, not green — a step that reports success
-          # without having run anything is the shape this whole job exists to
-          # avoid, and it is exactly what the first version of this step did.
+          # A missing checkout is a setup failure, never a successful skip.
           if ! git rev-parse --git-dir >/dev/null 2>&1; then
             echo "::error::no git repository in $(pwd); actions/checkout put" \
                  "the checkout in head/, so this step must declare" \
                  "working-directory: head" >&2
             exit 1
           fi
-          # PR lines retain their original columns: executed-step controls slice
-          # and execute these exact lines; byte identity keeps the PR diff honest.
           if [ "$EVENT_NAME" = "pull_request" ]; then
-          if ! git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_REF"; then
-            echo "Could not fetch the base branch '$BASE_REF' (renamed, or" \
-                 "deleted?). There is nothing to ratchet against."
-            exit 0
+          shallow="$(git rev-parse --is-shallow-repository)"
+          parents="$(git show -s --format=%P HEAD)"
+          if [ "$shallow" = "true" ]; then
+            # %P hides parents at a shallow boundary; read the commit header.
+            parents="$(git cat-file commit HEAD | sed -n '1,/^$/s/^parent //p' | tr '\n' ' ')"
           fi
-          base_tip="$(git rev-parse FETCH_HEAD)"
-          echo "Base branch tip: $base_tip"
+          read -ra parent_tips <<< "$parents"
+          if [ "${#parent_tips[@]}" -ne 2 ]; then
+            echo "::error::PR checkout must be a merge commit with exactly two parents;" \
+                 "failing closed" >&2
+            exit 1
+          fi
+          base_tip="${parent_tips[0]}"
+          echo "Merge base parent: $base_tip"
+          if [ "$shallow" = "true" ]; then
+            if ! git fetch --no-tags --unshallow origin "$base_tip" "$(git rev-parse HEAD)"; then
+              echo "::error::Could not fetch the PR merge ancestry; failing closed" >&2
+              exit 1
+            fi
+          fi
           baseline_at_base="$BASELINE"
           # The parent of the layout migration stores this same record at root.
           if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null &&
@@ -1147,11 +1141,6 @@ jobs:
           # the SHA and re-runs this job; a PR-body edit does not. The Python
           # entry point requires a baseline-only PR, exact Budget-Raise lines
           # and measuring dispatch run ids before emitting any slot names.
-          # Checkout and the fresh-base fetch above are shallow; obtain both
-          # ancestries so no earlier carrying message can be silently missed.
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --no-tags --unshallow origin "$base_tip" "$(git rev-parse HEAD)"
-          fi
           raise_slots="$(python3 scripts/ci/ratchet_declarations.py \
               "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
               --base "$base_tip" --head HEAD)"
