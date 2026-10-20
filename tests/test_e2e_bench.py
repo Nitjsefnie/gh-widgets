@@ -364,13 +364,11 @@ class TestHarness(unittest.TestCase):
         # instrument it is. Its magnitude is not a test-harness property.
         self.assertTrue(all(_number(case, "time") > 0
                             for case in cases.values()))
-        # Which instrument depends on what this host's kernel permits, so
-        # what is pinned is that the suite NAMES it and that it is a member
-        # of the counter's metric set — not a particular instrument. The
-        # harness is invoked with the ambient pin scrubbed (invoke above),
-        # so choose_metric()'s ambient answer is not the name to pin here.
-        self.assertTrue(suite.get("gh-metric"))
-        self.assertIn(suite.get("gh-metric"), e2e_bench.counter.METRICS)
+        # The renderer side measures raw, and invoke() scrubs the ambient
+        # pin, so the suite must name exactly the raw instrument — a ratio
+        # label here would mean the harness measured one thing and reported
+        # another.
+        self.assertEqual(suite.get("gh-metric"), e2e_bench.counter.CPU_METRIC)
         self.assertTrue(all(_number(case, "gh-wall") > 0
                             for case in cases.values()))
         self.assertTrue((work / "outputs/head-1/render/stats.svg").is_file())
