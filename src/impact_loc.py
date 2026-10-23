@@ -131,8 +131,8 @@ def check_git_fame():
     # "No manual entry for git-fame" and greps as if --jobs were absent —
     # even when the patched build IS installed. Invoke the binary directly.
     try:
-        r = subprocess.run(["git-fame", "--help"], capture_output=True,
-                           text=True, timeout=60, check=False)
+        r = common.run_process(["git-fame", "--help"], capture_output=True,
+                               text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"git-fame: CHECK FAILED ({e}) — blame pass may not work", flush=True)
         return False
@@ -141,18 +141,18 @@ def check_git_fame():
               "blame pass is serial and several times slower. See CLAUDE.md "
               "for the pin.", flush=True)
         return False
-    v = subprocess.run(["git-fame", "--version"], capture_output=True,
-                       text=True, timeout=60, check=False).stdout.strip()
+    v = common.run_process(["git-fame", "--version"], capture_output=True,
+                           text=True, timeout=60, check=False).stdout.strip()
     print(f"git-fame: {v} with --jobs (patched build)", flush=True)
     return True
 
 
-# Per-repo phase timings for the blame pass. Inert unless DEBUG_TIMING is set,
+# Per-repo phase timings for the blame pass. Opt in with GH_WIDGETS_DEBUG_TIMING,
 # and read once at import so the flag cannot change mid-run. This exists
 # because the blame pass is the only slow part of a render and its cost splits
 # across two very different resources -- `git clone` is network-bound and
 # `git fame` is CPU-bound -- which a single wall-clock number cannot separate.
-DEBUG_TIMING = bool(os.environ.get("DEBUG_TIMING"))
+DEBUG_TIMING = bool(os.environ.get("GH_WIDGETS_DEBUG_TIMING"))
 _TIMINGS = []
 _PHASES = {}
 _T0 = time.monotonic()
@@ -172,7 +172,8 @@ def timed_phase(name):
         return
     t0 = time.monotonic()
     try:
-        yield
+        with common.timing.track('phase', name):
+            yield
     finally:
         _PHASES[name] = _PHASES.get(name, 0.0) + time.monotonic() - t0
 
@@ -285,11 +286,17 @@ def _read_bounded_stdout_posix(proc, output, limit, deadline, cmd, timeout):
 
 
 def _run_bounded(cmd, *, cwd=None, timeout=600):
-    """Capture at most the configured stdout bytes before killing the child."""
+    """Capture at most the configured stdout bytes before killing the child.
+
+    The timer includes draining stdout and reaping on errors or timeouts;
+    those waits still block the caller even when no output is returned.
+    """
     limit = _git_output_cap_bytes()
-    with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL,
-                          start_new_session=os.name == "posix") as proc:
+    program = 'git-fame' if cmd[:2] == ['git', 'fame'] else Path(cmd[0]).name
+    with common.timing.track('process', program), \
+            subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL,
+                             start_new_session=os.name == "posix") as proc:
         output = bytearray()
         deadline = time.monotonic() + timeout
         if os.name == "posix":

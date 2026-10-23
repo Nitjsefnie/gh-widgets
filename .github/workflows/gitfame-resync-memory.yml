@@ -388,7 +388,7 @@ jobs:
                   "GH_TOKEN=$GH_TOKEN" \
                   "OUT_DIR=/tmp/out-$LABEL" \
                   "CACHE_FILE=/tmp/cache-$LABEL.json" \
-                  "DEBUG_TIMING=1" \
+                  "GH_WIDGETS_DEBUG_TIMING=1" \
                   "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
                   "BLAME_METHOD=$BLAME_METHOD" \
                   "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS" \
@@ -476,7 +476,8 @@ jobs:
           # `git fame` is CPU-bound, so a single wall number cannot say which
           # arm's change mattered -- and a clone-dominated total would mean the
           # blame build is not the thing worth optimising at all.
-          print("\n--- phase attribution (DEBUG_TIMING) ---")
+          # Match the renderer's opt-in journal instrumentation.
+          print("\n--- phase attribution (GH_WIDGETS_DEBUG_TIMING) ---")
           for f in sorted(glob.glob("/tmp/results/*.json")):
               label = json.load(open(f))["label"]
               txt = open(f"/tmp/results/{label}.out", errors="replace").read()
@@ -489,7 +490,7 @@ jobs:
                     for line in re.findall(r"^\s+timing \S+: .*$", txt, re.M)]
               if not ph:
                   print(f"{label}: NO TIMING LINES -- attribution is missing, "
-                        f"not zero (is DEBUG_TIMING set?)")
+                        f"not zero (is GH_WIDGETS_DEBUG_TIMING set?)")
                   continue
               def col(key):
                   return sum(float(p[key]) for p in ph if key in p)

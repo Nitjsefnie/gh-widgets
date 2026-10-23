@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 11
+REQUIRED_COMMON = 12
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -532,16 +532,22 @@ def load_inputs(args, token):
     return prs, insiders, fallback
 
 
+@common.timed_run('render-responsiveness')
 def main():
+    # Loading can acquire live PRs or take the durability fallback. The phase
+    # covers either path, net of shared GraphQL waits, without changing the
+    # acquisition labels used by the fallback journal or the card stamp.
     args, token = parse_args()
 
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    prs, insiders, fallback = load_inputs(args, token)
+    with common.timing.track('phase', 'load_inputs'):
+        prs, insiders, fallback = load_inputs(args, token)
     stale = fallback.fetched_at if fallback else None
-    svg, notes = build_card(C, prs, insiders, metric_knobs())
+    with common.timing.track('phase', 'render_svg'):
+        svg, notes = build_card(C, prs, insiders, metric_knobs())
     if stale and cache_is_stale(stale):
         # The stamp is a CAVEAT, not a label: it appears only when the data is
         # old enough to mislead. A successful hourly fetch carries no stamp at

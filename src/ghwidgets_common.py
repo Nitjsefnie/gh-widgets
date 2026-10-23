@@ -27,9 +27,12 @@ fails loudly at startup instead of rendering wrong numbers.
 Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 """
 import importlib.util
+import contextlib
+import functools
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -113,7 +116,131 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 11
+COMMON_VERSION = 12
+
+
+# One import-time switch, shared by all instrumentation in this renderer.
+# Timings never enter SVGs or caches; the journal is their only destination.
+DEBUG_TIMING = bool(os.environ.get("GH_WIDGETS_DEBUG_TIMING"))
+
+
+class TimingRecorder:
+    """Count direct calls and attribute main-thread time exactly once.
+
+    A phase records only its exclusive remainder after blocking calls and
+    nested phases. Worker durations are reported separately: summing them
+    into the main thread's wall budget would count overlapping work twice.
+    CPU is this Python process's CPU, including threads, excluding children.
+
+    The counter covers calls made by this renderer, including retries and
+    failed requests. Child entries count direct launches; commands inside
+    Git or git-fame belong to that child's duration rather than a second
+    launch by Python. Concurrent seconds are aggregate worker occupancy,
+    so they may exceed elapsed wall time when several clones run together.
+
+    Only the main thread advances ``named``. Each enclosing phase snapshots
+    that counter and subtracts the increment made by its children before
+    recording its own remainder. The lock protects the shared per-label
+    totals when clone workers complete together; it is never held across
+    network I/O, process waits, or user code. An unnamed stretch advances
+    wall time alone, leaving a visible gap rather than being charged to CPU.
+    """
+
+    def __init__(self):
+        self.wall = time.monotonic() if DEBUG_TIMING else 0.0
+        self.cpu = time.process_time() if DEBUG_TIMING else 0.0
+        self.totals = {}
+        self.named = 0.0
+        self.lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def track(self, kind, name):
+        """Record one attempt, including failures, and net nested phases."""
+        if not DEBUG_TIMING:
+            yield
+            return
+        concurrent = threading.current_thread() is not threading.main_thread()
+        start, named = time.monotonic(), self.named
+        launched = True
+        try:
+            yield
+        except OSError:
+            # A failed spawn starts no child. HTTP failures still count as
+            # requests, and a started child failing its check still counts.
+            launched = kind != 'process'
+            raise
+        finally:
+            elapsed = time.monotonic() - start
+            if kind == 'phase' and not concurrent:
+                elapsed = max(0.0, elapsed - (self.named - named))
+            if launched:
+                with self.lock:
+                    row = self.totals.setdefault((kind, name), [0, 0.0, 0.0])
+                    row[0] += 1
+                    row[2 if concurrent else 1] += elapsed
+                    if not concurrent:
+                        self.named += elapsed
+
+    def report(self, renderer):
+        """Print counts, blocking/concurrent durations, and the honest gap."""
+        if not DEBUG_TIMING:
+            return
+        wall, cpu = time.monotonic() - self.wall, time.process_time() - self.cpu
+        print(f'=== {renderer} timing ===\n  wall={wall:.3f}s cpu={cpu:.3f}s', flush=True)
+        for kind in ('graphql', 'rest', 'process', 'retry-sleep', 'pacing', 'phase'):
+            rows = [(name, row) for (category, name), row in self.totals.items()
+                    if category == kind]
+            if not rows:
+                print(f'  {kind}: count=0 blocked=0.000s concurrent=0.000s', flush=True)
+            for name, (count, blocked, concurrent) in sorted(rows):
+                label = f'{kind} {name}' if name else kind
+                print(f'  {label}: count={count} blocked={blocked:.3f}s '
+                      f'concurrent={concurrent:.3f}s', flush=True)
+        print(f'  attributed={self.named:.3f}s wall={wall:.3f}s '
+              f'gap={wall - self.named:.3f}s unattributed', flush=True)
+
+
+timing = TimingRecorder()
+
+
+def timed_run(renderer):
+    """Start fresh for every main(), and report even if acquisition fails."""
+    def decorate(function):
+        @functools.wraps(function)
+        def run(*args, **kwargs):
+            global timing
+            if not DEBUG_TIMING:
+                return function(*args, **kwargs)
+            timing = TimingRecorder()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                timing.report(renderer)
+        return run
+    return decorate
+
+
+def endpoint_shape(url):
+    """Fold identities out of the REST paths, dropping query pagination."""
+    path = urllib.parse.urlsplit(url).path
+    path = re.sub(r'^/repos/[^/]+/[^/]+', '/repos/{owner}/{repo}', path)
+    for family, field in (('users', 'user'), ('orgs', 'org')):
+        path = re.sub(r'^/' + family + r'/[^/]+',
+                      '/' + family + '/{' + field + '}', path)
+    return path
+
+
+def timing_sleep(seconds, kind='retry-sleep'):
+    """Keep retry back-off and intentional pacing out of unattributed time."""
+    with timing.track(kind, ''):
+        time.sleep(seconds)
+
+
+def run_process(command, *, check=False, **kwargs):
+    """Time a synchronous child while retaining subprocess.run semantics."""
+    program = 'git-fame' if command[:2] == ['git', 'fame'] else Path(command[0]).name
+    with timing.track('process', program):
+        return subprocess.run(command, check=check, **kwargs)
 
 
 def _read_repo_version() -> str:
@@ -233,19 +360,20 @@ def gql(token, query, variables=None, retries=3, timeout=20):
     )
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with timing.track('graphql', '/graphql'), \
+                    urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code < 500:
                 raise
             if attempt == retries:
                 raise
-            time.sleep(5 * (attempt + 1))
+            timing_sleep(5 * (attempt + 1))
             continue
         except urllib.error.URLError:
             if attempt == retries:
                 raise
-            time.sleep(5 * (attempt + 1))
+            timing_sleep(5 * (attempt + 1))
             continue
         if "errors" in body:
             transient = all(
@@ -253,7 +381,7 @@ def gql(token, query, variables=None, retries=3, timeout=20):
                 for e in body["errors"]
             )
             if transient and attempt < retries:
-                time.sleep(5 * (attempt + 1))
+                timing_sleep(5 * (attempt + 1))
                 continue
             raise RuntimeError(f"GraphQL errors: {body['errors']}")
         return body["data"]
@@ -362,7 +490,8 @@ def fetch_public_organizations(login, request_fn=None):
             },
         )
         try:
-            with request_fn(req, timeout=20) as response:
+            with timing.track('rest', endpoint_shape(url)), \
+                    request_fn(req, timeout=20) as response:
                 body = json.loads(response.read())
                 link = response.headers.get("Link", "")
         except (urllib.error.URLError, json.JSONDecodeError) as exc:

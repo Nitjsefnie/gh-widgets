@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import tempfile
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,7 +30,9 @@ def _load_common():
 
 
 common = _load_common()
-REQUIRED_COMMON = 11
+# Retain the renderer-visible clock used by transport tests and callers.
+time = common.time
+REQUIRED_COMMON = 12
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 API = 'https://api.github.com'
@@ -40,7 +41,11 @@ AGENT_EMAILS = frozenset({'noreply@anthropic.com', 'noreply@openai.com',
 
 
 def rest(token, path, retries=3, timeout=20):
-    """GET JSON and its Link header, retrying transport and server failures."""
+    """GET JSON and its Link header, retrying transport and server failures.
+
+    Each response body is included in its attempt's blocking duration; retry
+    back-off is separate so a slow API and a retry storm remain distinguishable.
+    """
     url = path if path.startswith(API + '/') else API + path
     req = urllib.request.Request(url, headers={
         'Authorization': f'Bearer {token}',
@@ -49,7 +54,8 @@ def rest(token, path, retries=3, timeout=20):
     })
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as result:
+            with common.timing.track('rest', common.endpoint_shape(url)), \
+                    urllib.request.urlopen(req, timeout=timeout) as result:
                 if result.status != 200:
                     raise urllib.error.HTTPError(url, result.status, 'expected HTTP 200',
                                                  result.headers, None)
@@ -60,7 +66,7 @@ def rest(token, path, retries=3, timeout=20):
         except urllib.error.URLError:
             if attempt == retries:
                 raise
-        time.sleep(5 * (attempt + 1))
+        common.timing_sleep(5 * (attempt + 1))
     raise RuntimeError('unreachable: REST retry loop exhausted')
 
 
@@ -101,30 +107,36 @@ def parse_authors(data, repository):
 
 
 def outsider_commits(repository, user, emails):
-    """Count default-branch authors in a fresh blobless clone, then remove it."""
+    """Count default-branch authors in a fresh blobless clone, then remove it.
+
+    Each Git invocation passes through the shared process timer, including
+    the probes that distinguish an empty remote from a broken default branch.
+    These calls are synchronous: their durations belong to blocked time,
+    unlike the impact renderer's pool of clones running ahead of blame.
+    """
     name = repository['full_name']
     with tempfile.TemporaryDirectory(prefix='ghwidgets-popularity-') as directory:
         clone = str(Path(directory) / 'repo')
         try:
-            subprocess.run(['git', 'clone', '--filter=blob:none', '--single-branch',
-                            '--', repository['clone_url'], clone],
-                           check=True, capture_output=True)
-            refs = subprocess.run(['git', '-C', clone, 'show-ref', '--head'],
-                                  check=False, capture_output=True)
+            common.run_process(['git', 'clone', '--filter=blob:none', '--single-branch',
+                                '--', repository['clone_url'], clone],
+                               check=True, capture_output=True)
+            refs = common.run_process(['git', '-C', clone, 'show-ref', '--head'],
+                                      check=False, capture_output=True)
             if refs.returncode == 1 and not refs.stdout and not refs.stderr:
                 # A broken remote HEAD can also produce a clone with no refs.
-                subprocess.run(['git', '-C', clone, 'symbolic-ref', 'HEAD'],
-                               check=True, capture_output=True)
-                remote = subprocess.run(['git', 'ls-remote', '--', repository['clone_url']],
-                                        check=True, capture_output=True)
+                common.run_process(['git', '-C', clone, 'symbolic-ref', 'HEAD'],
+                                   check=True, capture_output=True)
+                remote = common.run_process(['git', 'ls-remote', '--', repository['clone_url']],
+                                            check=True, capture_output=True)
                 if remote.stdout:
                     raise RuntimeError(f'{name}: empty clone but remote has history')
                 return 0
             refs.check_returncode()
             branch = 'refs/remotes/origin/' + repository['default_branch']
-            log = subprocess.run(['git', '-C', clone, 'log', '-z', '--format=%an%x1f%ae',
-                                  branch, '--'],
-                                 check=True, capture_output=True, text=False)
+            log = common.run_process(['git', '-C', clone, 'log', '-z', '--format=%an%x1f%ae',
+                                      branch, '--'],
+                                     check=True, capture_output=True, text=False)
         except (OSError, subprocess.CalledProcessError) as exc:
             raise RuntimeError(f'{name}: git clone/history failed: {exc}') from exc
         return sum(is_outsider(author, email, user, emails)
@@ -214,10 +226,13 @@ def parse_args():
     return args, token
 
 
+@common.timed_run('render-popularity')
 def main():
     args, token = parse_args()
-    user, scores = fetch_scores(token)
-    svg = render_popularity(THEMES[args.theme], user, scores)
+    with common.timing.track('phase', 'fetch_scores'):
+        user, scores = fetch_scores(token)
+    with common.timing.track('phase', 'render_svg'):
+        svg = render_popularity(THEMES[args.theme], user, scores)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / 'popularity.svg'
