@@ -112,8 +112,8 @@
     6273
   ],
   "scripts/ci/speed_ratchet.py": [
-    2784,
-    8479
+    2701,
+    8396
   ],
   "scripts/ci/speed_workflow_steps.py": [
     2664,
