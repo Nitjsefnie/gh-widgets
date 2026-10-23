@@ -8,12 +8,14 @@ their shared ``.git`` must never be made shallow or have its history move.
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,9 @@ def _config(repo):
     _git(repo, 'config', 'user.name', 'fixture')
     _git(repo, 'config', 'user.email', 'fixture@example.com')
     _git(repo, 'config', 'commit.gpgsign', 'false')
+    # Reap automatic maintenance before TemporaryDirectory removes the repo.
+    _git(repo, 'config', 'gc.autoDetach', 'false')
+    _git(repo, 'config', 'maintenance.autoDetach', 'false')
 
 
 def _commit(repo, subject, files):
@@ -83,6 +88,7 @@ def _fixture(tmp):
     })
     origin = Path(tmp) / 'origin.git'
     _git(tmp, 'clone', '--bare', str(repo), str(origin))
+    _config(origin)
     _git(repo, 'remote', 'add', 'origin', str(origin))
     _git(repo, 'push', '-u', 'origin', 'main')
     return repo, origin
@@ -238,15 +244,22 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
 
     def test_green_when_main_advances_a_non_gate_file(self):
         tmp = self.tmp
-        repo, origin = _fixture(tmp)
-        _advance_main(tmp, origin, 'fix: a file no required check reads by name', {
-            '.pylintrc': '[MESSAGES CONTROL]\ndisable=\n',
-        })
-        done = subprocess.run(
-            [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
-             '--root', str(repo)], check=False, capture_output=True, text=True)
+        trace = tmp / 'git-trace.json'
+        with mock.patch.dict(os.environ, {'GIT_TRACE2_EVENT': str(trace)}):
+            repo, origin = _fixture(tmp)
+            _advance_main(tmp, origin, 'fix: a file no required check reads by name', {
+                '.pylintrc': '[MESSAGES CONTROL]\ndisable=\n',
+            })
+            done = subprocess.run(
+                [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
+                 '--root', str(repo)], check=False, capture_output=True, text=True)
         assert done.returncode == 0, (done.stdout, done.stderr)
         assert 'carries every commit on main' in done.stdout
+        events = [json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines()]
+        maintenance = [event['argv'] for event in events
+                       if event['event'] == 'child_start' and 'maintenance' in event['argv']]
+        self.assertTrue(maintenance, events)
+        self.assertFalse(any('--detach' in argv for argv in maintenance), maintenance)
 
     def test_red_names_a_merge_commit(self):
         tmp = self.tmp
