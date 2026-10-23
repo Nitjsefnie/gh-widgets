@@ -139,8 +139,10 @@ walks overlap independently; impact overlaps total groups after the PR/issue
 repository union, with 0.3 s between group submissions. Cursor pages stay
 sequential. Both units leave `GH_WIDGETS_IMPACT_COUNT_BOT_PRS` unset: impact
 walks merged PR authors under the same cap and caches `bot_merged_prs` beside
-the unchanged `merged_prs` total. A full bot walk costs at least one request
-per repository each run, plus one per additional page of 100 PRs.
+the unchanged `merged_prs` total. Anchored, unchanged counts cost no bot requests;
+growth searches merges after `bot_waterline`. Missing anchors, count drops,
+inconsistent search deltas and resync trigger a full walk of 100 PRs per page.
+Setting the flag to `1` skips bot acquisition entirely.
 
 **Three caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and
