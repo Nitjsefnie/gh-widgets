@@ -1,14 +1,11 @@
-# gh-widgets — weekly cache-ignoring resync.
+# gh-widgets — weekly full acquisition and re-blame.
 #
 # The hourly unit is incremental: it trusts cached immutable data (merged PRs
 # keyed by id, per-repo line counts keyed by the default branch's HEAD oid).
-# That trust is only sound if something periodically re-derives it from
-# scratch, so no correctness claim rests permanently on MERGED being one-way
-# or on a line count surviving a force-push.
-#
-# This is that something. --resync discards the cache and refetches/re-blames
-# everything. It is the ONLY unit that ignores the cache; the hourly one never
-# passes --resync.
+# --resync requests a fresh full acquisition and re-blames every external repo.
+# The shared unit path retains cache-only PR history from both PR caches,
+# unioning those records with the complete live acquisition. Only this unit
+# passes --resync; the hourly unit remains incremental.
 #
 # Same two branches and dependencies as gh-widgets.service; the runner
 # waits for every branch even on failure.
@@ -16,7 +13,7 @@
 # Deploy with install.sh --units, never by editing /etc/systemd/system.
 
 [Unit]
-Description=Weekly full gh-widgets resync (ignores all caches)
+Description=Weekly full gh-widgets acquisition and re-blame (retains PR history)
 After=network-online.target
 Wants=network-online.target
 
@@ -39,9 +36,9 @@ StateDirectoryMode=0700
 UMask=0077
 
 # render.py takes no --cache-file (env only); render-responsiveness.py has no
-# --resync at all — it has no cache of its own, it renders from the impact
-# cache that impact has just rebuilt from scratch, so re-running it
-# plainly IS its resync. Both verified against --help; do not add flags here
+# --resync at all — it renders from the refreshed impact cache, including
+# cache-only PR history retained by the shared acquisition. Re-running it
+# after impact IS its resync. Both verified against --help; do not add flags here
 # without checking, an unknown flag exits 2 and fails the whole unit.
 # Org lookup: see gh-widgets.service.
 # Popularity and stars fetch live on every run and have no --resync flag.
