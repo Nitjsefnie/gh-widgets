@@ -90,6 +90,11 @@ def validate_cache_shape(cache):
             _validate_count("totals", repo, "bot_merged_prs", entry["bot_merged_prs"])
             if entry["bot_merged_prs"] > entry["merged_prs"]:
                 raise CacheShapeError(f"impact cache totals[{repo!r}] bots exceed merged_prs")
+        if "bot_waterline" in entry:
+            value = entry["bot_waterline"]
+            if not isinstance(value, str) or not value:
+                raise CacheShapeError(
+                    f"impact cache totals[{repo!r}].bot_waterline must be a non-empty string")
     if "ourloc" not in cache:
         return
     entries = cache["ourloc"]
