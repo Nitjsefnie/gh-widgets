@@ -1219,9 +1219,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             "git -C \"$repo\" config user.email "
             "'41898282+github-actions[bot]@users.noreply.github.com'",
             push["run"])
-        self.assertIn(
-            'git -C "$repo" commit -m "ci(ratchet): tighten the recorded '
-            'thresholds from run $RUN_ID (automated)"', push["run"])
+        self.assertIn('git -C "$repo" commit -m "$subject"', push["run"])
         self.assertIn(
             'git -C "$repo" push origin HEAD:refs/heads/main', push["run"])
 

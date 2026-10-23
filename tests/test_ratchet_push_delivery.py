@@ -47,10 +47,13 @@ def boundaries(root):
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
         "if args == ['diff', '--cached', '--quiet']: sys.exit(1)\n"
+        "subject = {'.github/comment-share.json': 'chore(ratchet): tighten comment-share records (automated)',\n"
+        " 'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
+        " 'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
         " ['config', 'user.name', 'github-actions[bot]'],\n"
         " ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],\n"
-        " ['commit', '-m', 'ci(ratchet): tighten the recorded thresholds from run 12345678 (automated)'],\n"
+        " ['commit', '-m', subject],\n"
         " ['push', 'origin', 'HEAD:refs/heads/main']]\n"
         "assert args in allowed, args\n", encoding="utf-8")
     for path in binary.iterdir():

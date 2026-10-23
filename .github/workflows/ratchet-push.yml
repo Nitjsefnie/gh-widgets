@@ -405,7 +405,13 @@ jobs:
           fi
           git -C "$repo" config user.name 'github-actions[bot]'
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git -C "$repo" commit -m "ci(ratchet): tighten the recorded thresholds from run $RUN_ID (automated)"
+          case "$record_path" in
+            .github/comment-share.json) subject='chore(ratchet): tighten comment-share records (automated)' ;;
+            gate/coverage-floor.json) subject='chore(ratchet): raise the coverage floor (automated)' ;;
+            gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;
+            *) echo "no commit subject for $record_path" >&2; exit 1 ;;
+          esac
+          git -C "$repo" commit -m "$subject"
 
           if git -C "$repo" push origin HEAD:refs/heads/main; then
             echo "ratchet record pushed from run $RUN_ID"
