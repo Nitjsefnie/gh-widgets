@@ -558,6 +558,15 @@ class TestCalibratedInstrument(unittest.TestCase):
     CHEAP_CALIBRATION = [sys.executable, "-c", "print(24576)"]
 
     @REQUIRES_BENCH
+    def test_shipped_calibration_matches_its_pin_and_costs_cpu(self):
+        measured = counter.measure(counter.CALIBRATION_COMMAND,
+                                   metric=counter.CPU_METRIC,
+                                   timeout=counter.CALIBRATION_TIMEOUT)
+        self.assertEqual(measured.returncode, 0, measured.stderr)
+        self.assertEqual(measured.stdout.strip(), counter.CALIBRATION_OUTPUT)
+        self.assertGreater(measured.value, 0.0)
+
+    @REQUIRES_BENCH
     def test_the_ratio_is_suite_cpu_over_calibration_cpu(self):
         measured = counter.measure_calibrated(
             [sys.executable, "-c", "sum(range(200000))"],
