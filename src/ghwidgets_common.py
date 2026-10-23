@@ -142,8 +142,7 @@ class TimingRecorder:
     that counter and subtracts the increment made by its children before
     recording its own remainder. The lock protects the shared per-label
     totals when clone workers complete together; it is never held across
-    network I/O, process waits, or user code. An unnamed stretch advances
-    wall time alone, leaving a visible gap rather than being charged to CPU.
+    network I/O, process waits, or user code.
     """
 
     def __init__(self):

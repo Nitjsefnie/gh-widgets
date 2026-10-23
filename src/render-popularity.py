@@ -43,8 +43,7 @@ AGENT_EMAILS = frozenset({'noreply@anthropic.com', 'noreply@openai.com',
 def rest(token, path, retries=3, timeout=20):
     """GET JSON and its Link header, retrying transport and server failures.
 
-    Each response body is included in its attempt's blocking duration; retry
-    back-off is separate so a slow API and a retry storm remain distinguishable.
+    Each attempt includes reading the body; back-off has its own timer.
     """
     url = path if path.startswith(API + '/') else API + path
     req = urllib.request.Request(url, headers={

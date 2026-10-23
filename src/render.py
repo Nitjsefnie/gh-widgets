@@ -939,8 +939,7 @@ def write_cards(C, out, user, prs, issues, fallback):
 
 @common.timed_run('render-gh-widgets')
 def main():
-    # Input phases include cache handling; the shared recorder subtracts API
-    # blocking time so acquisition and card writes can share one wall budget.
+    # Net shared API waits out of input and publication phases.
     args, token = parse_args()
 
     C = THEMES[args.theme]
