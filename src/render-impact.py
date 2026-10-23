@@ -35,6 +35,7 @@ Configuration (env vars or CLI flags, in that order of precedence):
   IMPACT_PR_GAMMA    volume exponent, PR table         (default 1.0)
   IMPACT_ISSUE_GAMMA volume exponent, issue table      (default 1.75)
   IMPACT_LOC_GAMMA   volume exponent, live-code table  (default 0.5)
+  GH_WIDGETS_IMPACT_COUNT_BOT_PRS  include bot PRs in repository totals (default 0)
 
 Who counts as "us" is DERIVED from the token's own account (login, databaseId,
 orgs) rather than hardcoded, so joining an org needs no code change. The two
@@ -157,7 +158,7 @@ def cache_complete(cache):
         return False
     # An older cache cannot supply the default human-only denominator.
     return count_bot_prs() or all("bot_merged_prs" in entry
-                                 for entry in cache["totals"].values())
+                                  for entry in cache["totals"].values())
 
 
 PR_QUERY = common.PR_QUERY
@@ -573,10 +574,10 @@ def fetch_all(token, user, cache, resync):
     """Fetch every input the impact card needs. Returns
     (insiders, prs, prs_by_id, issues, totals, ourloc).
 
-    Five acquisitions, not one: each is wrapped in `common.acquisition` so the
+    Six acquisitions, not one: each is wrapped in `common.acquisition` so the
     caller's fallback line can name the one that raised rather than this
     function, which is what the line can only do when the failure came from
-    outside all five.
+    outside all six.
     """
     with timed_phase("load_share"):
         shared = common.share.load(user)
@@ -680,9 +681,9 @@ def main():
             # Nothing here will carry the name, so drop the label.
             common.take_last_acquisition()
             raise
-        # fetch_all is five acquisitions; the label the failing one left
+        # fetch_all is six acquisitions; the label the failing one left
         # behind names it. `fetch_all` itself is the honest name when the
-        # failure came from outside all five (issue #55).
+        # failure came from outside all six (issue #55).
         fallback = common.CacheFallback(
             cache["fetched_at"], common.take_last_acquisition() or "fetch_all", exc)
         prs = list(cache["prs"].values())
