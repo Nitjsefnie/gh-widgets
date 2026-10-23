@@ -97,17 +97,25 @@ class ImpactBots(unittest.TestCase):
         self.assertEqual(saved['other/repo']['bot_waterline'], WATERLINE)
 
     def test_recounts_for_migration_drop_resync_and_search_mismatch(self):
-        for saved, fresh, resync, searches in (
-                ({}, 10, False, 0),
-                ({'merged_prs': 10, 'bot_merged_prs': 9}, 10, False, 0),
-                ({'merged_prs': 10, 'bot_waterline': WATERLINE}, 10, False, 0),
+        for saved, fresh, resync, searches, new_merges in (
+                ({}, 10, False, 0, 0),
+                ({'merged_prs': 10, 'bot_merged_prs': 9}, 10, False, 0, 0),
+                ({'merged_prs': 10, 'bot_waterline': WATERLINE}, 10, False, 0, 0),
                 ({'merged_prs': 11, 'bot_merged_prs': 9,
-                  'bot_waterline': WATERLINE}, 10, False, 0),
+                  'bot_waterline': WATERLINE}, 10, False, 0, 0),
                 ({'merged_prs': 10, 'bot_merged_prs': 9,
-                  'bot_waterline': WATERLINE}, 10, True, 0),
+                  'bot_waterline': WATERLINE}, 10, True, 0, 0),
                 ({'merged_prs': 9, 'bot_merged_prs': 9,
-                  'bot_waterline': WATERLINE}, 10, False, 1)):
+                  'bot_waterline': WATERLINE}, 10, False, 1, 0),
+                ({'merged_prs': 9, 'bot_merged_prs': 1,
+                  'bot_waterline': WATERLINE}, 10, False, 1, 2)):
             api = BotAPI()
+            if new_merges:
+                api.search_nodes = [
+                    {'mergedAt': NEWEST, 'author': {'__typename': 'Bot'}}
+                    for _ in range(new_merges)] + [
+                        {'mergedAt': WATERLINE, 'author': {'__typename': 'Bot'}},
+                        {'mergedAt': '2026-10-21T00:00:00Z', 'author': None}]
             with self.subTest(saved=saved, resync=resync):
                 totals = self.acquire(fresh, {'other/repo': saved}, api,
                                       resync=resync)['other/repo']
