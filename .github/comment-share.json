@@ -29,7 +29,7 @@
   ],
   ".github/workflows/gitfame-resync-memory.yml": [
     3185,
-    17409
+    17490
   ],
   ".github/workflows/pr-gate.yml": [
     615,
@@ -144,32 +144,32 @@
     6913
   ],
   "src/ghwidgets_common.py": [
-    9237,
-    24209
+    10892,
+    29132
   ],
   "src/ghwidgets_journal.py": [
     2106,
     2713
   ],
   "src/impact_clone.py": [
-    4747,
-    12776
+    4858,
+    13488
   ],
   "src/impact_loc.py": [
-    5472,
-    19375
+    5519,
+    19583
   ],
   "src/render-impact.py": [
-    7197,
-    20945
+    7208,
+    20998
   ],
   "src/render-responsiveness.py": [
-    10603,
-    19236
+    10717,
+    19485
   ],
   "src/render.py": [
-    10438,
-    31895
+    10487,
+    32076
   ],
   "tests/__init__.py": [
     68,
