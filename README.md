@@ -449,16 +449,19 @@ one or two samples is not an estimate of anything. The excluded tail is
 **stated on the card** — repo count and PR count — rather than quietly dropped,
 along with the number of rows the top-N cut hides.
 
-It fetches its own PR data — one paginated GraphQL connection, the same one
-`src/render.py` uses — so it needs a token; it runs in sequence after
-`src/render-impact.py` in the same service rather than on a schedule of its own
-(`units/gh-widgets.service` runs all four renderers as sequential
-`ExecStart` lines on an hourly timer; the weekly resync unit runs the same
-sequence, with `--resync` on `render-gh-widgets.py` and `render-impact.py`
+It needs a token for standalone PR acquisition; in the units it reuses the
+profile renderer's same-run acquisition share. Both units invoke
+`scripts/run-gh-widgets.sh`: lookup → profile → impact → responsiveness → stars
+is serial, while popularity runs independently alongside it. The runner
+waits for all branches and fails the unit if any step fails, skipping its
+dependents. Stars uses GraphQL too, so serializing it keeps the unit's
+in-flight GraphQL requests within the per-process cap of two.
+The hourly timer uses normal mode; the weekly resync uses
+`--resync` on `render-gh-widgets.py` and `render-impact.py`
 only — `render-responsiveness.py` takes none, since re-running it after the
 impact resync is its resync — and the order is load-bearing:
 `src/render-impact.py` refreshes the shared cache `src/render-responsiveness.py`
-then reads).
+then reads.
 It shares that script's cache,
 because that is where the account's authored PRs already live: it **merges**
 its half in and leaves every other section alone, above all `ourloc`, the

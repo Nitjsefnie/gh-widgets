@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.sh"
 RENDERER_SOURCES = {
+    "scripts/run-gh-widgets.sh": "run-gh-widgets.sh",
     "src/render.py": "render-gh-widgets.py",
     "src/render-impact.py": "render-impact.py",
     "src/impact_loc.py": "impact_loc.py",
@@ -103,7 +104,7 @@ def source_renderer_bytes(source_dir):
     "install.sh uses POSIX shell syntax and this class executes it directly",
 )
 class TestRendererInstall(unittest.TestCase):
-    """The eleven deployment files install or roll back as one verified set."""
+    """The runner and renderer deployment files install or roll back together."""
 
     def setUp(self):
         # pylint: disable=consider-using-with
