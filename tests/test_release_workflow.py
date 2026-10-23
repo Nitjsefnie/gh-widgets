@@ -365,6 +365,13 @@ exit 1
         # and suppress the chained TimeoutExpired, whose argv is the whole
         # workflow block and would bury the one line that says what went
         # wrong.
+        # A tick must not skip poll 1 (#237).
+        clock = self.root / "clock-tick.sh"
+        clock.write_text(
+            'trap \'case "$BASH_COMMAND" in missing=*) '
+            'SECONDS=$(( SECONDS + 1 )); trap - DEBUG;; esac\' DEBUG\n',
+            encoding="utf-8")
+        overrides["BASH_ENV"] = str(clock)
         try:
             return subprocess.run(
                 ["bash", "-e", "-o", "pipefail", "-c",
@@ -407,7 +414,6 @@ exit 1
     # Long enough that a step which should never wait does not, short
     # enough that a step which should give up does.
     NO_WAIT = {"POLL_INTERVAL_SECONDS": "1", "WAIT_DEADLINE_SECONDS": "3"}
-    GIVE_UP = {"POLL_INTERVAL_SECONDS": "1", "WAIT_DEADLINE_SECONDS": "1"}
 
 
 class TestReleaseWorkflowGates(_ReleaseWorkflowFixture):
@@ -466,7 +472,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                                      state, gate))
                     self._write_runs(runs)
                     done = self._execute(
-                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                        "Wait for the other gates on this commit",
+                        **self.NO_WAIT)
                     self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                     if state in ("missing", "pending"):
                         self.assertIn("Timed out", done.stderr)
@@ -500,7 +507,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         (self.root / f"check-runs-{anchor}").write_text(
             self._check_runs([]), encoding="utf-8")
         done = self._execute("Wait for the other gates on this commit",
-                             **self.GIVE_UP)
+                             **self.NO_WAIT)
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("never reported", done.stderr)
 
@@ -521,7 +528,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                         (self.root / f"check-runs-{anchor}").write_text(
                             self._check_runs(runs), encoding="utf-8")
                     done = self._execute(
-                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                        "Wait for the other gates on this commit",
+                        **self.NO_WAIT)
                     expected = 0 if location == "tip" and conclusion == "skipped" else 1
                     self.assertEqual(done.returncode, expected,
                                      done.stdout + done.stderr)
@@ -537,7 +545,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         (self.root / f"check-runs-{anchor}-after").write_text(
             self._check_runs(self.ALL_GREEN), encoding="utf-8")
         done = self._execute("Wait for the other gates on this commit",
-                             **self.NO_WAIT)
+                             **{**self.NO_WAIT, "WAIT_DEADLINE_SECONDS": "5"})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("still running", done.stdout)
 
@@ -551,14 +559,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self.setUp()
                 self._comment_share_tip()
                 self._window(self.SHA, self.OTHER_SHA, paths)
-                # One clock tick must still leave time for the first poll.
-                clock = self.root / "clock-tick.sh"
-                clock.write_text(
-                    'trap \'case "$BASH_COMMAND" in missing=*) '
-                    'SECONDS=$(( SECONDS + 1 )); trap - DEBUG;; esac\' DEBUG\n',
-                    encoding="utf-8")
                 done = self._execute("Wait for the other gates on this commit",
-                                     BASH_ENV=str(clock), **self.NO_WAIT)
+                                     **self.NO_WAIT)
                 self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                 self.assertIn("did not reach", done.stderr)
 
@@ -576,7 +578,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     (self.root / f"window-{location}").write_text(
                         value, encoding="utf-8")
                     done = self._execute(
-                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                        "Wait for the other gates on this commit",
+                        **self.NO_WAIT)
                     self.assertNotEqual(done.returncode, 0,
                                         done.stdout + done.stderr)
 
@@ -586,7 +589,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         self._comment_share_tip(stacked=True)
         (self.root / f"parent-{self.OTHER_SHA}").write_text("null", encoding="utf-8")
         done = self._execute("Wait for the other gates on this commit",
-                             **self.GIVE_UP)
+                             **self.NO_WAIT)
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("Unknown first parent", done.stderr)
 
@@ -644,7 +647,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # five and released.
         self._write_runs(self._without("speed"))
         done = self._execute("Wait for the other gates on this commit",
-                             **self.GIVE_UP)
+                             **self.NO_WAIT)
 
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("speed", done.stdout + done.stderr)
@@ -659,7 +662,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
             **{"polls-remaining": "2",
                "check-runs-after": self._check_runs(self.ALL_GREEN)})
         done = self._execute("Wait for the other gates on this commit",
-                             **self.NO_WAIT)
+                             **{**self.NO_WAIT, "WAIT_DEADLINE_SECONDS": "5"})
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("still running", done.stdout)
@@ -798,7 +801,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     self._write_runs(runs)
                     done = self._execute(
                         "Wait for the other gates on this commit",
-                        **self.GIVE_UP)
+                        **self.NO_WAIT)
                     out = done.stdout + done.stderr
 
                     self.assertEqual(done.returncode, 1, out)
@@ -851,7 +854,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self._write_runs([("in_progress", "", other)]
                                  + self.ALL_GREEN)
                 done = self._execute("Wait for the other gates on this commit",
-                                     **self.GIVE_UP)
+                                     **self.NO_WAIT)
                 out = done.stdout + done.stderr
 
                 self.assertEqual(done.returncode, 1, out)
@@ -912,7 +915,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
             + self._without("speed", "unittest (ubuntu-latest, 3.10)"),
             **{"polls-remaining": "1"})
         done = self._execute("Wait for the other gates on this commit",
-                             **self.GIVE_UP)
+                             **self.NO_WAIT)
 
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("Timed out", done.stderr)
@@ -927,7 +930,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
             [("completed", "success", "lint-docs")]
             + self._without("lint"))
         done = self._execute("Wait for the other gates on this commit",
-                             **self.GIVE_UP)
+                             **self.NO_WAIT)
 
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("never reported a check run: lint", done.stderr)
