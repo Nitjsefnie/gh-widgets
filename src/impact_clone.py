@@ -417,6 +417,11 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
                                       thread_name_prefix="prefetch")
     pending = {}
     dirs = {}
+    processes = {}
+
+    def run_clone(repo, branch, dest, head, samples):
+        with common.timing.collect_processes(samples):
+            return clone_fn(repo, branch, dest, head)
 
     def start(idx):
         if idx < len(moved) and idx not in pending:
@@ -428,8 +433,9 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
                 shutil.rmtree(scratch, ignore_errors=True)
                 raise
             dirs[idx] = scratch
-            pending[idx] = pool.submit(clone_fn, repo, t["branch"], dirs[idx],
-                                       t.get("head"))
+            processes[idx] = []
+            pending[idx] = pool.submit(run_clone, repo, t["branch"], dirs[idx],
+                                       t.get("head"), processes[idx])
 
     try:
         for i, entry in enumerate(moved):
@@ -440,7 +446,16 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
             t0 = time.monotonic()
             try:
                 with common.timing.track('phase', 'clone_wait'):
-                    clone_s = pending.pop(i).result()
+                    started = time.monotonic()
+                    future = pending[i]
+                    try:
+                        clone_s = future.result()
+                    finally:
+                        # Only a settled future exposes complete child intervals.
+                        if future.done():
+                            common.timing.reattribute_wait(
+                                processes.pop(i), started, time.monotonic())
+                            pending.pop(i)
                 err = None
             except Exception as e:  # pylint: disable=broad-except
                 clone_s, err = 0.0, e
@@ -450,6 +465,10 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
         for fut in pending.values():
             fut.cancel()
         with common.timing.track('phase', 'clone_shutdown'):
+            started = time.monotonic()
             pool.shutdown(wait=True)
+            common.timing.reattribute_wait(
+                [sample for group in processes.values() for sample in group],
+                started, time.monotonic())
         for scratch in dirs.values():
             remove_scratch_dir(scratch)

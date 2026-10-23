@@ -34,7 +34,7 @@ def _load_common():
 
 
 common = _load_common()
-REQUIRED_COMMON = 12
+REQUIRED_COMMON = 13
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 gql = common.gql
