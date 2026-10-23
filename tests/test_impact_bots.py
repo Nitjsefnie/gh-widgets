@@ -96,6 +96,15 @@ class ImpactBots(unittest.TestCase):
                                      if kind == 'bots'), 0)
         self.assertEqual(saved['other/repo']['bot_waterline'], WATERLINE)
 
+    def test_repository_without_merged_prs_costs_no_bot_request(self):
+        api = BotAPI()
+        api.bot_pages = [[], []]
+        totals = self.acquire(0, {'other/repo': {'merged_prs': 0, 'bot_merged_prs': 0}},
+                              api)['other/repo']
+        self.assertEqual(totals['bot_merged_prs'], 0)
+        self.assertNotIn('bot_waterline', totals)
+        self.assertFalse([k for k in api.counts if k[0] in ('bots', 'bot-search')])
+
     def test_recounts_for_migration_drop_resync_and_search_mismatch(self):
         for saved, fresh, resync, searches, new_merges in (
                 ({}, 10, False, 0, 0),
