@@ -96,7 +96,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 13
+REQUIRED_COMMON = 14
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -513,17 +513,27 @@ def fetch_all(token, user, cache, resync):
     function, which is what the line can only do when the failure came from
     outside all five.
     """
+    with timed_phase("load_share"):
+        shared = common.share.load(user)
     # Identity first: everything downstream depends on knowing who we are
     # and which owners are insiders. Derived from the token's own account,
     # so joining an org needs no code or config change.
-    with timed_phase("identity"), common.acquisition("fetch_identity"):
-        me = common.fetch_identity(token, user, gql_fn=gql)
+    if shared is not None:
+        identity = shared["identity"]
+        me = common.Identity(identity["login"], identity["databaseId"],
+                             identity["orgs"], frozenset(identity["insiders"]),
+                             frozenset(identity["emails"]))
+        prs, issues = shared["prs"], shared["issues"]
+        prs_by_id = {node["id"]: node for node in prs}
+    else:
+        with timed_phase("identity"), common.acquisition("fetch_identity"):
+            me = common.fetch_identity(token, user, gql_fn=gql)
+        with timed_phase("fetch_prs"), common.acquisition("fetch_pull_requests"):
+            prs, prs_by_id = fetch_pull_requests(
+                token, me.login, None if resync else cache.get("prs") or None)
+        with timed_phase("fetch_issues"), common.acquisition("fetch_issues"):
+            issues = fetch_issues(token, me.login)
     insiders = me.insiders
-    with timed_phase("fetch_prs"), common.acquisition("fetch_pull_requests"):
-        prs, prs_by_id = fetch_pull_requests(
-            token, me.login, None if resync else cache.get("prs") or None)
-    with timed_phase("fetch_issues"), common.acquisition("fetch_issues"):
-        issues = fetch_issues(token, me.login)
     repos = sorted({n["repository"]["nameWithOwner"]
                     for n in prs + issues
                     if common.is_external(n, insiders)})

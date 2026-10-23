@@ -17,10 +17,10 @@ of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning �
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs an eleven-file deployment set to `/usr/local/bin`
+unit.** Bare, it installs a twelve-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`, `impact_loc.py`,
 `render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_cache.py`,
-`ghwidgets_journal.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`, `render-popularity.py`).
+`ghwidgets_journal.py`, `ghwidgets_share.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`, `render-popularity.py`).
 Sources live under `src/` except the root public `ghwidgets_data.py`;
 installed filenames stay flat. The renderers
 load `ghwidgets_common.py` and assert its `COMMON_VERSION` at startup; that
@@ -118,6 +118,14 @@ contract and upgrade it deliberately with compatibility tests; an unpinned
 moving branch is not supported. The renderer CLIs, flags, caches, and SVG
 output remain unchanged and standalone. `cache.json` and `impact-cache.json`
 are separate private renderer caches, not the public integration API.
+
+**Unit acquisition sharing.** Both units set `GH_WIDGETS_SHARE_DIR` to a private
+directory per service under `/var/lib/gh-widgets/share/`. The profile renderer
+clears the previous artifact, acquires identity and authored history, unions PRs
+with both sibling caches, and publishes validated JSON atomically under a lock.
+Impact and responsiveness reuse it only for the same account and systemd
+invocation. Missing or invalid shares fetch live and log the reason; with the
+variable unset all renderers retain their standalone live-fetch behavior.
 
 **Three caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and

@@ -874,7 +874,8 @@ class ImportLayoutTests(unittest.TestCase):
                 shutil.copy2(root / "ghwidgets_data.py", directory)
                 siblings = directory / "src" if layout == "source" else directory
                 siblings.mkdir(exist_ok=True)
-                for name in ("ghwidgets_common", "ghwidgets_cache", "ghwidgets_journal"):
+                for name in ("ghwidgets_common", "ghwidgets_cache", "ghwidgets_journal",
+                             "ghwidgets_share"):
                     shutil.copy2(root / "src" / f"{name}.py", siblings)
                 done = subprocess.run(
                     [sys.executable, "-I", "-c",

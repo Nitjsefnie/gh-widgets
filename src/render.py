@@ -77,7 +77,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 13
+REQUIRED_COMMON = 14
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -833,14 +833,30 @@ def load_inputs(args, token, cache_file):
     need. Returns (user, prs, issues, fallback), where `fallback` is None
     after a successful fetch and otherwise carries the cache timestamp the
     cards are drawn from plus the acquisition that failed."""
+    share_path = common.share.begin()
     cache = {} if args.resync else load_cache(cache_file)
+    shared_prs = {}
+    if share_path is not None:
+        # Both unit caches contribute history before the one warm acquisition.
+        shared_prs = common.load_cache(
+            Path(cache_file).with_name("impact-cache.json"), 1).get("prs") or {}
+        shared_prs = {**shared_prs,
+                      **(load_cache(cache_file).get("prs") or {})}
     # `phase` is set to the acquisition about to run, so the except clause
     # knows which one raised without having to infer it after the fact.
     phase = "fetch"
     try:
         user, days = fetch(token, args.user, cache.get("calendar_days") or None)
+        if share_path is not None:
+            phase = "fetch_identity"
+            me = common.fetch_identity(token, args.user, gql_fn=gql)
         phase = "fetch_pull_requests"
-        prs, prs_by_id = fetch_pull_requests(token, args.user, cache.get("prs") or None)
+        prs, prs_by_id = fetch_pull_requests(
+            token, args.user,
+            None if args.resync else (shared_prs or cache.get("prs") or None))
+        if share_path is not None:
+            prs_by_id = {**shared_prs, **prs_by_id}
+            prs = list(prs_by_id.values())
         phase = "fetch_issues"
         issues = fetch_issues(token, args.user)
     except Exception as exc:
@@ -856,6 +872,8 @@ def load_inputs(args, token, cache_file):
         prs = list(cache["prs"].values())
         issues = cache["issues"]
     else:
+        if share_path is not None:
+            common.share.write(share_path, me, issues, prs)
         save_cache(cache_file, {
             "version": CACHE_VERSION,
             "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
