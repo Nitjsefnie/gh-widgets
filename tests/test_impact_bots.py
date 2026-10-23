@@ -119,6 +119,7 @@ class ImpactBots(unittest.TestCase):
         for value in ('true', '2', ' 1'):
             with mock.patch.dict(os.environ, {VARIABLE: value}), \
                     mock.patch.object(sys, 'argv', ['render-impact.py', '--user', 'me',
-                                                   '--token', 't']), \
+                                                    '--token', 't']), \
+                    mock.patch.object(impact, 'fetch_all', side_effect=AssertionError('network')), \
                     self.assertRaisesRegex(SystemExit, VARIABLE):
                 impact.main()

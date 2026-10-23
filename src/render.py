@@ -840,63 +840,64 @@ def load_inputs(args, token, cache_file):
     cards are drawn from plus the acquisition that failed."""
     share_path = common.share.begin()
     cache = {} if args.resync else load_cache(cache_file)
-    shared_prs = {}
+    prs_by_id = {}
     if share_path is not None:
         # Both unit caches contribute history before the one warm acquisition.
-        shared_prs = common.load_cache(
+        prs_by_id = common.load_cache(
             Path(cache_file).with_name("impact-cache.json"), 1).get("prs") or {}
-        shared_prs = {**shared_prs,
-                      **(load_cache(cache_file).get("prs") or {})}
+        prs_by_id = {**prs_by_id,
+                     **(load_cache(cache_file).get("prs") or {})}
     # `phase` is set to the acquisition about to run, so the except clause
     # knows which one raised without having to infer it after the fact.
     phase = "fetch"
     try:
         with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
-            results = {
+            tasks = {
                 "fetch": pool.submit(fetch, token, args.user,
                                      cache.get("calendar_days") or None),
                 "fetch_pull_requests": pool.submit(
                     fetch_pull_requests, token, args.user,
-                    None if args.resync else (shared_prs or cache.get("prs") or None)),
+                    None if args.resync else (prs_by_id or cache.get("prs") or None)),
                 "fetch_issues": pool.submit(fetch_issues, token, args.user),
             }
             if share_path is not None:
-                results["fetch_identity"] = pool.submit(
+                tasks["fetch_identity"] = pool.submit(
                     common.fetch_identity, token, args.user, gql_fn=gql)
+            results = {}
             # The coordinator owns phase; workers never race on the failure label.
-            for phase in results:
-                results[phase] = results[phase].result()
+            for phase, task in tasks.items():
+                results[phase] = task.result()
         user = results["fetch"][0]
-        prs, prs_by_id = results["fetch_pull_requests"]
+        prs = results["fetch_pull_requests"][0]
         issues = results["fetch_issues"]
         if share_path is not None:
-            prs_by_id = {**shared_prs, **prs_by_id}
+            prs_by_id = {**prs_by_id, **results["fetch_pull_requests"][1]}
             prs = list(prs_by_id.values())
+        else:
+            prs_by_id = results["fetch_pull_requests"][1]
     except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,
         # exiting non-zero is still correct.
         if not cache_complete(cache):
             raise
-        fallback = CacheFallback(cache["fetched_at"], phase, exc)
         user = dict(cache["user"])
         user["contributionsCollection"] = {
             "contributionCalendar": calendar_from_days(cache["calendar_days"])}
         prs = list(cache["prs"].values())
         issues = cache["issues"]
-    else:
-        if share_path is not None:
-            common.share.write(share_path, results["fetch_identity"], issues, prs)
-        save_cache(cache_file, {
-            "version": CACHE_VERSION,
-            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "user": {k: v for k, v in user.items() if k != "contributionsCollection"},
-            "calendar_days": results["fetch"][1],
-            "prs": prs_by_id,
-            "issues": issues,
-        })
-        fallback = None
-    return user, prs, issues, fallback
+        return user, prs, issues, CacheFallback(cache["fetched_at"], phase, exc)
+    if share_path is not None:
+        common.share.write(share_path, results["fetch_identity"], issues, prs)
+    save_cache(cache_file, {
+        "version": CACHE_VERSION,
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "user": {k: v for k, v in user.items() if k != "contributionsCollection"},
+        "calendar_days": results["fetch"][1],
+        "prs": prs_by_id,
+        "issues": issues,
+    })
+    return user, prs, issues, None
 
 
 ExternalCounts = namedtuple(
