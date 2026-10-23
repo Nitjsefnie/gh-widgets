@@ -33,7 +33,7 @@ sys.exit(7 if failed else 0)
 '''
 
 
-def run_unit(unit, fail='', delays=None, timing=''):
+def run_unit(unit, fail='', delays=None, timing=''):  # pylint: disable=too-many-locals
     """Relocate deployed command paths only; execute the unit's actual argv."""
     starts = [line.split('=', 1)[1] for line in
               (ROOT / 'units' / unit).read_text(encoding='utf-8').splitlines()
@@ -66,7 +66,7 @@ def run_unit(unit, fail='', delays=None, timing=''):
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             start = time.monotonic()
             result = subprocess.run(argv, env=env, stdout=stdout, stderr=stderr,
-                                    check=False, timeout=20)
+                                    text=True, check=False, timeout=20)
             elapsed = time.monotonic() - start
             stdout.seek(0)
             stderr.seek(0)
