@@ -424,15 +424,14 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # carries no repositories key at all, which is why the second walk's
     # result is grafted on rather than merely read.
     with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
-        orgs = pool.submit(page_profile_connection,
-                           token, ORG_QUERY, "organizations", login, max_pages)
-        repositories = pool.submit(page_profile_connection,
-                                   token, REPO_QUERY, "repositories", login, max_pages)
-        extra = pool.submit(fetch_extra_org_stats, token, extra_org_logins(), max_pages)
-        user, _orgs = orgs.result()
-        _, repos = repositories.result()
-        user["repositories"] = repos
-        user["extraOrgStats"] = extra.result()
+        tasks = [pool.submit(page_profile_connection,
+                             token, ORG_QUERY, "organizations", login, max_pages),
+                 pool.submit(page_profile_connection,
+                             token, REPO_QUERY, "repositories", login, max_pages),
+                 pool.submit(fetch_extra_org_stats, token, extra_org_logins(), max_pages)]
+        user = tasks[0].result()[0]
+        user["repositories"] = tasks[1].result()[1]
+        user["extraOrgStats"] = tasks[2].result()
     now = datetime.now(timezone.utc)
     q_window = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
@@ -853,7 +852,7 @@ def load_inputs(args, token, cache_file):
     phase = "fetch"
     try:
         with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
-            tasks = {
+            results = {
                 "fetch": pool.submit(fetch, token, args.user,
                                      cache.get("calendar_days") or None),
                 "fetch_pull_requests": pool.submit(
@@ -862,17 +861,15 @@ def load_inputs(args, token, cache_file):
                 "fetch_issues": pool.submit(fetch_issues, token, args.user),
             }
             if share_path is not None:
-                tasks["fetch_identity"] = pool.submit(
+                results["fetch_identity"] = pool.submit(
                     common.fetch_identity, token, args.user, gql_fn=gql)
-            results = {}
             # The coordinator owns phase; workers never race on the failure label.
-            for phase, task in tasks.items():
-                results[phase] = task.result()
-        user, days = results["fetch"]
+            for phase in results:
+                results[phase] = results[phase].result()
+        user = results["fetch"][0]
         prs, prs_by_id = results["fetch_pull_requests"]
         issues = results["fetch_issues"]
         if share_path is not None:
-            me = results["fetch_identity"]
             prs_by_id = {**shared_prs, **prs_by_id}
             prs = list(prs_by_id.values())
     except Exception as exc:
@@ -889,12 +886,12 @@ def load_inputs(args, token, cache_file):
         issues = cache["issues"]
     else:
         if share_path is not None:
-            common.share.write(share_path, me, issues, prs)
+            common.share.write(share_path, results["fetch_identity"], issues, prs)
         save_cache(cache_file, {
             "version": CACHE_VERSION,
             "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "user": {k: v for k, v in user.items() if k != "contributionsCollection"},
-            "calendar_days": days,
+            "calendar_days": results["fetch"][1],
             "prs": prs_by_id,
             "issues": issues,
         })

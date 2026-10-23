@@ -69,11 +69,13 @@ class ImpactBots(unittest.TestCase):
             argv = ['render-impact.py', '--user', 'me', '--token', 't',
                     '--out-dir', td, '--cache-file', str(cache)]
             env = {VARIABLE: '', 'GH_WIDGETS_SHARE_DIR': ''}
+            output = io.StringIO()
             with mock.patch.dict(os.environ, env), mock.patch.object(sys, 'argv', argv), \
                     mock.patch('urllib.request.urlopen', api), \
                     mock.patch.object(impact, 'update_loc', return_value={}), \
                     mock.patch.object(impact.common, 'timing_sleep'), \
-                    contextlib.redirect_stdout(io.StringIO()):
+                    mock.patch.object(impact.common, 'DEBUG_TIMING', True), \
+                    contextlib.redirect_stdout(output):
                 impact.main()
                 live = (root / 'impact.svg').read_text(encoding='utf-8')
                 saved = json.loads(cache.read_text(encoding='utf-8'))
@@ -81,6 +83,9 @@ class ImpactBots(unittest.TestCase):
                 self.assertEqual(saved['totals']['other/repo']['bot_merged_prs'], 2)
                 self.assertEqual(sum(n for (kind, _, _), n in api.counts.items()
                                      if kind == 'bots'), 2)
+                line = next(line for line in output.getvalue().splitlines()
+                            if 'graphql /graphql:' in line)
+                self.assertIn(f'count={sum(api.counts.values())}', line)
                 for value in ('', '0', '1'):
                     with mock.patch.dict(os.environ, {VARIABLE: value}), \
                             mock.patch.object(impact, 'fetch_all', side_effect=RuntimeError('offline')):
@@ -113,5 +118,7 @@ class ImpactBots(unittest.TestCase):
                     self.assertLess(actual[0].score, rows[0].score)
         for value in ('true', '2', ' 1'):
             with mock.patch.dict(os.environ, {VARIABLE: value}), \
+                    mock.patch.object(sys, 'argv', ['render-impact.py', '--user', 'me',
+                                                   '--token', 't']), \
                     self.assertRaisesRegex(SystemExit, VARIABLE):
-                impact.pr_table(prs, totals, frozenset(), knobs)
+                impact.main()

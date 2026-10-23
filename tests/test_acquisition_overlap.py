@@ -65,7 +65,9 @@ class AcquisitionOverlap(unittest.TestCase):
         self.assertLess(elapsed, 17 * .08)
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         self.assertIn('count=18', line)
-        self.assertGreater(float(re.search(r'concurrent=([\d.]+)s', line)[1]), 0)
+        concurrent = re.search(r'concurrent=([\d.]+)s', line)
+        assert concurrent is not None
+        self.assertGreater(float(concurrent[1]), 0)
 
     def test_totals_groups_overlap_keep_union_count_and_pacing(self):
         repos = [f"other/r{i}" for i in range(31)]
@@ -87,7 +89,9 @@ class AcquisitionOverlap(unittest.TestCase):
         self.assertEqual(pacing.call_args_list, [mock.call(.3, 'pacing')] * 3)
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         self.assertIn('count=3', line)
-        self.assertGreater(float(re.search(r'concurrent=([\d.]+)s', line)[1]), 0)
+        concurrent = re.search(r'concurrent=([\d.]+)s', line)
+        assert concurrent is not None
+        self.assertGreater(float(concurrent[1]), 0)
 
     def test_totals_cover_the_full_shared_pr_and_issue_union(self):
         nodes = []

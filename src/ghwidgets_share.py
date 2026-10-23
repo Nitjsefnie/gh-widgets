@@ -1,9 +1,7 @@
-"""Private unit-run sharing and a process-wide request cap of 2.
+"""Private unit-run sharing with a process-wide request cap of 2.
 
-``limited_request`` wraps any synchronous request callable (GraphQL or REST).
-Two slots are deliberately conservative: response time already approached
-GitHub's secondary GraphQL CPU budget in the serial profile acquisition.
-Nested acquisition pools share these slots; cursor pages remain sequential.
+``limited_request`` accepts GraphQL/REST callables. Two slots limit exposure to
+GitHub's secondary CPU budget; nested pools share slots, cursor pages stay serial.
 """
 import functools
 import json
