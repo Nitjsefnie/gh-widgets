@@ -431,7 +431,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         self._window(anchor, "3" * 40, ["src/render.py"])
         (self.root / f"check-runs-{anchor}").write_text(
             self._check_runs(self.ALL_GREEN), encoding="utf-8")
-        runs = [(status, "skipped" if name.split(" ")[0] not in
+        runs = [(status, "skipped" if name.split(" ", maxsplit=1)[0] not in
                  ("aggregate", "gitleaks") else conclusion, name)
                 for status, conclusion, name in self.ALL_GREEN
                 if name != "coverage-ratchet"]
