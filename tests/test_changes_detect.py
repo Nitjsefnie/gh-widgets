@@ -213,6 +213,23 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result.pop("gate-integrity"), "run")
         self.assertEqual(set(result.values()), {"skip"})
 
+    def test_comment_share_only_skips_code_but_keeps_integrity(self):
+        result = cd.classify({".github/comment-share.json"})
+        self.assertEqual(result.pop("gate-integrity"), "run")
+        self.assertEqual(set(result.values()), {"skip"})
+
+    def test_code_with_comment_share_and_other_ratchets_still_runs(self):
+        windows = (
+            {".github/comment-share.json", "src/render.py"},
+            {"gate/coverage-floor.json"},
+            {"gate/speed-baseline.json"},
+        )
+        for paths in windows:
+            with self.subTest(paths=paths):
+                result = cd.classify(paths)
+                self.assertEqual(result.pop("actionlint"), "skip")
+                self.assertEqual(set(result.values()), {"run"})
+
     def test_workflow_change_runs_code_gates_and_actionlint(self):
         result = cd.classify({".github/workflows/tests.yml"})
         self.assertEqual(set(result.values()), {"run"})
@@ -227,7 +244,8 @@ class ClassificationTests(unittest.TestCase):
 
     def test_codeql_keeps_its_seven_paths_and_runs_on_presentation_only(self):
         expected = ("**/*.md", "docs/**", "examples/**", ".claude/**",
-                    "LICENSE", "NOTICE", ".gitignore")
+                    "LICENSE", "NOTICE", ".gitignore",
+                    ".github/comment-share.json")
         self.assertEqual(cd.CODEQL_IGNORES, expected)
         self.assertIn("PRESENTATION.txt", cd.CODE_IGNORES)
         self.assertNotIn("PRESENTATION.txt", cd.CODEQL_IGNORES)

@@ -41,10 +41,9 @@ on:
   # gate (see the header), and the manifest admits a push-triggered workflow
   # only if its push block has no allow-list — an allow-list would have to
   # name the version file before this could gate a release at all. So the
-  # list below is tests.yml's deny-list verbatim, for tests.yml's reason: a
-  # new top-level directory would silently stop being measured under an
-  # allow-list. Every entry is something a docs-or-sample change cannot
-  # change the coverage of, so the run is skipped rather than run needlessly.
+  # list below excludes docs, samples and the comment-share record, which
+  # cannot change coverage. A new top-level directory still gets measured;
+  # an allow-list would silently leave it out.
   #
   # The version file is deliberately NOT in that list, and that is
   # load-bearing rather than an omission: it is the file a release is cut
@@ -62,6 +61,7 @@ on:
       - 'examples/**'
       - 'LICENSE'
       - '.gitignore'
+      - '.github/comment-share.json'
 
 permissions:
   contents: read

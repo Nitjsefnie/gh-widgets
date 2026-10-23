@@ -887,6 +887,12 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             f"the manifest entry 'coverage-ratchet' would never match the "
             f"check run {check_run!r}")
 
+    def test_comment_share_only_pushes_do_not_measure_coverage(self):
+        workflow = yaml.safe_load(self.text)
+        trigger = workflow.get("on", workflow.get(True))
+        self.assertIn(".github/comment-share.json",
+                      trigger["push"]["paths-ignore"])
+
     def test_a_newer_main_supersedes_an_in_flight_measurement(self):
         records = _records(self.text)
         concurrency = _block(records, 0, "concurrency")

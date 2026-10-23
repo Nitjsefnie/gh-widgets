@@ -170,27 +170,45 @@ fi
 if [ "$1" = "api" ]; then
   for arg in "$@"; do
     case "$arg" in
+      */compare/*)
+        if [ "$paginate" != yes ]; then exit 1; fi
+        window="${arg##*...}"
+        if [ ! -f "window-$window" ]; then exit 1; fi
+        cat "window-$window"
+        exit 0
+        ;;
       */check-runs)
+        sha="${arg%/check-runs}"
+        sha="${sha##*/}"
+        runs_file=check-runs
+        if [ -f "check-runs-$sha" ]; then runs_file="check-runs-$sha"; fi
         if [ "$paginate" != yes ]; then
           echo "unstubbed gh check-runs read: --paginate is missing" >&2
           exit 1
         fi
-        if [ -f polls-remaining ]; then
-          left="$(cat polls-remaining)"
+        polls_file=polls-remaining
+        if [ -f "polls-remaining-$sha" ]; then polls_file="polls-remaining-$sha"; fi
+        if [ -f "$polls_file" ]; then
+          left="$(cat "$polls_file")"
           if [ "$left" -gt 0 ]; then
             left=$(( left - 1 ))
-            printf '%s\n' "$left" > polls-remaining
-            if [ "$left" -eq 0 ] && [ -f check-runs-after ]; then
-              exec jq -r "$jq_prog" < check-runs-after
+            printf '%s\n' "$left" > "$polls_file"
+            if [ "$left" -eq 0 ] && [ -f "$runs_file-after" ]; then
+              exec jq -r "$jq_prog" < "$runs_file-after"
             fi
           fi
         fi
-        if [ -f check-runs ]; then
-          exec jq -r "$jq_prog" < check-runs
+        if [ -f "$runs_file" ]; then
+          exec jq -r "$jq_prog" < "$runs_file"
         fi
         exit 0
         ;;
       repos/*/commits/*)
+        if [ "$jq_prog" = ".parents[0].sha" ]; then
+          sha="${arg##*/}"
+          if [ -f "parent-$sha" ]; then cat "parent-$sha"; exit 0; fi
+          exit 1
+        fi
         if [ "$jq_prog" != ".sha" ]; then
           echo "unstubbed gh commits read: --jq is '$jq_prog', wanted .sha" >&2
           exit 1
@@ -233,6 +251,7 @@ exit 1
         stub = self.bin / "gh"
         stub.write_text(self.GH_STUB, encoding="utf-8")
         stub.chmod(0o755)
+        self._window(self.SHA, self.OTHER_SHA, ["src/render.py"])
 
     @staticmethod
     def _job_block(text, job):
@@ -366,6 +385,13 @@ exit 1
         for name, value in extra.items():
             (self.root / name).write_text(value, encoding="utf-8")
 
+    def _window(self, sha, parent, paths):
+        (self.root / f"parent-{sha}").write_text(parent, encoding="utf-8")
+        (self.root / f"window-{sha}").write_text(json.dumps([{
+            "status": "ahead", "files": [
+                {"filename": path, "status": "modified"} for path in paths],
+        }]), encoding="utf-8")
+
     def _without(self, *names):
         return [run for run in self.ALL_GREEN if run[2] not in names]
 
@@ -390,6 +416,121 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     ones that only read the workflow as text run on every OS.
     """
     # pylint: disable=too-many-public-methods
+
+    def _comment_share_tip(self, stacked=False):
+        anchor = "2" * 40
+        self._window(self.SHA, self.OTHER_SHA,
+                     [".github/comment-share.json"])
+        if stacked:
+            self._window(self.OTHER_SHA, anchor,
+                         [".github/comment-share.json"])
+            (self.root / f"check-runs-{self.OTHER_SHA}").write_text(
+                self._check_runs([]), encoding="utf-8")
+        else:
+            anchor = self.OTHER_SHA
+        self._window(anchor, "3" * 40, ["src/render.py"])
+        (self.root / f"check-runs-{anchor}").write_text(
+            self._check_runs(self.ALL_GREEN), encoding="utf-8")
+        runs = [(status, "skipped" if name.split(" ")[0] not in
+                 ("aggregate", "gitleaks") else conclusion, name)
+                for status, conclusion, name in self.ALL_GREEN
+                if name != "coverage-ratchet"]
+        self._write_runs(runs)
+        return anchor
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_tip_uses_the_nearest_code_gates(self):
+        for stacked in (False, True):
+            with self.subTest(stacked=stacked):
+                self.setUp()
+                self._comment_share_tip(stacked)
+                done = self._execute("Wait for the other gates on this commit",
+                                     **self.NO_WAIT)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_tolerance_preserves_failures_and_code_gate_rules(self):
+        for location in ("tip", "anchor"):
+            for conclusion in ("failure", "cancelled", "skipped", "missing"):
+                with self.subTest(location=location, conclusion=conclusion):
+                    self.setUp()
+                    anchor = self._comment_share_tip(stacked=True)
+                    runs = self._without("speed")
+                    if conclusion != "missing":
+                        runs += [("completed", conclusion, "speed")]
+                    if location == "tip":
+                        self._write_runs(runs)
+                    else:
+                        (self.root / f"check-runs-{anchor}").write_text(
+                            self._check_runs(runs), encoding="utf-8")
+                    done = self._execute(
+                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                    expected = 0 if location == "tip" and conclusion in (
+                        "skipped", "missing") else 1
+                    self.assertEqual(done.returncode, expected,
+                                     done.stdout + done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_waits_for_the_code_ancestors_running_checks(self):
+        anchor = self._comment_share_tip(stacked=True)
+        (self.root / f"polls-remaining-{anchor}").write_text("2", encoding="utf-8")
+        (self.root / f"check-runs-{anchor}").write_text(self._check_runs(
+            [("in_progress", "", "speed")] + self._without("speed")),
+            encoding="utf-8")
+        (self.root / f"check-runs-{anchor}-after").write_text(
+            self._check_runs(self.ALL_GREEN), encoding="utf-8")
+        done = self._execute("Wait for the other gates on this commit",
+                             **self.NO_WAIT)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("still running", done.stdout)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_tolerance_requires_an_exclusive_window(self):
+        for paths in ([".github/comment-share.json", "src/render.py"],
+                      ["gate/coverage-floor.json"],
+                      ["gate/speed-baseline.json"]):
+            with self.subTest(paths=paths):
+                self.setUp()
+                self._comment_share_tip()
+                self._window(self.SHA, self.OTHER_SHA, paths)
+                done = self._execute("Wait for the other gates on this commit",
+                                     **self.GIVE_UP)
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                self.assertIn("did not reach", done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_walk_refuses_unknown_windows(self):
+        for location in (self.SHA, self.OTHER_SHA):
+            for value in ("unavailable", "null", '[{"status":"ahead"}]',
+                          '[{"status":"ahead","files":[{}]}]'):
+                with self.subTest(location=location, value=value):
+                    self.setUp()
+                    self._comment_share_tip(stacked=True)
+                    self._write_runs(self.ALL_GREEN)
+                    (self.root / f"check-runs-{self.OTHER_SHA}").write_text(
+                        self._check_runs(self.ALL_GREEN), encoding="utf-8")
+                    (self.root / f"window-{location}").write_text(
+                        value, encoding="utf-8")
+                    done = self._execute(
+                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                    self.assertNotEqual(done.returncode, 0,
+                                        done.stdout + done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_walk_refuses_an_unknown_first_parent(self):
+        self._comment_share_tip(stacked=True)
+        self._write_runs(self.ALL_GREEN)
+        (self.root / f"parent-{self.OTHER_SHA}").write_text("null", encoding="utf-8")
+        done = self._execute("Wait for the other gates on this commit",
+                             **self.GIVE_UP)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("Unknown first parent", done.stderr)
 
     # --- #34: the manifest wait -----------------------------------------
 
