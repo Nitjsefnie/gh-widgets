@@ -7,7 +7,7 @@
 # impact.py also loads impact_loc.py beside itself. The EXIT trap rolls back
 # an interrupted or failed commit: when the trap can run, the result is the
 # complete prior set or the complete verified new set, never a mixed set.
-# Each same-filesystem mv is atomic, but the ten-file commit is not one atomic
+# Each same-filesystem mv is atomic, but the file set is not one atomic
 # operation: SIGKILL or power loss cannot run a shell trap and can still leave
 # a mixed set during commit. Re-running this installer repairs that state.
 #
@@ -138,6 +138,7 @@ set -- \
     "src/ghwidgets_common.py:ghwidgets_common.py" \
     "src/ghwidgets_cache.py:ghwidgets_cache.py" \
     "src/ghwidgets_journal.py:ghwidgets_journal.py" \
+    "src/ghwidgets_share.py:ghwidgets_share.py" \
     "src/impact_clone.py:impact_clone.py" \
     "ghwidgets_data.py:ghwidgets_data.py"
 
@@ -195,7 +196,7 @@ for dst in render-gh-widgets.py render-impact.py render-responsiveness.py render
 done
 if ! PYTHONDONTWRITEBYTECODE=1 \
         PYTHONPATH="$DEST${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -c 'import ghwidgets_data, ghwidgets_cache, ghwidgets_journal, impact_clone' \
+        python3 -c 'import ghwidgets_data, ghwidgets_cache, ghwidgets_journal, ghwidgets_share, impact_clone' \
         >/dev/null 2>&1; then
     echo "install.sh: a shared module failed to import after install" >&2
     exit 1

@@ -30,6 +30,7 @@ Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
 # hardest here: --resync re-blames every repo at once.
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
 Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
+Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
 StateDirectory=gh-widgets
 # systemd resets this directory's mode at each start, so declare it here.
 StateDirectoryMode=0700

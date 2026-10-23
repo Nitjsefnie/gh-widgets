@@ -93,6 +93,7 @@ def _load_sibling(name):
 
 ghwidgets_cache = _load_sibling("ghwidgets_cache")
 ghwidgets_journal = _load_sibling("ghwidgets_journal")
+share = _load_sibling("ghwidgets_share")
 # Preserve the original importable cache surface for callers of ghwidgets_common.
 CACHE_LOCK_TIMEOUT = ghwidgets_cache.CACHE_LOCK_TIMEOUT
 CacheShapeError = ghwidgets_cache.CacheShapeError
@@ -116,7 +117,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 13
+COMMON_VERSION = 14
 
 
 # One import-time switch, shared by all instrumentation in this renderer.

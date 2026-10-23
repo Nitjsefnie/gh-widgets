@@ -15,13 +15,10 @@ Writes ONE SVG to OUT_DIR:
                        SCORE_MAX (10.00) and the rest keep their ratios to
                        it; the ranking and the bars are unaffected.
 
-This renderer OWNS its data. It fetches the account's authored pull requests
-itself — one cheap paginated GraphQL connection, the same
-common.fetch_pull_requests the other two renderers use — and MERGES the result
-into render-impact.py's cache, which is the shared home of that PR set. The
-hourly gh-widgets service runs render-impact.py before this renderer; this
-renderer fetches its PR data without running the expensive per-repo git-blame
-walk. Runs hourly.
+This renderer uses the unit's shared authored acquisition when available;
+standalone runs fetch identity and PRs live through common.fetch_pull_requests.
+It merges the result into render-impact.py's cache, without running the
+expensive per-repo git-blame walk. The hourly unit runs impact first.
 
 Merging, not overwriting, is the whole hazard of writing to a cache someone
 else owns. This script replaces the PR half and preserves every other key
@@ -98,7 +95,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 13
+REQUIRED_COMMON = 14
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -154,6 +151,12 @@ def fetch_prs(token, user, cached_prs):
     cache. Returns (insiders, prs, prs_by_id) — the keyed mapping is what gets
     persisted, matching what render-impact.py stores under the same key.
     """
+    with common.timing.track("phase", "load_share"):
+        shared = common.share.load(user)
+    if shared is not None:
+        prs = shared["prs"]
+        return (frozenset(shared["identity"]["insiders"]), prs,
+                {node["id"]: node for node in prs})
     # Two acquisitions, not one: each is wrapped in `common.acquisition` so
     # the caller's fallback line can name the one that raised rather than this
     # function, which is what the line can only do when the failure came from
@@ -427,7 +430,7 @@ def read_impact_cache(path, user):
 
     A cache with no insider set is usable, though it once was not. That was
     fatal back when the cached set was the ONLY way this script could know who
-    is an insider; now identity is fetched from the token on every successful
+    is an insider; identity now comes from live or unit-shared data on each
     run, and a fetch failure is not a reason to refuse to render. It degrades
     to the account itself for one render — which can over-report externals
     until the next successful run repairs it — exactly as render-impact.py

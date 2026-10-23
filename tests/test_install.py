@@ -25,6 +25,7 @@ RENDERER_SOURCES = {
     "src/ghwidgets_common.py": "ghwidgets_common.py",
     "src/ghwidgets_cache.py": "ghwidgets_cache.py",
     "src/ghwidgets_journal.py": "ghwidgets_journal.py",
+    "src/ghwidgets_share.py": "ghwidgets_share.py",
     "src/impact_clone.py": "impact_clone.py",
     "ghwidgets_data.py": "ghwidgets_data.py",
 }
