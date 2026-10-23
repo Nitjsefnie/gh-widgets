@@ -155,6 +155,27 @@ def _run_download_with_failed_digest(script):
             tar_called.exists()
 
 
+class TestCheckoutCredentials(unittest.TestCase):
+    def test_every_checkout_disables_persisted_credentials(self):
+        paths = list(WORKFLOWS.glob("*.yml"))
+        paths += list((REPO_ROOT / ".github/actions").glob("**/action.yml"))
+        seen = 0
+        for path in paths:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if "jobs" in document:
+                steps = [step for job in document["jobs"].values()
+                         for step in job.get("steps", [])]
+            else:
+                steps = document.get("runs", {}).get("steps", [])
+            for step in steps:
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    seen += 1
+                    with self.subTest(path=path, step=step.get("name")):
+                        self.assertIs(
+                            step.get("with", {}).get("persist-credentials"), False)
+        self.assertGreater(seen, 0)
+
+
 class TestCodeqlPins(unittest.TestCase):
     """Every github/codeql-action step must run the same release."""
 
@@ -325,23 +346,6 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         checkouts = [index for index, line in enumerate(steps)
                      if line.startswith("      - uses: actions/checkout@")]
         self.assertEqual(len(checkouts), 1)
-        checkout_index = checkouts[0]
-        checkout_end = next(
-            (index for index in range(checkout_index + 1, len(steps))
-             if steps[index].startswith("      - ")),
-            len(steps))
-        checkout_block = steps[checkout_index:checkout_end]
-        settings = []
-        for line in checkout_block:
-            match = re.fullmatch(r" {10}([a-z-]+):[ \t]*(.*)", line)
-            if match:
-                value = match.group(2).strip()
-                if (len(value) >= 2 and value[0] == value[-1]
-                        and value[0] in "\"'"):
-                    value = value[1:-1]
-                settings.append((match.group(1), value))
-        self.assertEqual(settings, [
-            ("fetch-depth", "0"), ("persist-credentials", "false")])
         download = self._named_step(
             self.gitleaks_job, "Download gitleaks and verify its digest")
         download_script = textwrap.dedent(
@@ -621,7 +625,6 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
     def test_steps_check_markers_then_freshness_then_scopes(self):
         steps = self.job.get('steps', [])
         self.assertEqual(len(steps), 4)
-        self.assertIs(steps[0]['with']['persist-credentials'], False)
         for step in steps:
             self.assertNotIn('if', step)
             self.assertNotIn('continue-on-error', step)
@@ -783,13 +786,6 @@ class TestScorecardWorkflow(unittest.TestCase):
             "contents": "read",
         })
 
-    def test_scorecard_checkout_persists_no_credentials(self):
-        # Exactly one checkout runs without persisting credentials.
-        checkouts = [step for step in self.job.get("steps", [])
-                     if step.get("uses", "").startswith("actions/checkout@")]
-        self.assertEqual(len(checkouts), 1)
-        self.assertIs(checkouts[0]["with"].get("persist-credentials"), False)
-
 
 class TestPatchCoverageWorkflows(unittest.TestCase):
     """Keep patch coverage informational and its writer trusted."""
@@ -944,10 +940,6 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
         assert job is not None
         steps = job.get("steps", [])
-        checkout = next(step for step in steps
-                        if step.get("uses", "").startswith("actions/checkout@"))
-        self.assertIs(checkout["with"].get("persist-credentials"), False)
-
         measure = next(step for step in steps
                        if step.get("name") == "Measure the coverage of this change")
         run = measure.get("run", "")

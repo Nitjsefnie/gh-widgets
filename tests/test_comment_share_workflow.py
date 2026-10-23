@@ -24,11 +24,6 @@ class TestCommentShareWorkflow(unittest.TestCase):
         self.assertEqual(job["runs-on"], "ubuntu-latest")
         self.assertEqual(job["timeout-minutes"], 10)
         steps = job["steps"]
-        checkouts = [step for step in steps
-                     if step.get("uses", "").startswith("actions/checkout@")]
-        self.assertTrue(checkouts)
-        for checkout in checkouts:
-            self.assertIs(checkout.get("with", {}).get("persist-credentials"), False)
         stage = next(step for step in steps if step.get("id") == "stage")
         upload = next(step for step in steps
                       if step.get("name") == "Upload the tightened comment shares")

@@ -67,10 +67,10 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer main supersedes an in-flight measurement. Cancelling keeps an
-  # older candidate from being announced after the branch has advanced.
+  # Ratchet pushes preserve the code push's in-flight measurement. Other
+  # pushes supersede it; a null/absent committer username still cancels.
   group: coverage-ratchet-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}
 
 jobs:
   measure:

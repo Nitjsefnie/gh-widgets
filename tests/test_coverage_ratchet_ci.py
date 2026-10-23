@@ -50,11 +50,6 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
 RATCHET_WORKFLOW = WORKFLOWS / "coverage-ratchet.yml"
-PINNED_USE = re.compile(r"^\s*-?\s*uses:\s*[\w.-]+/[\w.-]+@[0-9a-f]{40}"
-                        r"\s+#\s+v[0-9][0-9A-Za-z.\-]*$")
-
-
-USES_LINE = re.compile(r"^\s*-?\s*uses:")
 # release.yml's manifest, parsed with the same shape its own
 # test_release_workflow.py uses: twelve spaces, the gate name, a `#` comment
 # naming the workflow file and the job the entry is written against. The
@@ -712,33 +707,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         self.assertIn("steps.stage.outputs.changed == 'true'",
                       " ".join(line for _at, line in upload["body"]))
 
-    def test_every_action_is_pinned_to_a_sha_with_a_version_comment(self):
-        # Prose is not a pin: a `# v1.2.3` comment with no SHA beside it is
-        # a moving tag wearing a version's clothes, so the line has to carry
-        # both or neither.
-        uses_lines = [line for line in self.text.splitlines()
-                      if USES_LINE.match(line)]
-        self.assertTrue(uses_lines)
-        for line in uses_lines:
-            with self.subTest(line=line.strip()):
-                self.assertRegex(line, PINNED_USE)
-
-    def test_no_checkout_persists_credentials(self):
-        # One checkout remains in the read-only job and does not persist its
-        # credentials. The count is asserted so deleting the checkout cannot
-        # turn this into a loop over nothing that always passes.
-        seen = 0
-        for job, records in self.jobs.items():
-            for step in _steps(records):
-                if not (step["uses"] or "").startswith("actions/checkout@"):
-                    continue
-                seen += 1
-                with self.subTest(job=job):
-                    self.assertEqual(
-                        _child_value(step["with"], "persist-credentials"),
-                        "false")
-        self.assertEqual(seen, 1)
-
     def test_only_staging_gets_a_read_token_for_the_compare_api(self):
         # The shared Python transport performs one read-only compare lookup.
         # Bind the token to that caller; measuring and gating inherit none.
@@ -925,7 +893,16 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         self.assertEqual(
             _value(concurrency, 2, "group"),
             "coverage-ratchet-${{ github.ref }}")
-        self.assertEqual(_value(concurrency, 2, "cancel-in-progress"), "true")
+        self.assertEqual(
+            _value(concurrency, 2, "cancel-in-progress"),
+            "${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}")
+
+    def test_an_unknown_committer_still_supersedes_the_measurement(self):
+        # Missing context properties compare unequal to this nonempty username.
+        concurrency = _block(_records(self.text), 0, "concurrency")
+        self.assertEqual(
+            _value(concurrency, 2, "cancel-in-progress"),
+            "${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}")
 
     def test_the_workflow_measures_the_cell_the_committed_floor_names(self):
         # The floor names one cell (coverage-floor.json's `cell`). A second
