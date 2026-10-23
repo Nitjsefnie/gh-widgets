@@ -210,11 +210,11 @@ jobs:
         #     no conclusion yet, and reading its empty conclusion as a
         #     failure would turn every ordinary wait into a red release.
         #
-        # Code windows require every manifest entry to reach success, every
-        # matrix leg included. Only a confirmed comment-share-only window
-        # accepts skipped or absent manifest gates. Walk first parents over
-        # stacked comment-share windows and require all manifest gates at
-        # the nearest code window too, polling if they are still running.
+        # A complete successful tip manifest needs no ancestor checks. For
+        # a proven comment-share-only gap, aggregate and gitleaks must still
+        # succeed at the tip. Only code legs may skip; only coverage-ratchet
+        # may be absent there. Fill that gap from the nearest code window's
+        # successful manifest, walking over stacked record-only windows.
         # Unknown windows refuse; cancelled checks always refuse. Incidental
         # checks retain the wider success/skipped/neutral acceptance set.
         run: |
@@ -267,52 +267,73 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Compare each landed first-parent window, not commit subjects or
-          # push actors. The compare API lists all files on its first page
-          # (up to 300); exactly one cannot be a truncated code window.
-          check_shas=("$SHA")
-          cursor="$SHA"
-          while :; do
-            parent="$(gh api -H "Cache-Control: no-cache" \
-              "repos/$REPO/commits/$cursor" --jq '.parents[0].sha')"
-            if ! printf '%s\n' "$parent" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-              echo "Unknown first parent for $cursor — refusing." >&2
-              exit 1
-            fi
-            comparison="$(gh api --paginate --slurp \
-              -H "Cache-Control: no-cache" \
-              "repos/$REPO/compare/$parent...$cursor")"
-            window="$(jq -er '
-              .[0] |
-              if .status != "ahead" or (.files | type) != "array"
-                or any(.files[]; (.filename | type) != "string") then
-                error("Unknown landed window")
-              elif (.files | length) == 1
-                and .files[0].filename == ".github/comment-share.json"
-                and (.files[0].status == "modified"
-                  or .files[0].status == "added"
-                  or .files[0].status == "removed")
-                and .files[0].previous_filename == null then
-                "comment-share"
-              else "code" end' <<< "$comparison")"
-            if [ "$window" = code ]; then break; fi
-            cursor="$parent"
-            check_shas+=("$cursor")
-          done
-          code_sha="$cursor"
           deadline=$(( SECONDS + WAIT_DEADLINE_SECONDS ))
           missing=""
           while [ "$SECONDS" -lt "$deadline" ]; do
+            tip_runs="$(gh api --paginate -H "Cache-Control: no-cache" \
+              "repos/$REPO/commits/$SHA/check-runs" \
+              --jq '.check_runs[] | "\(.status)\t\(.conclusion)\t\(.name)"')"
+            tip_complete="$(printf '%s\n' "$tip_runs" \
+              | awk -F'\t' -v gates="${required[*]}" '
+                  BEGIN { n = split(gates, g, " ") }
+                  {
+                    for (i = 1; i <= n; i++)
+                      if ($3 == g[i] || index($3, g[i] " (") == 1) {
+                        seen[i] = 1
+                        if ($1 != "completed" || $2 != "success") bad = 1
+                      }
+                  }
+                  END {
+                    for (i = 1; i <= n; i++) if (!seen[i]) bad = 1
+                    print bad ? "no" : "yes"
+                  }')"
+            # Compare landed first-parent windows; one exclusive record
+            # file cannot be the compare API's truncated 300-file list.
+            check_shas=("$SHA")
+            cursor="$SHA"
+            while :; do
+              parent="$(gh api -H "Cache-Control: no-cache" \
+                "repos/$REPO/commits/$cursor" --jq '.parents[0].sha')"
+              if ! printf '%s\n' "$parent" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+                echo "Unknown first parent for $cursor — refusing." >&2
+                exit 1
+              fi
+              comparison="$(gh api --paginate --slurp \
+                -H "Cache-Control: no-cache" \
+                "repos/$REPO/compare/$parent...$cursor")"
+              window="$(jq -er '
+                .[0] |
+                if .status != "ahead" or (.files | type) != "array"
+                  or any(.files[]; (.filename | type) != "string") then
+                  error("Unknown landed window")
+                elif (.files | length) == 1
+                  and .files[0].filename == ".github/comment-share.json"
+                  and (.files[0].status == "modified"
+                    or .files[0].status == "added"
+                    or .files[0].status == "removed")
+                  and .files[0].previous_filename == null then
+                  "comment-share"
+                else "code" end' <<< "$comparison")"
+              if [ "$window" = code ] || {
+                [ "$cursor" = "$SHA" ] && [ "$tip_complete" = yes ];
+              }; then break; fi
+              cursor="$parent"
+              check_shas+=("$cursor")
+            done
+            code_sha="$cursor"
             waiting=no
             for check_sha in "${check_shas[@]}"; do
-              allow_skipped=no
-              if [ "$check_sha" != "$code_sha" ]; then allow_skipped=yes; fi
-              echo "Checking gates on $check_sha (comment-share: $allow_skipped)"
-              runs="$(gh api --paginate \
+              data_window=no
+              if [ "$check_sha" != "$code_sha" ]; then data_window=yes; fi
+              echo "Checking gates on $check_sha (comment-share: $data_window)"
+              runs="$tip_runs"
+              if [ "$check_sha" != "$SHA" ]; then
+                runs="$(gh api --paginate \
                 -H "Cache-Control: no-cache" \
                 "repos/$REPO/commits/$check_sha/check-runs" \
                 --jq '.check_runs[]
                       | "\(.status)\t\(.conclusion)\t\(.name)"')"
+              fi
               # This job's own check run, and nothing else. A check whose
               # name merely starts with this one is left in.
               reported="$(printf '%s\n' "$runs" \
@@ -345,11 +366,22 @@ jobs:
               missing=""
               gate_bad=no
               for entry in "${required[@]}"; do
+                allow_skipped=no
+                allow_missing=no
+                if [ "$data_window" = yes ]; then
+                  case "$entry" in
+                    lint|pyright|speed|pip-audit|analyze|unittest) allow_skipped=yes ;;
+                  esac
+                  # Intermediate records need not have been push tips.
+                  if [ "$check_sha" != "$SHA" ] || [ "$entry" = coverage-ratchet ]; then
+                    allow_missing=yes
+                  fi
+                fi
                 matched="$(printf '%s\n' "$reported" \
                   | awk -F'\t' -v entry="$entry" 'NF && ($3 == entry \
                     || index($3, entry " (") == 1)')"
                 if [ -z "$matched" ]; then
-                  if [ "$allow_skipped" = no ]; then
+                  if [ "$allow_missing" = no ]; then
                     missing="$missing $entry"
                   fi
                   continue

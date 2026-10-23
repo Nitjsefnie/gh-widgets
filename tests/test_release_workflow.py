@@ -451,6 +451,55 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_tip_requires_its_unconditional_gates(self):
+        for gate in ("aggregate", "gitleaks"):
+            for state in ("missing", "pending", "skipped", "failure", "cancelled"):
+                with self.subTest(gate=gate, state=state):
+                    self.setUp()
+                    self._comment_share_tip()
+                    runs = self._without(gate, "coverage-ratchet")
+                    if state != "missing":
+                        runs.append(("in_progress" if state == "pending" else
+                                     "completed", "" if state == "pending" else
+                                     state, gate))
+                    self._write_runs(runs)
+                    done = self._execute(
+                        "Wait for the other gates on this commit", **self.GIVE_UP)
+                    self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                    if state in ("missing", "pending"):
+                        self.assertIn("Timed out", done.stderr)
+                        self.assertIn("no check run" if state == "missing" else
+                                      "still running", done.stdout)
+                    else:
+                        self.assertIn("did not reach", done.stderr)
+                        self.assertNotIn("Timed out", done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_complete_comment_share_tip_needs_no_ancestor_checks(self):
+        anchor = self._comment_share_tip()
+        self._write_runs(self.ALL_GREEN)
+        (self.root / f"check-runs-{anchor}").write_text(
+            self._check_runs([]), encoding="utf-8")
+        (self.root / f"parent-{anchor}").write_text("null", encoding="utf-8")
+        done = self._execute("Wait for the other gates on this commit",
+                             **self.NO_WAIT)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn(f"Checking gates on {anchor}", done.stdout)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
+    def test_comment_share_tip_cannot_inherit_an_empty_ancestor_manifest(self):
+        anchor = self._comment_share_tip()
+        (self.root / f"check-runs-{anchor}").write_text(
+            self._check_runs([]), encoding="utf-8")
+        done = self._execute("Wait for the other gates on this commit",
+                             **self.GIVE_UP)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("never reported", done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
     def test_comment_share_tolerance_preserves_failures_and_code_gate_rules(self):
         for location in ("tip", "anchor"):
             for conclusion in ("failure", "cancelled", "skipped", "missing"):
@@ -467,8 +516,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                             self._check_runs(runs), encoding="utf-8")
                     done = self._execute(
                         "Wait for the other gates on this commit", **self.GIVE_UP)
-                    expected = 0 if location == "tip" and conclusion in (
-                        "skipped", "missing") else 1
+                    expected = 0 if location == "tip" and conclusion == "skipped" else 1
                     self.assertEqual(done.returncode, expected,
                                      done.stdout + done.stderr)
 
@@ -511,7 +559,6 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 with self.subTest(location=location, value=value):
                     self.setUp()
                     self._comment_share_tip(stacked=True)
-                    self._write_runs(self.ALL_GREEN)
                     (self.root / f"check-runs-{self.OTHER_SHA}").write_text(
                         self._check_runs(self.ALL_GREEN), encoding="utf-8")
                     (self.root / f"window-{location}").write_text(
@@ -525,7 +572,6 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
     def test_comment_share_walk_refuses_an_unknown_first_parent(self):
         self._comment_share_tip(stacked=True)
-        self._write_runs(self.ALL_GREEN)
         (self.root / f"parent-{self.OTHER_SHA}").write_text("null", encoding="utf-8")
         done = self._execute("Wait for the other gates on this commit",
                              **self.GIVE_UP)
