@@ -35,6 +35,7 @@ DEAD_PROXY = "http://127.0.0.1:9"
 # module for its workload list by --list-workloads rather than hard-coding
 # names, which is only safe because they come from here.
 JUNIT_CLASSNAME = "e2e"
+OBSERVE_RATIO_ENV = "GH_WIDGETS_OBSERVE_RENDERER_RATIO"
 
 
 def _load_counter():
@@ -135,10 +136,10 @@ def _prepare_cache(run_dir, fixture_root, pristine_cache):
     return impact_cache
 
 
-def _run_renderer(renderer, repo_root, env):
+def _run_renderer(renderer, repo_root, env, metric=None):
     """Run one renderer and report what it COST, not how long it took.
 
-    counter.measure raises exactly the trio this function already handled for
+    Both counter paths raise the trio this function already handled for
     a bare subprocess.run — TimeoutExpired, OSError, and CounterError — so a
     renderer that cannot even be measured lands in the same JUnit failure path
     as one that ran and failed. The `time` key is the counter value; `wall` is
@@ -148,7 +149,10 @@ def _run_renderer(renderer, repo_root, env):
     result = {"time": 0.0, "metric": "", "wall": 0.0,
               "failure": None, "stdout": "", "stderr": ""}
     try:
-        measured = counter.measure(
+        measure = (counter.measure_calibrated
+                   if counter.choose_metric(metric) == counter.CALIBRATED_METRIC
+                   else counter.measure)
+        measured = measure(
             [sys.executable, str(renderer)], cwd=str(repo_root), env=env,
             timeout=600)
         result["time"] = measured.value
@@ -234,6 +238,26 @@ def _validate_impact_refresh(result, cache_file, fixture_root):
             + "\n- ".join(problems))
 
 
+def _observe_ratio(renderer, repo_root, run_dir, fixture_root, workload):
+    """Bank a log-only ratio on fresh inputs without replacing the raw run."""
+    observation_dir = run_dir / "calibrated"
+    observation_dir.mkdir()
+    cache_file = _prepare_cache(observation_dir, fixture_root, workload[3])
+    out_dir = observation_dir / "out"
+    env = _renderer_environment(fixture_root, Path(__file__).resolve().parent,
+                                cache_file, out_dir)
+    observation = _run_renderer(renderer, repo_root, env,
+                                metric=counter.CALIBRATED_METRIC)
+    _validate_live_result(observation, out_dir, workload[2])
+    if workload[0] == "render-impact" and observation["failure"] is None:
+        _validate_impact_refresh(observation, cache_file, fixture_root)
+    if observation["failure"]:
+        print(f"{workload_name(workload[0])}: ratio observation failed: "
+              f"{observation['failure']}", file=sys.stderr)
+        return {}
+    return {"calibrated_ratio": observation["time"]}
+
+
 def _run_workload(side, repo_root, round_number, work_root, fixture_root,
                   workload):
     name, script_name = workload[:2]
@@ -283,6 +307,10 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
     _validate_live_result(result, out_dir, workload[2])
     if name == "render-impact" and result["failure"] is None:
         _validate_impact_refresh(result, cache_file, fixture_root)
+    if (env.get(OBSERVE_RATIO_ENV) and result["metric"] == counter.CPU_METRIC
+            and result["failure"] is None):
+        result.update(_observe_ratio(renderer, repo_root, run_dir, fixture_root,
+                                     workload))
     return result
 
 
@@ -463,9 +491,12 @@ def main(argv=None):
         # The counter, labelled with the instrument it is. The `s` suffix is
         # gone because the number is not seconds; leaving it would print an
         # a counter as though it were a duration.
+        observation = (f"; observed {result['calibrated_ratio']:.6f} "
+                       f"{counter.CALIBRATED_METRIC}"
+                       if "calibrated_ratio" in result else "")
         print(f"{result['name']} ({args.side} round {args.round}): "
               f"{result['time']:.3f} {result['metric'] or 'unmeasured'} "
-              f"{status}")
+              f"{status}{observation}")
         # The status line above is the shape the suite asserts, and it says
         # only that something failed. The reason goes to stderr, because a red
         # step whose only detail lives in an uploaded JUnit artifact is a step
