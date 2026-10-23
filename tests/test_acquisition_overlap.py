@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import statistics
 import tempfile
 import threading
 import time
@@ -24,8 +25,10 @@ class DelayedAPI(CountingAPI):
         super().__init__()
         self.lock = threading.Lock()
         self.active = self.peak = 0
+        self.durations = []
 
     def __call__(self, request, **kwargs):
+        start = time.monotonic()
         with self.lock:
             self.active += 1
             self.peak = max(self.peak, self.active)
@@ -35,6 +38,7 @@ class DelayedAPI(CountingAPI):
         finally:
             with self.lock:
                 self.active -= 1
+                self.durations.append((json.loads(request.data)['query'], time.monotonic() - start))
 
 
 class AcquisitionOverlap(unittest.TestCase):
@@ -61,8 +65,15 @@ class AcquisitionOverlap(unittest.TestCase):
         self.assertEqual(user["login"], "me")
         self.assertIsNone(fallback)
         self.assertEqual(api.peak, 2)
-        # Longest dependent chain is 12 windows, rather than 18 serial requests.
-        self.assertLess(elapsed, 17 * .08)
+        # Use observed stub latency: sleep(.08) can overshoot on hosted runners.
+        # Calendar's 12 windows follow the parallel profile walks; four typical
+        # requests allow for cap contention, still rejecting sequential acquisition.
+        calendar = sum(duration for query, duration in api.durations
+                       if 'contributionCalendar' in query)
+        profile_walk = max(duration for query, duration in api.durations
+                           if 'organizations' in query or 'repositories' in query)
+        self.assertLess(elapsed, calendar + profile_walk
+                        + 4 * statistics.median(duration for _, duration in api.durations))
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         self.assertIn('count=18', line)
         concurrent = re.search(r'concurrent=([\d.]+)s', line)
@@ -85,7 +96,9 @@ class AcquisitionOverlap(unittest.TestCase):
                 recorder.report("impact")
         self.assertEqual(set(totals), set(repos))
         self.assertEqual(sum(api.counts.values()), 3)
-        self.assertLess(elapsed, .23)  # Two independent rounds, not three.
+        # Two dependent rounds plus scheduling slack; reject three serial calls.
+        typical = statistics.median(duration for _, duration in api.durations)
+        self.assertLess(elapsed, 2.875 * typical)
         self.assertEqual(pacing.call_args_list, [mock.call(.3, 'pacing')] * 3)
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         self.assertIn('count=3', line)
