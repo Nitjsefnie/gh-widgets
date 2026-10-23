@@ -12,6 +12,7 @@ import unittest
 import urllib.error
 from pathlib import Path
 from concurrent import futures
+from email.message import Message
 from unittest import mock
 
 from tests import test_render, test_stars, test_popularity
@@ -42,7 +43,7 @@ class RunTiming(unittest.TestCase):
         def request(_req, **_kwargs):
             self.clock += 2
             if self.clock == 2:
-                raise urllib.error.HTTPError('', 503, 'busy', {}, None)
+                raise urllib.error.HTTPError('', 503, 'busy', Message(), None)
             response = mock.MagicMock()
             response.__enter__.return_value.read.return_value = b'{"data": {}}'
             return response
@@ -220,6 +221,7 @@ class RendererTiming(unittest.TestCase):
         read. Changing the env after loading must not alter either switch.
         """
         # Load fresh modules without mutating the suite's shared donor modules.
+        assert common.__file__ is not None
         source = Path(common.__file__)
         for name in ('ghwidgets_common.py', 'impact_loc.py'):
             for enabled in ('', '1'):
@@ -246,7 +248,7 @@ class RendererTiming(unittest.TestCase):
             recorder = module.common.TimingRecorder()
             with mock.patch.object(module.common, 'timing', recorder), \
                     mock.patch.object(module.urllib.request, 'urlopen', side_effect=[
-                        urllib.error.HTTPError('', 503, 'busy', {}, None),
+                        urllib.error.HTTPError('', 503, 'busy', Message(), None),
                         test_popularity.response({'uniques': 2})]), \
                     mock.patch.object(module.common.time, 'sleep'):
                 module.rest('t', '/repos/A/B/traffic/views')
@@ -323,6 +325,7 @@ class UnitTiming(unittest.TestCase):
         environment assignment and failure path execute as shipped. A failing
         gh followed by successful paste must still stop before the renderer.
         """
+        assert common.__file__ is not None
         root = Path(common.__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
             token = Path(directory) / 'token'
