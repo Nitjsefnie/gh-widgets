@@ -19,14 +19,26 @@ MACHINE. Steal is excluded, but the pool spans CPU models and load states:
 the same tree measured 27.70 and 54.25 CPU seconds across seven runs of
 2026-10-19 (issue #190), a 1.96x spread on identical code — wider than the
 30% budget the gate judges, which is why main went red on unchanged code.
-The calibrated instrument divides the child's CPU seconds by the CPU
-seconds of a fixed calibration workload run adjacently in the same job
-(measure_calibrated, below). The machine factor multiplies both children
-and cancels in the ratio; what remains is the suite's own cost. It is
-STILL not deterministic — the calibrator's own noise only partially
-cancels: measured on a loaded box, a moving 17.7% suite spread fell to
-7.1% in the ratio — which is why the baseline still records an envelope
-over it, not a point.
+The calibrated instrument divides the child's CPU seconds by adjacent fixed
+synthetic work. Cancellation depends on the COST MIX, not just adjacency.
+Issue #221's twelve rounds fit suite_cpu = 19.4243 I + 18.4290 S, where I
+is the old calibrator's reading and S approximates fixed spawn/kernel work.
+The new workload retains that I block and adds 312 fork/wait pairs: its
+design target is I + 0.9488 S. Predicted suite ratios span 18.9277-19.7655
+(4.43%), inside the 30% budget; this is a fitted prediction, not a measured
+cross-runner result. The first four runs also measured older test populations,
+as the maintainer's correction records. File I/O has no independent predictor
+in those rows, so its cost cannot be separated from S.
+
+The six runs are 39922290165, 39942310219, 39953487997, 39960771504,
+39970388041 and 39969886729 (https://github.com/Nitjsefnie/gh-widgets/issues/221).
+The last two differ only in comment-share records and demonstrate runner
+dependence on the same measured program. This mix targets the suite; the
+more child-heavy renderers can still rise on faster interpreter runners.
+A purely fixed-cost subject would rise about 51% as I falls from 2 to 1;
+phase-2 cell observations must decide the renderer residual. Independent
+kernel/filesystem variation and calibration noise remain uncancelled, so
+the baseline still records an envelope rather than a point.
 
 THIS MODULE IS POSIX-ONLY, AND IT REFUSES RATHER THAN GUESSES. `resource`
 does not exist on Windows and `/proc` does not exist on macOS, and this
@@ -169,9 +181,8 @@ except ImportError:  # POSIX only. Windows has no RUSAGE_CHILDREN, and this
 
 CPU_METRIC = "cpu_time"
 # The second instrument: the suite's CPU seconds divided by a fixed
-# calibration workload's, run adjacently in the same job — the pool's
-# machine factor multiplies both children and cancels in the ratio. Why it
-# exists and what it does not fix is the docstring's second section.
+# calibration workload's, run adjacently. Cancellation requires matching
+# cost mixes; the docstring records the fit and its limits.
 CALIBRATED_METRIC = "cpu_time_ratio"
 # The metric names this file is willing to record. Anything else arriving in
 # GH_COUNTER_METRIC is a stale export from a shape this file has left
@@ -192,19 +203,13 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
 
-# THE CALIBRATION WORKLOAD. Fixed work whose cost MIX represents the
-# measured subject: the unit suite is roughly one quarter child-process CPU
-# (the offline git-fixture controls spawn real children per case), and a
-# pure-interpreter calibrator cancels the wrong fraction — three cell runs
-# on 2026-10-20 measured raw suite CPU falling 50% across machines while
-# an interpreter-only calibrator fell 50% from a different base, leaving
-# the ratio 31% apart (runs 39352515762, 39353675704, 39356149259). So the
-# program interleaves interpreter rounds with child spawns and small file
-# I/O, pinned HERE in source so the workload travels with the instrument
-# and a diff shows every change to it. ~1.5 CPU seconds on the cell: long
-# enough that startup noise is small against it, short enough that two
-# rounds cost seconds. Its output is deterministic, so a broken calibrator
-# shows up as a wrong answer rather than as a plausible number.
+# THE CALIBRATION WORKLOAD. The six #221 runs above fit I + 0.9488 S.
+# Retain 1400 arithmetic rounds, 25 Python starts and 25 file write/read
+# pairs as I; append 312 fork/wait pairs for S. With this block's heap,
+# a local probe priced 600 pairs at 1.824539 CPU s: round(0.9488 /
+# (1.824539 / 600)) = 312. This sizes work, not cross-runner validation.
+# Serial children share the counter's timeout-owned process group.
+# Fixed counts run in seconds; the unchanged arithmetic retains its pin.
 _CALIBRATION_PROGRAM = """\
 import os, shutil, subprocess, sys, tempfile
 acc = 0
@@ -228,14 +233,18 @@ try:
                     raise SystemExit(2)
 finally:
     shutil.rmtree(scratch, ignore_errors=True)
+for _ in range(312):
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    _, status = os.waitpid(pid, 0)
+    if status != 0:
+        raise SystemExit(2)
 print(acc)
 """
 CALIBRATION_COMMAND = (sys.executable, "-c", _CALIBRATION_PROGRAM)
-# The sum the pinned program must print. Pinning the expected output is what
-# makes a wrong calibrator a refusal rather than a plausible ratio: the
-# program is fixed arithmetic with a fixed answer, so a different answer
-# means the interpreter or the cell is broken, not that the suite got
-# slower. Changing the program means changing this with it.
+# The retained arithmetic still answers 24576. Change this with any change
+# to that answer; a wrong sum refuses rather than producing a plausible ratio.
 CALIBRATION_OUTPUT = "24576"
 # Generous: the calibrator is fixed work that takes seconds. A timeout here
 # means the cell itself is broken, and a broken calibration is refused, not
