@@ -129,6 +129,7 @@ trap 'exit 143' TERM
 
 # source -> installed name
 set -- \
+    "scripts/run-gh-widgets.sh:run-gh-widgets.sh" \
     "src/render.py:render-gh-widgets.py" \
     "src/render-impact.py:render-impact.py" \
     "src/impact_loc.py:impact_loc.py" \
@@ -226,7 +227,7 @@ fi
 [ "$WITH_UNITS" -eq 1 ] || exit 0
 
 # ---- systemd units -------------------------------------------------------
-# One hourly unit renders every SVG in sequence; one weekly unit reruns the
+# One hourly unit renders every SVG through the runner; one weekly unit reruns the
 # same five renderers, passing --resync only to the two that accept it. These
 # replaced five service/timer pairs whose ordering lived in `After=` chains.
 if [ "$(id -u)" -ne 0 ]; then

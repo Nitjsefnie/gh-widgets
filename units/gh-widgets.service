@@ -1,14 +1,13 @@
 # gh-widgets — render every widget SVG, in one pass.
 #
-# This replaced five service/timer pairs (render-gh-widgets, render-impact,
-# render-responsiveness and two -resync variants). One oneshot unit runs the
-# renderers sequentially, so the ordering that used to be expressed with
-# `After=` chains between separate units is now just the order of the
-# ExecStart lines — and a slow renderer delays the next one instead of
-# overlapping with it.
+# One runner starts two branches and waits for both, including when one fails.
+# Lookup -> profile -> impact -> responsiveness -> stars is serial; popularity
+# runs independently alongside it.
 #
-# Order is load-bearing: render-impact.py refreshes the shared impact cache
-# that render-responsiveness.py then reads. Star history and popularity are independent.
+# Order is load-bearing: profile publishes the authored-acquisition share for
+# impact, which refreshes the shared impact cache that responsiveness reads.
+# Only that chain uses GraphQL, preserving the per-process in-flight cap of 2
+# across the unit. Stars also uses GraphQL; popularity uses REST and git.
 #
 # A unit has ONE environment block but five renderers using THREE caches, so the
 # split is deliberate: CACHE_FILE= below is the profile cache, and the two
@@ -33,8 +32,8 @@ Environment=THEME=tokyonight
 Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
 # Line ownership is an exact match against the account's GitHub noreply
 # addresses; the workstation address never appears as one, so without this the
-# blame pass silently under-counts. Read by fetch_identity, which impact and
-# responsiveness both call; render.py does not call it and is unaffected.
+# blame pass silently under-counts. Profile fetches identity for the same-run
+# share that impact and responsiveness reuse; standalone runs fetch it live.
 Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
 Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
 Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
@@ -49,17 +48,10 @@ UMask=0077
 # token's account belongs to, looked up at each run (read:org also returns
 # private memberships), so joining or leaving an org needs no edit here.
 # A failed lookup fails the unit rather than rendering an under-count.
-# Bash's built-in clock keeps the lookup measurement outside the renderer;
-# the flag only adds its journal line, with the original pipeline intact.
-ExecStart=/bin/bash -c 'set -o pipefail; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_start=$${EPOCHREALTIME/./}; fi; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_us=$$(($${EPOCHREALTIME/./} - orgs_start)); printf "orgs-lookup: %%d.%%06ds\n" "$$((orgs_us / 1000000))" "$$((orgs_us %% 1000000))"; fi; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py'
-ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
-ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
-# Popularity has no cache and no --resync: every run clones and reads traffic.
-ExecStart=/usr/local/bin/render-popularity.py
-# Star history also has no --resync; its cache is a failed-fetch fallback.
-ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
+# The runner retains the opt-in orgs-lookup timing journal line.
+ExecStart=/bin/bash /usr/local/bin/run-gh-widgets.sh normal
 
-# Covers all five in sequence. The blame pass dominates: it re-clones and
+# Covers all five renderers. The blame pass dominates: it re-clones and
 # re-blames every external repo whose default-branch HEAD moved.
 TimeoutStartSec=5400
 Nice=12

@@ -8,20 +8,26 @@ renderers themselves have. There are **four** files, and they replaced **ten**:
 
 | unit | when | what |
 |---|---|---|
-| `gh-widgets.service` + `.timer` | hourly | all four renderers, in sequence |
-| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | all four renderers in sequence; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
+| `gh-widgets.service` + `.timer` | hourly | five renderers in two concurrent branches |
+| `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | same branches; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
 
 The five old `render-*` service/timer pairs are **gone**; ordering that used to
-be expressed with `After=` chains between separate units is now just the order
-of the `ExecStart` lines. Read `units/*.service` for the env and the reasoning —
+be expressed with `After=` chains between separate units now lives in
+`scripts/run-gh-widgets.sh`, invoked by each unit's single `ExecStart`.
+Lookup → profile → impact → responsiveness → stars is serial for the acquisition
+share, impact cache and GraphQL request cap; popularity runs alongside it.
+Every branch is waited for, and any failure fails the unit and skips its dependents.
+Read `units/*.service` for the env and the reasoning —
 do not re-derive it here, and do not edit `/etc/systemd/system` by hand.
 
 **Deploy with `/root/gh-widgets/install.sh` — never `cp`, never a hand-edited
-unit.** Bare, it installs a twelve-file deployment set to `/usr/local/bin`
+unit.** Bare, it installs a thirteen-file deployment set to `/usr/local/bin`
 (`render.py` → `render-gh-widgets.py`, `render-impact.py`, `impact_loc.py`,
 `render-responsiveness.py`, `ghwidgets_common.py`, `ghwidgets_cache.py`,
-`ghwidgets_journal.py`, `ghwidgets_share.py`, `impact_clone.py`, `ghwidgets_data.py`, `render-stars.py`, `render-popularity.py`).
-Sources live under `src/` except the root public `ghwidgets_data.py`;
+`ghwidgets_journal.py`, `ghwidgets_share.py`, `impact_clone.py`, `ghwidgets_data.py`,
+`render-stars.py`, `render-popularity.py`, `run-gh-widgets.sh`).
+Sources live under `src/` except the root public `ghwidgets_data.py` and
+`scripts/run-gh-widgets.sh`;
 installed filenames stay flat. The renderers
 load `ghwidgets_common.py` and assert its `COMMON_VERSION` at startup; that
 module imports the adjacent cache and journal modules, and `impact_loc.py`

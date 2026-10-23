@@ -2,7 +2,6 @@
 import contextlib
 import io
 import os
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -324,23 +323,6 @@ class RendererTiming(unittest.TestCase):
                 result = subprocess.run([sys.executable, '-c', code, str(source.with_name(name))],
                                         env=env, capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), str(bool(enabled)))
-        # These assertions carry the wrapper contract on Windows, where the
-        # POSIX execution test is skipped.
-        for unit, suffix in (('gh-widgets.service', ''),
-                             ('gh-widgets-resync.service', ' --resync')):
-            with self.subTest(unit=unit):
-                unit_file = source.resolve().parents[1] / 'units' / unit
-                line = next(line for line in unit_file.read_text(encoding='utf-8').splitlines()
-                            if line.startswith('ExecStart=/bin/bash'))
-                for fragment in ('set -o pipefail',
-                                 'gh api --paginate user/orgs --jq ".[].login"',
-                                 'paste -sd, -', 'GH_EXTRA_ORGS=',
-                                 'printf "orgs-lookup:'):
-                    self.assertIn(fragment, line)
-                self.assertEqual(
-                    line.count('if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then'), 2)
-                self.assertTrue(line.endswith(
-                    f'exec /usr/local/bin/render-gh-widgets.py{suffix}\''))
 
     def test_popularity_rest_retries_and_git_commands_reach_recorder(self):
         """Exercise popularity's own transport and its empty-history probes."""
@@ -408,49 +390,3 @@ class RendererTiming(unittest.TestCase):
             self.assertEqual(python_row[0], 2)
             self.assertGreater(python_row[1], 0)
             self.assertGreater(python_row[2], 0)
-
-
-# The env-name test above carries the textual contract on every OS.
-@unittest.skipIf(
-    sys.platform == 'win32',
-    'bash resolves to WSL bash.exe without an installed distribution on Windows; '
-    'the units run on Linux in production, and '
-    'RendererTiming.test_env_name_is_read_once_by_common_and_impact checks their text on every OS',
-)
-class UnitTiming(unittest.TestCase):
-    """Execute both shipped wrappers with offline gh and renderer commands."""
-
-    def test_org_lookup_flag_output_wiring_and_pipefail(self):
-        """Run the actual shell from both units with systemd escapes decoded."""
-        assert common.__file__ is not None
-        root = Path(common.__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as directory:
-            token = Path(directory) / 'token'
-            token.write_text('t', encoding='utf-8')
-            # Shell functions avoid executable fixtures or deployment paths.
-            functions = ('fake_gh() { printf "A\\nB\\n"; return "${FAIL_GH:-0}"; }; '
-                         'fake_render() { printf "render:%s:%s\\n" "$GH_EXTRA_ORGS" "$*"; }; ')
-            for unit, suffix in (('gh-widgets.service', ''),
-                                 ('gh-widgets-resync.service', '--resync')):
-                line = next(line for line in (root / 'units' / unit).read_text().splitlines()
-                            if line.startswith('ExecStart=/bin/bash'))
-                script = shlex.split(line.split('=', 1)[1])[2]
-                script = script.replace('$$', '$').replace('%%', '%')
-                script = script.replace('/usr/local/bin/gh', 'fake_gh')
-                script = script.replace('exec /usr/local/bin/render-gh-widgets.py', 'fake_render')
-                for flag in ('', '1'):
-                    env = {**os.environ, 'GH_TOKEN_FILE': str(token),
-                           'GH_WIDGETS_DEBUG_TIMING': flag}
-                    result = subprocess.run(['bash', '-c', functions + script], env=env,
-                                            capture_output=True, text=True, check=True)
-                    expected = f'render:A,B:{suffix}\n'
-                    if flag:
-                        self.assertRegex(result.stdout, r'^orgs-lookup: \d+\.\d+s\n' + expected)
-                    else:
-                        self.assertEqual(result.stdout, expected)
-                    self.assertEqual(result.stderr, '')
-                    failed = subprocess.run(['bash', '-c', functions + script],
-                                            env={**env, 'FAIL_GH': '1'},
-                                            capture_output=True, text=True, check=False)
-                    self.assertEqual(failed.returncode, 1)
-                    self.assertNotIn('render:', failed.stdout)

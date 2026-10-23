@@ -10,7 +10,8 @@
 # everything. It is the ONLY unit that ignores the cache; the hourly one never
 # passes --resync.
 #
-# Same renderers, same order, same reasoning as gh-widgets.service.
+# Same two branches and dependencies as gh-widgets.service; the runner
+# waits for every branch even on failure.
 #
 # Deploy with install.sh --units, never by editing /etc/systemd/system.
 
@@ -39,19 +40,12 @@ UMask=0077
 
 # render.py takes no --cache-file (env only); render-responsiveness.py has no
 # --resync at all — it has no cache of its own, it renders from the impact
-# cache that the line above has just rebuilt from scratch, so re-running it
+# cache that impact has just rebuilt from scratch, so re-running it
 # plainly IS its resync. Both verified against --help; do not add flags here
 # without checking, an unknown flag exits 2 and fails the whole unit.
 # Org lookup: see gh-widgets.service.
-# The same opt-in lookup clock as the hourly wrapper; see gh-widgets.service.
-ExecStart=/bin/bash -c 'set -o pipefail; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_start=$${EPOCHREALTIME/./}; fi; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_us=$$(($${EPOCHREALTIME/./} - orgs_start)); printf "orgs-lookup: %%d.%%06ds\n" "$$((orgs_us / 1000000))" "$$((orgs_us %% 1000000))"; fi; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py --resync'
-ExecStart=/usr/local/bin/render-impact.py --resync --cache-file /var/lib/gh-widgets/impact-cache.json
-ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
-# Popularity has no --resync flag either: fresh clones and live traffic on every run.
-ExecStart=/usr/local/bin/render-popularity.py
-# Star history refetches the entire current stargazer list on every run;
-# it has no --resync flag. Its cache is only a failed-fetch fallback.
-ExecStart=/usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
+# Popularity and stars fetch live on every run and have no --resync flag.
+ExecStart=/bin/bash /usr/local/bin/run-gh-widgets.sh resync
 
 # Far longer than the hourly unit: a resync re-clones and re-blames every
 # external repo rather than only the ones whose HEAD moved.
