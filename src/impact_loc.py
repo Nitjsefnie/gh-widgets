@@ -288,8 +288,7 @@ def _read_bounded_stdout_posix(proc, output, limit, deadline, cmd, timeout):
 def _run_bounded(cmd, *, cwd=None, timeout=600):
     """Capture at most the configured stdout bytes before killing the child.
 
-    The timer includes draining stdout and reaping on errors or timeouts;
-    those waits still block the caller even when no output is returned.
+    Timing includes stdout drain and timeout cleanup.
     """
     limit = _git_output_cap_bytes()
     program = 'git-fame' if cmd[:2] == ['git', 'fame'] else Path(cmd[0]).name

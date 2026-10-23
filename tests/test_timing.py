@@ -33,13 +33,7 @@ class RunTiming(unittest.TestCase):
         mock.patch.object(common, 'timing', self.recorder).start()
 
     def test_retry_attempts_and_sleep_are_reported_separately(self):
-        """A 503 costs a request, then back-off, then a second request.
-
-        The clock advances only at those operations and at one unit of local
-        work. The report must split 4 + 5 + 1 seconds against a ten-second run;
-        counting only the successful response or charging the entire fetch
-        phase again changes that arithmetic and must fail this test.
-        """
+        """A 503 costs a request, then back-off, then a second request."""
         def request(_req, **_kwargs):
             self.clock += 2
             if self.clock == 2:
@@ -68,12 +62,7 @@ class RunTiming(unittest.TestCase):
         self.assertIn('attributed=10.000s wall=10.000s gap=0.000s', text)
 
     def test_nested_phases_net_blocking_and_concurrent_processes(self):
-        """Child phases consume their parent's budget; worker time does not.
-
-        The worker is joined before the clock is read again, so this fixture
-        needs no scheduling tolerance or real sleep. Its four seconds pass
-        during the outer phase but remain separate in the process totals.
-        """
+        """Child phases consume their parent's budget; worker time does not."""
         with self.recorder.track('phase', 'outer'):
             with self.recorder.track('process', 'git'):
                 self.clock += 2
@@ -98,11 +87,7 @@ class RunTiming(unittest.TestCase):
         self.assertIn('attributed=9.000s wall=10.000s gap=1.000s', text)
 
     def test_endpoint_shapes_drop_names_and_pagination(self):
-        """Pin each endpoint family used by popularity and public identity.
-
-        Encoded slashes stay inside a path component until names are folded;
-        pagination changes counts without fragmenting an endpoint's totals.
-        """
+        """Pin each endpoint family used by popularity and public identity."""
         shapes = {
             '/user': '/user', '/user/orgs?per_page=100': '/user/orgs',
             '/user/repos?affiliation=owner&page=2': '/user/repos',
@@ -118,11 +103,7 @@ class RunTiming(unittest.TestCase):
                 self.assertEqual(common.endpoint_shape(url), expected)
 
     def test_disabled_recorder_does_not_read_clocks_or_print(self):
-        """Disabled hooks must yield normally without observing or reporting.
-
-        Raising clock/print stubs make accidental work visible even if a
-        report happened to contain zero durations on a fast test machine.
-        """
+        """Disabled hooks must yield normally without observing or reporting."""
         with mock.patch.object(common, 'DEBUG_TIMING', False), \
                 mock.patch.object(common.time, 'monotonic',
                                   side_effect=AssertionError('clock read')), \
@@ -133,11 +114,7 @@ class RunTiming(unittest.TestCase):
         self.assertEqual(self.recorder.totals, {})
 
     def test_public_org_pages_and_failed_requests_are_counted(self):
-        """Public memberships use an injected transport outside gql().
-
-        Both a complete response body and an unsuccessful attempt contribute
-        to the same folded endpoint; the original acquisition error survives.
-        """
+        """Public memberships use an injected transport outside gql()."""
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'[{"login":"Public"}]'
         response.__enter__.return_value.headers = {}
@@ -156,11 +133,7 @@ class RendererTiming(unittest.TestCase):
     """Exercise main() and real I/O seams rather than just the accumulator."""
 
     def test_all_main_entry_points_report_even_on_failure(self):
-        """Each CLI owns its report lifetime, including an early failure.
-
-        Failing at argument handling keeps this a small wiring test shared
-        across all five mains; the full render below supplies the success leg.
-        """
+        """Each CLI owns its report lifetime, including an early failure."""
         modules = (test_render.render, test_stars.stars, test_popularity.popularity,
                    test_impact_fallback.render_impact, test_responsiveness.resp)
         for module in modules:
@@ -176,13 +149,7 @@ class RendererTiming(unittest.TestCase):
                 self.assertIn('unattributed', output.getvalue())
 
     def test_profile_full_render_is_byte_identical_with_flag_off_and_on(self):
-        """Run the real profile publisher against the existing fake API.
-
-        Bypassing the main wrapper supplies a reference, then the disabled
-        and enabled wrappers must publish identical bytes from cold inputs.
-        The disabled stdout must equal the reference in full, not just lack
-        one expected timing heading.
-        """
+        """Run the real profile publisher against the existing fake API."""
         render = test_render.render
         self.assertTrue(hasattr(render.main, '__wrapped__'), 'main timing missing')
         with tempfile.TemporaryDirectory() as directory:
@@ -215,11 +182,7 @@ class RendererTiming(unittest.TestCase):
                 cache.unlink()
 
     def test_env_name_is_read_once_by_common_and_impact(self):
-        """Both import-time switches read the new name and retain that value.
-
-        Separate interpreters avoid stale module state masking a missing env
-        read. Changing the env after loading must not alter either switch.
-        """
+        """Both import-time switches read the new name and retain that value."""
         # Load fresh modules without mutating the suite's shared donor modules.
         assert common.__file__ is not None
         source = Path(common.__file__)
@@ -237,12 +200,7 @@ class RendererTiming(unittest.TestCase):
                 self.assertEqual(result.stdout.strip(), str(bool(enabled)))
 
     def test_popularity_rest_retries_and_git_commands_reach_recorder(self):
-        """Exercise popularity's own transport and its empty-history probes.
-
-        The fake responses replace I/O, leaving both retry loops and command
-        selection in production code. Dropping one call-site hook loses a
-        real count even though the shared recorder still works in isolation.
-        """
+        """Exercise popularity's own transport and its empty-history probes."""
         module = test_popularity.popularity
         with mock.patch.object(module.common, 'DEBUG_TIMING', True):
             recorder = module.common.TimingRecorder()
@@ -265,12 +223,7 @@ class RendererTiming(unittest.TestCase):
             self.assertEqual(recorder.totals[('process', 'git')][0], 4)
 
     def test_impact_bounded_clone_and_fame_probe_processes_are_counted(self):
-        """The bounded runner and clone launcher each own a real child.
-
-        Python stands in for Git portably; the capability probes use existing
-        completed-process doubles. No clone, network, or installed git-fame
-        version is needed to prove all four commands reach the recorder.
-        """
+        """The bounded runner and clone launcher each own a real child."""
         module = test_impact_loc.impact_loc
         clone = module.impact_clone
         # Configure the path-loaded donor just as render-impact does.
@@ -319,12 +272,7 @@ class UnitTiming(unittest.TestCase):
     """Execute both shipped wrappers with offline gh and renderer commands."""
 
     def test_org_lookup_flag_output_wiring_and_pipefail(self):
-        """Run the actual shell from both units with systemd escapes decoded.
-
-        Only deployment paths are replaced; the lookup pipeline, comma join,
-        environment assignment and failure path execute as shipped. A failing
-        gh followed by successful paste must still stop before the renderer.
-        """
+        """Run the actual shell from both units with systemd escapes decoded."""
         assert common.__file__ is not None
         root = Path(common.__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:

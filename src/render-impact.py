@@ -573,7 +573,6 @@ def print_summary(out, rows, fallback):
 
 # The run's own orchestration: argument handling, the fetch-or-fallback
 # decision, the card write, and handing both to print_summary.
-# The shared report follows the existing blame summary, including on errors.
 @common.timed_run('render-impact')
 def main():
     args, token = parse_args()

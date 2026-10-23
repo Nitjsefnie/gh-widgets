@@ -85,8 +85,7 @@ class _CloneLaunch:
 def _run_clone_command(cmd, timeout=300):
     """Run and track a clone-path Git child until it has been reaped.
 
-    Measure from the calling thread: pool callers overlap blame, whereas a
-    synchronous caller blocks even though its spawn is handed to a worker.
+    Pool calls overlap blame; synchronous callers block on the spawn worker.
     """
     with common.timing.track('process', Path(cmd[0]).name):
         # Python dispatches signals on the main thread. Keep Popen and its registry

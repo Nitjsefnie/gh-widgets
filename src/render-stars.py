@@ -207,10 +207,8 @@ def parse_args():
 def main():
     """Fetch and publish each repository with a separate stars cache.
 
-    Input time includes paging and cache persistence; its exclusive phase
-    excludes the GraphQL waits already counted by the shared client. Rendering
-    is measured separately because a large star history does local geometry
-    work after the final response. Timing never enters the history or SVG.
+    Input time includes paging and cache writes, net of GraphQL waits.
+    Rendering measures local star-history geometry; timings stay out of SVGs.
     """
     args, token = parse_args()
     C = THEMES[args.theme]

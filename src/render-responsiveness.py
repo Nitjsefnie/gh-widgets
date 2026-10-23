@@ -534,9 +534,8 @@ def load_inputs(args, token):
 
 @common.timed_run('render-responsiveness')
 def main():
-    # Loading can acquire live PRs or take the durability fallback. The phase
-    # covers either path, net of shared GraphQL waits, without changing the
-    # acquisition labels used by the fallback journal or the card stamp.
+    # Time live PR acquisition or fallback net of shared GraphQL waits;
+    # acquisition labels and card stamps retain their existing meaning.
     args, token = parse_args()
 
     C = THEMES[args.theme]
