@@ -163,8 +163,8 @@ jobs:
           REPO: ${{ github.repository }}
           WAIVE: ${{ inputs.waive }}
           SELF: ${{ github.job }}
-        # Polls this commit's check runs until every gate named in the
-        # manifest below has REPORTED and passed.
+        # Polls this commit's checks and, for comment-share-only windows,
+        # the nearest code ancestor until the manifest is satisfied.
         #
         # The manifest is the point (issue #34). Polling whatever happened
         # to have reported cannot tell "all gates are green" from
@@ -210,12 +210,13 @@ jobs:
         #     no conclusion yet, and reading its empty conclusion as a
         #     failure would turn every ordinary wait into a red release.
         #
-        # A manifest entry has to reach `success` and nothing less. The
-        # wider success/skipped/neutral set is kept for checks that are
-        # NOT in the manifest, because those are incidental — but `skipped`
-        # on a required gate means the gate did not run, which is issue
-        # #34's own hole one level down. Every leg of a matrix counts, not
-        # just the first.
+        # Code windows require every manifest entry to reach success, every
+        # matrix leg included. Only a confirmed comment-share-only window
+        # accepts skipped or absent manifest gates. Walk first parents over
+        # stacked comment-share windows and require all manifest gates at
+        # the nearest code window too, polling if they are still running.
+        # Unknown windows refuse; cancelled checks always refuse. Incidental
+        # checks retain the wider success/skipped/neutral acceptance set.
         run: |
           manifest=(
             lint        # tests.yml, job `lint`
@@ -266,95 +267,142 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+          # Compare each landed first-parent window, not commit subjects or
+          # push actors. The compare API lists all files on its first page
+          # (up to 300); exactly one cannot be a truncated code window.
+          check_shas=("$SHA")
+          cursor="$SHA"
+          while :; do
+            parent="$(gh api -H "Cache-Control: no-cache" \
+              "repos/$REPO/commits/$cursor" --jq '.parents[0].sha')"
+            if [[ ! "$parent" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Unknown first parent for $cursor — refusing." >&2
+              exit 1
+            fi
+            comparison="$(gh api --paginate --slurp \
+              -H "Cache-Control: no-cache" \
+              "repos/$REPO/compare/$parent...$cursor")"
+            window="$(jq -er '
+              .[0] |
+              if .status != "ahead" or (.files | type) != "array"
+                or any(.files[]; (.filename | type) != "string") then
+                error("Unknown landed window")
+              elif (.files | length) == 1
+                and .files[0].filename == ".github/comment-share.json"
+                and (.files[0].status == "modified"
+                  or .files[0].status == "added"
+                  or .files[0].status == "removed")
+                and .files[0].previous_filename == null then
+                "comment-share"
+              else "code" end' <<< "$comparison")"
+            if [ "$window" = code ]; then break; fi
+            cursor="$parent"
+            check_shas+=("$cursor")
+          done
+          code_sha="$cursor"
           deadline=$(( SECONDS + WAIT_DEADLINE_SECONDS ))
           missing=""
           while [ "$SECONDS" -lt "$deadline" ]; do
-            runs="$(gh api --paginate \
-              -H "Cache-Control: no-cache" \
-              "repos/$REPO/commits/$SHA/check-runs" \
-              --jq '.check_runs[]
-                    | "\(.status)\t\(.conclusion)\t\(.name)"')"
-            # This job's own check run, and nothing else. A check whose
-            # name merely starts with this one is left in.
-            reported="$(printf '%s\n' "$runs" \
-              | awk -F'\t' -v self="$SELF" 'NF && $3 != self')"
+            waiting=no
+            for check_sha in "${check_shas[@]}"; do
+              allow_skipped=no
+              if [ "$check_sha" != "$code_sha" ]; then allow_skipped=yes; fi
+              echo "Checking gates on $check_sha (comment-share: $allow_skipped)"
+              runs="$(gh api --paginate \
+                -H "Cache-Control: no-cache" \
+                "repos/$REPO/commits/$check_sha/check-runs" \
+                --jq '.check_runs[]
+                      | "\(.status)\t\(.conclusion)\t\(.name)"')"
+              # This job's own check run, and nothing else. A check whose
+              # name merely starts with this one is left in.
+              reported="$(printf '%s\n' "$runs" \
+                | awk -F'\t' -v self="$SELF" 'NF && $3 != self')"
 
-            # Incidental checks — anything that is not a manifest entry —
-            # keep the inherited wider acceptance set, so today's
-            # behaviour is unchanged for everything the manifest does not
-            # name. A waived gate lands here, which is what "removed from
-            # the required set" has to mean for the escape hatch to be
-            # worth having; that is why the waiver is this loud.
-            bad="$(printf '%s\n' "$reported" \
-              | awk -F'\t' -v gates="${manifest[*]}" '
-                    BEGIN { n = split(gates, g, " ") }
-                    function isgate(name,   i) {
-                      for (i = 1; i <= n; i++)
-                        if (name == g[i] || index(name, g[i] " (") == 1)
-                          return 1
-                      return 0
-                    }
-                    NF && !isgate($3) && $1 == "completed" \
-                      && $2 != "success" && $2 != "skipped" \
-                      && $2 != "neutral"')"
-            if [ -n "$bad" ]; then
-              echo "Refusing to release: these checks did not pass:" >&2
-              printf '%s\n' "$bad" | awk '{print "    " $0}' >&2
-              exit 1
-            fi
-
-            missing=""
-            gate_bad=no
-            for entry in "${required[@]}"; do
-              matched="$(printf '%s\n' "$reported" \
-                | awk -F'\t' -v entry="$entry" 'NF && ($3 == entry \
-                  || index($3, entry " (") == 1)')"
-              if [ -z "$matched" ]; then
-                missing="$missing $entry"
-                continue
+              # Incidental checks — anything that is not a manifest entry —
+              # keep the inherited wider acceptance set, so today's
+              # behaviour is unchanged for everything the manifest does not
+              # name. A waived gate lands here, which is what "removed from
+              # the required set" has to mean for the escape hatch to be
+              # worth having; that is why the waiver is this loud.
+              bad="$(printf '%s\n' "$reported" \
+                | awk -F'\t' -v gates="${manifest[*]}" '
+                      BEGIN { n = split(gates, g, " ") }
+                      function isgate(name,   i) {
+                        for (i = 1; i <= n; i++)
+                          if (name == g[i] || index(name, g[i] " (") == 1)
+                            return 1
+                        return 0
+                      }
+                      NF && !isgate($3) && $1 == "completed" \
+                        && $2 != "success" && $2 != "skipped" \
+                        && $2 != "neutral"')"
+              if [ -n "$bad" ]; then
+                echo "Refusing to release: these checks did not pass:" >&2
+                printf '%s\n' "$bad" | awk '{print "    " $0}' >&2
+                exit 1
               fi
-              # Every leg of a matrix has to land, not just the first.
-              settled="$(printf '%s\n' "$matched" \
-                | awk -F'\t' '$1 == "completed" && $2 != "success"')"
-              if [ -n "$settled" ]; then
-                if [ "$gate_bad" = no ]; then
-                  echo "Refusing to release: these gates did not reach" >&2
-                  echo "success, which a manifest entry must:" >&2
-                  gate_bad=yes
+
+              missing=""
+              gate_bad=no
+              for entry in "${required[@]}"; do
+                matched="$(printf '%s\n' "$reported" \
+                  | awk -F'\t' -v entry="$entry" 'NF && ($3 == entry \
+                    || index($3, entry " (") == 1)')"
+                if [ -z "$matched" ]; then
+                  if [ "$allow_skipped" = no ]; then
+                    missing="$missing $entry"
+                  fi
+                  continue
                 fi
-                echo "  $entry:" >&2
-                printf '%s\n' "$settled" | awk '{print "    " $0}' >&2
+                # Every leg of a matrix has to land, not just the first.
+                settled="$(printf '%s\n' "$matched" \
+                  | awk -F'\t' -v allow="$allow_skipped" '
+                      $1 == "completed" && $2 != "success" \
+                        && !(allow == "yes" && $2 == "skipped")')"
+                if [ -n "$settled" ]; then
+                  if [ "$gate_bad" = no ]; then
+                    echo "Refusing to release: these gates did not reach" >&2
+                    echo "success, which a manifest entry must:" >&2
+                    gate_bad=yes
+                  fi
+                  echo "  $entry:" >&2
+                  printf '%s\n' "$settled" | awk '{print "    " $0}' >&2
+                fi
+              done
+              if [ "$gate_bad" = yes ]; then
+                exit 1
               fi
-            done
-            if [ "$gate_bad" = yes ]; then
-              exit 1
-            fi
 
-            # A waived gate cannot hold this release either. It is already
-            # out of `required` and out of the `bad` scan; leaving it in
-            # the pending count meant a slow or stuck waived gate stalled
-            # the release for the full deadline and then failed it, one
-            # screen under a log line saying the opposite.
-            pending="$(printf '%s\n' "$reported" \
-              | awk -F'\t' -v skip="${waived[*]:-}" '
-                    BEGIN { ns = split(skip, s, " ") }
-                    function iswaived(name,   i) {
-                      for (i = 1; i <= ns; i++)
-                        if (name == s[i] || index(name, s[i] " (") == 1)
-                          return 1
-                      return 0
-                    }
-                    NF && !iswaived($3) && $1 != "completed" { n++ }
-                    END { print n + 0 }')"
-            if [ -n "$missing" ] || [ "$pending" -gt 0 ]; then
-              if [ -n "$missing" ]; then
-                echo "no check run has reported yet for:$missing"
+              # A waived gate cannot hold this release either. It is already
+              # out of `required` and out of the `bad` scan; leaving it in
+              # the pending count meant a slow or stuck waived gate stalled
+              # the release for the full deadline and then failed it, one
+              # screen under a log line saying the opposite.
+              pending="$(printf '%s\n' "$reported" \
+                | awk -F'\t' -v skip="${waived[*]:-}" '
+                      BEGIN { ns = split(skip, s, " ") }
+                      function iswaived(name,   i) {
+                        for (i = 1; i <= ns; i++)
+                          if (name == s[i] || index(name, s[i] " (") == 1)
+                            return 1
+                        return 0
+                      }
+                      NF && !iswaived($3) && $1 != "completed" { n++ }
+                      END { print n + 0 }')"
+              if [ -n "$missing" ] || [ "$pending" -gt 0 ]; then
+                if [ -n "$missing" ]; then
+                  echo "no check run has reported yet for:$missing"
+                fi
+                if [ "$pending" -gt 0 ]; then
+                  echo "$pending check(s) still running:"
+                  printf '%s\n' "$reported" \
+                    | awk -F'\t' 'NF && $1 != "completed" { print "    " $0 }'
+                fi
+                waiting=yes
               fi
-              if [ "$pending" -gt 0 ]; then
-                echo "$pending check(s) still running:"
-                printf '%s\n' "$reported" \
-                  | awk -F'\t' 'NF && $1 != "completed" { print "    " $0 }'
-              fi
+
+            done
+            if [ "$waiting" = yes ]; then
               sleep "$POLL_INTERVAL_SECONDS"
               continue
             fi

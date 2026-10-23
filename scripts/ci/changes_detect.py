@@ -24,11 +24,11 @@ class Transport(Protocol):
 
 CODE_IGNORES = (
     "**/*.md", "PRESENTATION.txt", "docs/**", "examples/**", "LICENSE",
-    ".gitignore",
+    ".gitignore", ".github/comment-share.json",
 )
 CODEQL_IGNORES = (
     "**/*.md", "docs/**", "examples/**", ".claude/**", "LICENSE",
-    "NOTICE", ".gitignore",
+    "NOTICE", ".gitignore", ".github/comment-share.json",
 )
 GATES = {
     "gate-integrity": ("deny", ()),
