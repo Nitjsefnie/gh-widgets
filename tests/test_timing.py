@@ -3,7 +3,6 @@ import contextlib
 import io
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -198,6 +197,23 @@ class RendererTiming(unittest.TestCase):
                 result = subprocess.run([sys.executable, '-c', code, str(source.with_name(name))],
                                         env=env, capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), str(bool(enabled)))
+        # These assertions carry the wrapper contract on Windows, where the
+        # POSIX execution test is skipped.
+        for unit, suffix in (('gh-widgets.service', ''),
+                             ('gh-widgets-resync.service', ' --resync')):
+            with self.subTest(unit=unit):
+                unit_file = source.resolve().parents[1] / 'units' / unit
+                line = next(line for line in unit_file.read_text(encoding='utf-8').splitlines()
+                            if line.startswith('ExecStart=/bin/bash'))
+                for fragment in ('set -o pipefail',
+                                 'gh api --paginate user/orgs --jq ".[].login"',
+                                 'paste -sd, -', 'GH_EXTRA_ORGS=',
+                                 'printf "orgs-lookup:'):
+                    self.assertIn(fragment, line)
+                self.assertEqual(
+                    line.count('if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then'), 2)
+                self.assertTrue(line.endswith(
+                    f'exec /usr/local/bin/render-gh-widgets.py{suffix}\''))
 
     def test_popularity_rest_retries_and_git_commands_reach_recorder(self):
         """Exercise popularity's own transport and its empty-history probes."""
@@ -267,7 +283,13 @@ class RendererTiming(unittest.TestCase):
             self.assertGreater(python_row[2], 0)
 
 
-@unittest.skipUnless(shutil.which('bash') and shutil.which('paste'), 'unit wrapper needs bash/paste')
+# The env-name test above carries the textual contract on every OS.
+@unittest.skipIf(
+    sys.platform == 'win32',
+    'bash resolves to WSL bash.exe without an installed distribution on Windows; '
+    'the units run on Linux in production, and '
+    'RendererTiming.test_env_name_is_read_once_by_common_and_impact checks their text on every OS',
+)
 class UnitTiming(unittest.TestCase):
     """Execute both shipped wrappers with offline gh and renderer commands."""
 
@@ -278,8 +300,7 @@ class UnitTiming(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             token = Path(directory) / 'token'
             token.write_text('t', encoding='utf-8')
-            # Shell functions keep the wrapper executable on Windows bash too;
-            # no executable fixture files or deployment paths are needed.
+            # Shell functions avoid executable fixtures or deployment paths.
             functions = ('fake_gh() { printf "A\\nB\\n"; return "${FAIL_GH:-0}"; }; '
                          'fake_render() { printf "render:%s:%s\\n" "$GH_EXTRA_ORGS" "$*"; }; ')
             for unit, suffix in (('gh-widgets.service', ''),
