@@ -60,8 +60,8 @@
     12711
   ],
   "install.sh": [
-    3252,
-    8784
+    3251,
+    8889
   ],
   "scripts/bench/bench_platform.py": [
     1408,
@@ -164,8 +164,8 @@
     20998
   ],
   "src/render-responsiveness.py": [
-    10717,
-    19485
+    10574,
+    19536
   ],
   "src/render.py": [
     10487,
