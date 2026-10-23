@@ -160,6 +160,9 @@ def _run_renderer(renderer, repo_root, env, metric=None):
         result["wall"] = measured.wall
         result["stdout"] = measured.stdout
         result["stderr"] = measured.stderr
+        if isinstance(measured, counter.CalibratedMeasurement):
+            result["raw_cpu"] = measured.suite_cpu
+            result["calibration_cpu"] = measured.calibration_cpu
         if measured.returncode != 0:
             result["failure"] = (
                 f"renderer exited with code {measured.returncode}\n"
@@ -494,8 +497,15 @@ def main(argv=None):
         observation = (f"; observed {result['calibrated_ratio']:.6f} "
                        f"{counter.CALIBRATED_METRIC}"
                        if "calibrated_ratio" in result else "")
+        value = f"{result['time']:.3f}"
+        if "calibration_cpu" in result:
+            value = f"{result['time']:.6f}"
+            observation += (
+                f"; calibration = {result['calibration_cpu']:.6f} "
+                f"{counter.CPU_METRIC}; renderer raw {result['raw_cpu']:.6f} "
+                f"{counter.CPU_METRIC}")
         print(f"{result['name']} ({args.side} round {args.round}): "
-              f"{result['time']:.3f} {result['metric'] or 'unmeasured'} "
+              f"{value} {result['metric'] or 'unmeasured'} "
               f"{status}{observation}")
         # The status line above is the shape the suite asserts, and it says
         # only that something failed. The reason goes to stderr, because a red
