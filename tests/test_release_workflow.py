@@ -365,10 +365,16 @@ exit 1
         # and suppress the chained TimeoutExpired, whose argv is the whole
         # workflow block and would bury the one line that says what went
         # wrong.
+        block = self._run_block(step_name)
+        if (self.root / "trace-wait").exists():
+            if (self.root / "trace-wait").read_text(encoding="utf-8") == "tick":
+                block = block.replace('missing=""\nwhile [',
+                                      'missing=""\nSECONDS=$(( SECONDS + 1 ))\nwhile [', 1)
+            block = "PS4='+$SECONDS:$LINENO: '; set -x\n" + block
         try:
             return subprocess.run(
                 ["bash", "-e", "-o", "pipefail", "-c",
-                 self._run_block(step_name)],
+                 block],
                 cwd=self.root, env=self._env(**overrides),
                 capture_output=True, text=True, check=False, timeout=120)
         except subprocess.TimeoutExpired:
@@ -551,8 +557,17 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self.setUp()
                 self._comment_share_tip()
                 self._window(self.SHA, self.OTHER_SHA, paths)
+                (self.root / "trace-wait").write_text("", encoding="utf-8")
                 done = self._execute("Wait for the other gates on this commit",
                                      **self.GIVE_UP)
+                print(f"RELEASE WAIT TRACE {paths}:\n"
+                      f"{done.stdout}\n{done.stderr}", flush=True)
+                if paths == [".github/comment-share.json", "src/render.py"]:
+                    (self.root / "trace-wait").write_text("tick", encoding="utf-8")
+                    tick = self._execute("Wait for the other gates on this commit",
+                                         **self.GIVE_UP)
+                    print(f"RELEASE WAIT ONE TICK: {tick.returncode}\n"
+                          f"{tick.stdout}\n{tick.stderr}", flush=True)
                 self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                 self.assertIn("did not reach", done.stderr)
 
