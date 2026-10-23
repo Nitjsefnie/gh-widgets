@@ -127,6 +127,15 @@ Impact and responsiveness reuse it only for the same account and systemd
 invocation. Missing or invalid shares fetch live and log the reason; with the
 variable unset all renderers retain their standalone live-fetch behavior.
 
+**Acquisition overlap.** `ghwidgets_share.MAX_IN_FLIGHT = 2` is the fixed
+per-process request cap; `limited_request` also accepts REST callables. Profile
+walks overlap independently; impact overlaps total groups after the PR/issue
+repository union, with 0.3 s between group submissions. Cursor pages stay
+sequential. Both units leave `GH_WIDGETS_IMPACT_COUNT_BOT_PRS` unset: impact
+walks merged PR authors under the same cap and caches `bot_merged_prs` beside
+the unchanged `merged_prs` total. A full bot walk costs at least one request
+per repository each run, plus one per additional page of 100 PRs.
+
 **Three caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and
 `render-responsiveness.py` — do not point them at one file. The unit sets

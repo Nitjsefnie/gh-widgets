@@ -123,6 +123,7 @@ taller to fit them. `N` must be a whole number of at least 1.
 |---|---|---|
 | `IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |
 | `IMPACT_PR_GAMMA` | `1.0` | How much raw PR volume counts against share. |
+| `GH_WIDGETS_IMPACT_COUNT_BOT_PRS` | `0` | Exclude merged PRs whose author is a GraphQL `Bot` from PR totals, shares and scores. Set `1` to include them; unset, empty or `0` excludes them. Other values abort. Cached fallback uses the same setting. |
 | `IMPACT_ISSUE_GAMMA` | `1.75` | Same, for issues. |
 | `IMPACT_LOC_GAMMA` | `0.5` | Same, for surviving lines. |
 

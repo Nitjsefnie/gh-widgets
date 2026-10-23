@@ -80,6 +80,20 @@ def _dispatch_totals(compact, payload_dir):
     return _json_bytes({"data": data})
 
 
+def _repository_pr_authors(variables, payload_dir):
+    """All benchmark repository PRs are human-authored; page the raw total."""
+    repo = f"{variables['owner']}/{variables['name']}"
+    count = _read_json(payload_dir, "totals.json")[repo]["merged_prs"]
+    offset = int(variables.get("cursor") or 0)
+    if offset < 0 or (offset and offset >= count):
+        raise RuntimeError("unknown offline repository PR cursor")
+    stop = min(count, offset + 100)
+    page = {"nodes": [{"author": {"__typename": "User"}} for _ in range(offset, stop)],
+            "pageInfo": {"hasNextPage": stop < count,
+                         "endCursor": str(stop) if stop < count else None}}
+    return _json_bytes({"data": {"repository": {"pullRequests": page}}})
+
+
 def _pull_requests_page(compact, variables, payload_dir):
     """The pullRequests connection page this query asks for."""
     payload = _read_json(payload_dir, "pull-requests.json")
@@ -128,6 +142,8 @@ def _graphql_dispatch(request, parsed_url, payload_dir):
     query, variables = _graphql_body(request, parsed_url)
     compact = re.sub(r"\s+", " ", query)
 
+    if "repository(" in compact and "author { __typename }" in compact:
+        return _repository_pr_authors(variables, payload_dir)
     if "repository(" in compact:
         return _dispatch_totals(compact, payload_dir)
     if "repositories(" in compact:

@@ -378,6 +378,7 @@ def env_float(name, default):
 
 # ------------------------------------------------------------------- GraphQL
 
+@share.limited_request
 def gql(token, query, variables=None, retries=3, timeout=20):
     """POST a GraphQL query, retrying transient server-side conditions.
 

@@ -85,6 +85,11 @@ def validate_cache_shape(cache):
     that do contain ``ours`` must also contain ``total``.
     """
     _validate_impact_map(cache, "totals", ("merged_prs", "issues"))
+    for repo, entry in cache.get("totals", {}).items():
+        if "bot_merged_prs" in entry:
+            _validate_count("totals", repo, "bot_merged_prs", entry["bot_merged_prs"])
+            if entry["bot_merged_prs"] > entry["merged_prs"]:
+                raise CacheShapeError(f"impact cache totals[{repo!r}] bots exceed merged_prs")
     if "ourloc" not in cache:
         return
     entries = cache["ourloc"]

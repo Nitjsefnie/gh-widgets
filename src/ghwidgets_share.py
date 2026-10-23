@@ -1,11 +1,32 @@
-"""Private, unit-run authored acquisition shared by sequential renderers."""
+"""Private unit-run sharing and a process-wide request cap of 2.
+
+``limited_request`` wraps any synchronous request callable (GraphQL or REST).
+Two slots are deliberately conservative: response time already approached
+GitHub's secondary GraphQL CPU budget in the serial profile acquisition.
+Nested acquisition pools share these slots; cursor pages remain sequential.
+"""
+import functools
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
 import ghwidgets_cache
+
+
+MAX_IN_FLIGHT = 2
+_REQUEST_SLOTS = threading.BoundedSemaphore(MAX_IN_FLIGHT)
+
+
+def limited_request(request):
+    """Decorate a request callable with the process-wide in-flight limit."""
+    @functools.wraps(request)
+    def run(*args, **kwargs):
+        with _REQUEST_SLOTS:
+            return request(*args, **kwargs)
+    return run
 
 
 def _keys(value, required, optional=()):

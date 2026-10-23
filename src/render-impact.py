@@ -75,6 +75,7 @@ import os
 import sys
 import urllib.error
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -133,6 +134,15 @@ def metric_knobs():
     }
 
 
+def count_bot_prs():
+    """Opt in to the unfiltered denominator; reject misspelled switches."""
+    name = "GH_WIDGETS_IMPACT_COUNT_BOT_PRS"
+    value = os.environ.get(name, "")
+    if value not in ("", "0", "1"):
+        raise SystemExit(f"error: {name}={value!r} must be empty, 0 or 1")
+    return value == "1"
+
+
 # Validating entry point: the out-of-repo /root/oss-contrib/scripts/impact-picks.py depends on this check; removing it or switching to common.load_cache changes that consumer's behavior.
 def load_cache(path):
     """Read the JSON cache, checked against THIS script's schema version."""
@@ -143,8 +153,11 @@ def load_cache(path):
 
 def cache_complete(cache):
     """The durability fallback can render only if every input is cached."""
-    return all(k in cache
-               for k in ("fetched_at", "prs", "issues", "totals", "ourloc"))
+    if not all(k in cache for k in ("fetched_at", "prs", "issues", "totals", "ourloc")):
+        return False
+    # An older cache cannot supply the default human-only denominator.
+    return count_bot_prs() or all("bot_merged_prs" in entry
+                                 for entry in cache["totals"].values())
 
 
 PR_QUERY = common.PR_QUERY
@@ -169,9 +182,8 @@ def fetch_repo_totals(token, repos):
     the LOC cache check is free. Returns
     {repo: {issues, merged_prs, branch, head}}; missing/renamed repos are
     simply absent."""
-    totals = {}
-    for i in range(0, len(repos), 15):
-        chunk = repos[i:i + 15]
+    def group(chunk):
+        totals = {}
         parts = [
             f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
             f'name:{json.dumps(r.split("/", 1)[1])}){{ '
@@ -191,8 +203,58 @@ def fetch_repo_totals(token, repos):
                 "branch": ref.get("name", ""),
                 "head": (ref.get("target") or {}).get("oid", ""),
             }
-        common.timing_sleep(0.3, 'pacing')
+        return totals
+
+    totals = {}
+    with ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+        groups = []
+        for i in range(0, len(repos), 15):
+            groups.append(pool.submit(group, repos[i:i + 15]))
+            common.timing_sleep(0.3, 'pacing')
+        for result in groups:
+            totals.update(result.result())
     return totals
+
+
+BOT_PR_QUERY = """
+query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { author { __typename } }
+    }
+  }
+}
+"""
+
+
+def fetch_bot_pr_counts(token, totals):
+    """Walk each repository to its connection end; retain raw totals beside bots.
+
+    Each run costs max(1, ceil(merged PRs / 100)) added queries per repository.
+    A full walk also reconciles deleted authors and transferred PRs.
+    """
+    def walk(repo):
+        owner, name = repo.split("/", 1)
+        cursor, seen, bots = None, {None}, 0
+        while True:
+            page = gql(token, BOT_PR_QUERY, {
+                "owner": owner, "name": name, "cursor": cursor,
+            })["repository"]["pullRequests"]
+            bots += sum((node.get("author") or {}).get("__typename") == "Bot"
+                        for node in page["nodes"])
+            info = page["pageInfo"]
+            if info["hasNextPage"] is False:
+                return bots
+            following = info.get("endCursor")
+            if info["hasNextPage"] is not True or not following or following in seen:
+                raise common.PaginationLimitError(f"bot PR pagination stalled for {repo}")
+            seen.add(following)
+            cursor = following
+
+    with ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+        for repo, bots in zip(totals, pool.map(walk, totals)):
+            totals[repo]["bot_merged_prs"] = bots
 
 
 def _load_loc_module():
@@ -366,6 +428,7 @@ def impact_rows(our_counts, total_of, gamma, z, freshness_of=None):
 
 
 def pr_table(prs, totals, insiders, knobs):
+    include_bots = count_bot_prs()
     our_merged = {}
     merged_at = {}
     for pr in prs:
@@ -376,7 +439,9 @@ def pr_table(prs, totals, insiders, knobs):
                 pr.get("mergedAt") or pr.get("closedAt") or pr.get("updatedAt"))
     now = datetime.now(timezone.utc)
     return impact_rows(our_merged,
-                       lambda r: (totals.get(r) or {}).get("merged_prs", 0),
+                       lambda r: (totals.get(r) or {}).get("merged_prs", 0)
+                       - (0 if include_bots else
+                          (totals.get(r) or {}).get("bot_merged_prs", 0)),
                        knobs["pr_gamma"], knobs["z"],
                        lambda r: contribution_freshness(merged_at[r], now))
 
@@ -539,6 +604,9 @@ def fetch_all(token, user, cache, resync):
                     if common.is_external(n, insiders)})
     with timed_phase("fetch_totals"), common.acquisition("fetch_repo_totals"):
         totals = fetch_repo_totals(token, repos)
+    with timed_phase("fetch_bots"), common.acquisition("fetch_bot_pr_counts"):
+        fetch_bot_pr_counts(token, totals)
+        common.validate_cache_shape({"totals": totals})
     merged_repos = {n["repository"]["nameWithOwner"] for n in prs
                     if n["merged"] and common.is_external(n, insiders)}
     with common.acquisition("update_loc"):
@@ -586,6 +654,7 @@ def print_summary(out, rows, fallback):
 @common.timed_run('render-impact')
 def main():
     args, token = parse_args()
+    count_bot_prs()
     # Say which method ran, every run. The git-fame guard line was the health
     # check while git-fame did the counting; under `targeted` it never runs,
     # so its absence has to mean "not used" rather than "guard broken".
