@@ -291,7 +291,7 @@ jobs:
             # file cannot be the compare API's truncated 300-file list.
             check_shas=("$SHA")
             cursor="$SHA"
-            while :; do
+            while [ "$tip_complete" != yes ]; do
               parent="$(gh api -H "Cache-Control: no-cache" \
                 "repos/$REPO/commits/$cursor" --jq '.parents[0].sha')"
               if ! printf '%s\n' "$parent" | grep -Eq '^[0-9a-fA-F]{40}$'; then
@@ -314,9 +314,7 @@ jobs:
                   and .files[0].previous_filename == null then
                   "comment-share"
                 else "code" end' <<< "$comparison")"
-              if [ "$window" = code ] || {
-                [ "$cursor" = "$SHA" ] && [ "$tip_complete" = yes ];
-              }; then break; fi
+              if [ "$window" = code ]; then break; fi
               cursor="$parent"
               check_shas+=("$cursor")
             done

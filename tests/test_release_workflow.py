@@ -171,6 +171,7 @@ if [ "$1" = "api" ]; then
   for arg in "$@"; do
     case "$arg" in
       */compare/*)
+        echo "$arg" >> compare.log
         if [ "$paginate" != yes ]; then exit 1; fi
         window="${arg##*...}"
         if [ ! -f "window-$window" ]; then exit 1; fi
@@ -205,6 +206,7 @@ if [ "$1" = "api" ]; then
         ;;
       repos/*/commits/*)
         if [ "$jq_prog" = ".parents[0].sha" ]; then
+          echo "$arg" >> parent.log
           sha="${arg##*/}"
           if [ -f "parent-$sha" ]; then cat "parent-$sha"; exit 0; fi
           exit 1
@@ -482,10 +484,14 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         (self.root / f"check-runs-{anchor}").write_text(
             self._check_runs([]), encoding="utf-8")
         (self.root / f"parent-{anchor}").write_text("null", encoding="utf-8")
+        (self.root / f"parent-{self.SHA}").write_text("null", encoding="utf-8")
+        (self.root / f"window-{self.SHA}").write_text("null", encoding="utf-8")
         done = self._execute("Wait for the other gates on this commit",
                              **self.NO_WAIT)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn(f"Checking gates on {anchor}", done.stdout)
+        self.assertFalse((self.root / "parent.log").exists())
+        self.assertFalse((self.root / "compare.log").exists())
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
