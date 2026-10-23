@@ -756,11 +756,9 @@ jobs:
       - name: Run renderer workloads
         env:
           GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
-          # Explicit, rather than relying on the default, so the instrument
-          # this population is judged by is visible in the workflow rather
-          # than buried in counter.py's fallback chain.
-          GH_COUNTER_METRIC: cpu_time
-          GH_WIDGETS_OBSERVE_RENDERER_RATIO: "1"
+          # Both populations use calibrated ratios; pin the instrument here
+          # so renderer measurements agree with their committed baseline.
+          GH_COUNTER_METRIC: cpu_time_ratio
         working-directory: head
         run: |
           mkdir -p "$REPORTS"

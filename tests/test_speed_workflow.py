@@ -91,7 +91,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     UNIT_POPULATION = "unit-suite"
     RENDERER_POPULATION = "renderer-workloads"
     UNIT_METRIC = "cpu_time"
-    RENDERER_METRIC = "cpu_time"
+    RENDERER_METRIC = "cpu_time_ratio"
     WORKLOADS = (("bench.render", 1000.0, 2.0),
                  ("bench.render-impact", 200.0, 1.0),
                  ("bench.render-responsiveness", 50.0, 0.5))
@@ -364,12 +364,12 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def test_both_measurement_steps_pin_the_instrument(self):
         # Pinned rather than inherited: the instrument a population is judged
-        # by should be visible in the workflow. Renderers stay raw; the unit
-        # suite is judged on the calibrated ratio.
+        # by should be visible in the workflow for both populations.
         self.assertEqual(self.steps.step_run("Measure the unit suite")[0]
                          ["GH_COUNTER_METRIC"], "cpu_time_ratio")
-        self.assertEqual(self.steps.step_run("Run renderer workloads")[0]
-                         ["GH_COUNTER_METRIC"], "cpu_time")
+        renderer_env = self.steps.step_run("Run renderer workloads")[0]
+        self.assertEqual(renderer_env["GH_COUNTER_METRIC"], "cpu_time_ratio")
+        self.assertNotIn("GH_WIDGETS_OBSERVE_RENDERER_RATIO", renderer_env)
 
     def test_the_unit_suite_step_measures_calibrated(self):
         # Losing the flag compares ratios against a raw envelope, or the

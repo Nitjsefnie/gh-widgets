@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -472,11 +473,12 @@ class TestHarness(unittest.TestCase):
         self.assertEqual(result["wall"], 7.0)
         self.assertEqual(result["stdout"], "renderer output")
         self.assertEqual(result["metric"], "cpu_time_ratio")
+        self.assertEqual(result["raw_cpu"], 8.0)
+        self.assertEqual(result["calibration_cpu"], 2.0)
         self.assertIsNone(result["failure"])
 
         with mock.patch.dict(os.environ, env), mock.patch.object(
-                e2e_bench.counter, "CALIBRATION_COMMAND",
-                (sys.executable, "-c", "print(24576)")), \
+                e2e_bench.counter, "_checked_calibration", return_value=2.0), \
                 contextlib.redirect_stdout(output):
             code = e2e_bench.main([
                 "--side", "head", "--repo-root", str(self.repo_root),
@@ -488,8 +490,18 @@ class TestHarness(unittest.TestCase):
         self.assertNotIn("observed", output.getvalue())
         for line, case in zip(output.getvalue().splitlines(),
                               suite.findall("testcase")):
-            self.assertIn(f"{_number(case, 'time'):.3f} cpu_time_ratio passed",
+            self.assertIn(f"{_number(case, 'time'):.6f} cpu_time_ratio passed",
                           line)
+            parts = re.search(r"calibration = ([0-9.]+) cpu_time; "
+                              r"renderer raw ([0-9.]+) cpu_time", line)
+            self.assertIsNotNone(parts, line)
+            if parts is None:
+                self.fail("calibrated result omitted its raw parts")
+            calibration, raw = map(float, parts.groups())
+            self.assertEqual(calibration, 2.0)
+            self.assertGreater(raw, 0)
+            self.assertAlmostEqual(raw / calibration, _number(case, "time"),
+                                   places=3)
             self.assertGreater(_number(case, "gh-wall"), 0)
 
     def test_renderer_refuses_foreign_metric(self):
