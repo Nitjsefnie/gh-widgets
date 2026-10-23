@@ -24,8 +24,7 @@ whole operation explains the need for re-derivation and exits successfully
 without writing anything. Downward movement is not a regression.
 
 The authored explanation and measurement identity are not re-stamped by this
-tool. Provenance for an automated move is the ratchet commit message, which
-names the triggering run id.
+tool.
 
     speed_ratchet.py --baseline gate/speed-baseline.json \\
       --unit-report reports/unit-1.xml --unit-report reports/unit-2.xml \\
