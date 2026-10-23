@@ -8,12 +8,14 @@ repository or any of its worktrees.
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.test_gate_base_freshness import _git, _config, _commit
 
@@ -46,6 +48,7 @@ def _fixture(tmp, *, head_subject, base_files=None):
     _commit(repo, 'base: seed the fixture', files)
     origin = Path(tmp) / 'origin.git'
     _git(tmp, 'clone', '--bare', str(repo), str(origin))
+    _config(origin)
     _git(repo, 'remote', 'add', 'origin', str(origin))
     _git(repo, 'push', '-u', 'origin', 'main')
     _commit(repo, head_subject, {'README.md': '# changed\n'})
@@ -281,13 +284,20 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
 
     def test_fetch_base_brings_main_in(self):
         tmp = self.tmp
-        repo, _ = _fixture(tmp, head_subject='ci: clean')
-        _git(repo, 'push', 'origin', 'main')
-        module = _load()
-        module.fetch_base(repo)
+        trace = tmp / 'git-trace.json'
+        with mock.patch.dict(os.environ, {'GIT_TRACE2_EVENT': str(trace)}):
+            repo, _ = _fixture(tmp, head_subject='ci: clean')
+            _git(repo, 'push', 'origin', 'main')
+            module = _load()
+            module.fetch_base(repo)
         base = _git(repo, 'rev-parse', '--verify', 'refs/remotes/origin/main').strip()
         head = _git(repo, 'rev-parse', 'HEAD').strip()
         assert base == head
+        events = [json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines()]
+        maintenance = [event['argv'] for event in events
+                       if event['event'] == 'child_start' and 'maintenance' in event['argv']]
+        self.assertTrue(maintenance, events)
+        self.assertFalse(any('--detach' in argv for argv in maintenance), maintenance)
 
     def test_check_reports_violations_in_process(self):
         tmp = self.tmp
@@ -409,6 +419,7 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
         })
         origin = self.tmp / 'origin.git'
         _git(self.tmp, 'clone', '--bare', str(repo), str(origin))
+        _config(origin)
         _git(repo, 'remote', 'add', 'origin', str(origin))
         _git(repo, 'commit', '--allow-empty', '-m',
              'fix(protected): forbidden workflow scope')

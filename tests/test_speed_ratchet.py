@@ -34,6 +34,7 @@ import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
+from tests.test_gate_base_freshness import _config
 from tests.test_speed_workflow import CarrierFixture
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -486,11 +487,13 @@ class TestMainPushRatchet(unittest.TestCase):
         fixture = self.fixture
         remote = self.root / "remote.git"
         fixture.git("clone", "--bare", str(fixture.head), str(remote))
+        _config(remote)
         # Keep the seed separately; file:// makes --depth use a real fetch.
         fixture.head.rename(self.root / "source")
         subprocess.run(
             ["git", "clone", "--depth", "1", remote.as_uri(), str(fixture.head)],
             cwd=self.root, capture_output=True, text=True, check=True)
+        _config(fixture.head)
         self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
                          .stdout.strip(), "true")
         previous = subprocess.run(

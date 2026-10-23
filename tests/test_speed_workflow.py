@@ -33,6 +33,7 @@ import xml.etree.ElementTree as ET
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
+from tests.test_gate_base_freshness import _config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STEP_EXEC_SENTINEL = "GHW_SPEED_UNIT_STEP_EXEC_ACTIVE"
@@ -1192,12 +1193,7 @@ class CarrierFixture:
         self.new["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = envelope(14)
         self.git("init", "-q")
-        # Identity by per-repo config, never by flags or environment: this
-        # repository's discipline forbids -c user.name/-c user.email and
-        # GIT_AUTHOR_*/GIT_COMMITTER_* on its own commits, and the fixtures
-        # keep the same shape.
-        self.git("config", "user.name", "fixture")
-        self.git("config", "user.email", "fixture@example.com")
+        _config(self.head)
         (self.head / "gate").mkdir()
         (self.head / "gate/speed-baseline.json").write_text(
             json.dumps(self.old), encoding="utf-8")
@@ -1281,6 +1277,7 @@ class TestPullRequestRatchet(unittest.TestCase):
         fixture.git("checkout", "-q", "merge")
         remote = self.root / "remote.git"
         fixture.git("clone", "--bare", str(fixture.head), str(remote))
+        _config(remote)
         subprocess.run(
             ["git", "--git-dir", str(remote), "config",
              "uploadpack.allowAnySHA1InWant", "true"],
@@ -1291,6 +1288,7 @@ class TestPullRequestRatchet(unittest.TestCase):
                 ["git", "clone", "--depth", "1", "--branch", "merge",
                  remote.as_uri(), str(fixture.head)],
                 capture_output=True, check=True)
+            _config(fixture.head)
             self.assertEqual(fixture.git("rev-parse", "--is-shallow-repository")
                              .stdout.strip(), "true")
             parent = subprocess.run(
