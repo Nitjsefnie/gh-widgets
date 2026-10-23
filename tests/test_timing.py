@@ -19,6 +19,50 @@ from tests import test_impact_fallback, test_responsiveness, test_impact_loc
 from tests.test_common import common
 
 
+class DeferredClone(futures.Future):
+    """Run a fake clone on a worker only when the test schedules it."""
+
+    def __init__(self, function, args):
+        super().__init__()
+        self.function, self.args = function, args
+
+    def run(self):
+        if self.done():
+            return
+        if self.set_running_or_notify_cancel():
+            def execute():
+                try:
+                    self.set_result(self.function(*self.args))
+                except BaseException as exc:
+                    self.set_exception(exc)
+            worker = threading.Thread(target=execute)
+            worker.start()
+            worker.join(2)
+            assert not worker.is_alive(), 'fake clone worker did not finish'
+
+    def result(self, timeout=None):
+        self.run()
+        return super().result(timeout=timeout)
+
+
+class DeferredClones:
+    """Model submit/cancel/shutdown with explicitly scheduled workers."""
+
+    def __init__(self):
+        self.pending = []
+
+    def submit(self, function, *args):
+        future = DeferredClone(function, args)
+        self.pending.append(future)
+        return future
+
+    def shutdown(self, wait=True):
+        assert wait
+        for future in self.pending:
+            if not future.cancelled():
+                future.run()
+
+
 class RunTiming(unittest.TestCase):
     """Counts and exclusive phases must survive retries and overlapping work."""
 
@@ -107,8 +151,9 @@ class RunTiming(unittest.TestCase):
                 mock.patch.object(common.time, 'monotonic',
                                   side_effect=AssertionError('clock read')), \
                 mock.patch('builtins.print', side_effect=AssertionError('print')):
-            with self.recorder.track('graphql', '/graphql'):
+            with self.recorder.collect_processes([]), self.recorder.track('graphql', '/graphql'):
                 pass
+            self.recorder.reattribute_wait([], 0, 1)
             self.recorder.report('disabled')
         self.assertEqual(self.recorder.totals, {})
 
@@ -126,6 +171,88 @@ class RunTiming(unittest.TestCase):
             common.fetch_public_organizations('Account', request_fn=mock.Mock(
                 side_effect=urllib.error.URLError('offline')))
         self.assertEqual(self.recorder.totals[('rest', '/users/{user}/orgs')][0], 2)
+
+    def clone_report(self, overlap=False, fail=False):
+        clone = test_impact_loc.impact_loc.impact_clone
+        pool = DeferredClones()
+
+        def run_clone(repo, *_args):
+            with self.recorder.track('process', 'git'):
+                self.clock += 3 if repo.endswith('second') else 2
+            if fail:
+                raise RuntimeError('clone failed')
+            return 2.0
+
+        moved = [('owner/first', {'branch': 'main'})]
+        if overlap:
+            moved.append(('owner/second', {'branch': 'main'}))
+        with mock.patch.object(clone, 'common', common), \
+                mock.patch.object(clone.futures, 'ThreadPoolExecutor', return_value=pool), \
+                mock.patch.object(clone.tempfile, 'mkdtemp', return_value='fake-clone'), \
+                mock.patch.object(clone, 'register_scratch_dir'), \
+                mock.patch.object(clone, 'remove_scratch_dir'):
+            for index, entry in enumerate(clone.prefetched_clones(
+                    moved, depth=2, clone_fn=run_clone)):
+                self.assertEqual(isinstance(entry[-1], RuntimeError), fail)
+                if overlap and index == 0:
+                    with self.recorder.track('phase', 'render'):
+                        pool.pending[1].run()
+                        self.clock += 1
+                    completed_result = pool.pending[1].result
+
+                    def result_with_bookkeeping(timeout=None, completed=completed_result):
+                        self.clock += 1
+                        return completed(timeout=timeout)
+
+                    # Result bookkeeping after completion is not process wait.
+                    mock.patch.object(pool.pending[1], 'result',
+                                      side_effect=result_with_bookkeeping).start()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.recorder.report('clones')
+        self.assertLessEqual(self.recorder.named, self.clock + 1e-9)
+        return output.getvalue()
+
+    def test_waited_clone_time_belongs_to_its_program_even_on_failure(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                self.clock = 0.0
+                self.recorder = common.TimingRecorder()
+                with mock.patch.object(common, 'timing', self.recorder):
+                    report = self.clone_report(fail=fail)
+                self.assertIn('process git: count=1 blocked=2.000s concurrent=0.000s', report)
+                self.assertIn('phase clone_wait: count=1 blocked=0.000s', report)
+                self.assertIn('attributed=2.000s wall=2.000s gap=0.000s', report)
+
+    def test_finished_lookahead_time_stays_concurrent(self):
+        report = self.clone_report(overlap=True)
+        self.assertIn('process git: count=2 blocked=2.000s concurrent=3.000s', report)
+        self.assertIn('phase clone_wait: count=2 blocked=1.000s', report)
+        self.assertIn('phase render: count=1 blocked=4.000s', report)
+        self.assertIn('attributed=7.000s wall=7.000s gap=0.000s', report)
+
+    def test_overlapping_shutdown_intervals_count_main_wait_once(self):
+        samples = []
+
+        def work():
+            # Nested worker intervals model two jobs joined by one shutdown.
+            with self.recorder.collect_processes(samples), self.recorder.track('process', 'git'):
+                self.clock = 1
+                with self.recorder.track('process', 'git'):
+                    self.clock = 2
+                self.clock = 3
+
+        with self.recorder.track('phase', 'clone_shutdown'):
+            worker = threading.Thread(target=work)
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.recorder.reattribute_wait(samples, 0, self.clock)
+        self.assertEqual(self.recorder.totals[('process', 'git')], [2, 3.0, 1.0])
+        self.assertEqual(self.recorder.totals[('phase', 'clone_shutdown')], [1, 0.0, 0.0])
+        self.assertEqual(self.recorder.named, self.clock)
+        self.recorder.reattribute_wait(samples, 0, self.clock)
+        self.assertEqual(self.recorder.named, self.clock)
 
 
 class RendererTiming(unittest.TestCase):
