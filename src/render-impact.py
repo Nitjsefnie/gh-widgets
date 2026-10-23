@@ -260,8 +260,8 @@ def fetch_bot_pr_counts(token, totals, prior=None):
                     "owner": owner, "name": name, "cursor": cursor,
                 })["repository"]["pullRequests"]
             for node in page["nodes"]:
-                # Same-second merges missed by the last walk await a recount;
-                # the weekly resync heals this strict-waterline boundary.
+                # A missed boundary-second merge forces a mismatch recount on growth;
+                # otherwise it waits for a drop, mismatch, missing anchor or resync.
                 if node["mergedAt"] > waterline:
                     kept += 1
                     bots += (node.get("author") or {}).get("__typename") == "Bot"
