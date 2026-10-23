@@ -20,8 +20,8 @@
     8095
   ],
   ".github/workflows/coverage-ratchet.yml": [
-    5044,
-    8267
+    4962,
+    8281
   ],
   ".github/workflows/gitfame-pool-probe.yml": [
     1580,
@@ -196,8 +196,8 @@
     26763
   ],
   "tests/test_coverage_ratchet_ci.py": [
-    8712,
-    30160
+    8492,
+    29777
   ],
   "tests/test_impact.py": [
     5834,
