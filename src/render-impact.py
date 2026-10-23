@@ -222,40 +222,77 @@ query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: MERGED, first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { author { __typename } }
+      nodes { mergedAt author { __typename } }
     }
   }
 }
 """
 
 
-def fetch_bot_pr_counts(token, totals):
-    """Walk each repository to its connection end; retain raw totals beside bots.
+BOT_PR_SEARCH_QUERY = """
+query($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { mergedAt author { __typename } } }
+  }
+}
+"""
 
-    Each run costs max(1, ceil(merged PRs / 100)) added queries per repository.
-    A full walk also reconciles deleted authors and transferred PRs.
+
+def fetch_bot_pr_counts(token, totals, prior=None):
+    """Reuse anchored counts; search new merges and recount on count mismatch.
+
+    Unchanged totals cost no requests. Missing anchors and count drops walk
+    the whole connection, also reconciling deleted authors and transfers.
     """
-    def walk(repo):
+    def walk(repo, waterline=""):
         owner, name = repo.split("/", 1)
-        cursor, seen, bots = None, {None}, 0
+        cursor, seen, bots, kept, newest = None, {None}, 0, 0, waterline
         while True:
-            page = gql(token, BOT_PR_QUERY, {
-                "owner": owner, "name": name, "cursor": cursor,
-            })["repository"]["pullRequests"]
-            bots += sum((node.get("author") or {}).get("__typename") == "Bot"
-                        for node in page["nodes"])
+            if waterline:
+                page = gql(token, BOT_PR_SEARCH_QUERY, {
+                    "query": f"repo:{repo} is:pr is:merged merged:>="
+                             + waterline.replace("Z", "+0000"),
+                    "cursor": cursor,
+                })["search"]
+            else:
+                page = gql(token, BOT_PR_QUERY, {
+                    "owner": owner, "name": name, "cursor": cursor,
+                })["repository"]["pullRequests"]
+            for node in page["nodes"]:
+                # Same-second merges missed by the last walk await a recount;
+                # the weekly resync heals this strict-waterline boundary.
+                if node["mergedAt"] > waterline:
+                    kept += 1
+                    bots += (node.get("author") or {}).get("__typename") == "Bot"
+                    newest = max(newest, node["mergedAt"])
             info = page["pageInfo"]
             if info["hasNextPage"] is False:
-                return bots
+                return kept, bots, newest
             following = info.get("endCursor")
             if info["hasNextPage"] is not True or not following or following in seen:
                 raise common.PaginationLimitError(f"bot PR pagination stalled for {repo}")
             seen.add(following)
             cursor = following
 
+    def count(repo):
+        saved = (prior or {}).get(repo) or {}
+        fresh = totals[repo]["merged_prs"]
+        if "bot_merged_prs" in saved and "bot_waterline" in saved:
+            if fresh == saved["merged_prs"]:
+                return saved["bot_merged_prs"], saved["bot_waterline"]
+            if fresh > saved["merged_prs"]:
+                kept, bots, newest = walk(repo, saved["bot_waterline"])
+                if kept == fresh - saved["merged_prs"]:
+                    return saved["bot_merged_prs"] + bots, newest
+        _, bots, newest = walk(repo)
+        return bots, newest
+
     with ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
-        for repo, bots in zip(totals, pool.map(walk, totals)):
+        for repo, (bots, newest) in zip(totals, pool.map(count, totals)):
             totals[repo]["bot_merged_prs"] = bots
+            if newest:
+                totals[repo]["bot_waterline"] = newest
 
 
 def _load_loc_module():
@@ -606,7 +643,8 @@ def fetch_all(token, user, cache, resync):
     with timed_phase("fetch_totals"), common.acquisition("fetch_repo_totals"):
         totals = fetch_repo_totals(token, repos)
     with timed_phase("fetch_bots"), common.acquisition("fetch_bot_pr_counts"):
-        fetch_bot_pr_counts(token, totals)
+        if not count_bot_prs():
+            fetch_bot_pr_counts(token, totals, {} if resync else cache.get("totals") or {})
         common.validate_cache_shape({"totals": totals})
     merged_repos = {n["repository"]["nameWithOwner"] for n in prs
                     if n["merged"] and common.is_external(n, insiders)}

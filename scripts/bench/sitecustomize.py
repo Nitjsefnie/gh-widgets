@@ -88,7 +88,8 @@ def _repository_pr_authors(variables, payload_dir):
     if offset < 0 or (offset and offset >= count):
         raise RuntimeError("unknown offline repository PR cursor")
     stop = min(count, offset + 100)
-    page = {"nodes": [{"author": {"__typename": "User"}} for _ in range(offset, stop)],
+    page = {"nodes": [{"author": {"__typename": "User"},
+                       "mergedAt": "2026-01-01T00:00:00Z"} for _ in range(offset, stop)],
             "pageInfo": {"hasNextPage": stop < count,
                          "endCursor": str(stop) if stop < count else None}}
     return _json_bytes({"data": {"repository": {"pullRequests": page}}})
