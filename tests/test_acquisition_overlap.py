@@ -96,9 +96,10 @@ class AcquisitionOverlap(unittest.TestCase):
                 recorder.report("impact")
         self.assertEqual(set(totals), set(repos))
         self.assertEqual(sum(api.counts.values()), 3)
-        # Two dependent rounds plus scheduling slack; reject three serial calls.
-        typical = statistics.median(duration for _, duration in api.durations)
-        self.assertLess(elapsed, 2.875 * typical)
+        # Three independent calls need two rounds. Keep scheduler allowance
+        # below the shortest (.08 s) request, even with uneven overshoot.
+        self.assertLess(elapsed, sum(sorted(duration for _, duration in api.durations)[1:]) + .04)
+        self.assertEqual(api.peak, 2)
         self.assertEqual(pacing.call_args_list, [mock.call(.3, 'pacing')] * 3)
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         self.assertIn('count=3', line)
