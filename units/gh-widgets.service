@@ -48,7 +48,9 @@ UMask=0077
 # token's account belongs to, looked up at each run (read:org also returns
 # private memberships), so joining or leaving an org needs no edit here.
 # A failed lookup fails the unit rather than rendering an under-count.
-ExecStart=/bin/bash -c 'set -o pipefail; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py'
+# Bash's built-in clock keeps the lookup measurement outside the renderer;
+# the flag only adds its journal line, with the original pipeline intact.
+ExecStart=/bin/bash -c 'set -o pipefail; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_start=$${EPOCHREALTIME/./}; fi; orgs=$$(GH_TOKEN=$$(cat "$$GH_TOKEN_FILE") /usr/local/bin/gh api --paginate user/orgs --jq ".[].login" | paste -sd, -) || exit 1; if [ -n "$$GH_WIDGETS_DEBUG_TIMING" ]; then orgs_us=$$(($${EPOCHREALTIME/./} - orgs_start)); printf "orgs-lookup: %%d.%%06ds\n" "$$((orgs_us / 1000000))" "$$((orgs_us %% 1000000))"; fi; GH_EXTRA_ORGS="$$orgs" exec /usr/local/bin/render-gh-widgets.py'
 ExecStart=/usr/local/bin/render-impact.py --cache-file /var/lib/gh-widgets/impact-cache.json
 ExecStart=/usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json
 # Popularity has no cache and no --resync: every run clones and reads traffic.

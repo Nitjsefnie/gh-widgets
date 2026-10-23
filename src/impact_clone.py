@@ -83,28 +83,33 @@ class _CloneLaunch:
 
 
 def _run_clone_command(cmd, timeout=300):
-    """Run and track a clone-path Git child until it has been reaped."""
-    # Python dispatches signals on the main thread. Keep Popen and its registry
-    # lock off that thread so a signal can wait for an atomic spawn/register
-    # operation without blocking the thread that must finish it.
-    if threading.current_thread() is threading.main_thread():
-        result = []
-        failure = []
+    """Run and track a clone-path Git child until it has been reaped.
 
-        def run_in_spawn_thread():
-            try:
-                result.append(_run_clone_command_worker(cmd, timeout))
-            except BaseException as exc:  # propagate the worker's exact error
-                failure.append(exc)
+    Measure from the calling thread: pool callers overlap blame, whereas a
+    synchronous caller blocks even though its spawn is handed to a worker.
+    """
+    with common.timing.track('process', Path(cmd[0]).name):
+        # Python dispatches signals on the main thread. Keep Popen and its registry
+        # lock off that thread so a signal can wait for an atomic spawn/register
+        # operation without blocking the thread that must finish it.
+        if threading.current_thread() is threading.main_thread():
+            result = []
+            failure = []
 
-        worker = threading.Thread(target=run_in_spawn_thread,
-                                  name="impact-clone-spawn")
-        worker.start()
-        worker.join()
-        if failure:
-            raise failure[0]
-        return result[0]
-    return _run_clone_command_worker(cmd, timeout)
+            def run_in_spawn_thread():
+                try:
+                    result.append(_run_clone_command_worker(cmd, timeout))
+                except BaseException as exc:  # propagate the worker's exact error
+                    failure.append(exc)
+
+            worker = threading.Thread(target=run_in_spawn_thread,
+                                      name="impact-clone-spawn")
+            worker.start()
+            worker.join()
+            if failure:
+                raise failure[0]
+            return result[0]
+        return _run_clone_command_worker(cmd, timeout)
 
 
 def _run_clone_command_worker(cmd, timeout):
@@ -435,7 +440,8 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
                 start(ahead)
             t0 = time.monotonic()
             try:
-                clone_s = pending.pop(i).result()
+                with common.timing.track('phase', 'clone_wait'):
+                    clone_s = pending.pop(i).result()
                 err = None
             except Exception as e:  # pylint: disable=broad-except
                 clone_s, err = 0.0, e
@@ -444,6 +450,7 @@ def prefetched_clones(moved, depth=None, *, clone_fn=None, lookahead_fn=None):  
     finally:
         for fut in pending.values():
             fut.cancel()
-        pool.shutdown(wait=True)
+        with common.timing.track('phase', 'clone_shutdown'):
+            pool.shutdown(wait=True)
         for scratch in dirs.values():
             remove_scratch_dir(scratch)

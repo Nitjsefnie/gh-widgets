@@ -408,7 +408,11 @@ everything, so it takes far longer than an incremental run.
 > its old count and its stale oid forces a retry, so nothing was lost, but
 > that is the thing to weigh — not the cgroup number.
 
-> **`DEBUG_TIMING=1`** — per-repo clone/wait/fame seconds plus a phase summary
+> **`GH_WIDGETS_DEBUG_TIMING=1`** — full-run wall/CPU, API attempts by kind and
+> endpoint shape, child counts by program with blocked/concurrent seconds,
+> retry sleeps, pacing and exclusive phases for every renderer. Both units
+> also print `orgs-lookup` seconds before the profile renderer starts.
+> The impact renderer keeps its per-repo clone/wait/fame seconds and summary
 > that closes named phases against real elapsed time. The residual is the
 > point: before the fetch phases were wrapped a stable ~36s of each run was
 > unattributed, and is now ~2s — indicative wall observations, and the

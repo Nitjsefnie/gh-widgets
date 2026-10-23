@@ -77,7 +77,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 11
+REQUIRED_COMMON = 12
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -937,7 +937,10 @@ def write_cards(C, out, user, prs, issues, fallback):
               f"issues={ext.iss_accepted}/{ext.iss_opened} in {ext.iss_repos} repos)")
 
 
+@common.timed_run('render-gh-widgets')
 def main():
+    # Input phases include cache handling; the shared recorder subtracts API
+    # blocking time so acquisition and card writes can share one wall budget.
     args, token = parse_args()
 
     C = THEMES[args.theme]
@@ -945,8 +948,10 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
-    user, prs, issues, fallback = load_inputs(args, token, cache_file)
-    write_cards(C, out, user, prs, issues, fallback)
+    with common.timing.track('phase', 'load_inputs'):
+        user, prs, issues, fallback = load_inputs(args, token, cache_file)
+    with common.timing.track('phase', 'write_cards'):
+        write_cards(C, out, user, prs, issues, fallback)
 
 
 if __name__ == "__main__":

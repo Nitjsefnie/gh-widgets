@@ -34,7 +34,7 @@ def _load_common():
 
 
 common = _load_common()
-REQUIRED_COMMON = 11
+REQUIRED_COMMON = 12
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 gql = common.gql
@@ -203,14 +203,24 @@ def parse_args():
     return args, token
 
 
+@common.timed_run('render-stars')
 def main():
+    """Fetch and publish each repository with a separate stars cache.
+
+    Input time includes paging and cache persistence; its exclusive phase
+    excludes the GraphQL waits already counted by the shared client. Rendering
+    is measured separately because a large star history does local geometry
+    work after the final response. Timing never enters the history or SVG.
+    """
     args, token = parse_args()
     C = THEMES[args.theme]
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for repo in args.repos:
-        history, fallback = load_inputs(args.cache_file, token, repo)
-        svg = render_stars(C, repo, history)
+        with common.timing.track('phase', 'load_inputs'):
+            history, fallback = load_inputs(args.cache_file, token, repo)
+        with common.timing.track('phase', 'render_svg'):
+            svg = render_stars(C, repo, history)
         if fallback:
             print(f'fetch failed at {fallback.phase}: {fallback.message}; '
                   f'rendering {repo} from cache (fetched_at={fallback.fetched_at})')

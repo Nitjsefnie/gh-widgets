@@ -30,7 +30,7 @@ Configuration (env vars or CLI flags, in that order of precedence):
   GH_EXTRA_EMAILS    extra commit-author addresses that are ours (comma-sep)
   BLAME_METHOD       targeted (default) | fame | both   — see CLAUDE.md
   CLONE_LOOKAHEAD    repos cloned ahead of the blame    (default 3)
-  DEBUG_TIMING       per-phase timing for the whole run (default off)
+  GH_WIDGETS_DEBUG_TIMING  per-phase timing for the whole run (default off)
   IMPACT_Z           Wilson lower-bound z score        (default 2.58)
   IMPACT_PR_GAMMA    volume exponent, PR table         (default 1.0)
   IMPACT_ISSUE_GAMMA volume exponent, issue table      (default 1.75)
@@ -73,7 +73,6 @@ import json
 import math
 import os
 import sys
-import time
 import urllib.error
 from collections import namedtuple
 from datetime import datetime, timezone
@@ -97,7 +96,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 11
+REQUIRED_COMMON = 12
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -192,7 +191,7 @@ def fetch_repo_totals(token, repos):
                 "branch": ref.get("name", ""),
                 "head": (ref.get("target") or {}).get("oid", ""),
             }
-        time.sleep(0.3)
+        common.timing_sleep(0.3, 'pacing')
     return totals
 
 
@@ -574,6 +573,8 @@ def print_summary(out, rows, fallback):
 
 # The run's own orchestration: argument handling, the fetch-or-fallback
 # decision, the card write, and handing both to print_summary.
+# The shared report follows the existing blame summary, including on errors.
+@common.timed_run('render-impact')
 def main():
     args, token = parse_args()
     # Say which method ran, every run. The git-fame guard line was the health
