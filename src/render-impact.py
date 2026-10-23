@@ -278,6 +278,8 @@ def fetch_bot_pr_counts(token, totals, prior=None):
     def count(repo):
         saved = (prior or {}).get(repo) or {}
         fresh = totals[repo]["merged_prs"]
+        if not fresh:
+            return 0, ""
         if "bot_merged_prs" in saved and "bot_waterline" in saved:
             if fresh == saved["merged_prs"]:
                 return saved["bot_merged_prs"], saved["bot_waterline"]
