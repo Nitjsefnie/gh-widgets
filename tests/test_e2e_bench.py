@@ -155,6 +155,17 @@ class TestPayloadDispatcher(unittest.TestCase):
         self.assertRegex(totals["data"]["a0"]["defaultBranchRef"]
                          ["target"]["oid"], r"^[0-9a-f]{40}$")
 
+    def test_dispatches_complete_repository_pr_author_pages(self):
+        query = render_impact.BOT_PR_QUERY
+        repo = next(iter(self.graphql(
+            'query { a0: repository(owner:"outside-owner-a",'
+            'name:"project-alpha") { pullRequests { totalCount } } }')['data'].values()))
+        variables = {'owner': 'outside-owner-a', 'name': 'project-alpha', 'cursor': None}
+        connection = self.graphql(query, variables)['data']['repository']['pullRequests']
+        self.assertEqual(len(connection['nodes']), repo['pullRequests']['totalCount'])
+        self.assertFalse(connection['pageInfo']['hasNextPage'])
+        self.assertEqual({node['author']['__typename'] for node in connection['nodes']}, {'User'})
+
     # The renderer's profile query, abbreviated but with the selections that
     # identify it: its own fields, and an organizations connection that pages.
     PROFILE_ORG_QUERY = (

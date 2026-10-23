@@ -42,6 +42,7 @@ INNER_ACQUISITIONS = {
     "fetch_pull_requests": "module",
     "fetch_issues": "module",
     "fetch_repo_totals": "module",
+    "fetch_bot_pr_counts": "module",
     "update_loc": "module",
 }
 

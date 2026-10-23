@@ -47,6 +47,7 @@ import sys
 import urllib.error
 from calendar import monthrange
 from collections import namedtuple
+from concurrent import futures
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -382,14 +383,16 @@ def fetch_extra_org_stats(token, org_logins,
     total_count = 0
     total_stars = 0
     total_forks = 0
-    for org_login in org_logins:
-        repositories = page_organization_repositories(
-            token, org_login, max_pages)
-        total_count += repositories["totalCount"]
-        total_stars += sum(repo["stargazerCount"]
-                           for repo in repositories["nodes"])
-        total_forks += sum(repo["forkCount"]
-                           for repo in repositories["nodes"])
+    with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+        walks = [pool.submit(page_organization_repositories, token, login, max_pages)
+                 for login in org_logins]
+        for walk in walks:
+            repositories = walk.result()
+            total_count += repositories["totalCount"]
+            total_stars += sum(repo["stargazerCount"]
+                               for repo in repositories["nodes"])
+            total_forks += sum(repo["forkCount"]
+                               for repo in repositories["nodes"])
     return {
         "orgs": org_logins,
         "totalCount": total_count,
@@ -420,13 +423,16 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # already merged into it, so organizations is in place; ORG_QUERY's payload
     # carries no repositories key at all, which is why the second walk's
     # result is grafted on rather than merely read.
-    user, _orgs = page_profile_connection(
-        token, ORG_QUERY, "organizations", login, max_pages)
-    _, repos = page_profile_connection(
-        token, REPO_QUERY, "repositories", login, max_pages)
-    user["repositories"] = repos
-    user["extraOrgStats"] = fetch_extra_org_stats(
-        token, extra_org_logins(), max_pages)
+    with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+        orgs = pool.submit(page_profile_connection,
+                           token, ORG_QUERY, "organizations", login, max_pages)
+        repositories = pool.submit(page_profile_connection,
+                                   token, REPO_QUERY, "repositories", login, max_pages)
+        extra = pool.submit(fetch_extra_org_stats, token, extra_org_logins(), max_pages)
+        user, _orgs = orgs.result()
+        _, repos = repositories.result()
+        user["repositories"] = repos
+        user["extraOrgStats"] = extra.result()
     now = datetime.now(timezone.utc)
     q_window = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
@@ -846,19 +852,29 @@ def load_inputs(args, token, cache_file):
     # knows which one raised without having to infer it after the fact.
     phase = "fetch"
     try:
-        user, days = fetch(token, args.user, cache.get("calendar_days") or None)
+        with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+            tasks = {
+                "fetch": pool.submit(fetch, token, args.user,
+                                     cache.get("calendar_days") or None),
+                "fetch_pull_requests": pool.submit(
+                    fetch_pull_requests, token, args.user,
+                    None if args.resync else (shared_prs or cache.get("prs") or None)),
+                "fetch_issues": pool.submit(fetch_issues, token, args.user),
+            }
+            if share_path is not None:
+                tasks["fetch_identity"] = pool.submit(
+                    common.fetch_identity, token, args.user, gql_fn=gql)
+            results = {}
+            # The coordinator owns phase; workers never race on the failure label.
+            for phase, task in tasks.items():
+                results[phase] = task.result()
+        user, days = results["fetch"]
+        prs, prs_by_id = results["fetch_pull_requests"]
+        issues = results["fetch_issues"]
         if share_path is not None:
-            phase = "fetch_identity"
-            me = common.fetch_identity(token, args.user, gql_fn=gql)
-        phase = "fetch_pull_requests"
-        prs, prs_by_id = fetch_pull_requests(
-            token, args.user,
-            None if args.resync else (shared_prs or cache.get("prs") or None))
-        if share_path is not None:
+            me = results["fetch_identity"]
             prs_by_id = {**shared_prs, **prs_by_id}
             prs = list(prs_by_id.values())
-        phase = "fetch_issues"
-        issues = fetch_issues(token, args.user)
     except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # cache and exits 0 — but only with a complete cache. Without one,

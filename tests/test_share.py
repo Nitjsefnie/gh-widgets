@@ -77,6 +77,9 @@ class CountingAPI(test_render.FakeAPI):
             data = {"user": {"issues": self.page(
                 [self.issues[0 if cursor is None else 1]],
                 "issue-next" if cursor is None else None)}}
+        elif "author { __typename }" in query:
+            kind = "bots"
+            data = {"repository": {"pullRequests": self.page([])}}
         elif "a0: repository" in query:
             kind = "totals"
             data = {alias: {"defaultBranchRef": None,
