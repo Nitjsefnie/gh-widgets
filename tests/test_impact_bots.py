@@ -75,7 +75,7 @@ class ImpactBots(unittest.TestCase):
 
     def test_warm_counts_scale_with_new_merges_including_old_created_pr(self):
         saved = {'other/repo': {'merged_prs': 10, 'bot_merged_prs': 2,
-                               'bot_waterline': WATERLINE}}
+                                'bot_waterline': WATERLINE}}
         for k, searches, bots in ((0, 0, 2), (1, 1, 3), (101, 2, 53)):
             api = BotAPI()
             api.search_nodes = [
@@ -149,7 +149,8 @@ class ImpactBots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'cache.json'
             for waterline in (None, WATERLINE, '', 1, False):
-                entry = {'merged_prs': 10, 'issues': 20, 'bot_merged_prs': 2}
+                entry: dict[str, object] = {
+                    'merged_prs': 10, 'issues': 20, 'bot_merged_prs': 2}
                 if waterline is not None:
                     entry['bot_waterline'] = waterline
                 cache = {'version': 1, 'totals': {'other/repo': entry}}
