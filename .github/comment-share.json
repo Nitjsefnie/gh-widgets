@@ -76,8 +76,8 @@
     5691
   ],
   "scripts/ci/baseline.py": [
-    5344,
-    12246
+    5077,
+    13143
   ],
   "scripts/ci/commit_scopes.py": [
     6658,
