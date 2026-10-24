@@ -262,6 +262,11 @@ def fetch_bot_pr_counts(token, totals, prior=None):
             for node in page["nodes"]:
                 # A missed boundary-second merge forces a mismatch recount on growth;
                 # otherwise it waits for a drop, mismatch, missing anchor or resync.
+                if node["mergedAt"] is None:
+                    if not waterline:
+                        kept += 1
+                        bots += (node.get("author") or {}).get("__typename") == "Bot"
+                    continue
                 if node["mergedAt"] > waterline:
                     kept += 1
                     bots += (node.get("author") or {}).get("__typename") == "Bot"
