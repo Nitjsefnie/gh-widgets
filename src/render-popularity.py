@@ -14,6 +14,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent import futures
 from pathlib import Path
 
 
@@ -40,10 +41,13 @@ AGENT_EMAILS = frozenset({'noreply@anthropic.com', 'noreply@openai.com',
                           'noreply@z.ai', 'noreply@openrouter.ai'})
 
 
+@common.share.limited_request
 def rest(token, path, retries=3, timeout=20):
     """GET JSON and its Link header, retrying transport and server failures.
 
-    Each attempt includes reading the body; back-off has its own timer.
+    Each attempt includes reading the body; back-off has its own timer. The
+    shared in-flight cap of two spans every REST call in the process, so the
+    pool's workers queue for slots like the profile renderer's GraphQL walks.
     """
     url = path if path.startswith(API + '/') else API + path
     req = urllib.request.Request(url, headers={
@@ -110,8 +114,10 @@ def outsider_commits(repository, user, emails):
 
     Each Git invocation passes through the shared process timer, including
     the probes that distinguish an empty remote from a broken default branch.
-    These calls are synchronous: their durations belong to blocked time,
-    unlike the impact renderer's pool of clones running ahead of blame.
+    The calls run on a pool worker, so the recorder first reports their
+    durations as concurrent time and the coordinator moves them into the
+    process rows' blocked column when it reattributes the wait spent on this
+    repository's future.
     """
     name = repository['full_name']
     with tempfile.TemporaryDirectory(prefix='ghwidgets-popularity-') as directory:
@@ -142,10 +148,36 @@ def outsider_commits(repository, user, emails):
                    for author, email in parse_authors(log.stdout, name))
 
 
+def score_repository(token, repository, user, emails):
+    """Read one repository's traffic counters and outsider commits."""
+    name = repository['full_name']
+    traffic = {}
+    for endpoint in ('clones', 'views'):
+        try:
+            data, _ = rest(token, f'/repos/{name}/traffic/{endpoint}')
+            traffic[endpoint] = data['uniques']
+        except (urllib.error.URLError, ValueError, KeyError) as exc:
+            raise RuntimeError(f'{name}: unreadable traffic/{endpoint}: {exc}') from exc
+    outsiders = outsider_commits(repository, user, emails)
+    return outsiders, traffic['clones'], traffic['views']
+
+
+def acquire_score(token, repository, user, emails, samples):
+    """Run one repository's reads on a pool worker, collecting its intervals."""
+    with common.timing.collect_processes(samples):
+        return score_repository(token, repository, user, emails)
+
+
 # The acquisition sequence keeps the eligible population and score inputs together.
 # pylint: disable=too-many-locals
 def fetch_scores(token):
-    """Acquire all eligible user/org repositories and their complete scores."""
+    """Acquire all eligible user/org repositories and their complete scores.
+
+    One pool task per repository runs its two traffic reads and its fresh
+    clone together, in enumeration order, so a repository's git and traffic
+    work overlaps the sibling pool slot's. Each task's worker intervals are
+    reattributed into their rows while the coordinator waits on it.
+    """
     user, _ = rest(token, '/user')
     emails = common.our_emails(user['login'], user['id'])
     if user.get('email'):
@@ -155,25 +187,34 @@ def fetch_scores(token):
     for org in orgs:
         login = urllib.parse.quote(org['login'], safe='')
         repositories.extend(rest_pages(token, f'/orgs/{login}/repos?per_page=100'))
-    scores, seen = [], set()
+    eligible, seen = [], set()
     for repository in repositories:
         name = repository['full_name']
         if (repository['visibility'] != 'public' or repository['fork']
                 or repository['archived'] or name.lower() in seen):
             continue
         seen.add(name.lower())
-        traffic = {}
-        for endpoint in ('clones', 'views'):
+        eligible.append(repository)
+    scores = []
+    with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
+        tasks = []
+        for repository in eligible:
+            samples = []
+            tasks.append((repository, samples,
+                          pool.submit(acquire_score, token, repository,
+                                      user, emails, samples)))
+        for repository, samples, future in tasks:
+            started = time.monotonic()
             try:
-                data, _ = rest(token, f'/repos/{name}/traffic/{endpoint}')
-                traffic[endpoint] = data['uniques']
-            except (urllib.error.URLError, ValueError, KeyError) as exc:
-                raise RuntimeError(f'{name}: unreadable traffic/{endpoint}: {exc}') from exc
-        outsiders = outsider_commits(repository, user, emails)
-        score = (repository['stargazers_count'] * 50 + repository['forks_count'] * 40
-                 + outsiders * 5 + traffic['clones'] * 2 + traffic['views'])
-        scores.append((name, score, repository['stargazers_count'], repository['forks_count'],
-                       traffic['views']))
+                outsiders, clones, views = future.result()
+            finally:
+                # Only a settled future exposes complete worker intervals.
+                if future.done():
+                    common.timing.reattribute_wait(samples, started, time.monotonic())
+            score = (repository['stargazers_count'] * 50 + repository['forks_count'] * 40
+                     + outsiders * 5 + clones * 2 + views)
+            scores.append((repository['full_name'], score,
+                           repository['stargazers_count'], repository['forks_count'], views))
     return user, scores
 # pylint: enable=too-many-locals
 
