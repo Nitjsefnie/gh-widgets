@@ -379,19 +379,14 @@ def env_float(name, default):
 # ------------------------------------------------------------------- GraphQL
 
 @share.limited_request
-def gql(token, query, variables=None, retries=3, timeout=20,
-        allow_errors_in=None):
+def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=None):
     """POST a GraphQL query, retrying transient server-side conditions.
 
     GitHub intermittently answers with RESOURCE_LIMITS_EXCEEDED under load.
-    Transient conditions get a few retries; real errors fail fast.
-
-    With ``allow_errors_in`` set to a path prefix such as
-    ``('user', 'pullRequests', 'nodes')``, a response carrying ``data``
-    whose every error lies strictly inside that subtree — one node GitHub
-    could not resolve — is accepted: each tolerated error is printed to
-    stdout naming its path, and the partial data is returned. The default
-    ``None`` keeps the strict behavior: any ``errors`` key raises.
+    Transient conditions get a few retries; real errors fail fast. With
+    ``allow_errors_in`` as a path prefix, a response whose every error lies
+    strictly inside that subtree is accepted, each error printed with its
+    path; the default keeps raise-on-any-error.
     """
     req = urllib.request.Request(
         "https://api.github.com/graphql",
@@ -431,21 +426,17 @@ def gql(token, query, variables=None, retries=3, timeout=20,
             tolerated = False
             if allow_errors_in is not None:
                 prefix = list(allow_errors_in)
-                tolerated = (
-                    body.get("data") is not None
-                    and bool(body["errors"])
-                    and all(
-                        isinstance(e.get("path"), list)
-                        and e["path"][:len(prefix)] == prefix
-                        and len(e["path"]) > len(prefix)
-                        for e in body["errors"]
-                    )
-                )
+                tolerated = (body.get("data") is not None
+                             and bool(body["errors"])
+                             and all(isinstance(e.get("path"), list)
+                                     and e["path"][:len(prefix)] == prefix
+                                     and len(e["path"]) > len(prefix)
+                                     for e in body["errors"]))
             if not tolerated:
                 raise RuntimeError(f"GraphQL errors: {body['errors']}")
             for e in body["errors"]:
-                path = ".".join(str(part) for part in e["path"])
-                print(f"GraphQL partial response: error at {path}: "
+                print(f"GraphQL partial response: error at "
+                      f"{'.'.join(str(p) for p in e['path'])}: "
                       f"{e.get('type', 'UNKNOWN')}: {e.get('message', '')}",
                       flush=True)
         return body["data"]
@@ -736,7 +727,7 @@ query($login: String!, $cursor: String) {
 
 # The live/cached/sweep reconciliation is intentionally one function so its
 # state transitions remain atomic and easy to audit.
-# pylint: disable=too-many-locals
+# pylint: disable=too-many-locals,too-many-branches
 def fetch_pull_requests(token, login, cached_prs=None,
                         max_pages: Optional[int] = 50, gql_fn=None):
     """Fetch the user's authored PRs and merge with the cached set.
@@ -749,14 +740,9 @@ def fetch_pull_requests(token, login, cached_prs=None,
     merged and moves to the cached half. On a cold cache (or --resync) all
     three states are queried and the set is rebuilt.
 
-    A node GitHub answers ``null`` (issue #243) never reaches the merge:
-    ``gql`` tolerates the error — printing it, with the node's index — and
-    the null entry is dropped, so the fetch keeps every resolved node. An
-    unresolved node carries no id, so a run that had one cannot tell
-    "absent because merged" from "absent because unreadable": the absence
-    inference is skipped for the whole run, and every cached entry the
-    MERGED sweep does not confirm as merged keeps its cached state. The
-    repair re-run below still fires on ``repair_ids`` from the cache alone.
+    A node GitHub answers null is dropped (gql logs it with the node's
+    index); a run with any unresolved node skips the absence inference —
+    absence proves nothing without an id, so cached entries keep their state.
 
     The live set alone permanently misses a PR that is opened AND merged
     between two renders: it never appears in [OPEN, CLOSED], so nothing ever
@@ -777,25 +763,21 @@ def fetch_pull_requests(token, login, cached_prs=None,
     Returns (prs, prs_by_id): the union list and the keyed mapping to persist.
     """
     g = gql_fn or gql
-    q = PR_QUERY % ("[OPEN, CLOSED]" if cached_prs is not None
-                    else "[OPEN, CLOSED, MERGED]")
+    q = PR_QUERY % ("[OPEN, CLOSED]" if cached_prs is not None else "[OPEN, CLOSED, MERGED]")
     live = []
     cursor = None
     seen_cursors = {None}
-    pages = 0
-    unresolved = False
+    pages, unresolved = 0, False
     while True:
         if max_pages is not None and pages >= max_pages:
             raise PaginationLimitError(
                 f"pullRequests pagination limit {max_pages} reached after "
                 f"cursor {cursor!r}")
         page = g(token, q, {"login": login, "cursor": cursor},
-                 allow_errors_in=("user", "pullRequests", "nodes"))["user"][
-            "pullRequests"]
+                 allow_errors_in=("user", "pullRequests", "nodes"))["user"]["pullRequests"]
         pages += 1
-        nodes = [node for node in page["nodes"] if node is not None]
-        unresolved = unresolved or len(nodes) != len(page["nodes"])
-        live.extend(nodes)
+        unresolved = unresolved or None in page["nodes"]
+        live.extend(node for node in page["nodes"] if node is not None)
         if not page["pageInfo"]["hasNextPage"]:
             break
         next_cursor = page["pageInfo"].get("endCursor")
@@ -822,29 +804,25 @@ def fetch_pull_requests(token, login, cached_prs=None,
         live_ids.add(node["id"])
         known[node["id"]] = node
     if cached_prs is not None:
-        sweep = g(token, PR_QUERY % "[MERGED]",
-                  {"login": login, "cursor": None},
-                  allow_errors_in=("user", "pullRequests",
-                                   "nodes"))["user"]["pullRequests"]
-        sweep_nodes = [node for node in sweep["nodes"] if node is not None]
-        unresolved = unresolved or len(sweep_nodes) != len(sweep["nodes"])
-        for node in sweep_nodes:
-            known[node["id"]] = node
+        sweep = g(token, PR_QUERY % "[MERGED]", {"login": login, "cursor": None},
+                  allow_errors_in=("user", "pullRequests", "nodes"))["user"]["pullRequests"]
+        unresolved = unresolved or None in sweep["nodes"]
+        known.update({node["id"]: node
+                      for node in sweep["nodes"] if node is not None})
         if not unresolved:
             for pid, node in known.items():
                 if not node["merged"] and pid not in live_ids:
                     known[pid] = {**node, "merged": True}
                     if (any(key in node for key in
                             ("mergedAt", "closedAt", "updatedAt"))
-                            and not (node.get("mergedAt")
-                                     or node.get("closedAt"))):
+                            and not (node.get("mergedAt") or node.get("closedAt"))):
                         repair_ids.add(pid)
         if repair_ids:
             # Reuse the cold-cache query so an incomplete cached or inferred
             # merge is replaced before the warm cache is persisted.
             return fetch_pull_requests(token, login, None, max_pages, gql_fn=g)
     return list(known.values()), known
-# pylint: enable=too-many-locals
+# pylint: enable=too-many-locals,too-many-branches
 
 
 def fetch_issues(token, login, max_pages: Optional[int] = 50, gql_fn=None):
