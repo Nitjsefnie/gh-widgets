@@ -70,7 +70,17 @@ def records(record_path):
                    measured_commit=BASE)
     elif record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
-        envelope = old["populations"]["unit-suite"]["entries"][entry]
+        # The #240 reset leaves `entries` empty for the declared blind
+        # window, so the recorded side gains the entry here rather than
+        # reading it out of the committed document: what the validator
+        # judges is a lowering of a recorded maximum, whatever the
+        # committed document currently records.
+        envelope = old["populations"]["unit-suite"]["entries"].get(entry)
+        if envelope is None:
+            envelope = {"min": 9.0, "max": 10.0, "n": 2}
+            old["populations"]["unit-suite"].setdefault("slopes", {})[entry] \
+                = 2.0
+            old["populations"]["unit-suite"]["entries"][entry] = envelope
         envelope["max"] = envelope["min"] + 2
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
