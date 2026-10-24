@@ -479,6 +479,12 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                         self.assertIn("Timed out", done.stderr)
                         self.assertIn("no check run" if state == "missing" else
                                       "still running", done.stdout)
+                        if state == "missing":
+                            self.assertIn(
+                                f"no check run has reported yet for: {gate}",
+                                done.stdout)
+                        else:
+                            self.assertIn(f"\t{gate}", done.stdout)
                     else:
                         self.assertIn("did not reach", done.stderr)
                         self.assertNotIn("Timed out", done.stderr)
@@ -510,6 +516,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                              **self.NO_WAIT)
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("never reported", done.stderr)
+        self.assertIn("never reported a check run: lint", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
@@ -533,6 +540,13 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     expected = 0 if location == "tip" and conclusion == "skipped" else 1
                     self.assertEqual(done.returncode, expected,
                                      done.stdout + done.stderr)
+                    if conclusion == "missing":
+                        self.assertIn("Timed out", done.stderr)
+                        self.assertIn("no check run has reported yet for: speed",
+                                      done.stdout)
+                    elif expected:
+                        self.assertIn("did not reach", done.stderr)
+                        self.assertNotIn("Timed out", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
@@ -563,6 +577,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                                      **self.NO_WAIT)
                 self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                 self.assertIn("did not reach", done.stderr)
+                self.assertNotIn("Timed out", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
@@ -582,6 +597,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                         **self.NO_WAIT)
                     self.assertNotEqual(done.returncode, 0,
                                         done.stdout + done.stderr)
+                    self.assertRegex(done.stderr,
+                                     r"parse error|Unknown landed window")
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
@@ -592,6 +609,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                              **self.NO_WAIT)
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("Unknown first parent", done.stderr)
+        self.assertNotIn("Timed out", done.stderr)
 
     # --- #34: the manifest wait -----------------------------------------
 
@@ -609,6 +627,27 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                       "unittest", done.stdout)
         self.assertIn("required gates: lint pyright speed pip-audit analyze "
                       "unittest", done.stdout)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "see above")
+    def test_all_green_gates_release_even_at_a_zero_deadline(self):
+        self._write_runs(self.ALL_GREEN)
+        done = self._execute("Wait for the other gates on this commit",
+                             WAIT_DEADLINE_SECONDS="0")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    @requires_bash
+    @unittest.skipUnless(shutil.which("jq"), "see above")
+    def test_a_failed_gate_is_refused_even_at_a_zero_deadline(self):
+        self._write_runs([("completed", "failure", "speed")]
+                         + self._without("speed"))
+        done = self._execute("Wait for the other gates on this commit",
+                             WAIT_DEADLINE_SECONDS="0")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("did not reach", done.stderr)
+        self.assertNotIn("Timed out", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -652,6 +691,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("speed", done.stdout + done.stderr)
         self.assertIn("never reported", done.stderr)
+        self.assertIn("never reported a check run: speed", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -806,6 +846,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
                     self.assertEqual(done.returncode, 1, out)
                     self.assertIn("Timed out", out)
+                    self.assertIn("still running", done.stdout)
+                    self.assertIn(f"\t{queued}", done.stdout)
                     self.assertNotIn("did not pass", out)
                     self.assertNotIn("did not reach", out)
 

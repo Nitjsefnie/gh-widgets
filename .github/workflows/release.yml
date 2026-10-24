@@ -269,7 +269,8 @@ jobs:
 
           deadline=$(( SECONDS + WAIT_DEADLINE_SECONDS ))
           missing=""
-          while [ "$SECONDS" -lt "$deadline" ]; do
+          # Poll 1 always runs; consult the deadline between polls (#239).
+          while :; do
             tip_runs="$(gh api --paginate -H "Cache-Control: no-cache" \
               "repos/$REPO/commits/$SHA/check-runs" \
               --jq '.check_runs[] | "\(.status)\t\(.conclusion)\t\(.name)"')"
@@ -434,6 +435,9 @@ jobs:
             done
             if [ "$waiting" = yes ]; then
               sleep "$POLL_INTERVAL_SECONDS"
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                break
+              fi
               continue
             fi
 
