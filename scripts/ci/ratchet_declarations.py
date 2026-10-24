@@ -48,17 +48,10 @@ _TRIM_REMEDY = (
 
 
 def derive_raises(old, new, commits, window="the judged window"):
-    """Return raised unit-suite slots, admitted only by a feat: subject.
-
-    A raise is an existing entry's recorded maximum going up. An entry the
-    base never recorded is refused whatever the subjects say; only the
-    seed shape — which `raised_entries` excludes — enters without a
-    feature.
-    """
+    """Return raised unit-suite slots, admitted only by a feat: subject."""
     moved = baseline.raised_entries(old, new)
-    # A unit-suite slot with a None `was` is an entry the base never
-    # recorded that `raised_entries` did not seed-exclude: a hand-written
-    # envelope, which no commit subject admits.
+    # A None `was` is an entry the base never recorded, which no subject
+    # admits; the seed shape never reaches here.
     additions = {
         slot: values for slot, values in moved.items()
         if slot.startswith('unit-suite:') and values[0] is None

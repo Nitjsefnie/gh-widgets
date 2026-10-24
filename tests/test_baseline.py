@@ -579,10 +579,6 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
         self.assertEqual(self.derive("chore: seed", old=old, new=seeded), [])
 
     def test_a_non_seed_shaped_addition_is_refused_whatever_the_subject(self):
-        # The ruling this gate implements: a raise is an existing entry's
-        # recorded max going up. An entry the base never recorded is not a
-        # raise any subject can admit; only the seed shape enters without a
-        # feature, and a hand-written envelope keeps the base's refusal.
         old = document()
         old["populations"]["unit-suite"]["entries"] = {}
         added = copy.deepcopy(old)
@@ -598,10 +594,6 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
                 self.assertIn("trimming its own tests", message)
 
     def test_a_slope_declared_removal_derives_no_raise(self):
-        # The #240-style reset removes the entry the base records while the
-        # same commit declares its slope; the workflow derives the removal
-        # and the comparator judges it. It is lawful without a feature, so
-        # a removal must never be emitted as a raise — whatever the subject.
         old = document()
         removed = copy.deepcopy(old)
         del removed["populations"]["unit-suite"]["entries"][
