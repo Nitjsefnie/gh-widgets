@@ -901,11 +901,16 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         The wrong ones lived in the baseline's `basis` and in the workflow
         header. This cannot police prose it does not parse; what it CAN do is
         make the next reader's first move a computation rather than a
-        reading, and pin the one number that must agree.
+        reading, and pin the one number that must agree. The suite's own
+        entry is named only while the population records entries at all:
+        the #240 reset empties `entries` for the declared blind window, the
+        automated ratchet re-seeds the node after the merge, and the pin
+        re-arms then — the same waiting shape as an absent baseline.
         """
         loaded = self._load()
         ceilings = self.ceilings(loaded)
-        self.assertIn("counter::unit-suite", ceilings["unit-suite"])
+        if loaded["populations"]["unit-suite"]["entries"]:
+            self.assertIn("counter::unit-suite", ceilings["unit-suite"])
         # Every recorded maximum is below its own ceiling, which is what
         # makes a same-tree run pass rather than refuse.
         for name, population in loaded["populations"].items():
