@@ -5,7 +5,9 @@
 
 No network: the identity test drives a fake gql.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -416,14 +418,17 @@ class FetchPublicOrganizations(unittest.TestCase):
 class FetchPullRequests(unittest.TestCase):
     def fake_gql(self, live_nodes, merged_nodes):
         # Serves the [OPEN, CLOSED] live query and the [MERGED] sweep from
-        # two canned single pages, counting sweep invocations. The cold-cache
-        # [OPEN, CLOSED, MERGED] query matches neither branch on purpose:
-        # "[MERGED]" is not a substring of "[OPEN, CLOSED, MERGED]".
+        # two canned single pages, counting sweep invocations and recording
+        # the gql kwargs. The cold-cache [OPEN, CLOSED, MERGED] query matches
+        # neither branch on purpose: "[MERGED]" is not a substring of
+        # "[OPEN, CLOSED, MERGED]".
         # Deliberately set outside __init__: fixture state owned by the fake
         # factory, mirroring the FetchPullRequests style (triaged, see #5).
         self.merged_calls = 0  # pylint: disable=attribute-defined-outside-init
+        self.gql_kwargs = []  # pylint: disable=attribute-defined-outside-init
 
         def _gql(token, query, variables=None, **kw):
+            self.gql_kwargs.append(kw)
             if "[MERGED]" in query:
                 self.merged_calls += 1
                 nodes = merged_nodes
@@ -590,6 +595,164 @@ class FetchPullRequests(unittest.TestCase):
         self.assertEqual(calls, [None, "same"])
         self.assertIn("pullRequests", str(raised.exception))
         self.assertIn("same", str(raised.exception))
+
+    def test_unresolved_node_warm_run_keeps_cached_state(self):
+        """A null node must not mark the missing cached PR merged (#243).
+
+        The cached CLOSED, unmerged PR is absent from the live set exactly
+        because its node is the one GitHub answered null; its absence is not
+        evidence of a merge.
+        """
+        cached = {
+            "PR_unreadable": {
+                "id": "PR_unreadable", "merged": False,
+                "closedAt": "2026-10-23T23:04:35Z",
+                "updatedAt": "2026-10-23T23:04:35Z",
+                **repo("stranger", "flare"),
+            }
+        }
+        resolved = {"id": "PR_resolved", "merged": False,
+                    **repo("stranger", "other")}
+        g = self.fake_gql(live_nodes=[resolved, None], merged_nodes=[])
+        prs, by_id = common.fetch_pull_requests("t", "me", cached_prs=cached,
+                                                gql_fn=g)
+        self.assertIn("PR_resolved", by_id)
+        self.assertEqual(by_id["PR_unreadable"], cached["PR_unreadable"],
+                         "an unresolved node must change no cached PR")
+        self.assertFalse(by_id["PR_unreadable"]["merged"])
+        self.assertEqual(len(prs), 2)
+        self.assertEqual(
+            [kw.get("allow_errors_in") for kw in self.gql_kwargs],
+            [("user", "pullRequests", "nodes")] * 2,
+            "both fetch calls must tolerate node-confined errors")
+
+    def test_unresolved_node_cold_run_returns_resolved_nodes(self):
+        """A null node on a cold rebuild is dropped, not fatal (#243)."""
+        g = self.fake_gql(
+            live_nodes=[{"id": "PR_a", "merged": False, **repo("me")},
+                        None,
+                        {"id": "PR_b", "merged": True, **repo("me")}],
+            merged_nodes=[])
+        prs, by_id = common.fetch_pull_requests("t", "me", cached_prs=None,
+                                                gql_fn=g)
+        self.assertEqual(sorted(by_id), ["PR_a", "PR_b"])
+        self.assertEqual(len(prs), 2)
+        self.assertEqual(self.merged_calls, 0, "a cold run runs no sweep")
+
+    def test_unresolved_node_repair_run_still_completes(self):
+        """A repair re-run (cold recursion) survives an unresolved node.
+
+        The cached entry is an incomplete merge, so repair_ids fires and the
+        run recurses with cached_prs=None; that inner page also carries the
+        null node (#243).
+        """
+        cached = {
+            "PR_unreadable": {
+                "id": "PR_unreadable", "merged": True,
+                "mergedAt": None, "closedAt": None,
+            }
+        }
+        resolved = {"id": "PR_resolved", "merged": False,
+                    **repo("stranger", "flare")}
+        g = self.fake_gql(live_nodes=[resolved, None], merged_nodes=[])
+        prs, by_id = common.fetch_pull_requests("t", "me", cached_prs=cached,
+                                                gql_fn=g)
+        self.assertEqual([node["id"] for node in prs], ["PR_resolved"])
+        self.assertEqual(set(by_id), {"PR_resolved"})
+        self.assertEqual(self.merged_calls, 1,
+                         "the warm half sweeps once; the cold repair does not")
+
+
+class GqlPartialResponse(unittest.TestCase):
+    """gql accepts a partial response only under ``allow_errors_in`` (#243).
+
+    The default ``None`` keeps the strict behavior: any ``errors`` key
+    raises, which is what protects render-impact's plain-gql BOT_PR walk
+    over ``repository.pullRequests.nodes``.
+    """
+
+    NODES = ("user", "pullRequests", "nodes")
+
+    class RecordingStdout(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.flushes = 0
+
+        def flush(self):
+            self.flushes += 1
+            super().flush()
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.body).encode("utf-8")
+
+    @staticmethod
+    def partial_body(path, data=True):
+        body = {"errors": [{"type": "INTERNAL", "path": path,
+                            "message": "Something went wrong while "
+                                       "executing your query"}]}
+        if data:
+            body["data"] = {"user": {"pullRequests": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [None]}}}
+        return body
+
+    def run_gql(self, body, **kwargs):
+        with mock.patch.object(common.urllib.request, "urlopen",
+                               return_value=self.Response(body)), \
+                contextlib.redirect_stdout(self.RecordingStdout()) as stdout:
+            data = common.gql("t", "query", **kwargs)
+        return data, stdout
+
+    def test_confined_error_is_tolerated_and_named(self):
+        body = self.partial_body(["user", "pullRequests", "nodes", 17])
+        data, stdout = self.run_gql(body, allow_errors_in=self.NODES)
+        self.assertEqual(data, body["data"])
+        lines = stdout.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("GraphQL partial response:"))
+        self.assertIn("user.pullRequests.nodes.17", lines[0])
+        self.assertIn("INTERNAL", lines[0])
+        self.assertIn("Something went wrong while executing your query",
+                      lines[0])
+        self.assertGreaterEqual(stdout.flushes, 1,
+                                "the warning must be flushed, not buffered")
+
+    def test_error_outside_the_allowed_subtree_raises(self):
+        body = self.partial_body(["user"])
+        with self.assertRaises(RuntimeError) as raised:
+            self.run_gql(body, allow_errors_in=self.NODES)
+        self.assertIn("GraphQL errors", str(raised.exception))
+
+    def test_default_still_raises_inside_any_subtree(self):
+        body = self.partial_body(["repository", "pullRequests", "nodes", 0])
+        with self.assertRaises(RuntimeError):
+            self.run_gql(body)
+
+    def test_confined_error_without_data_raises(self):
+        body = self.partial_body(["user", "pullRequests", "nodes", 17],
+                                 data=False)
+        with self.assertRaises(RuntimeError):
+            self.run_gql(body, allow_errors_in=self.NODES)
+
+    def test_empty_error_list_is_not_a_partial_response(self):
+        body = {"data": {"answer": 42}, "errors": []}
+        with self.assertRaises(RuntimeError):
+            self.run_gql(body, allow_errors_in=self.NODES, retries=0)
+
+    def test_error_at_the_prefix_itself_raises(self):
+        body = self.partial_body(["user", "pullRequests", "nodes"])
+        with self.assertRaises(RuntimeError):
+            self.run_gql(body, allow_errors_in=self.NODES)
 
 
 class EnvKnobs(unittest.TestCase):
