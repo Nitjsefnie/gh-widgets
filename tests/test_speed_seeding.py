@@ -140,13 +140,10 @@ class TestSpeedSeeding(unittest.TestCase):
     def _slope_declared_removals(self, base_doc, new_doc):
         """The STEP's slope-declared removal fragment, run over two documents.
 
-        Sliced out of the `speed` job between the fragment's own marker
-        comment and the loop's `done`, with the base copy written to
-        $RUNNER_TEMP and the head copy to $BASELINE, exactly where the step
-        leaves them. Both conditions of the declaration — slope-declared in
-        the head document, no longer recorded in it — are exercised against
-        real files, because the loop reads the documents rather than
-        trusting a declaration.
+        Sliced from the fragment's marker to its `done`, with the base copy
+        at $RUNNER_TEMP and the head copy at $BASELINE, exactly where the
+        step leaves them; both declaration conditions run against real
+        files, because the loop reads the documents rather than trusting.
         """
         _declared, _working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
@@ -185,14 +182,12 @@ class TestSpeedSeeding(unittest.TestCase):
     def test_the_step_declares_slope_redefined_removals(self):
         """The instrument reset's removals are declared from the documents.
 
-        Issue #240's reset commit removes the four redefined ratio
-        envelopes and declares each node's calibration slope in the same
-        document. The down-only ratchet refuses an undeclared deletion, so
-        the step derives the declaration itself: recorded in the base,
-        slope-declared in the head for the SAME population, and no longer
-        recorded — read from the two documents, never trusted. The derived
-        declarations must then be the arguments that make the real
-        comparator accept the removal.
+        The reset removes the four redefined ratio envelopes and declares
+        each node's slope in the same document; the down-only ratchet
+        refuses an undeclared deletion, so the step derives the declaration:
+        recorded in the base, slope-declared in the head, no longer
+        recorded. The derived arguments must make the real comparator
+        accept the removal.
         """
         new_doc = self._sloped(fixtures.document())
         for population in new_doc["populations"].values():
