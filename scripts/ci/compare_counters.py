@@ -171,22 +171,12 @@ def _is_unittest_collection_error(root: ET.Element) -> bool:
 
 
 def scan_junit(path: Path, slopes: dict | None = None) -> tuple:
-    """One report, read three ways: (passing values, present, not_passed).
+    """One report's (passing values, present ids, non-passing ids).
 
-    The intersection this comparator works on throws away everything that did
-    not pass, which is right for the arithmetic and useless for the
-    diagnosis: when a gated workload goes missing, "it is not in the
-    intersection" and "it is in the report but failed" are different bugs
-    with different fixes. So the scan keeps both raw sets: `present` is every
-    node id, `not_passed` every one that produced no usable passing value.
-
-    The `time` attribute read here is whatever the producer wrote into it:
-    for counter.py and e2e_bench.py that is the COUNTER, not seconds, and
-    the producer says which in the suite's gh-metric. This file does not
-    care, because comparing across two different metrics is checked
-    explicitly in `_resolve_metric` and `_check_metric`.
-    With slopes, passing entries instead use raw CPU minus their slope
-    times calibration CPU; the report must carry both raw parts (#240).
+    Keep presence separate from passing values to diagnose missing workloads.
+    `time` holds the producer's counter, with gh-metric checked separately.
+    With slopes, use raw CPU minus slope times calibration CPU instead;
+    both raw parts are required on passing entries (#240).
     """
     try:
         root = ET.parse(path).getroot()
@@ -213,10 +203,7 @@ def scan_junit(path: Path, slopes: dict | None = None) -> tuple:
                               - slopes[nid]
                               * float(case.attrib["gh-calibration-cpu"]))
             else:
-                raw = case.get("time")
-                if raw is None:
-                    continue
-                times[nid] = float(raw)
+                times[nid] = float(case.get("time", ""))
         except ValueError:
             continue
     if not times:
@@ -894,10 +881,7 @@ def _compare(args) -> int:
     if args.baseline:
         recorded = read_population(read_baseline(Path(args.baseline)),
                                    args.population)
-        # The recorded MAXIMUM is what the head is judged against: the
-        # spread that was actually observed is inside it, so a budget over
-        # the top of that range fires where a budget over its middle would
-        # not.
+        # Judge against the maximum so the observed spread is conceded.
         base_folded = envelope_maxima(recorded["entries"])
     else:
         base_folded = fold_rounds(args.base)
@@ -925,10 +909,7 @@ def _compare(args) -> int:
     result["envelopes"] = (recorded["entries"] if recorded is not None
                            else {})
     if recorded is not None and recorded.get("wall"):
-        # Against the recorded wall MAXIMUM, for the same reason the counter
-        # side is: the observed spread is inside it, so SMOKE_FACTOR is a
-        # multiple of the worst wall actually seen rather than of an
-        # arbitrary pick from inside the range.
+        # Smoke uses a multiple of the worst wall actually observed too.
         result["smoke"] = smoke_failures(_fold_wall(args.head),
                                          envelope_maxima(recorded["wall"]))
     return _verdict(args, result)
