@@ -63,11 +63,11 @@ class TestTheWorkflowText(unittest.TestCase):
     def test_the_ratchet_step_declares_slope_redefined_removals(self):
         """The instrument reset's removals must stay declared by the step.
 
-        Issue #240 removes the four redefined ratio envelopes while the same
-        document declares each node's calibration slope; without the
-        derivation, the down-only ratchet refuses the very commit that
-        re-derives it, and once main records the seeds the loop must stay
-        silent again. Both conditions live in the step text alone.
+        Issue #240 removes the four redefined ratio envelopes while the
+        same document declares each node's slope; without the derivation
+        the ratchet refuses the reset commit, and once main records the
+        seeds the loop stays silent again. Both conditions live in the
+        step text alone.
         """
         block = self._run_block("The committed baseline only ratchets down")
         self.assertIn("# SLOPE-DECLARED REMOVALS", block)
