@@ -5,6 +5,9 @@
 
 No network: the identity test drives a fake gql.
 """
+# The null-node fetch contract is pinned at every run shape alongside the
+# module's own suites.
+# pylint: disable=too-many-lines
 import contextlib
 import importlib.util
 import io
@@ -697,14 +700,15 @@ class GqlPartialResponse(unittest.TestCase):
 
     @staticmethod
     def partial_body(path, data=True):
-        body = {"errors": [{"type": "INTERNAL", "path": path,
-                            "message": "Something went wrong while "
-                                       "executing your query"}]}
+        data_part = None
         if data:
-            body["data"] = {"user": {"pullRequests": {
+            data_part = {"user": {"pullRequests": {
                 "pageInfo": {"hasNextPage": False, "endCursor": None},
                 "nodes": [None]}}}
-        return body
+        return {"errors": [{"type": "INTERNAL", "path": path,
+                            "message": "Something went wrong while "
+                                       "executing your query"}],
+                "data": data_part}
 
     def run_gql(self, body, **kwargs):
         with mock.patch.object(common.urllib.request, "urlopen",
