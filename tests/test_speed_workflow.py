@@ -1420,6 +1420,11 @@ class TestFeatureRaiseCLI(unittest.TestCase):
         fixture.commit("feat(sp\need): grow the envelope", fixture.new)
         self.assert_admits(fixture.declarations(), [fixture.SLOT])
 
+    def test_a_line_separator_beyond_lf_in_a_subject_still_refuses(self):
+        fixture = self.fixture
+        fixture.commit("fix: x\u2028feat: y", fixture.new)
+        self.assert_refuses(fixture.declarations())
+
     def test_no_feat_subject_refuses_with_the_trim_remedy(self):
         fixture = self.fixture
         fixture.commit("fix: grow the suite\n\nfeat: not a subject line",

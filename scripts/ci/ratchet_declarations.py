@@ -102,7 +102,7 @@ def collect_window(cwd, base, head):
     if _git(cwd, ['rev-parse', '--is-shallow-repository']).strip() != 'false':
         raise RuntimeError("the raise check requires full history; fetch the "
                            "base and head ancestry before judging the window")
-    return _git(cwd, ['log', '--format=%s', f'{base}..{head}']).splitlines()
+    return _git(cwd, ['log', '--format=%s', f'{base}..{head}']).split('\n')
 
 
 def main(argv=None):
