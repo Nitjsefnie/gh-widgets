@@ -46,8 +46,10 @@ class BotAPI(CountingAPI):
             if not qualifier.endswith('+0000'):
                 raise AssertionError(f'unmodelled timestamp: {qualifier}')
             # Search models merged time only: creation order must not affect it.
+            # A null mergedAt is served too: GitHub answers this query with it.
             nodes = [n for n in self.search_nodes
-                     if n['mergedAt'] >= qualifier.replace('+0000', 'Z')]
+                     if n['mergedAt'] is None
+                     or n['mergedAt'] >= qualifier.replace('+0000', 'Z')]
             offset = int(cursor or 0)
             following = str(offset + 100) if offset + 100 < len(nodes) else None
             data = {'search': self.page(nodes[offset:offset + 100], following)}
@@ -95,6 +97,35 @@ class ImpactBots(unittest.TestCase):
                 self.assertEqual(sum(n for (kind, _, _), n in api.counts.items()
                                      if kind == 'bots'), 0)
         self.assertEqual(saved['other/repo']['bot_waterline'], WATERLINE)
+
+    def test_full_walk_counts_a_null_merged_at_node(self):
+        # PullRequest.mergedAt is nullable; a null node is still a merge, so
+        # the count must include it and the waterline must not take the null.
+        data = {'repository': {'pullRequests': {'nodes': [
+            {'mergedAt': WATERLINE, 'author': {'__typename': 'Bot'}},
+            {'mergedAt': None, 'author': {'__typename': 'Bot'}},
+            {'mergedAt': NEWEST, 'author': None},
+        ], 'pageInfo': {'hasNextPage': False}}}}
+        totals = {'other/repo': {'merged_prs': 10}}
+        with mock.patch.object(impact, 'gql', return_value=data):
+            impact.fetch_bot_pr_counts('t', totals)
+        self.assertEqual(totals['other/repo']['bot_merged_prs'], 2)
+        self.assertEqual(totals['other/repo']['bot_waterline'], NEWEST)
+
+    def test_search_skips_a_null_merged_at_node_and_recounts(self):
+        # The search cannot tell whether the null node is new, so it must not
+        # count it: the kept-count mismatch then falls back to the full walk.
+        api = BotAPI()
+        api.search_nodes = [{'mergedAt': None, 'author': {'__typename': 'Bot'}}]
+        saved = {'other/repo': {'merged_prs': 9, 'bot_merged_prs': 2,
+                                'bot_waterline': WATERLINE}}
+        totals = self.acquire(10, saved, api)['other/repo']
+        self.assertEqual(totals['bot_merged_prs'], 2)
+        self.assertEqual(totals['bot_waterline'], NEWEST)
+        self.assertEqual(sum(n for (kind, _, _), n in api.counts.items()
+                             if kind == 'bot-search'), 1)
+        self.assertEqual(sum(n for (kind, _, _), n in api.counts.items()
+                             if kind == 'bots'), 2)
 
     def test_repository_without_merged_prs_costs_no_bot_request(self):
         api = BotAPI()
