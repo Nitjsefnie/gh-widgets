@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Fit raw CPU on calibration from speed-job logs (issue #240).
 
-Renderer rounds are fitted against the SAME JOB's unit-step calibration,
-because pre-#242 renderer calibrators are contaminated; post-merge
-re-derivations may use the renderer step's own reading. `--job <id>`
+Renderer rounds are fitted against the SAME JOB's unit-step calibration
+(the pre-#242 renderer calibrators are contaminated; post-merge
+re-derivations may use the renderer step's own reading). `--job <id>`
 (repeatable) fetches via `gh api`; `--from-file <log>` reads one saved log
-offline, labelled file:<name> without a numeric job id. One job's two rounds
-can fit a negative slope, which is refused; pool jobs. Nothing is written.
+offline. One job's two rounds can fit a negative slope, refused; pool jobs.
+Nothing is written.
 Job-log API: https://docs.github.com/en/rest/actions/workflow-jobs
 """
 import argparse
