@@ -809,6 +809,48 @@ class EnvKnobs(unittest.TestCase):
         with mock.patch.dict(os.environ, {"X": " a , ,b,"}):
             self.assertEqual(common.env_list("X"), ["a", "b"])
 
+    # The prefixed name is the interface; the bare name is the pre-#217
+    # spelling every test below keeps working. Callers pass the prefixed name.
+    def test_prefixed_name_is_read(self):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_THEME": "dark"}):
+            self.assertEqual(common.env("GH_WIDGETS_THEME", "light"), "dark")
+
+    def test_bare_name_falls_back_when_prefixed_unset(self):
+        with mock.patch.dict(os.environ, {"THEME": "dark"}):
+            self.assertEqual(common.env("GH_WIDGETS_THEME", "light"), "dark")
+
+    def test_prefixed_wins_when_both_set(self):
+        env = {"GH_WIDGETS_THEME": "dark", "THEME": "light"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(common.env("GH_WIDGETS_THEME", "solar"), "dark")
+
+    def test_neither_set_returns_default(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(common.env("GH_WIDGETS_THEME", "light"), "light")
+            self.assertIsNone(common.env("GH_WIDGETS_THEME"))
+
+    def test_prefixed_set_but_empty_wins_over_bare(self):
+        env = {"GH_WIDGETS_THEME": "", "THEME": "light"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(common.env("GH_WIDGETS_THEME", "solar"), "")
+
+    def test_env_float_reads_the_bare_name(self):
+        with mock.patch.dict(os.environ, {"IMPACT_Z": "1.96"}):
+            self.assertEqual(common.env_float("GH_WIDGETS_IMPACT_Z", 2.58),
+                             1.96)
+
+    def test_env_float_error_names_the_name_it_read(self):
+        with mock.patch.dict(os.environ, {"IMPACT_Z": "2,58"}):
+            with self.assertRaises(SystemExit) as ctx:
+                common.env_float("GH_WIDGETS_IMPACT_Z", 2.58)
+        self.assertEqual(str(ctx.exception),
+                         "error: IMPACT_Z='2,58' is not a number")
+
+    def test_env_list_reads_the_bare_name(self):
+        with mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": " a , b "}):
+            self.assertEqual(common.env_list("GH_WIDGETS_GH_EXTRA_ORGS"),
+                             ["a", "b"])
+
 
 class CacheShape(unittest.TestCase):
     """Impact cache maps reject structural field drift without rejecting

@@ -53,8 +53,7 @@ def _load_sibling(name):
     execution a None registration makes normal imports fail honestly; this
     fallback cannot coordinate normal imports already in progress.
     """
-    lock_manager = getattr(getattr(importlib, "_bootstrap", None),
-                           "_ModuleLockManager", None)
+    lock_manager = getattr(getattr(importlib, "_bootstrap", None), "_ModuleLockManager", None)
     if lock_manager is None:
         # importlib is shared even when donors are loaded under new aliases.
         locks = importlib.__dict__.setdefault("_ghwidgets_sibling_locks", {})
@@ -64,8 +63,7 @@ def _load_sibling(name):
     with lock:
         if name in sys.modules:
             module = sys.modules[name]
-            if module is None or getattr(
-                    getattr(module, "__spec__", None), "_initializing", False):
+            if module is None or getattr(getattr(module, "__spec__", None), "_initializing", False):
                 raise ImportError(f"module {name} is not ready", name=name)
             return module
         path = Path(__file__).resolve().with_name(f"{name}.py")
@@ -115,9 +113,9 @@ acquisition = ghwidgets_journal.acquisition
 take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 
-# Bumped whenever this module's interface changes in a way that would make an
-# older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 15
+# Bumped when the interface changes so an older script would misbehave;
+# each script pins the version it expects.
+COMMON_VERSION = 16
 
 
 # One import-time switch, shared by all instrumentation in this renderer.
@@ -261,8 +259,7 @@ def endpoint_shape(url):
     path = urllib.parse.urlsplit(url).path
     path = re.sub(r'^/repos/[^/]+/[^/]+', '/repos/{owner}/{repo}', path)
     for family, field in (('users', 'user'), ('orgs', 'org')):
-        path = re.sub(r'^/' + family + r'/[^/]+',
-                      '/' + family + '/{' + field + '}', path)
+        path = re.sub(r'^/' + family + r'/[^/]+', '/' + family + '/{' + field + '}', path)
     return path
 
 
@@ -354,26 +351,34 @@ THEMES = {
 
 # ---------------------------------------------------------------- environment
 
+def env(name, default=None):
+    """The GH_WIDGETS_-prefixed name wins, the bare name falls back."""
+    if name in os.environ:
+        return os.environ[name]
+    return os.environ.get(name.removeprefix("GH_WIDGETS_"), default)
+
+
 def env_list(name, default=""):
     """Comma-separated env var -> list of trimmed non-empty strings."""
-    return [s.strip() for s in os.environ.get(name, default).split(",") if s.strip()]
+    # env(name, "") is never None; or-"" settles pyright's Optional read.
+    return [s.strip() for s in (env(name, default) or "").split(",") if s.strip()]
 
 
 def env_float(name, default):
     """Numeric env var with a default.
 
     An unparseable value is a hard error, NOT a silent fall back to the
-    default: a typo in a tuning knob would otherwise render wrong numbers with
-    no signal anywhere, which is exactly the failure mode these knobs were
-    moved out of source to avoid.
+    default: a typo in a tuning knob would otherwise render wrong numbers
+    with no signal anywhere.
     """
-    raw = os.environ.get(name)
+    raw = env(name)
     if raw is None or not raw.strip():
         return default
     try:
         return float(raw)
     except ValueError as exc:
-        raise SystemExit(f"error: {name}={raw!r} is not a number") from exc
+        source = name if name in os.environ else name.removeprefix("GH_WIDGETS_")
+        raise SystemExit(f"error: {source}={raw!r} is not a number") from exc
 
 
 # ------------------------------------------------------------------- GraphQL
@@ -437,8 +442,7 @@ def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=Non
             for e in body["errors"]:
                 print(f"GraphQL partial response: error at "
                       f"{'.'.join(str(p) for p in e['path'])}: "
-                      f"{e.get('type', 'UNKNOWN')}: {e.get('message', '')}",
-                      flush=True)
+                      f"{e.get('type', 'UNKNOWN')}: {e.get('message', '')}", flush=True)
         return body["data"]
     raise RuntimeError("unreachable: gql retry loop exhausted")
 
@@ -459,12 +463,10 @@ class Identity(namedtuple(
 
     __slots__ = ()
 
-    def __new__(cls, login, database_id, orgs, insiders, emails,
-                public_orgs=None):
+    def __new__(cls, login, database_id, orgs, insiders, emails, public_orgs=None):
         if public_orgs is None:
             public_orgs = []
-        return super().__new__(
-            cls, login, database_id, orgs, insiders, emails, public_orgs)
+        return super().__new__(cls, login, database_id, orgs, insiders, emails, public_orgs)
 
 
 class PaginationLimitError(RuntimeError):
@@ -554,8 +556,7 @@ def fetch_public_organizations(login, request_fn=None):
                 f"could not retrieve public organization memberships for {login}"
             ) from exc
         if not isinstance(body, list):
-            raise RuntimeError(
-                f"invalid public organization response for {login}")
+            raise RuntimeError(f"invalid public organization response for {login}")
         public_orgs.extend(
             org["login"] for org in body
             if isinstance(org, dict) and org.get("login"))
@@ -568,8 +569,7 @@ def fetch_public_organizations(login, request_fn=None):
 # The identity query deliberately keeps pagination, visibility, and derived
 # sets together so the transient membership data cannot leak into snapshots.
 # pylint: disable=too-many-locals
-def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
-                   include_public_orgs=False):
+def fetch_identity(token, login, gql_fn=None, *, include_environment=True, include_public_orgs=False):
     """Resolve who we are from the token's own account.
 
     Returns an Identity carrying the canonical login (as GitHub spells it),
@@ -587,8 +587,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True,
     canonical = None
     database_id = None
     while True:
-        data = g(token, IDENTITY_QUERY,
-                 {"login": login, "cursor": cursor})
+        data = g(token, IDENTITY_QUERY, {"login": login, "cursor": cursor})
         user = data["user"]
         if not user:
             raise RuntimeError(f"no such GitHub user: {login}")
@@ -728,8 +727,7 @@ query($login: String!, $cursor: String) {
 # The live/cached/sweep reconciliation is intentionally one function so its
 # state transitions remain atomic and easy to audit.
 # pylint: disable=too-many-locals,too-many-branches
-def fetch_pull_requests(token, login, cached_prs=None,
-                        max_pages: Optional[int] = 50, gql_fn=None):
+def fetch_pull_requests(token, login, cached_prs=None, max_pages: Optional[int] = 50, gql_fn=None):
     """Fetch the user's authored PRs and merge with the cached set.
 
     MERGED is the only one-way PR state, so with a warm cache the live query
@@ -891,15 +889,13 @@ def xml_color(value, fallback="#888888"):
     GitHub language colors are hex, so anything else is hostile or corrupt;
     use the fallback.
     """
-    return (value if re.fullmatch(
-        r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", str(value)) else fallback)
+    return (value if re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", str(value)) else fallback)
 
 
 TableRow = namedtuple("TableRow", "repo score values")
 
 
-def render_score_table(C, y, rows, columns, *, score_label, accent, empty,
-                       top_n=None, relative=False):
+def render_score_table(C, y, rows, columns, *, score_label, accent, empty, top_n=None, relative=False):
     """Draw the family's headers, supporting cells and ten-point score bars.
 
     Columns are (x, heading, color); TableRow.values are display text.
