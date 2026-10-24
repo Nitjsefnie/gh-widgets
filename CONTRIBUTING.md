@@ -112,40 +112,19 @@ dependency vulnerability checks, security analysis, workflow syntax and
 security checks, and the speed job. The speed job counts **CPU seconds** for
 each renderer workload and for the unit suite, on pinned offline fixtures,
 and compares each against a committed baseline in `gate/speed-baseline.json` that
-only ever ratchets down, with unit-suite raises permitted solely as a
-declared re-derivation in a **pure carrier PR**: its changed-file set must be
-exactly `{gate/speed-baseline.json}`. Each raised key requires one line anywhere
-in the carrying commit's message, naming the exact old and new maxima:
-
-```
-Budget-Raise: gate/speed-baseline.json <population:key:node> <from> -> <to>
-```
-
-Use the ASCII ` -> ` arrow. The same carrying message must record the
-dispatch run ids the re-derivation was measured on: GitHub
-`https://github.com/<owner>/<repo>/actions/runs/<digits>` URLs or standalone,
-whitespace-delimited all-digit tokens of at least eight digits, on a
-non-declaration line. PR-body declarations do not count: editing the body
-does not re-run the speed job; changing a commit message produces a new SHA
-that does. The job checks the lines against the documents before passing
-`--ratchet-allow-raise` slots to the comparator; missing, contradictory,
-duplicate and leftover declarations are refused. Keep measured provenance
-(n ≥ 2 envelopes and dispatch run ids in `basis`) in the baseline too.
-
-A raise mixed with code or tests is refused. Land the code PR first (red on
-speed if the suite outgrew its envelope), then follow the baseline's HOW TO
-RE-DERIVE using dispatch runs on that head and open the baseline-only raise
-carrier. **Merge the carrier with rebase** so its declaration-bearing commit
-message survives; a squash that drops the lines loses the raise declaration.
-The ratchet judges PRs and main's landed push window, so a squash that drops
-the declaration lines goes red on main's push run. Rebase is the deterministic
-route.
-Renderer ceilings remain strictly down-only; their raises cannot be
-declared. Population digest moves ride with the tests that cause them;
-with no ceiling raised, that mixed diff stays green. Non-raising baseline
-edits may ride with code changes, including digest re-derivation or lowering
-a recorded maximum, which is always allowed. Only a raise demands the pure
-carrier.
+only ever ratchets down. A unit-suite maximum may rise only when the judged
+range contains a commit subject starting `feat:` or `feat(scope):`
+(case-sensitive, read from each message's first line). On a PR the range is
+the merge checkout's first parent..HEAD; on a main push it is
+`BEFORE_SHA`..HEAD, so a squash merge keeps the raise only when its title
+starts `feat:`. Shallow or unreadable history refuses: the step fails closed.
+Any other unit-suite raise is refused with the remedy: a non-feature change
+trims its own tests until the suite fits its envelope. Renderer ceilings
+remain strictly down-only, feature or not. Seeding an absent slope-declared
+entry stays allowed without a feature, population digest moves ride with the
+tests that cause them, and lowering a recorded maximum is always allowed.
+Keep measured provenance (n ≥ 2 envelopes and dispatch run ids in `basis`) in
+the baseline for any raise.
 
 CPU seconds rather than a deterministic instruction
 or syscall count, because neither survives measurement on the cell that reads
@@ -241,9 +220,9 @@ Adding or removing a source module moves the measured population. The `files`
 tripwire then fails until a person re-derives `gate/coverage-floor.json` for the
 new population, including its file count and basis. Both `gate` and `raise`
 refuse a measurement whose file count differs from the committed record, so the
-automatic push cannot hide that change. The declared unit-suite raise route
-above also stays human-reviewed: it moves speed maxima UP and must never be
-automated.
+automatic push cannot hide that change. The feature-gated unit-suite raise
+above also stays human-reviewed: a person writes the raised envelope into a
+`feat:` change, and it must never be automated.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
@@ -251,7 +230,7 @@ only ever run against files touched after it shipped), `speed` (counts the
 work this commit does in CPU seconds — per renderer workload and for the
 unit suite, on pinned offline fixtures — and fails when a committed
 baseline is exceeded, with renderer ceilings strictly down-only and
-unit-suite raises requiring the pure-carrier declarations above; with no
+unit-suite raises requiring a `feat:` subject in the judged range; with no
 baseline committed it reports what
 it measured and exits 0, because no data is not a regression; elapsed time
 survives only as a gross smoke check that reports no number), `release`
@@ -265,7 +244,7 @@ measurement workflows that were already here.
 
 A successful main `tests` run also stages any entry or wall maximum that its
 measured value strictly beats, and `ratchet-push.yml` validates and commits
-that data. The declared unit-suite raise path above remains the only route that
+that data. The feature-gated unit-suite raise above remains the only route that
 moves speed maxima UP.
 
 All three staging steps skip a landed window that changed only

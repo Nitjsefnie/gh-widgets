@@ -315,30 +315,13 @@ def raised_entries(old: dict, new: dict,
     ratchet commit landing after an instrument reset; every other
     absent-entry addition keeps its original raise.
 
-    A RAISE is allowed when it is DECLARED, by the same trade the removal
-    path above introduced, and for the same reason: the documented
-    re-derivation route ("HOW TO RE-DERIVE" in the committed document) has
-    no other green path. A suite grows by design, so its recorded envelope
-    eventually no longer describes the program it gates, and every
-    observation then lands above a ceiling the re-derivation procedure is
-    supposed to replace. A declared raise is checked against the documents
-    rather than trusted: a slot declared raised that has NOT gone up is a
-    stale declaration and is refused, which is what stops a declaration from
-    being pasted over a diff it does not describe. Declaring does not
-    testify that the new numbers were measured — no code path can — which
-    is why the envelope validator refuses n below 2 ("re-measure, do not
-    widen the number by hand") and the re-derived figures carry their
-    dispatch run ids in the document's `basis`, where review reads them.
-    The workflow reads exact Budget-Raise lines from carrying commit
-    messages, requires measuring dispatch run ids in those messages, and
-    permits unit-suite raises only when the PR touches gate/speed-baseline.json
-    alone. It checks each line's from/to against the documents before
-    passing slot names here; renderer ceilings stay strictly down-only.
-    A declaration that names no slot either document has — a typo — is
-    refused too, once the documents
-    have been walked: it is checked against what exists, not silently
-    ignored, which is what keeps the checked-against-the-documents promise
-    true for every declaration and not only for the ones that resolve.
+    A RAISE is permitted only for a slot the caller names in
+    `allowed_raises`. The workflow derives unit-suite slots only when the
+    judged base..head window carries a commit subject starting `feat:` or
+    `feat(scope):`, and never names a renderer slot, so renderer ceilings
+    stay strictly down-only. A named slot is checked against the documents
+    rather than trusted: one that has NOT gone up, or names no slot either
+    document has, is refused.
     """
     _refuse_contradictory_declarations(allowed_removals, allowed_raises)
     moved = {}
