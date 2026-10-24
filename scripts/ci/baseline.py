@@ -252,6 +252,27 @@ def _refuse_contradictory_declarations(allowed, raises):
             + " — that asks for two opposite verdicts at once; pick one")
 
 
+def _is_seed_addition(old: dict, name: str, key: str, node: str,
+                      after: dict, now) -> bool:
+    """Whether `node`'s absence from `old` is the seeding path, not a raise.
+
+    Three properties, all read from the documents: the base population
+    declares the node's slope (the authorisation that the entry's record
+    was redefined, not lost), the map is `entries` (wall never seeds), and
+    the candidate envelope is seed-shaped — the observed value as both
+    bounds, from at least the minimum sample count. Anything else about an
+    entry the base never recorded stays exactly the raise it was.
+    """
+    if now is None or key != "entries" or now < 0 or not math.isfinite(now):
+        return False
+    declared = node in old.get("populations", {}).get(name, {}).get(
+        "slopes", {})
+    shape = (after[node]["min"] == now
+             and isinstance(after[node]["n"], int)
+             and after[node]["n"] >= MIN_ENVELOPE_SAMPLES)
+    return declared and shape
+
+
 def raised_entries(old: dict, new: dict,
                    allowed_removals=frozenset(),
                    allowed_raises=frozenset()) -> dict:
@@ -286,6 +307,13 @@ def raised_entries(old: dict, new: dict,
 
     Lowering a recorded maximum, or raising a minimum alone, is an improvement
     and stays allowed: the ceiling is the maximum.
+
+    An entry the base never recorded is a raise too — unless it is the
+    seeding path (issue #240): the base population declares the node's
+    calibration slope, the map is `entries`, and the candidate is
+    seed-shaped (`_is_seed_addition`). That addition is the automated
+    ratchet commit landing after an instrument reset; every other
+    absent-entry addition keeps its original raise.
 
     A RAISE is allowed when it is DECLARED, by the same trade the removal
     path above introduced, and for the same reason: the documented
@@ -339,10 +367,8 @@ def raised_entries(old: dict, new: dict,
                 if now is None:
                     moved[slot] = (was, None)
                     continue
-                if (was is None and key == "entries"
-                        and node in old.get("populations", {}).get(name, {}).get("slopes", {})
-                        and after[node]["min"] == now and math.isfinite(now) and now >= 0
-                        and isinstance(after[node]["n"], int) and after[node]["n"] >= 2):
+                if (was is None and _is_seed_addition(old, name, key, node,
+                                                      after, now)):
                     continue
                 if was is None or now > was:
                     if slot in allowed_raises:

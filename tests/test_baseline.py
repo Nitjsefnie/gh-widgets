@@ -321,6 +321,54 @@ class TestRatchet(unittest.TestCase):
         moved = baseline.raised_entries(old, new)
         self.assertEqual(len(moved), 1)
 
+    def test_a_slope_backed_seed_addition_is_not_a_raise(self):
+        """The post-merge seed commit must pass the down-only ratchet.
+
+        Issue #240: after the instrument reset main records no entries, and
+        the first passing default-branch measurement seeds them through the
+        automated ratchet commit. That addition is lawful only while the
+        base document declares the node's slope and the candidate is
+        seed-shaped; both are read from the documents.
+        """
+        old = self.population(0.09)
+        old["populations"]["renderer-workloads"]["slopes"] = {
+            "e2e::bench.render": 0.5}
+        del old["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"]
+        new = self.population(0.09)
+        new["populations"]["renderer-workloads"]["slopes"] = {
+            "e2e::bench.render": 0.5}
+        new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"] = {"min": 0.12, "max": 0.12, "n": 2}
+        self.assertEqual(baseline.raised_entries(old, new), {})
+
+    def test_a_seed_addition_needs_a_declared_slope(self):
+        """Without the base slope the same addition is the raise it is."""
+        old = self.population(0.09)
+        del old["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"]
+        new = self.population(0.09)
+        new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"] = {"min": 0.12, "max": 0.12, "n": 2}
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(
+            moved,
+            {"renderer-workloads:entries:e2e::bench.render": (None, 0.12)})
+
+    def test_a_seed_shaped_wall_addition_stays_a_raise(self):
+        """Wall never seeds, in the ratchet as in the writer."""
+        old = self.population(0.09)
+        new = self.population(0.09)
+        for side in (old, new):
+            side["populations"]["renderer-workloads"]["slopes"] = {
+                "e2e::bench.render": 0.5}
+        new["populations"]["renderer-workloads"]["wall"][
+            "e2e::bench.render"] = {"min": 0.09, "max": 0.09, "n": 2}
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(
+            moved,
+            {"renderer-workloads:wall:e2e::bench.render": (None, 0.09)})
+
 
 class TestDeclaredRaises(unittest.TestCase):
     """A raise is allowed only when declared, and the declaration is checked.
