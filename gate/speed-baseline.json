@@ -8,7 +8,7 @@
     "unit-suite": {
       "metric": "cpu_time_ratio",
       "tolerance": 0.45,
-      "population": "9c8ef7e07662873171a9c96d1ceb77f74e7d821266cead74e5b4575523446bd2",
+      "population": "de5ae488007e95a4755d73edc542cac03829f98e973aaf50cdfc357b3abcf6ae",
       "entries": {
         "counter::unit-suite": {
           "min": 22.035402332184688,
