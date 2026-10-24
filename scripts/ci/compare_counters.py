@@ -18,19 +18,7 @@ time survives only as a gross smoke check reported as a verdict with no
 number attached. That ruling is also why there is no base checkout any more:
 the committed baseline IS the comparison point.
 
-WHY ONE TOLERANCE PER POPULATION, NOT ONE PER DOCUMENT. Both populations
-are measured in CPU seconds, but their budgets are derived from their own
-measured spreads, and one number for both is a number chosen for whichever
-instrument is not in use. The committed figures are in the baseline's
-`basis` and the rule is in the speed job's header in tests.yml: the tolerance
-is the
-population's own observed spread, because the gate compares a per-run MINIMUM
-against a recorded MAXIMUM, so the machine's whole observed range is conceded
-for free and the tolerance only has to cover a head landing on a machine worse
-than any seen. That is a rule, not a constant — 0.40 and 0.50 today — and
-the two populations' spreads are of the same order (39.8% against 49.0%), so
-the per-population split is about which contract a run is held to, not about
-the tolerances being far apart.
+Each population declares its own tolerance in the baseline's basis.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of
@@ -548,7 +536,8 @@ def render(result: dict, threshold: float, base_label: str) -> str:
     if result.get("head_only"):
         lines.append(
             f"- {len(result['head_only'])} entry/entries in this report the "
-            "baseline does not record, excluded from the comparison")
+            "baseline does not record, excluded from the comparison; "
+            "main's ratchet will seed them on merge")
     if result.get("base_only"):
         lines.append(
             f"- {len(result['base_only'])} baseline entry/entries not in "
@@ -900,7 +889,12 @@ def _compare(args) -> int:
     tolerance = (args.tolerance if args.tolerance is not None
                  else (recorded["tolerance"] if recorded is not None
                        else args.max_regression))
-    result = compare(base_folded, head_folded)
+    if recorded is not None and not base_folded:
+        # Declared blind window: main's ratchet seeds the slope-backed entries.
+        result = {"shared": 0, "base_only": [], "head_only": sorted(head_folded),
+                  "base_total": 0, "head_total": 0, "ratio": 1, "per_test": []}
+    else:
+        result = compare(base_folded, head_folded)
     result["metric"] = (recorded["metric"] if recorded is not None
                         else (head_metric or "counter"))
     result["tolerance"] = tolerance

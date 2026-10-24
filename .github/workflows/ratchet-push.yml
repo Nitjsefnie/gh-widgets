@@ -329,17 +329,45 @@ jobs:
               for population_name, old_pop in old_pops.items():
                   new_pop = new_pops[population_name]
                   if type(old_pop) is not dict or type(new_pop) is not dict \
-                          or set(old_pop) != population_keys \
-                          or set(new_pop) != population_keys:
+                          or not population_keys <= set(old_pop) \
+                          or not population_keys <= set(new_pop) \
+                          or set(old_pop) - population_keys - {"slopes"} \
+                          or set(new_pop) - population_keys - {"slopes"}:
                       refuse(f"{population_name} has an unexpected shape")
+                  for pop in (old_pop, new_pop):
+                      if "slopes" in pop:
+                          slopes = pop["slopes"]
+                          if type(slopes) is not dict or not slopes \
+                                  or any(not isinstance(node, str) or not node
+                                         or not number(value) or value <= 0
+                                         for node, value in slopes.items()):
+                              refuse(f"{population_name} has invalid slopes")
+                          if type(pop["entries"]) is not dict \
+                                  or not set(pop["entries"]) <= set(slopes):
+                              refuse(f"{population_name} has entries without slopes")
+                  if not same(new_pop.get("slopes"), old_pop.get("slopes")):
+                      refuse(f"{population_name} changed slopes")
                   for key in ("metric", "tolerance", "population"):
                       if not same(new_pop[key], old_pop[key]):
                           refuse(f"{population_name} changed {key}")
                   for map_name in ("entries", "wall"):
                       old_map, new_map = old_pop[map_name], new_pop[map_name]
                       if type(old_map) is not dict or type(new_map) is not dict \
-                              or set(old_map) != set(new_map):
+                              or not set(old_map) <= set(new_map):
                           refuse(f"{population_name}.{map_name} changed its entries")
+                      for entry_name in set(new_map) - set(old_map):
+                          if map_name != "entries" \
+                                  or entry_name not in old_pop.get("slopes", {}):
+                              refuse(f"{population_name}.{map_name} changed its entries")
+                          seed = new_map[entry_name]
+                          if type(seed) is not dict or set(seed) != envelope_keys:
+                              refuse(f"{entry_name} has an invalid envelope")
+                          if not number(seed["min"]) or not number(seed["max"]) \
+                                  or seed["min"] != seed["max"]:
+                              refuse(f"{entry_name} is not a seed-shaped range")
+                          if type(seed["n"]) is not int or seed["n"] < 2:
+                              refuse(f"{entry_name}.n is not a valid sample count")
+                          lowered = True
                       for entry_name, old_entry in old_map.items():
                           new_entry = new_map[entry_name]
                           if type(old_entry) is not dict \
