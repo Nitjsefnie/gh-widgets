@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -319,6 +320,116 @@ class Acquisition(unittest.TestCase):
                     mock.patch.object(popularity, 'outsider_commits', return_value=0):
                 with self.assertRaisesRegex(RuntimeError, f'Owner/Repo.*{endpoint}'):
                     popularity.fetch_scores('t')
+
+
+class Overlap(unittest.TestCase):
+    """Per-repository git and traffic work overlaps inside one run."""
+
+    def test_two_repositories_acquire_concurrently(self):
+        """A barrier pairs one repository's traffic read with another's."""
+        fixtures = {
+            '/user': response(USER),
+            '/user/orgs?per_page=100': response([]),
+            '/user/repos?affiliation=owner&per_page=100': response(
+                [repo('Owner/A'), repo('Owner/B')]),
+        }
+        barrier = threading.Barrier(2, timeout=10)
+        traffic = []
+        lock = threading.Lock()
+
+        def fetch(request, **_kwargs):
+            url = request.full_url.removeprefix('https://api.github.com')
+            if url not in fixtures:
+                with lock:
+                    traffic.append(url)
+                barrier.wait()
+                return response({'count': 9999, 'uniques': 5})
+            return fixtures[url]
+
+        with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=fetch), \
+                mock.patch.object(popularity, 'outsider_commits', return_value=4):
+            _, scores = popularity.fetch_scores('t')
+        self.assertEqual(scores, [('Owner/A', 255, 2, 3, 5), ('Owner/B', 255, 2, 3, 5)])
+        self.assertEqual(sorted(traffic), [
+            '/repos/Owner/A/traffic/clones', '/repos/Owner/A/traffic/views',
+            '/repos/Owner/B/traffic/clones', '/repos/Owner/B/traffic/views'])
+
+    def test_one_clone_and_two_traffic_reads_per_repository(self):
+        """Nonempty repositories still cost one clone and two traffic reads."""
+        fixtures = {
+            '/user': response(USER),
+            '/user/orgs?per_page=100': response([]),
+            '/user/repos?affiliation=owner&per_page=100': response(
+                [repo('Owner/A'), repo('Owner/B'), repo('Owner/C')]),
+        }
+        traffic, clones = [], []
+        lock = threading.Lock()
+
+        def fetch(request, **_kwargs):
+            url = request.full_url.removeprefix('https://api.github.com')
+            if url not in fixtures:
+                with lock:
+                    traffic.append(url)
+                return response({'count': 9999, 'uniques': 5})
+            return fixtures[url]
+
+        def git(command, **_kwargs):
+            if command[1] == 'clone':
+                with lock:
+                    clones.append(command[-1])
+                return subprocess.CompletedProcess(command, 0, '', '')
+            if command[3] == 'show-ref':
+                return subprocess.CompletedProcess(command, 0, b'refs', b'')
+            return subprocess.CompletedProcess(command, 0, b'Real\x1freal@example.org\0', b'')
+
+        recorder = popularity.common.TimingRecorder()
+        with mock.patch.object(popularity.common, 'DEBUG_TIMING', True), \
+                mock.patch.object(popularity.common, 'timing', recorder), \
+                mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=fetch), \
+                mock.patch.object(popularity.subprocess, 'run', side_effect=git):
+            _, scores = popularity.fetch_scores('t')
+        self.assertEqual(scores, [('Owner/A', 240, 2, 3, 5), ('Owner/B', 240, 2, 3, 5),
+                                  ('Owner/C', 240, 2, 3, 5)])
+        self.assertEqual(len(clones), 3)
+        self.assertEqual(len(traffic), 6)
+        self.assertEqual(recorder.totals[('process', 'git')][0], 9)
+
+    def test_failed_traffic_leaves_no_temporary_clones(self):
+        """A sibling still cloning on failure cleans its own temporary clone."""
+        fixtures = {
+            '/user': response(USER),
+            '/user/orgs?per_page=100': response([]),
+            '/user/repos?affiliation=owner&per_page=100': response(
+                [repo('Owner/A'), repo('Owner/B')]),
+        }
+        denied = urllib.error.HTTPError('url', 403, 'denied', Message(), None)
+        parents = []
+        lock = threading.Lock()
+
+        def fetch(request, **_kwargs):
+            url = request.full_url.removeprefix('https://api.github.com')
+            if url not in fixtures:
+                if url == '/repos/Owner/A/traffic/clones':
+                    raise denied
+                return response({'count': 9999, 'uniques': 5})
+            return fixtures[url]
+
+        def git(command, **_kwargs):
+            if command[1] == 'clone':
+                with lock:
+                    parents.append(Path(command[-1]).parent)
+                return subprocess.CompletedProcess(command, 0, '', '')
+            if command[3] == 'show-ref':
+                return subprocess.CompletedProcess(command, 0, b'refs', b'')
+            return subprocess.CompletedProcess(command, 0, b'Real\x1freal@example.org\0', b'')
+
+        with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=fetch), \
+                mock.patch.object(popularity.subprocess, 'run', side_effect=git):
+            with self.assertRaisesRegex(RuntimeError, 'Owner/A.*traffic/clones'):
+                popularity.fetch_scores('t')
+        self.assertEqual(len(parents), 1)
+        self.assertTrue(all(not parent.exists() for parent in parents))
+        self.assertEqual(list(Path(tempfile.gettempdir()).glob('ghwidgets-popularity-*')), [])
 
 
 class CardAndCLI(unittest.TestCase):

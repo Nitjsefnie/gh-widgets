@@ -61,6 +61,12 @@ class DeferredClones:
             if not future.cancelled():
                 future.run()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.shutdown(wait=True)
+
 
 class RunTiming(unittest.TestCase):
     """Counts and exclusive phases must survive retries and overlapping work."""
@@ -369,6 +375,73 @@ class RendererTiming(unittest.TestCase):
             self.assertEqual(recorder.totals[('rest', '/repos/{owner}/{repo}/traffic/views')][0], 2)
             self.assertEqual(recorder.totals[('retry-sleep', '')][0], 1)
             self.assertEqual(recorder.totals[('process', 'git')][0], 4)
+
+    def test_popularity_workers_reattribute_into_git_and_traffic_rows(self):
+        """The coordinator's wait lands in the git and traffic rows it covered."""
+        module = test_popularity.popularity
+        # The fake clock starts at zero for this one renderer-level test.
+        self.clock = 0.0  # pylint: disable=attribute-defined-outside-init
+        pages = {
+            '/user': test_popularity.response(test_popularity.USER),
+            '/user/orgs?per_page=100': test_popularity.response([]),
+            '/user/repos?affiliation=owner&per_page=100': test_popularity.response(
+                [test_popularity.repo('Owner/A'), test_popularity.repo('Owner/B')]),
+        }
+        gates = {'Owner/A': threading.Event(), 'Owner/B': threading.Event()}
+        gates['Owner/A'].set()
+        cloned = {}
+
+        def fetch(request, **_kwargs):
+            path = request.full_url.removeprefix('https://api.github.com')
+            if path in pages:
+                self.clock += 1
+                return pages[path]
+            gate = gates['/'.join(path.split('/')[2:4])]
+            self.assertTrue(gate.wait(10))
+            self.clock += 1
+            return test_popularity.response({'count': 9999, 'uniques': 5})
+
+        def git(command, **_kwargs):
+            if command[1] == 'clone':
+                which = 'Owner/' + Path(command[-2]).stem
+                cloned[command[-1]] = which
+            else:
+                which = cloned[command[2]]
+            self.assertTrue(gates[which].wait(10))
+            self.clock += 1
+            if command[3] == 'log':
+                if which == 'Owner/A':
+                    gates['Owner/B'].set()
+                return subprocess.CompletedProcess(
+                    command, 0, b'Real\x1freal@example.org\0', b'')
+            return subprocess.CompletedProcess(command, 0, b'refs', b'')
+
+        with tempfile.TemporaryDirectory() as directory:
+            argv = ['render-popularity.py', '--token', 't', '--out-dir', directory]
+            pool = DeferredClones()
+            with mock.patch.object(module.common, 'DEBUG_TIMING', True), \
+                    mock.patch.object(module.common.time, 'monotonic',
+                                      lambda: self.clock), \
+                    mock.patch.object(module.futures, 'ThreadPoolExecutor',
+                                      return_value=pool), \
+                    mock.patch.object(module.urllib.request, 'urlopen', side_effect=fetch), \
+                    mock.patch.object(module.subprocess, 'run', side_effect=git), \
+                    mock.patch.object(sys, 'argv', argv), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                module.main()
+            recorder = module.common.timing
+            self.assertEqual(recorder.totals[('rest', '/user')], [1, 1.0, 0.0])
+            self.assertEqual(recorder.totals[('rest', '/user/orgs')], [1, 1.0, 0.0])
+            self.assertEqual(recorder.totals[('rest', '/user/repos')], [1, 1.0, 0.0])
+            self.assertEqual(
+                recorder.totals[('rest', '/repos/{owner}/{repo}/traffic/clones')],
+                [2, 2.0, 0.0])
+            self.assertEqual(
+                recorder.totals[('rest', '/repos/{owner}/{repo}/traffic/views')],
+                [2, 2.0, 0.0])
+            self.assertEqual(recorder.totals[('process', 'git')], [6, 6.0, 0.0])
+            self.assertEqual(recorder.totals[('phase', 'fetch_scores')], [1, 0.0, 0.0])
+            self.assertEqual(recorder.named, self.clock)
 
     def test_impact_bounded_clone_and_fame_probe_processes_are_counted(self):
         """The bounded runner and clone launcher each own a real child."""
