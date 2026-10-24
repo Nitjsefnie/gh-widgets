@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """Fit raw CPU on calibration from speed-job logs (issue #240).
 
-Unit rounds use their own calibration. Renderer rounds use the SAME JOB's
-unit-step calibration for that round: pre-#242 renderer calibrators inherited
-the sitecustomize PYTHONPATH and are contaminated. Post-merge re-derivations
-may use the renderer step's own reading after establishing a clean population.
-
-The initial derivation uses jobs 120557535854, 120635046392, 120646492798,
-120692739181, 120719364637, 120722730198 and 120751224414, from runs
-39995389023, 40018012732, 40021280822, 40035159380, 40042973260 (attempts
-1 and 2), and 40053452461. Pass each job with --job; --from-file reads one
-saved log offline. A file without a numeric job id is labelled file:<name>.
-Nothing is written by this script.
-
+Unit rounds use their own calibration; renderer rounds use the SAME JOB's
+unit-step calibration, because pre-#242 renderer calibrators inherited the
+sitecustomize PYTHONPATH and are contaminated. Post-merge re-derivations may
+use the renderer step's own reading after a clean population exists.
+`--job <id>` (repeatable) fetches via `gh api`; `--from-file <log>` reads one
+saved log offline, labelled file:<name> without a numeric job id. A single
+job's two rounds are noise-dominated and can fit a negative slope, which is
+refused; pool jobs instead. Nothing is written by this script.
 Job-log API: https://docs.github.com/en/rest/actions/workflow-jobs
 """
 import argparse

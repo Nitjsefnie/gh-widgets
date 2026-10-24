@@ -66,9 +66,8 @@ class TestTheWorkflowText(unittest.TestCase):
         Issue #240 removes the four redefined ratio envelopes while the same
         document declares each node's calibration slope; without the
         derivation, the down-only ratchet refuses the very commit that
-        re-derives it, and after the seeds land the same loop must stay
-        silent for entries main still records. Both conditions live in the
-        step text and nowhere else.
+        re-derives it, and once main records the seeds the loop must stay
+        silent again. Both conditions live in the step text alone.
         """
         block = self._run_block("The committed baseline only ratchets down")
         self.assertIn("# SLOPE-DECLARED REMOVALS", block)
