@@ -4,12 +4,12 @@
 This operation lowers existing maxima in ``entries`` and ``wall`` and seeds
 absent counter entries declared by the population's slopes: the folded head
 value as both bounds, n = the head report count, wall never seeds. The CLI
-is context-free: only the staging step's existing successful default-branch
-push condition admits this artifact to the push path. It reuses
-``compare_counters``' report reader, round folding and population digest
-check, so the new maxima are the same head values the speed gate compared.
-Every other recorded field is carried unchanged, and a candidate is
-validated by ``baseline.read_baseline`` before anything is written.
+is context-free: only the staging step's existing default-branch push
+condition admits this artifact to the push path. It reuses
+``compare_counters``' readers so the new maxima are the same head values the
+speed gate compared; every other recorded field is carried unchanged, and a
+candidate is validated by ``baseline.read_baseline`` before anything is
+written.
 
 There is deliberately no hysteresis. CPU time is noisy, and any positive
 hysteresis below the pool's observed spread either dead-letters the tighten
