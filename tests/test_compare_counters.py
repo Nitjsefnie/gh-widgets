@@ -68,10 +68,14 @@ def write_junit(path: Path, cases: dict, not_passed: dict | None = None) -> Path
 
 
 class TestComparator(unittest.TestCase):
+    UNIT_NODE = "counter::unit-suite"
+
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.baseline_path = self.tmp_path / "baseline.json"
+        self.summary_path = self.tmp_path / "summary.md"
 
     def test_node_id_joins_class_and_name(self):
         report = write_junit(self.tmp_path / "r.xml", {"tests.test_a::test_one": 1.0})
@@ -101,54 +105,52 @@ class TestComparator(unittest.TestCase):
         # The minimum estimates the floor; the mean would track the noise.
         self.assertEqual(cd.fold_rounds([str(a), str(b)]), {"m::t": 1.00})
 
-        node = "counter::unit-suite"
         payload = document()
         population = payload["populations"]["unit-suite"]
         population["metric"] = "cpu_time_ratio"
-        baseline = self.tmp_path / "baseline.json"
-        summary = self.tmp_path / "summary.md"
         for parts, maximum, expected, status in (
                 (((36, 10), (12, 1)), 7, 10, 1),
                 (((36, 10), (3, 1)), 2, 1, 0)):
             for path, (raw, calibration) in zip((a, b), parts):
-                cd.counter.write_junit(path, node,
+                cd.counter.write_junit(path, self.UNIT_NODE,
                                        cd.counter.CalibratedMeasurement(
                                            raw / calibration, "cpu_time_ratio",
                                            4, "", "", 0, raw, calibration))
             population["entries"] = {
-                node: {"min": 1, "max": maximum, "n": 2}}
-            for slopes, expected_status, head in (
-                    ({node: 2}, status, expected),
-                    (None, 1 - status, min(raw / calibration
-                                          for raw, calibration in parts))):
+                self.UNIT_NODE: {"min": 1, "max": maximum, "n": 2}}
+            for slopes, head in (
+                    ({self.UNIT_NODE: 2}, expected),
+                    (None, min(raw / calibration
+                               for raw, calibration in parts))):
                 with self.subTest(parts=parts, slopes=slopes):
                     population.pop("slopes", None)
                     if slopes is not None:
                         population["slopes"] = slopes
-                    baseline.write_text(json.dumps(payload), encoding="utf-8")
+                    self.baseline_path.write_text(json.dumps(payload),
+                                                  encoding="utf-8")
                     output = io.StringIO()
                     with contextlib.redirect_stdout(output), \
                             contextlib.redirect_stderr(io.StringIO()):
-                        actual = cd.main([
-                            "--baseline", str(baseline), "--population",
+                        self.assertEqual(cd.main([
+                            "--baseline", str(self.baseline_path), "--population",
                             "unit-suite", "--head", str(a), str(b),
-                            "--summary-file", str(summary)])
-                    self.assertEqual(actual, expected_status, output.getvalue())
+                            "--summary-file", str(self.summary_path)]),
+                            status if slopes else 1 - status, output.getvalue())
                     self.assertIn(f"- This commit: **{head:g}**",
                                   output.getvalue())
                     if slopes:
                         self.assertIn("net of the calibration slope",
                                       output.getvalue())
-                    self.assertTrue(summary.read_text(encoding="utf-8")
+                    self.assertTrue(self.summary_path.read_text(encoding="utf-8")
                                     .endswith(output.getvalue().rstrip() + "\n"))
         payload["schema"] = 3
-        baseline.write_text(json.dumps(payload), encoding="utf-8")
-        errors = io.StringIO()
-        with contextlib.redirect_stderr(errors):
+        self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
             self.assertEqual(cd.main([
-                "--baseline", str(baseline), "--population", "unit-suite",
+                "--baseline", str(self.baseline_path), "--population", "unit-suite",
                 "--head", str(a), str(b)]), 2)
-        self.assertIn("reads schema 4", errors.getvalue())
+        self.assertIn("reads schema 4", output.getvalue())
 
     def test_a_test_missing_from_one_round_is_dropped(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
@@ -333,17 +335,16 @@ class TestComparator(unittest.TestCase):
         finally:
             sys.argv = argv
 
-        node = "counter::unit-suite"
         payload = document()
         population = payload["populations"]["unit-suite"]
-        population["slopes"] = {node: 2.0}
+        population["slopes"] = {self.UNIT_NODE: 2.0}
         baseline = self.tmp_path / "baseline.json"
         baseline.write_text(json.dumps(payload), encoding="utf-8")
         for attribute in ("gh-raw-cpu", "gh-calibration-cpu"):
             for path in (base, other):
                 with self.subTest(attribute=attribute, report=path.name):
                     for report in (base, other):
-                        cd.counter.write_junit(report, node,
+                        cd.counter.write_junit(report, self.UNIT_NODE,
                                                cd.counter.CalibratedMeasurement(
                                                    4, "cpu_time", 1, "", "", 0,
                                                    8, 2))
@@ -354,14 +355,14 @@ class TestComparator(unittest.TestCase):
                     tree.write(path)
                     with self.assertRaises(cd.ComparisonError) as caught:
                         cd.scan_junit(path, population["slopes"])
-                    for fragment in (node, str(path), attribute):
+                    for fragment in (self.UNIT_NODE, str(path), attribute):
                         self.assertIn(fragment, str(caught.exception))
                     errors = io.StringIO()
                     with contextlib.redirect_stderr(errors):
                         self.assertEqual(cd.main([
                             "--baseline", str(baseline), "--population",
                             "unit-suite", "--head", str(base), str(other)]), 2)
-                    self.assertIn(node, errors.getvalue())
+                    self.assertIn(self.UNIT_NODE, errors.getvalue())
                     self.assertIn(str(path), errors.getvalue())
 
 

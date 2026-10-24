@@ -1,20 +1,4 @@
-"""The down-only ratchet: what it must refuse, and what it must let through.
-
-    python3 -m unittest discover -v
-
-The ratchet governs the committed baseline document itself rather than a run
-of it, so a mistake in it either lets the ceiling be raised in the same push
-that is measured against it, or blocks the legitimate work of retiring a
-workload.
-
-Every case here builds two documents and asks the real comparator, or runs
-the real step's own derivation fragment sliced out of the `speed` job in
-`tests.yml`. The
-fragment is sliced rather than reimplemented because a reimplementation is
-exactly what let a prefix bug survive two review rounds: `e2e::bench.render`
-is a prefix of the other two ids, and a reimplementation that tested the
-wrong thing would have gone on passing.
-"""
+"""Ratchet refusals, retirements and tightening through real tools and steps."""
 import contextlib
 import hashlib
 import importlib.util
