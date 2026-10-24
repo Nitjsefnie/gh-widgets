@@ -253,6 +253,29 @@ class RunTiming(unittest.TestCase):
         self.recorder.reattribute_wait(samples, 0, self.clock)
         self.assertEqual(self.recorder.named, self.clock)
 
+    def test_worker_rest_and_process_intervals_reattribute_to_their_rows(self):
+        """A pool worker's REST and process intervals move into their own rows."""
+        samples = []
+
+        def work():
+            with self.recorder.collect_processes(samples):
+                with self.recorder.track('rest', '/repos/o/r/traffic/views'):
+                    self.clock = 1
+                with self.recorder.track('process', 'git'):
+                    self.clock = 3
+
+        with self.recorder.track('phase', 'fetch'):
+            worker = threading.Thread(target=work)
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.recorder.reattribute_wait(samples, 0, self.clock)
+        self.assertEqual(self.recorder.totals[('rest', '/repos/o/r/traffic/views')],
+                         [1, 1.0, 0.0])
+        self.assertEqual(self.recorder.totals[('process', 'git')], [1, 2.0, 0.0])
+        self.assertEqual(self.recorder.totals[('phase', 'fetch')], [1, 0.0, 0.0])
+        self.assertEqual(self.recorder.named, self.clock)
+
 
 class RendererTiming(unittest.TestCase):
     """Exercise main() and real I/O seams rather than just the accumulator."""
