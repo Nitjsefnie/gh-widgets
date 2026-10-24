@@ -568,10 +568,18 @@ class TestCalibratedInstrument(unittest.TestCase):
 
     @REQUIRES_BENCH
     def test_the_ratio_is_suite_cpu_over_calibration_cpu(self):
+        env = dict(os.environ, PYTHONPATH="subject-only")
         measured = counter.measure_calibrated(
-            [sys.executable, "-c", "sum(range(200000))"],
-            calibration_command=self.CHEAP_CALIBRATION)
+            [sys.executable, "-c",
+             "import os; print(os.environ['PYTHONPATH'])"], env=env,
+            calibration_command=[sys.executable, "-c",
+                                 "import os\n"
+                                 "if 'PYTHONPATH' in os.environ:\n"
+                                 "    raise SystemExit(3)\n"
+                                 "print(24576)"])
 
+        self.assertEqual(measured.stdout.strip(), "subject-only")
+        self.assertEqual(env["PYTHONPATH"], "subject-only")
         self.assertEqual(measured.metric, counter.CALIBRATED_METRIC)
         self.assertGreater(measured.value, 0.0)
         self.assertAlmostEqual(
@@ -738,6 +746,17 @@ class TestWriteJunit(unittest.TestCase):
         # The wall seconds are carried separately, for the smoke gate alone.
         self.assertEqual(number(case, "gh-wall"), 0.5)
         self.assertIsNone(case.find("failure"))
+
+        calibrated = counter.CalibratedMeasurement(
+            4.0, counter.CALIBRATED_METRIC, 0.5, "out", "err", 0,
+            8.1234567, 2.0308642)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "calibrated.xml"
+            counter.write_junit(path, "counter::unit-suite", calibrated)
+            case = ET.parse(path).getroot().find("testcase")
+        assert case is not None
+        self.assertEqual(case.get("gh-raw-cpu"), "8.123457")
+        self.assertEqual(case.get("gh-calibration-cpu"), "2.030864")
 
     def test_a_failing_command_is_a_junit_failure(self):
         # Which is what drops it out of the comparator's intersection: a

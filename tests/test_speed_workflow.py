@@ -273,7 +273,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         unit_walls = ({self.UNIT_NODE: envelope(5.0)}
                       if unit_wall is None else unit_wall)
         document = {
-            "schema": 3,
+            "schema": 4,
             "basis": "fixture baseline for the workflow tests",
             "cell": "ubuntu-latest / 3.13",
             "measured_commit": "0" * 40,
@@ -1178,7 +1178,7 @@ class CarrierFixture:
             source = REPO_ROOT / "scripts" / "ci" / name
             shutil.copyfile(source, scripts / name)
         self.old = {
-            "schema": 3, "basis": "fixture envelope", "cell": "fixture",
+            "schema": 4, "basis": "fixture envelope", "cell": "fixture",
             "measured_commit": "0" * 40, "measured_at": "2026-10-04",
             "populations": {"unit-suite": {
                 "metric": "cpu_time", "tolerance": 0.4,

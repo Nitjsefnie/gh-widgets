@@ -466,10 +466,17 @@ def _checked_calibration(calib_command, calib_timeout, env) -> float:
     is a CounterError, never a division: a broken calibration turned into a
     plausible ratio is precisely the lie this instrument exists to prevent.
     Returns the calibration's CPU seconds.
+
+    The workload prices the machine, not the subject's PYTHONPATH (#240).
+    e2e_bench's renderer env carries the sitecustomize shim path; each of
+    25 nested interpreter starts imported it (+59 ms/start measured, whole
+    calibrator +85% locally and +0.9–1.3 CPU s hosted).
     """
+    calibration_env = child_environment(env)
+    calibration_env.pop("PYTHONPATH", None)
     try:
         rc, out, _err, wall, cpu = _run_child(
-            list(calib_command), None, child_environment(env), calib_timeout)
+            list(calib_command), None, calibration_env, calib_timeout)
     except subprocess.TimeoutExpired:
         raise CounterError(
             "the calibration workload exceeded its "
@@ -614,6 +621,9 @@ def write_junit(path: Path, node_id: str,
         "time": f"{measurement.value:.6f}",
         "gh-wall": f"{measurement.wall:.6f}",
     })
+    if isinstance(measurement, CalibratedMeasurement):
+        case.set("gh-raw-cpu", f"{measurement.suite_cpu:.6f}")
+        case.set("gh-calibration-cpu", f"{measurement.calibration_cpu:.6f}")
     if measurement.returncode:
         failure = ET.SubElement(case, "failure", {
             "message": f"command exited with code {measurement.returncode}",

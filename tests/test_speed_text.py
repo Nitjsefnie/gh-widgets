@@ -11,6 +11,7 @@ drive the ratchet.
 """
 import unittest
 from scripts.ci.speed_workflow_steps import StepRunner
+from tests.test_compare_counters import cd
 
 
 class TestTheWorkflowText(unittest.TestCase):
@@ -66,6 +67,15 @@ class TestTheWorkflowText(unittest.TestCase):
         text = StepRunner.job_text()
         self.assertNotIn("releases/latest", text)
         self.assertNotIn("--base-label \"$BASE_TAG\"", text)
+
+        result = cd.compare({"m::a": 10}, {"m::a": 12})
+        result.update(metric="cpu_time_ratio", slopes={"m::a": 2})
+        report = cd.render(result, 0.30, "baseline")
+        self.assertIn(
+            "The gate judges the NET value (raw − slope·calibration, "
+            "per-entry slopes in the baseline) when the population declares "
+            "slopes; the ratio remains what the JUnit records.", report)
+        self.assertIn("Compared value: **net of the calibration slope**", report)
 
 
 if __name__ == "__main__":

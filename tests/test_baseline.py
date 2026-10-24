@@ -59,7 +59,7 @@ DIGEST = "a" * 64
 def document():
     """A valid document, for each test to break in one specific way."""
     return {
-        "schema": 3,
+        "schema": 4,
         "basis": "why this number sits here",
         "cell": "ubuntu-latest, image ubuntu24/20260927.320, runner 2.337.0",
         "measured_commit": "0" * 40,
@@ -98,6 +98,25 @@ class TestValidation(unittest.TestCase):
     def test_a_valid_document_is_accepted(self):
         loaded = baseline.read_baseline(self.write(document()))
         self.assertEqual(sorted(loaded["populations"]), ["unit-suite"])
+        self.assertEqual(loaded["schema"], 4)
+        self.assertEqual(cd.SUPPORTED_SCHEMA, baseline.SUPPORTED_SCHEMA)
+        payload = document()
+        population = payload["populations"]["unit-suite"]
+        population["slopes"] = {"counter::unit-suite": 2.0}
+        self.assertEqual(baseline.read_baseline(self.write(payload)), payload)
+        invalid = [None, [], {}, {"other": 2.0},
+                   {"counter::unit-suite": 2.0, "other": 1.0}]
+        invalid += [{"counter::unit-suite": value} for value in
+                    (0, -1, True, "2", None, float("nan"), float("inf"),
+                     float("-inf"))]
+        for slopes in invalid:
+            with self.subTest(slopes=slopes):
+                population["slopes"] = slopes
+                path = self.write(payload)
+                with self.assertRaises(baseline.ComparisonError) as caught:
+                    baseline.read_baseline(path)
+                for fragment in (str(path), "unit-suite", "slopes"):
+                    self.assertIn(fragment, str(caught.exception))
 
     def test_a_missing_file_is_the_first_push_not_an_error(self):
         # Exit 0 and a report, never a traceback: two stack traces ahead of
@@ -114,8 +133,10 @@ class TestValidation(unittest.TestCase):
 
     def test_an_unknown_schema_is_refused_by_number(self):
         payload = document()
-        payload["schema"] = 2
-        self.refusal(payload, "reads schema 3")
+        for schema in (2, 3):
+            with self.subTest(schema=schema):
+                payload["schema"] = schema
+                self.refusal(payload, "reads schema 4")
 
     def test_an_empty_basis_is_refused(self):
         payload = document()

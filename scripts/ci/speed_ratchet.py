@@ -79,7 +79,8 @@ def _read_head(reports: list[Path], population: dict, name: str) -> tuple:
     if not reports:
         raise RatchetError(f"no {name.replace('-', ' ')} reports were given")
     try:
-        scans = [compare.scan_junit(path) for path in reports]
+        scans = [compare.scan_junit(path, population.get("slopes"))
+                 for path in reports]
         head = compare.fold_scans(scans)
         # These use the same comparator helpers that `_compare` uses so this
         # writer cannot fold or qualify a different head value.
