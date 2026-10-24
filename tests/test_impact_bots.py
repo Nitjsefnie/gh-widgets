@@ -112,6 +112,18 @@ class ImpactBots(unittest.TestCase):
         self.assertEqual(totals['other/repo']['bot_merged_prs'], 2)
         self.assertEqual(totals['other/repo']['bot_waterline'], NEWEST)
 
+    def test_full_walk_counts_a_null_merged_at_node_without_author(self):
+        """A null mergedAt with a null author is counted, adds no bot, moves no waterline."""
+        data = {'repository': {'pullRequests': {'nodes': [
+            {'mergedAt': WATERLINE, 'author': {'__typename': 'Bot'}},
+            {'mergedAt': None, 'author': None},
+        ], 'pageInfo': {'hasNextPage': False}}}}
+        totals = {'other/repo': {'merged_prs': 2}}
+        with mock.patch.object(impact, 'gql', return_value=data):
+            impact.fetch_bot_pr_counts('t', totals)
+        self.assertEqual(totals['other/repo']['bot_merged_prs'], 1)
+        self.assertEqual(totals['other/repo']['bot_waterline'], WATERLINE)
+
     def test_search_skips_a_null_merged_at_node_and_recounts(self):
         # The search cannot tell whether the null node is new, so it must not
         # count it: the kept-count mismatch then falls back to the full walk.
