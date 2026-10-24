@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Tighten recorded speed maxima from the values the comparison judged.
 
-This operation only lowers the maxima in ``entries`` and ``wall``. It
+This operation lowers existing maxima in ``entries`` and ``wall`` and seeds
+absent counter entries declared by the population's slopes. A seed records
+the folded head value as both bounds and the number of head reports as n;
+wall never seeds. The CLI is context-free: only the staging step's existing
+successful default-branch push condition admits this artifact to the push path.
+It
 reuses ``compare_counters``' report reader, round folding and population
 digest check, so the new maxima are the same head values the speed gate
 compared. Every other recorded field is carried unchanged. A candidate is
@@ -103,12 +108,12 @@ def _read_head(reports: list[Path], population: dict, name: str) -> tuple:
             raise RatchetError(
                 f"{name} wall report value for {node} is not a finite "
                 "non-negative number")
-    return head, wall
+    return head, wall, len(reports)
 
 
-def _check_recorded_entries(head: dict, recorded: dict, name: str) -> None:
-    """A report entry outside the record is not a candidate threshold."""
-    unknown = sorted(set(head) - set(recorded))
+def _check_recorded_entries(head: dict, recorded: dict, name: str, slopes=()) -> None:
+    """Only a slope-declared absent entry can seed a counter threshold."""
+    unknown = sorted(set(head) - set(recorded) - set(slopes))
     if unknown:
         raise RatchetError(
             f"{name} reports entry/entries not recorded in the baseline: "
@@ -116,13 +121,17 @@ def _check_recorded_entries(head: dict, recorded: dict, name: str) -> None:
 
 
 def _tighten_map(recorded: dict, candidate: dict, head: dict,
-                 population: str, map_name: str) -> list[str]:
+                 population: str, map_name: str, slopes=(), samples=0) -> list[str]:
     """Lower one map's maxima to passing head values, preserving its other fields."""
-    _check_recorded_entries(head, recorded, population)
+    _check_recorded_entries(head, recorded, population, slopes)
     changes = []
     for node, head_value in head.items():
         envelope = recorded.get(node)
-        if envelope is None or head_value >= envelope["max"]:
+        if envelope is None:
+            candidate[node] = {"min": head_value, "max": head_value, "n": samples}
+            changes.append(f"{population}:{map_name}:{node} seed {head_value}")
+            continue
+        if head_value >= envelope["max"]:
             continue
         candidate_envelope = candidate.get(node)
         if candidate_envelope is None:
@@ -137,20 +146,20 @@ def _tighten_map(recorded: dict, candidate: dict, head: dict,
 def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
     """Return a valid down-only candidate and the maxima it tightened.
 
-    ``measurements`` maps population names to ``(head entries, head wall)``.
+    ``measurements`` maps populations to ``(head entries, head wall, report count)``.
     Missing entries remain unchanged, exactly as the comparator's shared-set
-    comparison does. A report-only entry is refused instead of being
-    intersected away.
+    comparison does. Report-only counters require a declared slope to seed;
+    report-only wall entries remain refused.
     """
     candidate = json.loads(json.dumps(document))
     changes = []
     for name, head_values in measurements.items():
         recorded_population = baseline.read_population(document, name)
         candidate_population = candidate["populations"][name]
-        entries, wall = head_values
+        entries, wall, samples = head_values
         changes.extend(_tighten_map(
             recorded_population["entries"], candidate_population["entries"],
-            entries, name, "entries"))
+            entries, name, "entries", recorded_population.get("slopes", ()), samples))
         changes.extend(_tighten_map(
             recorded_population["wall"], candidate_population["wall"],
             wall, name, "wall"))

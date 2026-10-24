@@ -159,20 +159,23 @@ def _check_population(path: Path, name: str, population) -> None:
             f"{where} population={digest!r} is not a sha256 digest of that "
             "population's node ids")
     _check_entry_map(path, name, population["entries"], "entries",
-                     required=True)
+                     required="slopes" not in population)
     _check_entry_map(path, name, population["wall"], "wall", required=False)
     if "slopes" in population:
         slopes = population["slopes"]
-        if (not isinstance(slopes, dict) or not slopes
-                or set(slopes) != set(population["entries"])):
+        if not isinstance(slopes, dict) or not slopes:
             raise ComparisonError(
-                f"{where} slopes must be a non-empty object covering "
-                "exactly the entries")
+                f"{where} slopes must be a non-empty object")
         for node, slope in slopes.items():
+            if not isinstance(node, str) or not node:
+                raise ComparisonError(f"{where} slopes has an empty or non-string node id")
             if not _is_number(slope) or not math.isfinite(slope) or slope <= 0:
                 raise ComparisonError(
                     f"{where} slopes[{node!r}]={slope!r} is not a finite "
                     "positive number")
+        for node in population["entries"]:
+            if node not in slopes:
+                raise ComparisonError(f"{where} slopes is missing entry {node!r}")
 
 
 def _check_entry_map(path: Path, name: str, mapping, key: str,
@@ -335,6 +338,11 @@ def raised_entries(old: dict, new: dict,
                     declared_seen.add(slot)
                 if now is None:
                     moved[slot] = (was, None)
+                    continue
+                if (was is None and key == "entries"
+                        and node in old.get("populations", {}).get(name, {}).get("slopes", {})
+                        and after[node]["min"] == now and math.isfinite(now) and now >= 0
+                        and isinstance(after[node]["n"], int) and after[node]["n"] >= 2):
                     continue
                 if was is None or now > was:
                     if slot in allowed_raises:

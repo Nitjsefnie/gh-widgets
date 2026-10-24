@@ -110,8 +110,13 @@ class TestValidation(unittest.TestCase):
         population = payload["populations"]["unit-suite"]
         population["slopes"] = {"counter::unit-suite": 2.0}
         self.assertEqual(baseline.read_baseline(self.write(payload)), payload)
+        population["slopes"]["other"] = 1.0
+        self.assertEqual(baseline.read_baseline(self.write(payload)), payload)
+        population["entries"] = {}
+        self.assertEqual(baseline.read_baseline(self.write(payload)), payload)
+        population["entries"] = document()["populations"]["unit-suite"]["entries"]
         invalid = [None, [], {}, {"other": 2.0},
-                   {"counter::unit-suite": 2.0, "other": 1.0}]
+                   {"counter::unit-suite": 2.0, "": 1.0}]
         invalid += [{"counter::unit-suite": value} for value in
                     (0, -1, True, "2", None, float("nan"), float("inf"),
                      float("-inf"))]
