@@ -1425,6 +1425,20 @@ class TestFeatureRaiseCLI(unittest.TestCase):
         fixture.commit("fix: x\u2028feat: y", fixture.new)
         self.assert_refuses(fixture.declarations())
 
+    def test_a_subject_after_a_blank_first_line_is_admitted(self):
+        fixture = self.fixture
+        (fixture.head / "gate/speed-baseline.json").write_text(
+            json.dumps(fixture.new), encoding="utf-8")
+        fixture.git("add", "gate/speed-baseline.json")
+        fixture.git("commit", "-q", "--cleanup=verbatim", "--allow-empty",
+                    "-m", "\nfeat: grow the envelope")
+        self.assert_admits(fixture.declarations(), [fixture.SLOT])
+
+    def test_a_folded_nonfeature_first_line_still_refuses(self):
+        fixture = self.fixture
+        fixture.commit("fix: grow\nfeat: second line", fixture.new)
+        self.assert_refuses(fixture.declarations())
+
     def test_no_feat_subject_refuses_with_the_trim_remedy(self):
         fixture = self.fixture
         fixture.commit("fix: grow the suite\n\nfeat: not a subject line",
