@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Admit unit-suite raises only from a feature commit in the judged window.
 
-Reads one thing from git: the subject (first message line, split on LF) of
-every commit in --base..--head. A raised unit-suite maximum is admitted only
-when some subject starts `feat:` or `feat(scope):`, case-sensitive; then each
-raised unit-suite slot prints, one per line, for compare_counters.py's
---ratchet-allow-raise. Any other unit-suite raise is refused with exit 1 and
-prints no slot. Shallow, missing or unreadable history, or an unreadable
-document, exits 2.
+Reads one thing from git: the folded subject (%s) of every commit in
+--base..--head. A raised unit-suite maximum is admitted only when some
+subject starts `feat:` or `feat(scope):`, case-sensitive; then each raised
+unit-suite slot prints, one per line, for compare_counters.py's
+--ratchet-allow-raise. A unit-suite entry the base never recorded is refused
+with exit 1. Any other unit-suite raise is refused with exit 1 and prints no
+slot. Shallow, missing or unreadable history, or an unreadable document,
+exits 2.
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ _TRIM_REMEDY = (
     "stay strictly down-only.")
 
 
-def derive_raises(old, new, commits, window="the judged window"):
+def derive_raises(old, new, subjects, window="the judged window"):
     """Return raised unit-suite slots, admitted only by a feat: subject."""
     moved = baseline.raised_entries(old, new)
     # A None `was` is an entry the base never recorded, which no subject
@@ -72,9 +73,8 @@ def derive_raises(old, new, commits, window="the judged window"):
     }
     if not unit_raises:
         return []
-    # Git separates message lines with LF; other separators can be content.
-    if not any(_FEATURE_SUBJECT.match(body.split('\n', 1)[0])
-               for _sha, body in commits):
+    # Git separates subjects with LF; other separators can be subject content.
+    if not any(_FEATURE_SUBJECT.match(subject) for subject in subjects):
         raised = '\n'.join(f"- {slot}: {was} -> {now}"
                            for slot, (was, now) in sorted(unit_raises.items()))
         raise DeclarationError(
@@ -98,21 +98,11 @@ def _git(cwd, args):
 
 
 def collect_window(cwd, base, head):
-    """Read the full base..head message window and the PR-level path set."""
+    """Read the folded subject of every commit in base..head."""
     if _git(cwd, ['rev-parse', '--is-shallow-repository']).strip() != 'false':
         raise RuntimeError("the raise check requires full history; fetch the "
                            "base and head ancestry before judging the window")
-    records = _git(cwd, ['log', '--format=%x00%H%n%B', f'{base}..{head}'])
-    commits = []
-    for record in records.split('\0'):
-        if record:
-            sha, _newline, body = record.partition('\n')
-            commits.append((sha, body))
-    # Base can advance after Actions creates its checkout merge. A PR's
-    # paths start at its merge base; base-only commits are not PR edits.
-    paths = _git(cwd, ['diff', '--no-renames', '--name-only', '-z',
-                       f'{base}...{head}'])
-    return commits, set(filter(None, paths.split('\0')))
+    return _git(cwd, ['log', '--format=%s', f'{base}..{head}']).splitlines()
 
 
 def main(argv=None):
@@ -125,8 +115,8 @@ def main(argv=None):
     try:
         old = baseline.read_baseline(args.old)
         new = baseline.read_baseline(args.new)
-        commits, _paths = collect_window(Path.cwd(), args.base, args.head)
-        slots = derive_raises(old, new, commits,
+        subjects = collect_window(Path.cwd(), args.base, args.head)
+        slots = derive_raises(old, new, subjects,
                               window=f"{args.base}..{args.head}")
     except DeclarationError as exc:
         print(str(exc), file=sys.stderr)
