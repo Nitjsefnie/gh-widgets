@@ -5,7 +5,7 @@ Renderer rounds are fitted against the SAME JOB's unit-step calibration
 (pre-#242 renderer calibrators are contaminated; post-merge re-derivations
 may use the renderer step's own reading). `--job <id>` (repeatable) fetches
 via `gh api`; `--from-file <log>` reads one saved log offline. Nothing is
-written by this script.
+written.
 Job-log API: https://docs.github.com/en/rest/actions/workflow-jobs
 """
 import argparse
