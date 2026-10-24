@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Render public owned-repository popularity from fresh git history and REST data.
 
-OUT_DIR, THEME, GH_TOKEN and GH_TOKEN_FILE match the other renderers.
-There is no cache: every run clones each default branch and reads live traffic.
+No cache: every run clones each default branch and reads live traffic.
 """
 import argparse
 import importlib.util
@@ -31,7 +30,7 @@ def _load_common():
 
 
 common = _load_common()
-# Retain the renderer-visible clock used by transport tests and callers.
+# Clock alias kept for tests and callers.
 time = common.time
 REQUIRED_COMMON = 15
 common.check_version(REQUIRED_COMMON)
@@ -43,12 +42,7 @@ AGENT_EMAILS = frozenset({'noreply@anthropic.com', 'noreply@openai.com',
 
 @common.share.limited_request
 def rest(token, path, retries=3, timeout=20):
-    """GET JSON and its Link header, retrying transport and server failures.
-
-    Each attempt includes reading the body; back-off has its own timer. The
-    shared in-flight cap of two spans every REST call in the process, so the
-    pool's workers queue for slots like the profile renderer's GraphQL walks.
-    """
+    """GET JSON and its Link header, retrying transport and server failures."""
     url = path if path.startswith(API + '/') else API + path
     req = urllib.request.Request(url, headers={
         'Authorization': f'Bearer {token}',
@@ -74,7 +68,7 @@ def rest(token, path, retries=3, timeout=20):
 
 
 def rest_pages(token, path):
-    """Follow every next Link; a repeated URL fails instead of truncating."""
+    """Follow every next Link; a repeated URL fails."""
     items, seen = [], set()
     while path:
         url = urllib.parse.urljoin(API, path)
@@ -112,12 +106,8 @@ def parse_authors(data, repository):
 def outsider_commits(repository, user, emails):
     """Count default-branch authors in a fresh blobless clone, then remove it.
 
-    Each Git invocation passes through the shared process timer, including
-    the probes that distinguish an empty remote from a broken default branch.
-    The calls run on a pool worker, so the recorder first reports their
-    durations as concurrent time and the coordinator moves them into the
-    process rows' blocked column when it reattributes the wait spent on this
-    repository's future.
+    Pool worker: durations sit in the recorder's concurrent column until
+    reattribution; the probes ride the shared process timer.
     """
     name = repository['full_name']
     with tempfile.TemporaryDirectory(prefix='ghwidgets-popularity-') as directory:
@@ -129,7 +119,7 @@ def outsider_commits(repository, user, emails):
             refs = common.run_process(['git', '-C', clone, 'show-ref', '--head'],
                                       check=False, capture_output=True)
             if refs.returncode == 1 and not refs.stdout and not refs.stderr:
-                # A broken remote HEAD can also produce a clone with no refs.
+                # A broken remote HEAD also clones with no refs.
                 common.run_process(['git', '-C', clone, 'symbolic-ref', 'HEAD'],
                                    check=True, capture_output=True)
                 remote = common.run_process(['git', 'ls-remote', '--', repository['clone_url']],
@@ -149,7 +139,7 @@ def outsider_commits(repository, user, emails):
 
 
 def score_repository(token, repository, user, emails):
-    """Read one repository's traffic counters and outsider commits."""
+    """Read one repository's traffic and outsider commits."""
     name = repository['full_name']
     traffic = {}
     for endpoint in ('clones', 'views'):
@@ -163,20 +153,17 @@ def score_repository(token, repository, user, emails):
 
 
 def acquire_score(token, repository, user, emails, samples):
-    """Run one repository's reads on a pool worker, collecting its intervals."""
+    """Collect one repository's worker intervals around its reads."""
     with common.timing.collect_processes(samples):
         return score_repository(token, repository, user, emails)
 
 
-# The acquisition sequence keeps the eligible population and score inputs together.
+# Keeps the eligible population and score inputs together.
 # pylint: disable=too-many-locals
 def fetch_scores(token):
     """Acquire all eligible user/org repositories and their complete scores.
 
-    One pool task per repository runs its two traffic reads and its fresh
-    clone together, in enumeration order, so a repository's git and traffic
-    work overlaps the sibling pool slot's. Each task's worker intervals are
-    reattributed into their rows while the coordinator waits on it.
+    One pool task per repository, collected in enumeration order.
     """
     user, _ = rest(token, '/user')
     emails = common.our_emails(user['login'], user['id'])
@@ -220,7 +207,7 @@ def fetch_scores(token):
 
 
 def rank_repositories(scores):
-    """Return the five strongest rows, breaking ties by canonical repo name."""
+    """Return the five strongest rows, ties broken by canonical name."""
     ranked = sorted(scores, key=lambda item: (-item[1], item[0].lower(), item[0]))[:5]
     top = ranked[0][1] if ranked else 0
     return [(name, f'{raw * 10 / top if top else 0:.2f}', stars, forks, views)
@@ -228,7 +215,7 @@ def rank_repositories(scores):
 
 
 def render_popularity(C, user, scores):
-    """Draw repository inputs and relative scores in the shared table."""
+    """Draw repository inputs and relative scores."""
     login = user['login']
     rows = rank_repositories(scores)
     body = f"""
