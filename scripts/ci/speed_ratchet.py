@@ -6,8 +6,8 @@ absent counter entries the population's slopes declare: the folded head
 value as both bounds, wall never seeds. The CLI is context-free: only the
 staging step's existing default-branch push condition admits this artifact
 to the push path. It reuses ``compare_counters``' readers so the new maxima
-are the same head values the speed gate compared; other recorded fields are
-carried unchanged, and a candidate is validated before anything is written.
+are the same head values the gate compared; other fields are carried
+unchanged, and a candidate is validated before anything is written.
 
 There is deliberately no hysteresis. CPU time is noisy, and any positive
 hysteresis below the pool's observed spread either dead-letters the tighten
