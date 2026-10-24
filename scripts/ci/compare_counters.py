@@ -70,7 +70,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "gate/speed-baseline.json"
-SUPPORTED_SCHEMA = 3
+SUPPORTED_SCHEMA = 4
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is
 # catastrophically wrong now" — an hour where the baseline says a minute — and
@@ -89,7 +89,10 @@ METRIC_NOTES = {
         "the child's CPU seconds divided by a fixed calibration workload's, "
         "measured adjacently in the same job — the runner pool's machine "
         "factor multiplies both and cancels; still not deterministic, so "
-        "the envelope discipline applies unchanged"),
+        "the envelope discipline applies unchanged. "
+        "The gate judges the NET value (raw − slope·calibration, "
+        "per-entry slopes in the baseline) when the population declares "
+        "slopes; the ratio remains what the JUnit records."),
 }
 
 # A testcase carrying any of these children did not pass, and its value is not
@@ -167,7 +170,7 @@ def _is_unittest_collection_error(root: ET.Element) -> bool:
     ))
 
 
-def scan_junit(path: Path) -> tuple:
+def scan_junit(path: Path, slopes: dict | None = None) -> tuple:
     """One report, read three ways: (passing values, present, not_passed).
 
     The intersection this comparator works on throws away everything that did
@@ -182,6 +185,8 @@ def scan_junit(path: Path) -> tuple:
     the producer says which in the suite's gh-metric. This file does not
     care, because comparing across two different metrics is checked
     explicitly in `_resolve_metric` and `_check_metric`.
+    With slopes, passing entries instead use raw CPU minus their slope
+    times calibration CPU; the report must carry both raw parts (#240).
     """
     try:
         root = ET.parse(path).getroot()
@@ -197,11 +202,21 @@ def scan_junit(path: Path) -> tuple:
         present.add(nid)
         if any(case.find(tag) is not None for tag in NOT_PASSED):
             continue
-        raw = case.get("time")
-        if raw is None:
-            continue
         try:
-            times[nid] = float(raw)
+            if slopes is not None and nid in slopes:
+                for attribute in ("gh-raw-cpu", "gh-calibration-cpu"):
+                    if case.get(attribute) is None:
+                        raise ComparisonError(
+                            f"{path} entry {nid!r} is missing {attribute}; "
+                            "the calibration slope requires both raw parts")
+                times[nid] = (float(case.attrib["gh-raw-cpu"])
+                              - slopes[nid]
+                              * float(case.attrib["gh-calibration-cpu"]))
+            else:
+                raw = case.get("time")
+                if raw is None:
+                    continue
+                times[nid] = float(raw)
         except ValueError:
             continue
     if not times:
@@ -528,6 +543,8 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         "(the recorded MAXIMUM of each entry's observed range, summed — the "
         "ranges are in the table below)",
         f"- This commit: **{_format_counter(result['head_total'])}**",
+        *(["- Compared value: **net of the calibration slope**"]
+          if result.get("slopes") else []),
         "",
         "**The gate this is: a step-change detector, not a regression "
         "detector.** Each ceiling is the current recorded maximum times "
@@ -885,7 +902,8 @@ def _compare(args) -> int:
     else:
         base_folded = fold_rounds(args.base)
 
-    head_scans = [scan_junit(Path(p)) for p in args.head]
+    slopes = recorded.get("slopes") if recorded is not None else None
+    head_scans = [scan_junit(Path(p), slopes) for p in args.head]
     head_folded = fold_scans(head_scans)
     head_metric = _resolve_metric(args.head, "head")
     if recorded is not None:
@@ -902,6 +920,7 @@ def _compare(args) -> int:
     result["metric"] = (recorded["metric"] if recorded is not None
                         else (head_metric or "counter"))
     result["tolerance"] = tolerance
+    result["slopes"] = slopes
     result["over"] = over_tolerance(base_folded, head_folded, tolerance)
     result["envelopes"] = (recorded["entries"] if recorded is not None
                            else {})

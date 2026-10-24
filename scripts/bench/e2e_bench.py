@@ -417,6 +417,9 @@ def _write_junit(path, results):
             # Wall seconds, for the gross smoke gate only. Never a magnitude.
             "gh-wall": f"{result['wall']:.6f}",
         })
+        if "raw_cpu" in result and "calibration_cpu" in result:
+            case.set("gh-raw-cpu", f"{result['raw_cpu']:.6f}")
+            case.set("gh-calibration-cpu", f"{result['calibration_cpu']:.6f}")
         if result["skipped"]:
             ET.SubElement(case, "skipped", {"message": "renderer not present"})
         elif result["failure"] is not None:

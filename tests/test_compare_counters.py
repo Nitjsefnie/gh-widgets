@@ -19,11 +19,14 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from tests.test_baseline import document
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -83,12 +86,69 @@ class TestComparator(unittest.TestCase):
         # A failure can be fast or slow for reasons unrelated to speed; a skip
         # is not a measurement at all.
         self.assertEqual(set(cd.parse_junit(report)), {"m::ok"})
+        tree = ET.parse(report)
+        case = next(tree.iter("testcase"))
+        case.set("gh-raw-cpu", "8")
+        case.set("gh-calibration-cpu", "2")
+        tree.write(report)
+        self.assertEqual(cd.scan_junit(
+            report, {"m::ok": 2, "m::bad": 2, "m::skip": 2})[0],
+            {"m::ok": 4})
 
     def test_rounds_fold_to_the_minimum(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.00})
         b = write_junit(self.tmp_path / "b.xml", {"m::t": 3.00})
         # The minimum estimates the floor; the mean would track the noise.
         self.assertEqual(cd.fold_rounds([str(a), str(b)]), {"m::t": 1.00})
+
+        node = "counter::unit-suite"
+        payload = document()
+        population = payload["populations"]["unit-suite"]
+        population["metric"] = "cpu_time_ratio"
+        baseline = self.tmp_path / "baseline.json"
+        summary = self.tmp_path / "summary.md"
+        for parts, maximum, expected, status in (
+                (((36, 10), (12, 1)), 7, 10, 1),
+                (((36, 10), (3, 1)), 2, 1, 0)):
+            for path, (raw, calibration) in zip((a, b), parts):
+                cd.counter.write_junit(path, node,
+                                       cd.counter.CalibratedMeasurement(
+                                           raw / calibration, "cpu_time_ratio",
+                                           4, "", "", 0, raw, calibration))
+            population["entries"] = {
+                node: {"min": 1, "max": maximum, "n": 2}}
+            for slopes, expected_status, head in (
+                    ({node: 2}, status, expected),
+                    (None, 1 - status, min(raw / calibration
+                                          for raw, calibration in parts))):
+                with self.subTest(parts=parts, slopes=slopes):
+                    population.pop("slopes", None)
+                    if slopes is not None:
+                        population["slopes"] = slopes
+                    baseline.write_text(json.dumps(payload), encoding="utf-8")
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        actual = cd.main([
+                            "--baseline", str(baseline), "--population",
+                            "unit-suite", "--head", str(a), str(b),
+                            "--summary-file", str(summary)])
+                    self.assertEqual(actual, expected_status, output.getvalue())
+                    self.assertIn(f"- This commit: **{head:g}**",
+                                  output.getvalue())
+                    if slopes:
+                        self.assertIn("net of the calibration slope",
+                                      output.getvalue())
+                    self.assertTrue(summary.read_text(encoding="utf-8")
+                                    .endswith(output.getvalue().rstrip() + "\n"))
+        payload["schema"] = 3
+        baseline.write_text(json.dumps(payload), encoding="utf-8")
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            self.assertEqual(cd.main([
+                "--baseline", str(baseline), "--population", "unit-suite",
+                "--head", str(a), str(b)]), 2)
+        self.assertIn("reads schema 4", errors.getvalue())
 
     def test_a_test_missing_from_one_round_is_dropped(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
@@ -272,6 +332,37 @@ class TestComparator(unittest.TestCase):
                 self.assertEqual(cd.main(), 2)
         finally:
             sys.argv = argv
+
+        node = "counter::unit-suite"
+        payload = document()
+        population = payload["populations"]["unit-suite"]
+        population["slopes"] = {node: 2.0}
+        baseline = self.tmp_path / "baseline.json"
+        baseline.write_text(json.dumps(payload), encoding="utf-8")
+        for attribute in ("gh-raw-cpu", "gh-calibration-cpu"):
+            for path in (base, other):
+                with self.subTest(attribute=attribute, report=path.name):
+                    for report in (base, other):
+                        cd.counter.write_junit(report, node,
+                                               cd.counter.CalibratedMeasurement(
+                                                   4, "cpu_time", 1, "", "", 0,
+                                                   8, 2))
+                    tree = ET.parse(path)
+                    case = tree.getroot().find("testcase")
+                    assert case is not None
+                    del case.attrib[attribute]
+                    tree.write(path)
+                    with self.assertRaises(cd.ComparisonError) as caught:
+                        cd.scan_junit(path, population["slopes"])
+                    for fragment in (node, str(path), attribute):
+                        self.assertIn(fragment, str(caught.exception))
+                    errors = io.StringIO()
+                    with contextlib.redirect_stderr(errors):
+                        self.assertEqual(cd.main([
+                            "--baseline", str(baseline), "--population",
+                            "unit-suite", "--head", str(base), str(other)]), 2)
+                    self.assertIn(node, errors.getvalue())
+                    self.assertIn(str(path), errors.getvalue())
 
 
 # The closed-population gate (issue #36).

@@ -499,6 +499,8 @@ class TestHarness(unittest.TestCase):
                 self.fail("calibrated result omitted its raw parts")
             calibration, raw = map(float, parts.groups())
             self.assertEqual(calibration, 2.0)
+            self.assertEqual(case.get("gh-calibration-cpu"), "2.000000")
+            self.assertEqual(case.get("gh-raw-cpu"), f"{raw:.6f}")
             self.assertGreater(raw, 0)
             self.assertAlmostEqual(raw / calibration, _number(case, "time"),
                                    places=3)

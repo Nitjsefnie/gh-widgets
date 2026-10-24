@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 
@@ -39,7 +40,7 @@ def _load_counter():
 counter = _load_counter()
 
 
-SUPPORTED_SCHEMA = 3
+SUPPORTED_SCHEMA = 4
 
 
 class ComparisonError(RuntimeError):
@@ -58,7 +59,7 @@ class MissingBaseline(ComparisonError):
 
 REQUIRED_KEYS = ("schema", "basis", "cell", "measured_commit", "measured_at",
                  "populations")
-POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall")
+POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall", "slopes")
 ENVELOPE_KEYS = ("min", "max", "n")
 # An envelope from a single sample is not an envelope: it records what one
 # machine did once, and the "maximum" is then a measurement, not a worst case.
@@ -134,7 +135,8 @@ def _check_population(path: Path, name: str, population) -> None:
     where = f"{path} populations[{name!r}]"
     if not isinstance(population, dict):
         raise ComparisonError(f"{where} is not an object")
-    absent = [key for key in POPULATION_KEYS if key not in population]
+    absent = [key for key in POPULATION_KEYS
+              if key != "slopes" and key not in population]
     if absent:
         raise ComparisonError(
             f"{where} is missing required key(s): " + ", ".join(absent))
@@ -155,6 +157,18 @@ def _check_population(path: Path, name: str, population) -> None:
     _check_entry_map(path, name, population["entries"], "entries",
                      required=True)
     _check_entry_map(path, name, population["wall"], "wall", required=False)
+    if "slopes" in population:
+        slopes = population["slopes"]
+        if (not isinstance(slopes, dict) or not slopes
+                or set(slopes) != set(population["entries"])):
+            raise ComparisonError(
+                f"{where} slopes must be a non-empty object covering "
+                "exactly the entries")
+        for node, slope in slopes.items():
+            if not _is_number(slope) or not math.isfinite(slope) or slope <= 0:
+                raise ComparisonError(
+                    f"{where} slopes[{node!r}]={slope!r} is not a finite "
+                    "positive number")
 
 
 def _check_entry_map(path: Path, name: str, mapping, key: str,

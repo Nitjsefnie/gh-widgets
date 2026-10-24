@@ -77,7 +77,7 @@ def document(*, impact=1.3514, wall=0.085, drop_impact=False):
     if drop_impact:
         entries.pop("e2e::bench.render-impact")
     return {
-        "schema": 3,
+        "schema": 4,
         "basis": "fixture document for the ratchet tests",
         "cell": "fixture",
         "measured_commit": "0" * 40,
@@ -822,6 +822,29 @@ class TestSpeedRatchetTightening(unittest.TestCase):
                          self.baseline["populations"]["renderer-workloads"]
                          ["entries"][WORKLOAD_NODES[0]])
 
+        self.output_path = self.output_path.with_name("net.json")
+        self._stratify_unit_reports(((28, 10), (11, 1)))
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        updated = json.loads(self.output_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["populations"]["unit-suite"]["entries"]
+                         [self.UNIT_NODE], {"min": 5.0, "max": 8.0, "n": 6})
+        self.assertEqual(updated["populations"]["unit-suite"]["slopes"],
+                         {self.UNIT_NODE: 2.0})
+
+    def _stratify_unit_reports(self, parts):
+        self.baseline["populations"]["unit-suite"]["slopes"] = {
+            self.UNIT_NODE: 2.0}
+        self._write_baseline()
+        for path, (raw, calibration) in zip(self.unit_reports, parts):
+            tree = ET.parse(path)
+            case = tree.getroot().find("testcase")
+            assert case is not None
+            case.set("time", str(raw / calibration))
+            case.set("gh-raw-cpu", str(raw))
+            case.set("gh-calibration-cpu", str(calibration))
+            tree.write(path)
+
     def test_equal_or_higher_head_values_write_nothing(self):
         before = self.baseline_path.read_bytes()
         self._write_reports(
@@ -836,6 +859,18 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.output_path.exists())
         self.assertEqual(self.baseline_path.read_bytes(), before)
+
+        for parts in (((30, 10), (31, 10)), ((31, 10), (32, 10))):
+            with self.subTest(parts=parts):
+                self._stratify_unit_reports(parts)
+                before = self.baseline_path.read_bytes()
+                result = self._run()
+                self.assertEqual(result.returncode, 0,
+                                 result.stdout + result.stderr)
+                self.assertIn("no speed maximum beat its recorded value",
+                              result.stdout)
+                self.assertFalse(self.output_path.exists())
+                self.assertEqual(self.baseline_path.read_bytes(), before)
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
     def test_tightening_preserves_the_existing_records_permission_bits(self):
@@ -947,7 +982,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         loaded = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(loaded)
-        self.assertEqual(loaded.read_baseline(self.output_path)["schema"], 3)
+        self.assertEqual(loaded.read_baseline(self.output_path)["schema"], 4)
 
     def test_a_head_below_the_recorded_minimum_explains_a_successful_noop(self):
         before = self.baseline_path.read_bytes()
