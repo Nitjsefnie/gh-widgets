@@ -84,8 +84,8 @@
     12714
   ],
   "scripts/ci/compare_counters.py": [
-    11818,
-    32871
+    10565,
+    32453
   ],
   "scripts/ci/counter.py": [
     16950,
