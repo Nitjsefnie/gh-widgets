@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1347,38 +1348,175 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                     if status == 0:
                         self.assertEqual(result.stdout.strip(), "coverage-floor.json")
 
+    @staticmethod
+    def _speed_documents(acked):
+        """A recorded speed document and one candidate, over one entry.
+
+        Built here rather than read from the committed baseline: the gate
+        must keep its verdict for ANY population shape it accepts, and the
+        committed record now legitimately carries empty `entries` while its
+        slopes await the seeds (issue #240), so a fixture reading
+        `entries[...]` out of it breaks on the reset commit instead of
+        testing the validator.
+        """
+        population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
+                      "population": "a" * 64,
+                      "entries": {"counter::unit-suite": {"min": 5.0,
+                                                          "max": 10.0,
+                                                          "n": 6}},
+                      "wall": {}}
+        if acked:
+            population["slopes"] = {"counter::unit-suite": 2.0}
+        recorded = {"schema": 4, "basis": "fixture", "cell": "fixture",
+                    "measured_commit": "a" * 40, "measured_at": "2026-10-24",
+                    "populations": {"unit-suite": population}}
+        candidate = json.loads(json.dumps(recorded))
+        candidate["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"]["max"] = 9.0
+        return recorded, candidate
+
+    @staticmethod
+    def _speed_validator_tree(prefix):
+        """Sibling `data` and `main` directories, as the job lays them out.
+
+        The validator reads the candidate from `$data` and fetched main from
+        `$repo/gate`; `$repo` must sit BESIDE the artifact, not inside it,
+        because the artifact preflight refuses a `$data` holding any third
+        entry.
+        """
+        root = Path(tempfile.mkdtemp(prefix=prefix))
+        data, repo = root / "data", root / "main"
+        data.mkdir()
+        return data, repo
+
+    def _speed_validator_case(self, script, data, repo, recorded, candidate,
+                              status, fragment):
+        (repo / "gate").mkdir(parents=True, exist_ok=True)
+        (repo / "gate/speed-baseline.json").write_text(
+            json.dumps(recorded), encoding="utf-8")
+        (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
+        (data / "speed-baseline.json").write_text(
+            json.dumps(candidate), encoding="utf-8")
+        result = self._run_validator(script, data, repo)
+        self.assertEqual(result.returncode, status, result.stderr)
+        if fragment:
+            self.assertIn(fragment, result.stderr)
+        return result
+
     def test_inline_speed_validator_accepts_tightening_and_refuses_looseners(self):
         script = self._validator()
-        with tempfile.TemporaryDirectory(prefix="ghw-speed-validator-") as tmp:
-            data, repo = Path(tmp) / "artifact", Path(tmp) / "main"
-            data.mkdir()
-            (repo / "gate").mkdir(parents=True)
-            baseline = json.loads((REPO_ROOT / "gate/speed-baseline.json")
-                                  .read_text(encoding="utf-8"))
-            recorded_range = baseline["populations"]["unit-suite"]["entries"]["counter::unit-suite"]
-            recorded_range["max"] = recorded_range["min"] + 1
-            speed_candidate = json.loads(json.dumps(baseline))
-            unit = speed_candidate["populations"]["unit-suite"]
-            unit["entries"]["counter::unit-suite"]["max"] -= 0.001
-            (repo / "gate/speed-baseline.json").write_text(
-                json.dumps(baseline), encoding="utf-8")
-            (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
-            (data / "speed-baseline.json").write_text(
-                json.dumps(speed_candidate), encoding="utf-8")
-            accepted = self._run_validator(script, data, repo)
-            self.assertEqual(accepted.returncode, 0,
-                             accepted.stdout + accepted.stderr)
-            self.assertEqual(accepted.stdout.strip(), "speed-baseline.json")
+        for acked in (False, True):
+            with self.subTest(slopes=acked):
+                data, repo = self._speed_validator_tree(
+                    "ghw-speed-validator-")
+                self.addCleanup(shutil.rmtree, data.parent, True)
+                recorded, candidate = self._speed_documents(acked)
+                self._speed_validator_case(
+                    script, data, repo, recorded, candidate, 0, "")
+                recorded_max = recorded["populations"]["unit-suite"][
+                    "entries"]["counter::unit-suite"]["max"]
+                candidate["populations"]["unit-suite"]["entries"][
+                    "counter::unit-suite"]["max"] = recorded_max + 0.001
+                refused = self._speed_validator_case(
+                    script, data, repo, recorded, candidate, 1, "loosened")
+                self.assertEqual(refused.stdout.strip(), "")
 
-            recorded_max = baseline["populations"]["unit-suite"]["entries"]
-            recorded_max = recorded_max["counter::unit-suite"]["max"]
-            unit["entries"]["counter::unit-suite"]["max"] = \
-                recorded_max + 0.001
-            (data / "speed-baseline.json").write_text(
-                json.dumps(speed_candidate), encoding="utf-8")
-            refused = self._run_validator(script, data, repo)
-            self.assertEqual(refused.returncode, 1)
-            self.assertIn("loosened", refused.stderr)
+    @staticmethod
+    def _seed_loophole_cases(recorded, seeded):
+        """(recorded, candidate, fragment): each route around the seed shape.
+
+        Every case must refuse, naming why. The first one rewrites the
+        recorded side too — with no slope table anywhere, the same addition
+        is refused exactly as before seeds existed, which is the property
+        that keeps the allowance closed for everything it does not name.
+        """
+        no_slopes = json.loads(json.dumps(recorded))
+        no_slopes["populations"]["unit-suite"].pop("slopes")
+        no_slopes_seeded = json.loads(json.dumps(no_slopes))
+        no_slopes_seeded["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = {"min": 9.0, "max": 9.0, "n": 2}
+        yield no_slopes, no_slopes_seeded, "changed its entries"
+
+        def mutated(fragment, case):
+            mutant = json.loads(json.dumps(seeded))
+            case(mutant["populations"]["unit-suite"])
+            return recorded, mutant, fragment
+
+        def wrong_shape(unit):
+            unit["entries"]["counter::unit-suite"] = {"min": 8.0, "max": 9.0,
+                                                      "n": 2}
+        yield mutated("not a seed-shaped range", wrong_shape)
+
+        def wrong_n(unit):
+            unit["entries"]["counter::unit-suite"] = {"min": 9.0, "max": 9.0,
+                                                      "n": 1}
+        yield mutated("not a valid sample count", wrong_n)
+
+        def on_wall(unit):
+            unit["wall"]["counter::unit-suite"] = {"min": 9.0, "max": 9.0,
+                                                   "n": 2}
+        yield mutated("changed its entries", on_wall)
+
+        def changed_slope(unit):
+            unit["slopes"]["counter::unit-suite"] = 3.0
+        yield mutated("changed slopes", changed_slope)
+
+        def invalid_slope(unit):
+            unit["slopes"] = {"counter::unit-suite": -1}
+        yield mutated("invalid slopes", invalid_slope)
+
+        def missing_slope(unit):
+            unit["slopes"] = {"e2e::bench.render": 1.0}
+        yield mutated("entries without slopes", missing_slope)
+
+        def no_change(unit):
+            unit["entries"] = {}
+        yield mutated("no strict maximum reduction", no_change)
+
+    def test_inline_speed_validator_judges_seeds_and_their_loopholes(self):
+        """A seed lands only slope-declared, seed-shaped, entries-only.
+
+        Issue #240's post-merge state: main records no entries and the
+        first measurement seeds them. The validator must accept exactly the
+        seeded artifact and refuse every route around the shape — an
+        undeclared addition, a non-degenerate range, a wall addition, a
+        changed slope, an invalid slope table, and an artifact with neither
+        a lowering nor a seed.
+        """
+        script = self._validator()
+        recorded, seeded = self._speed_documents(acked=True)
+        # The seed case is the post-merge state: fetched main records no
+        # entries yet, so the candidate's entry is an addition, not a move.
+        recorded["populations"]["unit-suite"]["entries"] = {}
+        seeded["populations"]["unit-suite"]["entries"] = {}
+        seeded["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = {"min": 9.0, "max": 9.0, "n": 2}
+        data, repo = self._speed_validator_tree("ghw-speed-seed-validator-")
+        self.addCleanup(shutil.rmtree, data.parent, True)
+        accepted = self._speed_validator_case(
+            script, data, repo, recorded, seeded, 0, "")
+        self.assertEqual(accepted.stdout.strip(), "speed-baseline.json")
+        for recorded_case, candidate_case, fragment in self._seed_loophole_cases(
+                recorded, seeded):
+            self._speed_validator_case(script, data, repo, recorded_case,
+                                       candidate_case, 1, fragment)
+
+    def test_inline_speed_validator_refuses_entries_without_slopes_in_old(self):
+        """The shape rule holds for the recorded side too.
+
+        A population carrying slopes must cover every entry it still
+        records — that is what makes a later seed of the same node
+        lawful — so an old document recording an entry its slopes omit is
+        refused before anything is compared.
+        """
+        script = self._validator()
+        recorded, candidate = self._speed_documents(acked=True)
+        recorded["populations"]["unit-suite"]["slopes"] = {
+            "e2e::bench.render": 0.5}
+        data, repo = self._speed_validator_tree("ghw-speed-shape-validator-")
+        self.addCleanup(shutil.rmtree, data.parent, True)
+        self._speed_validator_case(script, data, repo, recorded, candidate,
+                                   1, "entries without slopes")
 
     def test_comment_share_validator_uses_exact_bytes_and_integer_shares(self):
         script = self._validator()

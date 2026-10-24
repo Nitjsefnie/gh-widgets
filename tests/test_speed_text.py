@@ -60,6 +60,31 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertIn("working-directory: head", step)
         self.assertIn("id: probe", text)
 
+    def test_the_ratchet_step_declares_slope_redefined_removals(self):
+        """The instrument reset's removals must stay declared by the step.
+
+        Issue #240 removes the four redefined ratio envelopes while the same
+        document declares each node's calibration slope; without the
+        derivation, the down-only ratchet refuses the very commit that
+        re-derives it, and after the seeds land the same loop must stay
+        silent for entries main still records. Both conditions live in the
+        step text and nowhere else.
+        """
+        block = self._run_block("The committed baseline only ratchets down")
+        self.assertIn("# SLOPE-DECLARED REMOVALS", block)
+        self.assertIn('"$RUNNER_TEMP/base-baseline.json" "$BASELINE"', block)
+        self.assertIn('--ratchet-allow-removal "$population:entries:$node"',
+                      block)
+        # The declaration reads both documents, and the comparator still
+        # refuses a declared removal that is still recorded — the loop may
+        # only name entries the head document no longer records.
+        self.assertIn('if node in new["populations"][name]["entries"]:', block)
+        listing_start = block.index("listing=")
+        slope_start = block.index("# SLOPE-DECLARED REMOVALS")
+        self.assertGreater(slope_start, listing_start,
+                           "the slope loop reads the base copy the listing "
+                           "loop's window wrote; it must run after it")
+
     def test_no_workflow_still_looks_up_a_release_for_the_speed_gate(self):
         # The whole point of issue #81: the comparison point is committed
         # data now, so a tag lookup here would be a leftover argument for a

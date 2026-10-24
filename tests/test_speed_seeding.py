@@ -2,18 +2,31 @@
 import contextlib
 import io
 import json
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
+from scripts.ci.speed_workflow_steps import StepRunner
 from tests import test_speed_ratchet as fixtures
 from tests import test_ratchet_push_delivery as delivery
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+# The comparator and its two path-loaded modules, for the boundary check.
+CI_SCRIPTS = ("compare_counters.py", "baseline.py", "counter.py",
+              "changes_detect.py")
 
 # These tests reuse the existing on-disk report and staging fixtures.
 # pylint: disable=protected-access
 
 
 class TestSpeedSeeding(unittest.TestCase):
+    steps = StepRunner()
+
     def setUp(self):
         self.fixture = fixtures.TestSpeedRatchetTightening()
         self.fixture.setUp()
@@ -123,6 +136,107 @@ class TestSpeedSeeding(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(["push", "origin", "HEAD:refs/heads/main"], calls)
         self.assertEqual(json.loads(installed), seeded)
+
+    def _slope_declared_removals(self, base_doc, new_doc):
+        """The STEP's slope-declared removal fragment, run over two documents.
+
+        Sliced out of the `speed` job between the fragment's own marker
+        comment and the loop's `done`, with the base copy written to
+        $RUNNER_TEMP and the head copy to $BASELINE, exactly where the step
+        leaves them. Both conditions of the declaration — slope-declared in
+        the head document, no longer recorded in it — are exercised against
+        real files, because the loop reads the documents rather than
+        trusting a declaration.
+        """
+        _declared, _working_dir, block = self.steps.step_run(
+            "The committed baseline only ratchets down")
+        lines = block.splitlines(True)
+        start = next(index for index, line in enumerate(lines)
+                     if line.lstrip().startswith("# SLOPE-DECLARED REMOVALS"))
+        end = next(index for index, line in enumerate(lines)
+                   if line.lstrip().startswith('done <<< "$slope_removals"'))
+        fragment = "".join(lines[start:end + 1])
+
+        root = Path(tempfile.mkdtemp(prefix="ghw-slope-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "head" / "gate").mkdir(parents=True)
+        (root / "base-baseline.json").write_text(
+            json.dumps(base_doc), encoding="utf-8")
+        (root / "head" / "gate" / "speed-baseline.json").write_text(
+            json.dumps(new_doc), encoding="utf-8")
+        script = ("set -euo pipefail\n"
+                  f'RUNNER_TEMP="{root}"\n'
+                  'BASELINE="gate/speed-baseline.json"\n'
+                  + fragment
+                  + 'printf "%s\\n" "${removals[@]+${removals[@]}}"\n')
+        done = self.steps.bash(script, root, "head",
+                               self.steps.env_for({}, root))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout.split(), root
+
+    @staticmethod
+    def _sloped(document):
+        """`document` with every population's entries slope-declared."""
+        for population in document["populations"].values():
+            population["slopes"] = {node: 2 for node in population["entries"]}
+        return document
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_step_declares_slope_redefined_removals(self):
+        """The instrument reset's removals are declared from the documents.
+
+        Issue #240's reset commit removes the four redefined ratio
+        envelopes and declares each node's calibration slope in the same
+        document. The down-only ratchet refuses an undeclared deletion, so
+        the step derives the declaration itself: recorded in the base,
+        slope-declared in the head for the SAME population, and no longer
+        recorded — read from the two documents, never trusted. The derived
+        declarations must then be the arguments that make the real
+        comparator accept the removal.
+        """
+        new_doc = self._sloped(fixtures.document())
+        for population in new_doc["populations"].values():
+            population["entries"] = {}
+
+        derived, root = self._slope_declared_removals(
+            fixtures.document(), new_doc)
+
+        self.assertEqual(sorted(derived), sorted([
+            "--ratchet-allow-removal",
+            "renderer-workloads:entries:e2e::bench.render",
+            "--ratchet-allow-removal",
+            "renderer-workloads:entries:e2e::bench.render-impact",
+            "--ratchet-allow-removal",
+            "renderer-workloads:entries:e2e::bench.render-responsiveness",
+            "--ratchet-allow-removal",
+            "unit-suite:entries:counter::unit-suite",
+        ]))
+        comparator = root / "head" / "scripts" / "ci"
+        comparator.mkdir(parents=True)
+        for name in CI_SCRIPTS:
+            shutil.copyfile(REPO_ROOT / "scripts" / "ci" / name,
+                            comparator / name)
+        result = subprocess.run(
+            [sys.executable, str(comparator / "compare_counters.py"),
+             "--ratchet-baselines", str(root / "base-baseline.json"),
+             str(root / "head" / "gate" / "speed-baseline.json"), *derived],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no entry raised", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_slope_declarations_are_not_derived_for_recorded_entries(self):
+        """A slope-declared entry the head still records is no removal.
+
+        Main carries every seeded entry beside the slopes that produced it.
+        Deriving a removal declaration for a recorded entry would refuse
+        the ratchet step on every later push — "declared removed but is
+        still recorded" — so the loop's second condition is load-bearing,
+        not a convenience, and is pinned here against exactly that state.
+        """
+        derived, _root = self._slope_declared_removals(
+            fixtures.document(), self._sloped(fixtures.document()))
+        self.assertEqual(derived, [])
 
 
 if __name__ == "__main__":

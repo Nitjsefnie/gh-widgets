@@ -1135,6 +1135,49 @@ jobs:
             echo "Declared workload removals: ${removals[*]}"
           fi
 
+          # SLOPE-DECLARED REMOVALS, DERIVED FROM THE DOCUMENTS. The
+          # instrument reset (issue #240) removes the four redefined ratio
+          # envelopes while the same commit declares each node's calibration
+          # slope, and the down-only ratchet refuses an undeclared deletion,
+          # so the declaration is derived here instead of hand-written: an
+          # entry the base records, the head slope-declares for the SAME
+          # population, and no longer records is the removal the documents
+          # describe. All three conditions are read from the two documents,
+          # never trusted; the comparator still refuses a declared removal
+          # that is still recorded, which keeps the derivation honest. Only
+          # entries are eligible: wall never seeds, so no slope ever
+          # redefines a wall record. After the seeds land the loop is silent
+          # again — an entry main still records is no removal — so main's
+          # own pushes keep passing this step unchanged.
+          slope_removals="$(python3 - "$RUNNER_TEMP/base-baseline.json" "$BASELINE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          base = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          new = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          for name, population in sorted(base.get("populations", {}).items()):
+              slopes = (new.get("populations", {}).get(name, {})
+                        .get("slopes", {}))
+              for node in population.get("entries", {}):
+                  if node not in slopes:
+                      continue
+                  if node in new["populations"][name]["entries"]:
+                      continue
+                  print(f"{name}\t{node}")
+          PY
+          )"
+          while IFS=$'\t' read -r population node; do
+            if [ -n "$population" ]; then
+              removals+=(--ratchet-allow-removal "$population:entries:$node")
+            fi
+          done <<< "$slope_removals"
+          if [ -n "$slope_removals" ]; then
+            echo "Declared slope redefinition removals:"
+            printf '%s\n' "$slope_removals" \
+              | sed 's/^/  /;s/\t/:entries:/'
+          fi
+
           # DECLARED RAISES, FROM PURE CARRIER COMMIT MESSAGES, UNIT SUITE ONLY.
           # Read all carrying messages, not PR prose: a message edit changes
           # the SHA and re-runs this job; a PR-body edit does not. The Python
