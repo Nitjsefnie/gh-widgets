@@ -512,8 +512,7 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
         return self.guard.derive_raises(
             self.old if old is None else old,
             self.new if new is None else new,
-            [(f"{index:040x}", message)
-             for index, message in enumerate(messages)], **kwargs)
+            list(messages), **kwargs)
 
     def test_subjects_the_anchors_admit(self):
         for subject in ("feat: grow the suite", "feat(speed): grow",
@@ -524,7 +523,8 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
     def test_near_miss_subjects_refuse(self):
         for subject in ("feature: grow", "defeat: grow", "Feat: grow",
                         " feat: grow", "feat(speed) grow", "feat(speed: grow",
-                        "fix: grow\nfeat: second line", ""):
+                        "fix: grow\nfeat: second line",
+                        "fix: grow feat: second line", ""):
             with self.subTest(subject=subject):
                 with self.assertRaises(self.guard.DeclarationError):
                     self.derive(subject)

@@ -1415,6 +1415,11 @@ class TestFeatureRaiseCLI(unittest.TestCase):
         fixture.commit("fix: raise the envelope", fixture.new)
         self.assert_admits(fixture.declarations(), [fixture.SLOT])
 
+    def test_a_subject_wrapped_inside_its_scope_is_admitted(self):
+        fixture = self.fixture
+        fixture.commit("feat(sp\need): grow the envelope", fixture.new)
+        self.assert_admits(fixture.declarations(), [fixture.SLOT])
+
     def test_no_feat_subject_refuses_with_the_trim_remedy(self):
         fixture = self.fixture
         fixture.commit("fix: grow the suite\n\nfeat: not a subject line",
