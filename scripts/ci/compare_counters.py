@@ -70,7 +70,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "gate/speed-baseline.json"
-SUPPORTED_SCHEMA = 4
+SUPPORTED_SCHEMA = (3, 4)
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is
 # catastrophically wrong now" — an hour where the baseline says a minute — and

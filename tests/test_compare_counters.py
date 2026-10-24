@@ -146,11 +146,19 @@ class TestComparator(unittest.TestCase):
         payload["schema"] = 3
         self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
         output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(cd.main([
+                "--baseline", str(self.baseline_path), "--population", "unit-suite",
+                "--head", str(a), str(b)]), 1)
+        self.assertIn("REGRESSION", output.getvalue())
+        payload["schema"] = 2
+        self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+        output = io.StringIO()
         with contextlib.redirect_stderr(output):
             self.assertEqual(cd.main([
                 "--baseline", str(self.baseline_path), "--population", "unit-suite",
                 "--head", str(a), str(b)]), 2)
-        self.assertIn("reads schema 4", output.getvalue())
+        self.assertIn("reads schema 3 and 4", output.getvalue())
 
     def test_a_test_missing_from_one_round_is_dropped(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})

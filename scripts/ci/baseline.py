@@ -40,7 +40,7 @@ def _load_counter():
 counter = _load_counter()
 
 
-SUPPORTED_SCHEMA = 4
+SUPPORTED_SCHEMA = (3, 4)
 
 
 class ComparisonError(RuntimeError):
@@ -91,10 +91,10 @@ def read_baseline(path: Path) -> dict:
     if absent:
         raise ComparisonError(
             f"{path} is missing required key(s): " + ", ".join(absent))
-    if document["schema"] != SUPPORTED_SCHEMA:
+    if document["schema"] not in SUPPORTED_SCHEMA:
         raise ComparisonError(
             f"{path} declares schema={document['schema']!r}; this script "
-            f"reads schema {SUPPORTED_SCHEMA}")
+            "reads schema 3 and 4")
     if not isinstance(document["basis"], str) or not document["basis"].strip():
         raise ComparisonError(
             f"{path} has no basis — the reason a counter baseline sits "
@@ -112,6 +112,10 @@ def read_baseline(path: Path) -> dict:
             "one metric and one tolerance for both populations is the shape "
             "this document was changed to remove")
     for name in sorted(populations):
+        if (document["schema"] == 3 and isinstance(populations[name], dict)
+                and "slopes" in populations[name]):
+            raise ComparisonError(
+                f"{path} populations[{name!r}] slopes requires schema 4")
         _check_population(path, name, populations[name])
     return document
 
