@@ -114,7 +114,7 @@ each renderer workload and for the unit suite, on pinned offline fixtures,
 and compares each against a committed baseline in `gate/speed-baseline.json` that
 only ever ratchets down. A unit-suite maximum may rise only when the judged
 range contains a commit subject starting `feat:` or `feat(scope):`
-(case-sensitive, read from each message's first line). On a PR the range is
+(case-sensitive, read from git's folded subject). On a PR the range is
 the merge checkout's first parent..HEAD; on a main push it is
 `BEFORE_SHA`..HEAD, so a squash merge keeps the raise only when its title
 starts `feat:`. Shallow or unreadable history refuses: the step fails closed.
