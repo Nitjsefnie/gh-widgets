@@ -39,12 +39,43 @@ def _load_baseline():
 
 baseline = _load_baseline()
 
+_TRIM_REMEDY = (
+    "A non-feature change answers a speed-budget breach by trimming its "
+    "own tests until the suite fits its envelope: drop redundant cases, "
+    "merge parametrisations, delete tests that repeat another test's "
+    "assertions. Lowering a maximum is always allowed; renderer ceilings "
+    "stay strictly down-only.")
+
 
 def derive_raises(old, new, commits, window="the judged window"):
-    """Return raised unit-suite slots, admitted only by a feat: subject."""
+    """Return raised unit-suite slots, admitted only by a feat: subject.
+
+    A raise is an existing entry's recorded maximum going up. An entry the
+    base never recorded is refused whatever the subjects say; only the
+    seed shape — which `raised_entries` excludes — enters without a
+    feature.
+    """
+    moved = baseline.raised_entries(old, new)
+    # A unit-suite slot with a None `was` is an entry the base never
+    # recorded that `raised_entries` did not seed-exclude: a hand-written
+    # envelope, which no commit subject admits.
+    additions = {
+        slot: values for slot, values in moved.items()
+        if slot.startswith('unit-suite:') and values[0] is None
+    }
+    if additions:
+        raised = '\n'.join(f"- {slot}: {was} -> {now}"
+                           for slot, (was, now) in sorted(additions.items()))
+        raise DeclarationError(
+            f"{DOCUMENT}: unit-suite entry addition refused: the base never "
+            f"recorded:\n{raised}\n"
+            "No commit subject admits an entry the base never recorded; an "
+            "envelope enters the document only through the seeding route "
+            "(the declared slope), never written by hand. " + _TRIM_REMEDY)
     unit_raises = {
-        slot: values for slot, values in baseline.raised_entries(old, new).items()
-        if slot.startswith('unit-suite:') and values[1] is not None
+        slot: values for slot, values in moved.items()
+        if slot.startswith('unit-suite:') and values[0] is not None
+        and values[1] is not None
     }
     if not unit_raises:
         return []
@@ -56,11 +87,7 @@ def derive_raises(old, new, commits, window="the judged window"):
         raise DeclarationError(
             f"{DOCUMENT}: unit-suite raise refused: no commit subject in "
             f"{window} starts with `feat:` or `feat(scope):`.\n{raised}\n"
-            "A non-feature change answers a speed-budget breach by trimming "
-            "its own tests until the suite fits its envelope: drop redundant "
-            "cases, merge parametrisations, delete tests that repeat another "
-            "test's assertions. Lowering a maximum is always allowed; "
-            "renderer ceilings stay strictly down-only.")
+            + _TRIM_REMEDY)
     allowed = sorted(unit_raises)
     # The comparator's own contradictory/unknown-slot checks still apply;
     # renderer raises stay undeclared for the ratchet comparison to refuse.
@@ -80,8 +107,8 @@ def _git(cwd, args):
 def collect_window(cwd, base, head):
     """Read the full base..head message window and the PR-level path set."""
     if _git(cwd, ['rev-parse', '--is-shallow-repository']).strip() != 'false':
-        raise RuntimeError("declarations require full history; fetch the base "
-                           "and head ancestry before judging the carrier")
+        raise RuntimeError("the raise check requires full history; fetch the "
+                           "base and head ancestry before judging the window")
     records = _git(cwd, ['log', '--format=%x00%H%n%B', f'{base}..{head}'])
     commits = []
     for record in records.split('\0'):
