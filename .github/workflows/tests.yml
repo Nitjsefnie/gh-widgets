@@ -1009,8 +1009,8 @@ jobs:
         # erroring. A force-push has no verifiable landed window. Unlike
         # ai-researcher's ratchet, a newly created main ref also fails closed:
         # its all-zero before tip cannot establish the previous baseline.
-        # Rebase merges keep Budget-Raise lines; a squash that drops them
-        # refuses the raise on main's push. Rebase is the deterministic route.
+        # A unit-suite raise needs a feat: subject in base_tip..HEAD; on
+        # main's push a squash carries one only when its title starts feat:.
         if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         # The repository is at head/, so every git command in this step has
         # to run there. See the comment above.
@@ -1178,11 +1178,11 @@ jobs:
               | sed 's/^/  /;s/\t/:entries:/'
           fi
 
-          # DECLARED RAISES, FROM PURE CARRIER COMMIT MESSAGES, UNIT SUITE ONLY.
-          # Read all carrying messages, not PR prose: a message edit changes
-          # the SHA and re-runs this job; a PR-body edit does not. The Python
-          # entry point requires a baseline-only PR, exact Budget-Raise lines
-          # and measuring dispatch run ids before emitting any slot names.
+          # DECLARED RAISES, FROM FEATURE COMMIT SUBJECTS, UNIT SUITE ONLY.
+          # The entry point emits the raised unit-suite slots when a subject
+          # in base_tip..HEAD starts feat: or feat(scope):, and refuses (exit
+          # 1) otherwise. Its exit, 2 for unreadable history included, fails
+          # this step inside the $(...) under GitHub's default bash -e.
           raise_slots="$(python3 scripts/ci/ratchet_declarations.py \
               "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
               --base "$base_tip" --head HEAD)"

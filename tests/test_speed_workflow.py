@@ -1164,9 +1164,8 @@ class CarrierFixture:
 
     SLOT = "unit-suite:entries:counter::unit-suite"
     WALL_SLOT = "unit-suite:wall:counter::unit-suite"
-    MESSAGE = (f"Raise envelope\n\nBudget-Raise: gate/speed-baseline.json {SLOT} "
-               "10 -> 14\n\nMeasured on dispatch 37188224043\n"
-               "Explanation after the declaration")
+    MESSAGE = ("feat: grow the suite and raise its envelope\n\n"
+               "Measured on dispatch 37188224043")
 
     def __init__(self, root, old_doc=None):
         self.root = root
@@ -1258,7 +1257,7 @@ class TestPullRequestRatchet(unittest.TestCase):
         self.fixture.base = self.fixture.git("rev-parse", "HEAD").stdout.strip()
 
     def _merge_checkout(self, *, raise_baseline=False, shallow=False,
-                        message="PR change without a declaration"):
+                        message="fix: PR change without a feature"):
         fixture = self.fixture
         fixture.git("checkout", "-qb", "pr")
         fixture.commit(message, fixture.new if raise_baseline else None,
@@ -1310,30 +1309,51 @@ class TestPullRequestRatchet(unittest.TestCase):
         self._merge_checkout()
         result = self._pr_step()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("has no declaration", result.stdout + result.stderr)
+        self.assertNotIn("raise refused", result.stdout + result.stderr)
         self.assertEqual(json.loads(self.fixture.base_path.read_text(
             encoding="utf-8")), self.fixture.old)
 
     @REQUIRES_POSIX_SHELL
-    def test_pr_raise_without_a_declaration_is_still_refused(self):
+    def test_pr_raise_without_a_feature_subject_is_refused(self):
         self._merge_checkout(raise_baseline=True)
         result = self._pr_step()
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("has no declaration", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no commit subject in", result.stderr)
+        self.assertIn("trimming its own tests", result.stderr)
+        self.assertNotIn("Declared unit-suite raises:", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_an_unreadable_head_baseline_fails_the_step_at_the_derivation(self):
+        """Pins that the step relies on `bash -e` for the derivation's exit 2.
+
+        The head document records an n=1 envelope, so `read_baseline` raises
+        and the entry point exits 2 inside `raise_slots="$(...)"`. Without
+        `-e` the step would carry on to the comparator; the absent comparator
+        verdict proves the step died at the substitution.
+        """
+        self.fixture.new["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"]["n"] = 1
+        self._merge_checkout(raise_baseline=True,
+                             message=CarrierFixture.MESSAGE)
+        result = self._pr_step()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot derive unit-suite raises", result.stderr)
+        # The comparator's own refusal of this document is "cannot compare".
+        self.assertNotIn("cannot compare", result.stderr)
 
     @REQUIRES_POSIX_SHELL
     def test_shallow_merge_fetches_the_missing_fixed_base(self):
         self._merge_checkout(shallow=True)
         result = self._pr_step()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("has no declaration", result.stdout + result.stderr)
+        self.assertNotIn("raise refused", result.stdout + result.stderr)
         self.assertEqual(self.fixture.git("rev-parse", "--is-shallow-repository")
                          .stdout.strip(), "false")
         self.assertEqual(json.loads(self.fixture.base_path.read_text(
             encoding="utf-8")), self.fixture.old)
 
     @REQUIRES_POSIX_SHELL
-    def test_shallow_merge_keeps_the_full_declaration_window(self):
+    def test_shallow_merge_keeps_the_full_feature_window(self):
         self._merge_checkout(raise_baseline=True, shallow=True,
                              message=CarrierFixture.MESSAGE)
         result = self._pr_step()
@@ -1361,73 +1381,103 @@ class TestPullRequestRatchet(unittest.TestCase):
         self.assertIn("failing closed", result.stderr)
 
 
-class TestCarrierDeclarationCLI(unittest.TestCase):
+class TestFeatureRaiseCLI(unittest.TestCase):
+    """The entry point over real git windows: only a feat: subject admits."""
+
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        root = Path(stack.enter_context(
+        self.root = Path(stack.enter_context(
             tempfile.TemporaryDirectory(prefix="ghw-carrier-")))
-        self.fixture = CarrierFixture(root)
+        self.fixture = CarrierFixture(self.root)
 
-    def test_carrier_cli_reads_whole_commit_messages_and_prints_slots(self):
-        fixture = self.fixture
-        fixture.commit(fixture.MESSAGE, fixture.new)
-        result = fixture.declarations()
+    def assert_admits(self, result, slots):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [fixture.SLOT])
+        self.assertEqual(result.stdout.splitlines(), slots)
 
-    def test_new_base_changes_are_not_mistaken_for_pr_paths(self):
-        fixture = self.fixture
-        fixture.git("branch", "base-tip")
-        fixture.commit(fixture.MESSAGE, fixture.new)
-        carrier = fixture.git("rev-parse", "HEAD").stdout.strip()
-        fixture.git("checkout", "-q", "base-tip")
-        fixture.commit("Base advances", extra={"unrelated.py": "# base\n"})
-        base = fixture.git("rev-parse", "HEAD").stdout.strip()
-        fixture.git("checkout", "-q", "--detach", carrier)
-        result = fixture.declarations(base=base)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [fixture.SLOT])
-
-    def test_separate_code_commit_still_makes_the_pr_impure(self):
-        fixture = self.fixture
-        fixture.commit("Add test", extra={"test_new.py": "# fixture\n"})
-        fixture.commit(fixture.MESSAGE, fixture.new)
-        result = fixture.declarations()
+    def assert_refuses(self, result):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("code PR first (red on speed)", result.stderr)
-        self.assertIn("test_new.py", result.stderr)
+        self.assertIn("no commit subject in", result.stderr)
         self.assertEqual(result.stdout, "")
 
-    def test_same_commit_code_and_raise_refuse(self):
-        fixture = self.fixture
-        fixture.commit(fixture.MESSAGE, fixture.new,
-                       {"render.py": "# fixture\n"})
-        result = fixture.declarations()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("re-derived from runs on that head", result.stderr)
+    def fixture_with(self, name, old):
+        (self.root / name).mkdir()
+        return CarrierFixture(self.root / name, old)
 
-    def test_all_window_commits_are_scanned_and_duplicates_refuse(self):
+    def test_a_feat_subject_admits_the_raise_and_prints_its_slot(self):
         fixture = self.fixture
         fixture.commit(fixture.MESSAGE, fixture.new)
-        fixture.commit(fixture.MESSAGE)
-        result = fixture.declarations()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("does not match a raise in this diff", result.stderr)
+        self.assert_admits(fixture.declarations(), [fixture.SLOT])
 
-    def test_message_outside_the_window_cannot_declare(self):
+    def test_a_scoped_feat_subject_on_any_window_commit_admits(self):
+        fixture = self.fixture
+        fixture.commit("feat(speed): add the measured cases")
+        fixture.commit("fix: raise the envelope", fixture.new)
+        self.assert_admits(fixture.declarations(), [fixture.SLOT])
+
+    def test_no_feat_subject_refuses_with_the_trim_remedy(self):
+        fixture = self.fixture
+        fixture.commit("fix: grow the suite\n\nfeat: not a subject line",
+                       fixture.new)
+        result = fixture.declarations()
+        self.assert_refuses(result)
+        self.assertIn(f"{fixture.base}..HEAD", result.stderr)
+        self.assertIn(f"- {fixture.SLOT}: 10 -> 14", result.stderr)
+        self.assertIn("trimming its own tests", result.stderr)
+        self.assertIn("renderer ceilings stay strictly down-only",
+                      result.stderr)
+
+    def test_a_feat_subject_before_the_window_cannot_admit(self):
         fixture = self.fixture
         fixture.commit(fixture.MESSAGE)
         base = fixture.git("rev-parse", "HEAD").stdout.strip()
-        fixture.commit("Raise without a line", fixture.new)
-        result = fixture.declarations(base=base)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("has no declaration", result.stderr)
+        fixture.commit("fix: raise without a feature", fixture.new)
+        self.assert_refuses(fixture.declarations(base=base))
+
+    def test_a_feat_subject_only_on_the_advanced_base_cannot_admit(self):
+        fixture = self.fixture
+        fixture.git("branch", "base-tip")
+        fixture.commit("fix: raise without a feature", fixture.new)
+        head = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "base-tip")
+        fixture.commit("feat: a base-side feature")
+        base = fixture.git("rev-parse", "HEAD").stdout.strip()
+        fixture.git("checkout", "-q", "--detach", head)
+        self.assert_refuses(fixture.declarations(base=base))
+
+    def test_a_renderer_only_raise_with_a_feat_subject_emits_nothing(self):
+        old = json.loads(json.dumps(self.fixture.old))
+        old["populations"]["renderer-workloads"] = {
+            "metric": "cpu_time", "tolerance": 0.6, "population": "b" * 64,
+            "entries": {"e2e::bench.render": envelope(1.0)}, "wall": {}}
+        fixture = self.fixture_with("renderer", old)
+        new = json.loads(json.dumps(old))
+        new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"] = envelope(2.0)
+        fixture.commit(fixture.MESSAGE, new)
+        self.assert_admits(fixture.declarations(), [])
+
+    def test_no_raise_emits_nothing_whatever_the_subjects(self):
+        fixture = self.fixture
+        fixture.commit(fixture.MESSAGE, fixture.old)
+        self.assert_admits(fixture.declarations(), [])
+
+    def test_a_seed_shaped_addition_passes_without_a_feature(self):
+        old = json.loads(json.dumps(self.fixture.old))
+        old["populations"]["unit-suite"]["entries"] = {}
+        old["populations"]["unit-suite"]["slopes"] = {
+            "counter::unit-suite": 2.0}
+        fixture = self.fixture_with("seed", old)
+        new = json.loads(json.dumps(old))
+        new["populations"]["unit-suite"]["entries"] = {
+            "counter::unit-suite": {"min": 14.0, "max": 14.0, "n": 2}}
+        fixture.commit("chore(speed): seed the reset entry", new)
+        self.assert_admits(fixture.declarations(), [])
 
     def test_invalid_base_ref_is_a_setup_failure(self):
         result = self.fixture.declarations(base="missing-ref")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("cannot", result.stderr)
+        self.assertIn("cannot derive unit-suite raises", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
     def test_shallow_history_is_refused_instead_of_skipping_messages(self):
