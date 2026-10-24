@@ -932,6 +932,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 for name in missing:
                     self.assertIn(name, out)
                     self.assertNotIn(f"WAIVED: {name}", out)
+                    self.assertIn(f"never reported a check run: {name}",
+                                  done.stderr)
                 # The required set is the manifest minus exactly the names
                 # in the input — a name outside it waives nothing.
                 requested = [word.strip() for word in waive.split(",")]
