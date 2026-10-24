@@ -998,8 +998,9 @@ jobs:
         # HEAD^1 is the base this merge checkout was built on: it cannot move
         # mid-run when main tightens (#195). A trailing base is lenient only
         # about main's later tightens; each landed ratchet commit is judged
-        # by main's own push check. PR raises still need declarations against
-        # this same base_tip, whether the PR is current or behind main.
+        # by main's own push check. PR raises are judged by the feat:
+        # subjects in this same base_tip window, whether the PR is current
+        # or behind main.
         #
         # actions/checkout puts the repository at head/. Run every git command
         # there; the executed-step tests exercise this working directory.
