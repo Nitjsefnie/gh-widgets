@@ -665,6 +665,34 @@ class FetchPullRequests(unittest.TestCase):
         self.assertEqual(self.merged_calls, 1,
                          "the warm half sweeps once; the cold repair does not")
 
+    def test_unresolved_sweep_node_keeps_cached_state(self):
+        """A null node in the MERGED sweep raises the same skip (#243).
+
+        The cached CLOSED, unmerged PR is confirmed by nothing this run, so
+        the sweep's unreadable node must not let the absence inference run.
+        """
+        cached = {
+            "PR_unreadable": {
+                "id": "PR_unreadable", "merged": False,
+                "closedAt": "2026-10-23T23:04:35Z",
+                "updatedAt": "2026-10-23T23:04:35Z",
+                **repo("stranger", "flare"),
+            }
+        }
+        live_node = {"id": "PR_live", "merged": False,
+                     **repo("stranger", "live")}
+        sweep_node = {"id": "PR_merged", "merged": True,
+                      **repo("stranger", "swept")}
+        g = self.fake_gql(live_nodes=[live_node],
+                          merged_nodes=[sweep_node, None])
+        prs, by_id = common.fetch_pull_requests("t", "me", cached_prs=cached,
+                                                gql_fn=g)
+        self.assertIn("PR_merged", by_id)
+        self.assertEqual(by_id["PR_unreadable"], cached["PR_unreadable"],
+                         "a sweep-side unresolved node must change no cached PR")
+        self.assertFalse(by_id["PR_unreadable"]["merged"])
+        self.assertEqual(len(prs), 3)
+
 
 class GqlPartialResponse(unittest.TestCase):
     """gql accepts a partial response only under ``allow_errors_in`` (#243).

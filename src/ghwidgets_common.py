@@ -384,9 +384,9 @@ def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=Non
 
     GitHub intermittently answers with RESOURCE_LIMITS_EXCEEDED under load.
     Transient conditions get a few retries; real errors fail fast. With
-    ``allow_errors_in`` as a path prefix, a response whose every error lies
-    strictly inside that subtree is accepted, each error printed with its
-    path; the default keeps raise-on-any-error.
+    ``allow_errors_in`` as a path prefix, a response carrying data and at
+    least one error, every error strictly inside that subtree, is accepted,
+    each error printed with its path; the default keeps raise-on-any-error.
     """
     req = urllib.request.Request(
         "https://api.github.com/graphql",
