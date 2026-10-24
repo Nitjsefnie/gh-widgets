@@ -117,7 +117,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped whenever this module's interface changes in a way that would make an
 # older script misbehave against it. Each script pins the version it expects.
-COMMON_VERSION = 14
+COMMON_VERSION = 15
 
 
 # One import-time switch, shared by all instrumentation in this renderer.
@@ -142,7 +142,7 @@ class TimingRecorder:
     Only the main thread advances ``named``. Each enclosing phase snapshots
     that counter and subtracts the increment made by its children before
     recording its own remainder. The lock protects the shared per-label
-    totals when clone workers complete together; it is never held across
+    totals when pool workers complete together; it is never held across
     network I/O, process waits, or user code.
     """
 
@@ -183,12 +183,12 @@ class TimingRecorder:
                     if not concurrent:
                         self.named += elapsed
                     group = getattr(self.processes, 'group', None)
-                    if kind == 'process' and concurrent and group is not None:
-                        group.append((name, start, stop))
+                    if concurrent and group is not None and kind in ('process', 'rest'):
+                        group.append((kind, name, start, stop))
 
     @contextlib.contextmanager
     def collect_processes(self, samples):
-        """Collect one clone's completed child intervals on its worker."""
+        """Collect one worker's completed process and REST intervals."""
         if not DEBUG_TIMING:
             yield
             return
@@ -200,18 +200,18 @@ class TimingRecorder:
             self.processes.group = previous
 
     def reattribute_wait(self, samples, start, stop):
-        """Move settled process intervals overlapped by a main-thread wait."""
+        """Move settled process and REST intervals overlapped by a main-thread wait."""
         if not DEBUG_TIMING:
             return
         assert threading.current_thread() is threading.main_thread()
         cursor = start
         with self.lock:
             # Shutdown can wait on several children; charge their union once.
-            for program, begin, end in sorted(samples, key=lambda sample: sample[1]):
+            for kind, program, begin, end in sorted(samples, key=lambda sample: sample[2]):
                 blocked = max(0.0, min(stop, end) - max(cursor, begin))
                 cursor = max(cursor, min(stop, end))
-                row = self.totals[('process', program)]
-                assert row[2] + 1e-9 >= blocked, 'process wait precedes its completed timing'
+                row = self.totals[(kind, program)]
+                assert row[2] + 1e-9 >= blocked, 'worker wait precedes its completed timing'
                 row[1] += blocked
                 row[2] = max(0.0, row[2] - blocked)
                 self.named += blocked

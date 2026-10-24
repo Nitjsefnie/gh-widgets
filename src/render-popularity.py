@@ -32,7 +32,7 @@ def _load_common():
 common = _load_common()
 # Retain the renderer-visible clock used by transport tests and callers.
 time = common.time
-REQUIRED_COMMON = 14
+REQUIRED_COMMON = 15
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 API = 'https://api.github.com'
