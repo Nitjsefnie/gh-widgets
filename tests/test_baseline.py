@@ -17,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from decimal import Decimal
 from pathlib import Path
 
 
@@ -491,15 +490,14 @@ class TestDeclaredRaises(unittest.TestCase):
                               str(caught.exception))
 
 
-class TestCarrierDeclarations(unittest.TestCase):
-    """The message contract over real documents and hand-built messages."""
+class TestFeatureAdmittedRaises(unittest.TestCase):
+    """Only a feat: subject in the window admits a unit-suite raise."""
 
     SLOT = "unit-suite:entries:counter::unit-suite"
-    LINE = f"Budget-Raise: gate/speed-baseline.json {SLOT} 16 -> 20"
+    WALL_SLOT = "unit-suite:wall:counter::unit-suite"
 
     def setUp(self):
         path = REPO_ROOT / "scripts" / "ci" / "ratchet_declarations.py"
-        self.assertTrue(path.is_file(), "the commit-message parser is missing")
         spec = importlib.util.spec_from_file_location("ghw_declarations", path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"cannot load {path}")
@@ -510,133 +508,75 @@ class TestCarrierDeclarations(unittest.TestCase):
         self.new["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"]["max"] = 20
 
-    def derive(self, message, *, paths=None, new=None):
+    def derive(self, *messages, new=None, old=None, **kwargs):
         return self.guard.derive_raises(
-            self.old, self.new if new is None else new,
-            [("a" * 40, message)],
-            {"gate/speed-baseline.json"} if paths is None else paths)
+            self.old if old is None else old,
+            self.new if new is None else new,
+            [(f"{index:040x}", message)
+             for index, message in enumerate(messages)], **kwargs)
 
-    def refusal(self, message, fragment, **kwargs):
-        with self.assertRaises(self.guard.DeclarationError) as caught:
-            self.derive(message, **kwargs)
-        self.assertIn(fragment, str(caught.exception))
+    def test_subjects_the_anchors_admit(self):
+        for subject in ("feat: grow the suite", "feat(speed): grow",
+                        "feat(): grow", "feat: grow\n\nfix: body text"):
+            with self.subTest(subject=subject):
+                self.assertEqual(self.derive(subject), [self.SLOT])
 
-    def test_exact_numeric_declaration_anywhere_in_message_is_accepted(self):
-        message = ("Raise envelope\n\n" + self.LINE.replace("16 -> 20",
-                   "1.6e1 -> 20.000") + "\n\nMeasured on 37188224043\n"
-                   "Further explanation after the declaration\n")
-        self.assertEqual(self.derive(message), [self.SLOT])
+    def test_near_miss_subjects_refuse(self):
+        for subject in ("feature: grow", "defeat: grow", "Feat: grow",
+                        " feat: grow", "feat(speed) grow", "feat(speed: grow",
+                        "fix: grow\nfeat: second line", ""):
+            with self.subTest(subject=subject):
+                with self.assertRaises(self.guard.DeclarationError):
+                    self.derive(subject)
 
-    def test_ported_parser_keeps_greedy_keys_and_decimal_values(self):
-        parsed, errors = self.guard.parse_declarations([
-            "Budget-Raise: gate/speed-baseline.json odd key:with:colons 1 -> 2"])
-        self.assertEqual(parsed, [("gate/speed-baseline.json",
-                                   "odd key:with:colons",
-                                   Decimal("1"), Decimal("2"))])
-        self.assertEqual(errors, [])
+    def test_any_window_commit_may_carry_the_feature(self):
+        self.assertEqual(self.derive("fix: raise", "feat: the feature"),
+                         [self.SLOT])
 
-    def test_missing_or_nonexact_prefix_cannot_authorize_a_raise(self):
-        for line in ("", self.LINE.replace("Budget-Raise: ", "Budget-Raise:"),
-                     self.LINE.replace("Budget-Raise", "budget-raise")):
-            with self.subTest(line=line):
-                self.refusal(line + "\nRun 37188224043", "has no declaration")
-
-    def test_malformed_declarations_refuse_with_the_format(self):
-        for line in (self.LINE.replace(" -> ", " → "),
-                     self.LINE.replace(" -> ", "->"),
-                     self.LINE.replace("Budget-Raise: ", "Budget-Raise:  "),
-                     self.LINE.rsplit(" -> ", 1)[0],
-                     self.LINE.replace("16 ->", "sNaN ->"),
-                     self.LINE.replace("16 ->", "NaN ->"),
-                     self.LINE.replace("-> 20", "-> Infinity"),
-                     self.LINE.replace("-> 20", "-> -Infinity"),
-                     self.LINE.replace("-> 20", "-> nope")):
-            with self.subTest(line=line):
-                self.refusal(line + "\nRun 37188224043",
-                             "Budget-Raise: <document> <key> <from> -> <to>")
-
-    def test_wrong_values_unknown_keys_and_duplicates_are_leftovers(self):
-        for line in (self.LINE.replace("16 ->", "15 ->"),
-                     self.LINE.replace("-> 20", "-> 21"),
-                     self.LINE.replace(self.SLOT, "unit-suite:entries:typo"),
-                     self.LINE + "\n" + self.LINE):
-            with self.subTest(line=line):
-                self.refusal(line + "\nRun 37188224043",
-                             "does not match a raise in this diff")
-
-    def test_declaration_without_raise_is_refused(self):
-        self.refusal(self.LINE + "\nRun 37188224043",
-                     "does not match a raise in this diff", new=self.old)
-
-    def test_other_documents_are_not_declarable(self):
-        self.refusal(self.LINE.replace("gate/speed-baseline.json", "other.json")
-                     + "\nRun 37188224043", "not declarable")
-
-    def test_renderer_and_unknown_populations_are_not_declarable(self):
-        for population in ("renderer-workloads", "typo"):
-            with self.subTest(population=population):
-                self.refusal(self.LINE.replace("unit-suite:entries:",
-                             population + ":entries:") + "\nRun 37188224043",
-                             "only unit-suite raises are declarable")
-
-    def test_any_foreign_pr_path_refuses_with_the_split_route(self):
-        for path in ("render.py", "test_new.py", "CONTRIBUTING.md"):
-            with self.subTest(path=path):
-                self.refusal(self.LINE + "\nRun 37188224043",
-                             "code PR first (red on speed)",
-                             paths={"gate/speed-baseline.json", path})
-                self.refusal(self.LINE + "\nRun 37188224043",
-                             "re-derived from runs on that head",
-                             paths={"gate/speed-baseline.json", path})
-
-    def test_no_raise_allows_a_digest_move_alongside_tests(self):
-        new = copy.deepcopy(self.old)
-        new["populations"]["unit-suite"]["population"] = "b" * 64
-        self.assertEqual(self.derive("add tests", new=new,
-                         paths={"gate/speed-baseline.json", "test_new.py"}), [])
-
-    def test_no_raise_derives_nothing_even_for_a_code_only_pr(self):
-        self.assertEqual(self.derive("change code", new=self.old,
-                         paths={"render.py"}), [])
-
-    def test_each_carrying_message_needs_its_own_run_ids(self):
-        with self.assertRaisesRegex(self.guard.DeclarationError,
-                                    "dispatch run ids"):
-            self.guard.derive_raises(self.old, self.new,
-                                     [("a" * 40, self.LINE),
-                                      ("b" * 40, "Run 37188224043")],
-                                     {"gate/speed-baseline.json"})
-
-    def test_run_urls_and_standalone_eight_digit_tokens_are_accepted(self):
-        for run in ("12345678", "37188224043",
-                    "https://github.com/Nitjsefnie/gh-widgets/actions/runs/123",
-                    "https://github.com/a/b/actions/runs/123/jobs/456",
-                    "https://github.com/a/b/actions/runs/123?check_suite=1"):
-            with self.subTest(run=run):
-                self.assertEqual(self.derive(self.LINE + "\nMeasured on "
-                                             + run), [self.SLOT])
-
-    def test_short_embedded_decimal_and_non_github_ids_are_refused(self):
-        for run in ("", "1234567", "sha12345678", "12345678abc",
-                    "12345678.0", "https://example.com/actions/runs/12345678",
-                    "https://github.com/a/b/actions/runs/123abc"):
-            with self.subTest(run=run):
-                self.refusal(self.LINE + "\nMeasured on " + run,
-                             "dispatch run ids")
-
-    def test_declaration_values_cannot_substitute_for_run_ids(self):
-        self.new["populations"]["unit-suite"]["entries"][
-            "counter::unit-suite"]["max"] = 12345678
-        self.refusal(self.LINE.replace("-> 20", "-> 12345678"),
-                     "dispatch run ids")
-
-    def test_missing_second_unit_slot_declaration_is_refused(self):
+    def test_every_raised_unit_slot_is_admitted_sorted(self):
         self.old["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": {"min": 10, "max": 16, "n": 2}}
         self.new["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": {"min": 10, "max": 20, "n": 2}}
-        self.refusal(self.LINE + "\nRun 37188224043",
-                     "unit-suite:wall:counter::unit-suite")
+        self.assertEqual(self.derive("feat: grow"),
+                         [self.SLOT, self.WALL_SLOT])
+
+    def test_the_refusal_states_the_window_slots_and_remedy(self):
+        with self.assertRaises(self.guard.DeclarationError) as caught:
+            self.derive("fix: grow", window="abc123..HEAD")
+        message = str(caught.exception)
+        self.assertIn("no commit subject in abc123..HEAD starts with", message)
+        self.assertIn(f"- {self.SLOT}: 16.0 -> 20", message)
+        self.assertIn("trimming its own tests", message)
+        self.assertIn("renderer ceilings stay strictly down-only", message)
+
+    def test_no_raise_derives_nothing_whatever_the_subjects(self):
+        for subject in ("fix: tests", "feat: tests"):
+            with self.subTest(subject=subject):
+                self.assertEqual(self.derive(subject, new=self.old), [])
+
+    def test_renderer_raises_are_never_derived(self):
+        old = document()
+        old["populations"]["renderer-workloads"] = copy.deepcopy(
+            old["populations"]["unit-suite"])
+        renderer_up = copy.deepcopy(old)
+        renderer_up["populations"]["renderer-workloads"]["entries"][
+            "counter::unit-suite"]["max"] = 20
+        self.assertEqual(self.derive("feat: x", old=old, new=renderer_up), [])
+        renderer_up["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"]["max"] = 20
+        self.assertEqual(self.derive("feat: x", old=old, new=renderer_up),
+                         [self.SLOT])
+
+    def test_a_seed_shaped_addition_needs_no_feature(self):
+        old = document()
+        old["populations"]["unit-suite"]["entries"] = {}
+        old["populations"]["unit-suite"]["slopes"] = {
+            "counter::unit-suite": 2.0}
+        seeded = copy.deepcopy(old)
+        seeded["populations"]["unit-suite"]["entries"] = {
+            "counter::unit-suite": {"min": 14.0, "max": 14.0, "n": 2}}
+        self.assertEqual(self.derive("chore: seed", old=old, new=seeded), [])
 
 
 class ReadsTheCommittedBaseline(unittest.TestCase):

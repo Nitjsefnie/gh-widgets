@@ -344,9 +344,8 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
             "counter::unit-suite"] = envelope(14.0)
         new_doc["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": envelope(60.0)}
-        message = (CarrierFixture.MESSAGE + "\nBudget-Raise: gate/speed-baseline.json "
-                   "unit-suite:wall:counter::unit-suite 40 -> 60")
-        derived = self._derived_raises(old_doc, new_doc, message)
+        derived = self._derived_raises(old_doc, new_doc,
+                                       CarrierFixture.MESSAGE)
         self.assertEqual(derived, [
             "--ratchet-allow-raise",
             "unit-suite:entries:counter::unit-suite",
@@ -397,40 +396,30 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
             "counter::unit-suite"] = envelope(14.0)
         new_doc["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": envelope(60.0)}
-        message = (CarrierFixture.MESSAGE + "\nBudget-Raise: gate/speed-baseline.json "
-                   "unit-suite:wall:counter::unit-suite 40 -> 60")
-        unit = ratchet(old_doc, new_doc, message)
+        unit = ratchet(old_doc, new_doc, CarrierFixture.MESSAGE)
         self.assertEqual(unit.returncode, 0, unit.stdout + unit.stderr)
         self.assertIn("no entry raised", unit.stdout)
 
-        # A renderer maximum rises: the step derives nothing for it, and
-        # the tool refuses — the renderer half stays strictly down-only.
+        # A renderer maximum rises: even with a feat: subject the step
+        # derives nothing for it, and the tool refuses — the renderer half
+        # stays strictly down-only.
         renderer = ratchet(document(impact=1.3514),
-                           document(impact=1.9))
+                           document(impact=1.9), CarrierFixture.MESSAGE)
         self.assertEqual(renderer.returncode, 1,
                          renderer.stdout + renderer.stderr)
         self.assertIn("renderer-workloads:entries:e2e::bench.render-impact",
                       renderer.stderr)
 
     @REQUIRES_POSIX_SHELL
-    def test_raise_step_refuses_a_mixed_pr_with_the_split_route(self):
-        old, new = document(), document()
-        new["populations"]["unit-suite"]["entries"][
-            "counter::unit-suite"] = envelope(14)
-        result, _fixture = self._raise_step(
-            old, new, CarrierFixture.MESSAGE,
-            {"test_new.py": "# added control\n"})
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("code PR first (red on speed)", result.stderr)
-
-    @REQUIRES_POSIX_SHELL
-    def test_raise_step_refuses_an_undeclared_raise(self):
+    def test_raise_step_refuses_a_raise_without_a_feature_subject(self):
         old, new = document(), document()
         new["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = envelope(14)
         result, _fixture = self._raise_step(old, new)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("has no declaration", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no commit subject in", result.stderr)
+        self.assertIn("trimming its own tests", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     @REQUIRES_POSIX_SHELL
     def test_digest_move_with_test_changes_passes_the_step_and_ratchet(self):
@@ -508,15 +497,16 @@ class TestMainPushRatchet(unittest.TestCase):
         self.assertEqual(declared["BEFORE_SHA"], "${{ github.event.before }}")
 
     @REQUIRES_POSIX_SHELL
-    def test_squash_landing_without_declarations_is_refused_on_push_route(self):
-        self.fixture.commit("Squash baseline carrier (#140)", self.fixture.new)
+    def test_non_feature_squash_landing_is_refused_on_push_route(self):
+        self.fixture.commit("Grow the suite (#140)\n\n* feat: squashed body",
+                            self.fixture.new)
         result = self._push_step()
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("has no declaration", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no commit subject in", result.stderr)
         self.assertNotIn("Declared unit-suite raises:", result.stdout)
 
     @REQUIRES_POSIX_SHELL
-    def test_rebase_landing_keeps_declarations_on_push_route(self):
+    def test_feature_subject_landing_is_admitted_on_push_route(self):
         self.fixture.commit(self.fixture.MESSAGE, self.fixture.new)
         result = self._push_step()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

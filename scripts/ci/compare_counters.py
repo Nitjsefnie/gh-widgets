@@ -719,12 +719,12 @@ def ratchet_check(old_path: Path, new_path: Path,
              "only ever ratchets down:"]
     for node, (was, now) in moved.items():
         lines.append(f"- `{node}`: {was} -> {now}")
-    lines.append("  Lowering is always allowed. A rise is allowed only as a "
-                 "declared re-derivation (--ratchet-allow-raise), which the "
-                 "workflow reads from pure baseline-carrier commits' exact "
-                 "Budget-Raise lines and measuring dispatch run ids; every "
-                 "undeclared raise stays a failure, and renderer ceilings "
-                 "stay strictly down-only.")
+    lines.append("  Lowering is always allowed. A unit-suite rise is allowed "
+                 "only through --ratchet-allow-raise, which the workflow "
+                 "derives when the judged window carries a `feat:` or "
+                 "`feat(scope):` commit subject; renderer ceilings stay "
+                 "strictly down-only. Any other change answers a breach by "
+                 "trimming its own tests until the suite fits its envelope.")
     print("\n".join(lines), file=sys.stderr)
     return 1
 
@@ -804,9 +804,9 @@ def main(argv: list | None = None) -> int:
     parser.add_argument("--ratchet-allow-raise", action="append",
                         default=[], metavar="POP:KEY:NODE",
                         help="a `population:key:node` slot whose recorded "
-                             "maximum went UP, declared as a re-derivation; "
-                             "the workflow reads unit-suite declarations "
-                             "from pure baseline-carrier commit messages. "
+                             "maximum went UP; the workflow derives "
+                             "unit-suite slots when the judged window "
+                             "carries a `feat:` commit subject. "
                              "A declaration that contradicts the documents "
                              "is refused")
     args = parser.parse_args(argv)
