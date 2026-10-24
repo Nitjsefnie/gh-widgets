@@ -319,7 +319,7 @@ class FakeAPI:
             "pageInfo": self.page_info(len(self.repo_pages)),
             "nodes": nodes}}}
 
-    def __call__(self, token, query, variables=None, retries=3):
+    def __call__(self, token, query, variables=None, retries=3, **kwargs):
         if self.fail:
             raise RuntimeError("simulated fetch failure")
         variables = variables or {}
