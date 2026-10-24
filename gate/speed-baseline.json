@@ -9,7 +9,13 @@
       "metric": "cpu_time_ratio",
       "tolerance": 0.45,
       "population": "b2d2e84f71920f5479d8fd53c9171b0f5dfe61826296377c5110e821ff9877d1",
-      "entries": {},
+      "entries": {
+        "counter::unit-suite": {
+          "min": 22.035402332184688,
+          "max": 22.035402332184688,
+          "n": 2
+        }
+      },
       "wall": {
         "counter::unit-suite": {
           "min": 65.223,
@@ -25,7 +31,23 @@
       "metric": "cpu_time_ratio",
       "tolerance": 0.6,
       "population": "a59ee4b0b38d2663c05b816c6549783ef895efb39c3604e1d18819e069054230",
-      "entries": {},
+      "entries": {
+        "e2e::bench.render": {
+          "min": 0.023327715443820965,
+          "max": 0.023327715443820965,
+          "n": 2
+        },
+        "e2e::bench.render-impact": {
+          "min": 0.46264421622016083,
+          "max": 0.46264421622016083,
+          "n": 2
+        },
+        "e2e::bench.render-responsiveness": {
+          "min": 0.015582395576214741,
+          "max": 0.015582395576214741,
+          "n": 2
+        }
+      },
       "wall": {
         "e2e::bench.render": {
           "min": 0.057,
