@@ -248,9 +248,7 @@ jobs:
               required+=("$entry")
             fi
           done
-          # Overridable so the tests can run THIS block rather than a copy
-          # of it. A release sets neither, and only the defaults are
-          # production values.
+          # Tests can override these; releases use the defaults.
           : "${POLL_INTERVAL_SECONDS:=20}"
           : "${WAIT_DEADLINE_SECONDS:=$(( 45 * 60 ))}"
           echo "expected gates: ${manifest[*]}"
