@@ -1,6 +1,7 @@
 """Execute sibling-artifact reuse, validation, installation and the git boundary."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,11 +43,17 @@ def boundaries(root):
     (binary / "git").write_text(
         f"#!{sys.executable}\nimport json, os, sys\n"
         "args = sys.argv[1:]\n"
+        "if args[:1] == ['merge-file']:\n"
+        " os.execv(os.environ['REAL_GIT'], ['git'] + args)\n"
         "assert args[:2] == ['-C', os.environ['repo']], args\n"
         "args = args[2:]\n"
+        "if args == ['diff', '--cached', '--quiet']: sys.exit(1)\n"
+        "if args[:1] == ['show']:\n"
+        " if os.environ.get('SHOW_FAIL') == 'yes': sys.exit(1)\n"
+        " sys.stdout.buffer.write(open(os.environ['BASE_RECORD'], 'rb').read())\n"
+        " sys.exit(0)\n"
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
-        "if args == ['diff', '--cached', '--quiet']: sys.exit(1)\n"
         "subject = {'.github/comment-share.json': 'chore(ratchet): tighten comment-share records (automated)',\n"
         " '.github/size-baseline.json': 'chore(ratchet): tighten size records (automated)',\n"
         " 'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
@@ -112,12 +119,23 @@ def size_document(baseline):
 
 class TestRatchetPushDelivery(unittest.TestCase):
     @staticmethod
-    def _prepare(root, record_path, documents, coverage):
+    def _prepare(root, record_path, documents, coverage, *, base_bytes=None,
+                 main_bytes=None):
         old, new = documents or records(record_path)
         (root / "data").mkdir()
         target = root / "main" / record_path
         target.parent.mkdir(parents=True)
-        target.write_bytes(json.dumps(old).encode())
+        if main_bytes is None:
+            # All three merge inputs share one canonical shape, exactly as
+            # the real writers produce them; divergent fixture formatting
+            # would read as a whole-file rewrite on both sides.
+            main_bytes = (size_document(old["baseline"])
+                          if record_path == ".github/size-baseline.json"
+                          else (json.dumps(old, sort_keys=True, indent=2)
+                                + "\n").encode())
+        if base_bytes is None:
+            base_bytes = main_bytes
+        target.write_bytes(main_bytes)
         name = Path(record_path).name
         if record_path == ".github/size-baseline.json":
             (root / "data" / name).write_bytes(size_document(new["baseline"]))
@@ -125,15 +143,19 @@ class TestRatchetPushDelivery(unittest.TestCase):
             (root / "data" / name).write_bytes(
                 (json.dumps(new, sort_keys=True, indent=2) + "\n").encode())
         (root / "data/base.txt").write_bytes((BASE + "\n").encode())
+        (root / "base-record").write_bytes(base_bytes)
         if coverage is not None:
             target.with_name("coverage-floor.json").write_bytes(coverage)
         return target
 
     def _drive(self, record_path, response, *, documents=None, body=None,
-               api_fail=False, coverage=None):
+               api_fail=False, coverage=None, base_bytes=None,
+               main_bytes=None, show_fail=False):
         with tempfile.TemporaryDirectory(prefix="ratchet delivery ") as tmp:
             root = Path(tmp)
-            target = self._prepare(root, record_path, documents, coverage)
+            target = self._prepare(root, record_path, documents, coverage,
+                                   base_bytes=base_bytes,
+                                   main_bytes=main_bytes)
             env = dict(os.environ, PATH=str(boundaries(root)) + os.pathsep + os.environ["PATH"],
                        base=BASE, fetched=TIP, record_path=record_path, document_name=Path(record_path).name,
                        data=str(root / "data"), repo=str(root / "main"),
@@ -141,7 +163,10 @@ class TestRatchetPushDelivery(unittest.TestCase):
                        GH_WIDGETS_RUN_ID="12345678", RUNNER_TEMP=str(root),
                        GITHUB_STEP_SUMMARY=str(root / "summary"),
                        GH_CALLS=str(root / "gh-calls"), GIT_CALLS=str(root / "git-calls"),
-                       COMPARISON=json.dumps(response), API_FAIL="yes" if api_fail else "no")
+                       COMPARISON=json.dumps(response), API_FAIL="yes" if api_fail else "no",
+                       BASE_RECORD=str(root / "base-record"),
+                       REAL_GIT=shutil.which("git"),
+                       SHOW_FAIL="yes" if show_fail else "no")
             run = body or push_body()
             run = run[run.index('if [ "$base" != "$fetched" ]; then'):]
             result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", run],
@@ -235,6 +260,95 @@ class TestRatchetPushDelivery(unittest.TestCase):
             ".github/size-baseline.json", response, body=mutant)
         # The restored subtraction drops the same movement green.
         self._assert_delivery(result, calls, False)
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_merge_preserves_main_edit_and_delivers_both(self):
+        """Own-record movement plus a non-conflicting in-between edit.
+
+        Main added an entry to the size record after the artifact was
+        measured; the artifact lowered a different entry. The delivered
+        document must carry both sides merged against the base copy —
+        the whole-file copy the old apply used would lose main's entry,
+        which is exactly the mutant's tell.
+        """
+        base_bytes = size_document({"a1.py": 300, "one.py": 42})
+        main_bytes = size_document({"a0.py": 100, "a1.py": 300,
+                                    "one.py": 42})
+        # The two edits sit apart: main inserts a0.py above an entry the
+        # artifact never touches, and the artifact lowers one.py below it —
+        # same map on both sides, so neither side deletes what the other
+        # needs. Adjacent hunks or a deleted entry would conflict, which is
+        # the other branch's own drop case.
+        merged_bytes = size_document({"a0.py": 100, "a1.py": 300,
+                                      "one.py": 41})
+        documents = (
+            {"schema_version": 1,
+             "baseline": {"a1.py": 300, "one.py": 42}},
+            {"schema_version": 1,
+             "baseline": {"a1.py": 300, "one.py": 41}},
+        )
+        result, calls, written, _summary = self._drive(
+            ".github/size-baseline.json",
+            self._comparison({".github/size-baseline.json"}),
+            documents=documents,
+            base_bytes=base_bytes, main_bytes=main_bytes)
+        self._assert_delivery(result, calls, True)
+        self.assertEqual(written, merged_bytes)
+        self.assertIn("merged and preserved", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_a_conflicting_records_edit_drops_green(self):
+        """Main and the artifact touched the same entry: drop, don't lose.
+
+        The conflict notice is asserted by name: a mutant that delivers on
+        conflict would otherwise fall through to the parse check (conflict
+        markers do not parse) and drop with a different notice, which the
+        verdict alone cannot distinguish.
+        """
+        base_bytes = size_document({"one.py": 42})
+        main_bytes = size_document({"one.py": 50})
+        result, calls, _written, summary = self._drive(
+            ".github/size-baseline.json",
+            self._comparison({".github/size-baseline.json"}),
+            base_bytes=base_bytes, main_bytes=main_bytes)
+        self._assert_delivery(result, calls, False)
+        self.assertIn("the merge conflicts", result.stdout)
+        self.assertIn("Dropped ratchet artifact", summary)
+        self.assertIn("records merge conflicts", summary)
+
+    @REQUIRES_POSIX_SHELL
+    def test_an_unparseable_merged_record_drops_green(self):
+        """A clean line-merge that still produces unparseable JSON drops.
+
+        Main appended a broken line where the artifact did not touch, so
+        the textual merge is clean but the result is not JSON; the parse
+        check must drop the run green rather than installing it.
+        """
+        base_bytes = size_document({"one.py": 42})
+        main_bytes = size_document({"one.py": 42}).replace(
+            b'{\n', b'{\n  broken\n', 1)
+        result, calls, _written, summary = self._drive(
+            ".github/size-baseline.json",
+            self._comparison({".github/size-baseline.json"}),
+            base_bytes=base_bytes, main_bytes=main_bytes)
+        self._assert_delivery(result, calls, False)
+        self.assertIn("does not parse as JSON", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_an_unreachable_base_record_drops_green(self):
+        """No base copy of the record: drop green, name the reason.
+
+        The record first landed on main after the artifact's measured
+        base, so there is nothing to merge against; installing the
+        artifact whole would discard whatever main carries now.
+        """
+        result, calls, _written, summary = self._drive(
+            ".github/size-baseline.json",
+            self._comparison({".github/size-baseline.json"}),
+            show_fail=True)
+        self._assert_delivery(result, calls, False)
+        self.assertIn("the measured base carries no copy", result.stdout)
+        self.assertIn("no record to merge against", summary)
 
     @REQUIRES_POSIX_SHELL
     def test_real_writer_output_survives_an_intervening_coverage_raise_and_is_delivered(self):
