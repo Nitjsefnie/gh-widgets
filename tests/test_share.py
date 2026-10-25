@@ -251,7 +251,8 @@ class UnitSharing(unittest.TestCase):
 
     def test_shared_identity_uses_writer_environment_without_rederiving(self):
         self.run_renderer(profile)
-        self.environment.update(GH_EXTRA_INSIDERS="", GH_EXTRA_EMAILS="")
+        self.environment.update(GH_WIDGETS_GH_EXTRA_INSIDERS="",
+                                GH_WIDGETS_GH_EXTRA_EMAILS="")
         with mock.patch.object(impact, "update_loc", return_value={}) as update:
             with mock.patch.dict(os.environ, self.environment), \
                     mock.patch("urllib.request.urlopen", self.api):

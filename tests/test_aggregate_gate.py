@@ -579,7 +579,7 @@ class SecretScanTests(unittest.TestCase):
             "owner/repo", HEAD_SHA, 30, transport,
             clock=timer.clock, sleep=timer.sleep)
         self.assertEqual(result.verdict, ag.FAILED)
-        self.assertIn("outside HEAD_SHA", result.detail)
+        self.assertIn("outside GH_WIDGETS_HEAD_SHA", result.detail)
         self.assertEqual(len(transport.calls), 1)
 
     def test_newest_run_on_the_sha_wins_independent_of_response_order(self):

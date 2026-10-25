@@ -211,7 +211,7 @@ def changed_files(transport: Transport, repository: str, *, event: str,
                   payload: dict | None = None) -> tuple[set[str], bool]:
     """Read the event's changed paths and report whether the diff hit its cap."""
     if REPOSITORY.fullmatch(repository) is None:
-        raise DetectionError("missing or invalid REPOSITORY")
+        raise DetectionError("missing or invalid GH_WIDGETS_REPOSITORY")
     if event == "pull_request":
         number = pr_number
         if not number:
@@ -219,7 +219,7 @@ def changed_files(transport: Transport, repository: str, *, event: str,
             number = (str(pull_request.get("number", ""))
                       if isinstance(pull_request, dict) else "")
         if not number.isascii() or not number.isdigit() or int(number) < 1:
-            raise DetectionError("pull_request has no valid PR_NUMBER")
+            raise DetectionError("pull_request has no valid number")
         files = _list_items(_api(
             transport,
             f"repos/{repository}/pulls/{number}/files?per_page=100",

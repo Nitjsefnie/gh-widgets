@@ -7,9 +7,9 @@ default branch means each of those clones takes whatever the tip happens to be
 at that moment, so a repo that moves mid-comparison quietly makes the arms
 incomparable while every report still reads clean.
 
-This writes the manifest that `IMPACT_REPO_PINS` names: the repo set the run
-will blame, each at one commit, resolved once up front from the same GraphQL
-query the renderer itself uses. Run it before the arms, not per arm.
+This writes the manifest that `GH_WIDGETS_IMPACT_REPO_PINS` names: the repo
+set the run will blame, each at one commit, resolved once up front from the
+renderer's own GraphQL query. Run it before the arms, not per arm.
 
     scripts/resolve-repo-pins.py --user Nitjsefnie --out pins.json
 

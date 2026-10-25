@@ -318,11 +318,11 @@ class AcquisitionTests(unittest.TestCase):
                              sha="a" * 40, pr_number="37")
 
     def test_changed_files_validates_event_identity_and_payload(self):
-        with self.assertRaisesRegex(cd.DetectionError, "REPOSITORY"):
+        with self.assertRaisesRegex(cd.DetectionError, "GH_WIDGETS_REPOSITORY"):
             cd.changed_files(FakeTransport(), "bad repo", event="push",
                              sha="a" * 40,
                              payload={"before": "b" * 40, "after": "a" * 40})
-        with self.assertRaisesRegex(cd.DetectionError, "PR_NUMBER"):
+        with self.assertRaisesRegex(cd.DetectionError, "no valid number"):
             cd.changed_files(FakeTransport(), "owner/repo",
                              event="pull_request", sha="a" * 40)
         with self.assertRaisesRegex(cd.DetectionError, "does not match"):
