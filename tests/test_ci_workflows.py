@@ -1260,6 +1260,40 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertIn("exactly base.txt", refused.stderr)
 
+    @REQUIRES_POSIX_SHELL
+    def test_preflight_names_the_size_document_and_maps_its_path(self):
+        script = self._artifact_preflight()
+        push = self._step("Validate and push the ratchet record")["run"]
+        start = push.index('base="$(cat "$data/base.txt")"')
+        end = push.index("eval \"$(ssh-agent -s)\"")
+        mapping = push[start:end]
+        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-size-map-") as tmp:
+            data = Path(tmp) / "ratchet-data"
+            data.mkdir()
+            (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
+            (data / "size-baseline.json").write_text(
+                '{"schema_version": 1, "baseline": {}}', encoding="utf-8")
+            accepted = subprocess.run(
+                [sys.executable, "-c", script, str(data)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(accepted.returncode, 0,
+                             accepted.stdout + accepted.stderr)
+            self.assertEqual(accepted.stdout.strip(), "size-baseline.json")
+            for document_name, record_path in (
+                    ("size-baseline.json", ".github/size-baseline.json"),
+                    ("coverage-floor.json", "gate/coverage-floor.json"),
+            ):
+                with self.subTest(document=document_name):
+                    mapped = subprocess.run(
+                        ["bash", "-e", "-o", "pipefail", "-c",
+                         mapping + "\nprintf '%s\\n' \"$record_path\"\n"],
+                        cwd=tmp, env=dict(os.environ,
+                                          data=str(data),
+                                          document_name=document_name),
+                        capture_output=True, text=True, check=False)
+            self.assertEqual(mapped.returncode, 0, mapped.stderr)
+            self.assertEqual(mapped.stdout.strip(), record_path)
+
     def _run_rejected_push(self, remote_main):
         run = self._step("Validate and push the ratchet record")["run"]
         start = run.index(
