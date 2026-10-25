@@ -3,10 +3,10 @@ Description=Render self-hosted GitHub stat SVGs
 
 [Service]
 Type=oneshot
-Environment=GH_USER=YOUR_GH_USERNAME
-Environment=GH_TOKEN_FILE=/etc/gh-widget.token
-Environment=OUT_DIR=/var/www/example.com/widgets
-Environment=THEME=tokyonight
+Environment=GH_WIDGETS_GH_USER=YOUR_GH_USERNAME
+Environment=GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token
+Environment=GH_WIDGETS_OUT_DIR=/var/www/example.com/widgets
+Environment=GH_WIDGETS_THEME=tokyonight
 ExecStart=/usr/local/bin/render-gh-widgets.py
 Nice=10
 StandardOutput=journal

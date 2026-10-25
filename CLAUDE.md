@@ -147,7 +147,7 @@ Setting the flag to `1` skips bot acquisition entirely.
 **Three caches, and the flags are not symmetric.** `cache.json` is the profile
 cache; `impact-cache.json` is shared by `render-impact.py` and
 `render-responsiveness.py` — do not point them at one file. The unit sets
-`CACHE_FILE=…/cache.json` in its environment and passes `--cache-file
+`GH_WIDGETS_CACHE_FILE=…/cache.json` in its environment and passes `--cache-file
 …/impact-cache.json` explicitly to the two that share the impact cache, because
 **`render.py` has no `--cache-file` flag at all** (env only) and
 **`render-responsiveness.py` has no `--resync`** (it has no cache of its own;
@@ -155,11 +155,11 @@ re-running it after the impact resync *is* its resync). Check `--help` before
 adding a flag to a unit — an unknown flag exits 2 and fails the whole unit.
 
 `render-stars.py` uses a separate `stars-cache.json`, configured by
-`--cache-file` or `STARS_CACHE_FILE` (never `CACHE_FILE`), and `GH_STAR_REPOS`
+`--cache-file` or `GH_WIDGETS_STARS_CACHE_FILE` (never `GH_WIDGETS_CACHE_FILE`), and `GH_WIDGETS_GH_STAR_REPOS`
 or `--repos` for its repository list. It refetches all current stargazers on
 every run and has no `--resync` flag. Both units configure Overflow.
 
-> **Do not drop `GH_EXTRA_EMAILS`.** Line ownership is an exact match against
+> **Do not drop `GH_WIDGETS_GH_EXTRA_EMAILS`.** Line ownership is an exact match against
 > the account's GitHub noreply addresses (derived from `login` + `databaseId`),
 > replacing a substring test. The workstation address never appears as a noreply,
 > so without this var those lines stop counting — **silently**, as a lower number
@@ -222,7 +222,7 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > to fix. The bytes and the equality are the argument; the seconds only
 > agree with it, and should not be carried forward without them.
 >
-> Note that under the default `BLAME_METHOD=targeted` **git-fame does not run
+> Note that under the default `GH_WIDGETS_BLAME_METHOD=targeted` **git-fame does not run
 > at all** — this pin only governs `fame` and the weekly `both` audit. Keep it
 > current anyway: the audit is what certifies the fast path, and auditing
 > against a stale reference is worth less.
@@ -346,12 +346,12 @@ everything, so it takes far longer than an incremental run.
 > line is absent on purpose — which is why the method line exists at all:
 > silence would otherwise be ambiguous between "not used" and "guard broken".
 
-> **`BLAME_METHOD` — how the per-repo line counts are produced.**
+> **`GH_WIDGETS_BLAME_METHOD` — how the per-repo line counts are produced.**
 > `targeted` (**the default**, `impact_loc.py`) blames only the files our own
 > commits touched and takes `total` from a line count of the files
 > `git grep -I .` calls text; `fame` runs git-fame over every file; `both`
 > runs the two and **fails** on any disagreement. The unit sets no
-> `BLAME_METHOD`, so production renders with `targeted` and git-fame does not
+> `GH_WIDGETS_BLAME_METHOD`, so production renders with `targeted` and git-fame does not
 > run at all there. The blame phase measured 535.6s -> 61.2s over 59 repos —
 > an indicative wall observation, not a magnitude; what is load-invariant
 > here is that `targeted` blames a strict subset of what `fame` does, which
@@ -375,14 +375,14 @@ everything, so it takes far longer than an incremental run.
 > **It must carry the production address set**: the earlier 59/59 that briefly
 > justified enabling `targeted` was measured on the derived noreply addresses
 > alone, and auditing a different identity than the one that renders the card
-> is not an audit. The workflow passes `GH_EXTRA_EMAILS` for exactly that
+> is not an audit. The workflow passes `GH_WIDGETS_GH_EXTRA_EMAILS` for exactly that
 > reason.
 >
 > The audit lived inside `gitfame-resync-memory.yml` until 2026-08-19, under a
 > name that described only that workflow's other half. That one is now
 > dispatch-only memory measurement and carries no schedule.
 >
-> Both workflows resolve `IMPACT_REPO_PINS` first (`scripts/resolve-repo-pins.py`):
+> Both workflows resolve `GH_WIDGETS_IMPACT_REPO_PINS` first (`scripts/resolve-repo-pins.py`):
 > one commit per repo, fixed before any arm runs. Without it the two methods —
 > or the two git-fame builds — clone minutes apart and a repo that moves in
 > between is measured at two different sizes. Under a manifest, an unhonourable
@@ -408,7 +408,7 @@ everything, so it takes far longer than an incremental run.
 > as the box's, as production's, or as a magnitude at all: it is the wall of
 > a shared CI runner measuring a different program.
 
-> **`CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
+> **`GH_WIDGETS_CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
 > blame consuming them. Clone waits on the network, blame saturates the CPUs,
 > so the overlap is close to free: those runs measured 125.4s of 159.0s
 > clone hidden against 60s hidden at depth 1, an indicative wall observation
@@ -425,7 +425,7 @@ everything, so it takes far longer than an incremental run.
 > cgroup `memory.peak` **counts page cache**,
 > and eight concurrent clones write much more file data, so most of that
 > "regression" is reclaimable cache rather than process memory. Capping
-> index-pack (`CLONE_PACK_THREADS`, `CLONE_WINDOW_MB`) confirmed it: 769MB ->
+> index-pack (`GH_WIDGETS_CLONE_PACK_THREADS`, `GH_WIDGETS_CLONE_WINDOW_MB`) confirmed it: 769MB ->
 > 761MB, i.e. allocation was never the driver.
 >
 > The real cost of depth 8 is reliability: one of two runs lost a repo to

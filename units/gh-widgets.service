@@ -10,10 +10,10 @@
 # across the unit. Stars also uses GraphQL; popularity uses REST and git.
 #
 # A unit has ONE environment block but five renderers using THREE caches, so the
-# split is deliberate: CACHE_FILE= below is the profile cache, and the two
+# split is deliberate: GH_WIDGETS_CACHE_FILE= below is the profile cache, and the two
 # renderers that share the impact cache get it as an explicit --cache-file flag
 # (the flag overrides the env var). render.py has NO --cache-file flag at all —
-# it reads CACHE_FILE only — which is why the env var carries the profile cache
+# it reads GH_WIDGETS_CACHE_FILE only — which is why the env var carries the profile cache
 # rather than the impact one. Verify with `--help` before changing either.
 #
 # Deploy with install.sh --units, never by editing /etc/systemd/system.
@@ -25,17 +25,17 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=GH_USER=Nitjsefnie
-Environment=GH_TOKEN_FILE=/etc/gh-widget.token
-Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
-Environment=THEME=tokyonight
-Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
+Environment=GH_WIDGETS_GH_USER=Nitjsefnie
+Environment=GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token
+Environment=GH_WIDGETS_OUT_DIR=/var/www/nitjsefni.eu/widgets
+Environment=GH_WIDGETS_THEME=tokyonight
+Environment=GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow
 # Line ownership is an exact match against the account's GitHub noreply
 # addresses; the workstation address never appears as one, so without this the
 # blame pass silently under-counts. Profile fetches identity for the same-run
 # share that impact and responsiveness reuse; standalone runs fetch it live.
-Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
-Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
+Environment=GH_WIDGETS_GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+Environment=GH_WIDGETS_CACHE_FILE=/var/lib/gh-widgets/cache.json
 Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
 StateDirectory=gh-widgets
 # systemd resets this directory's mode at each start, so declare it here.

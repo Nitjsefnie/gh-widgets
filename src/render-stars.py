@@ -191,7 +191,7 @@ def parse_args():
     p.add_argument('--cache-file', default=common.env('GH_WIDGETS_STARS_CACHE_FILE',
                                                       DEFAULT_CACHE_FILE),
                    help='Separate star cache (env: GH_WIDGETS_STARS_CACHE_FILE; '
-                        'ignores CACHE_FILE and its prefixed spelling)')
+                        'ignores GH_WIDGETS_CACHE_FILE)')
     args = p.parse_args()
     repos = [repo.strip() for repo in args.repos.split(',') if repo.strip()]
     if not repos or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', repo)

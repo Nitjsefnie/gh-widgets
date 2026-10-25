@@ -45,7 +45,7 @@ sudo chmod 600 /etc/gh-widget.token
 # customise the service unit (username, output dir, theme)
 sudo cp examples/gh-widgets.service /etc/systemd/system/
 sudo cp examples/gh-widgets.timer   /etc/systemd/system/
-sudoedit /etc/systemd/system/gh-widgets.service   # set GH_USER, OUT_DIR
+sudoedit /etc/systemd/system/gh-widgets.service   # set GH_WIDGETS_GH_USER, GH_WIDGETS_OUT_DIR
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now gh-widgets.timer
@@ -85,14 +85,14 @@ match against the account's GitHub noreply addresses, not by pattern-matching
 a name.
 
 The two identity overrides are **additive** — neither can remove something
-the API reported. `GH_EXTRA_ORGS` separately adds public organization repos to
+the API reported. `GH_WIDGETS_GH_EXTRA_ORGS` separately adds public organization repos to
 the stats card.
 
 | Variable | Use it for |
 |---|---|
-| `GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
-| `GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
-| `GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account belongs to (`gh api user/orgs`); private repos are filtered out. |
+| `GH_WIDGETS_GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
+| `GH_WIDGETS_GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
+| `GH_WIDGETS_GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account belongs to (`gh api user/orgs`); private repos are filtered out. |
 
 ## Tuning the impact score (`src/render-impact.py`)
 
@@ -121,11 +121,11 @@ taller to fit them. `N` must be a whole number of at least 1.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |
-| `IMPACT_PR_GAMMA` | `1.0` | How much raw PR volume counts against share. |
+| `GH_WIDGETS_IMPACT_Z` | `2.58` | Confidence level of the lower bound. Higher = more sceptical of small samples. |
+| `GH_WIDGETS_IMPACT_PR_GAMMA` | `1.0` | How much raw PR volume counts against share. |
 | `GH_WIDGETS_IMPACT_COUNT_BOT_PRS` | `0` | Exclude merged PRs whose author is a GraphQL `Bot` from PR totals, shares and scores. Set `1` to include them; unset, empty or `0` excludes them. Other values abort. Cached fallback uses the same setting. |
-| `IMPACT_ISSUE_GAMMA` | `1.75` | Same, for issues. |
-| `IMPACT_LOC_GAMMA` | `0.5` | Same, for surviving lines. |
+| `GH_WIDGETS_IMPACT_ISSUE_GAMMA` | `1.75` | Same, for issues. |
+| `GH_WIDGETS_IMPACT_LOC_GAMMA` | `0.5` | Same, for surviving lines. |
 
 An unparseable value aborts the run rather than silently reverting to the
 default — a mis-typed knob that quietly renders wrong numbers is worse than a
@@ -144,17 +144,17 @@ without merging is excluded: it was answered, with a no.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `RESP_GAMMA` | `0.5` | How much raw PR volume counts against turnaround. |
-| `RESP_HALF_LIFE_H` | `24.0` | Turnaround at which the speed factor is 0.5 (0.25 at three times it). |
-| `RESP_MIN_PRS` | `3` | PRs (merged or open) a repo needs before it is ranked at all. |
+| `GH_WIDGETS_RESP_GAMMA` | `0.5` | How much raw PR volume counts against turnaround. |
+| `GH_WIDGETS_RESP_HALF_LIFE_H` | `24.0` | Turnaround at which the speed factor is 0.5 (0.25 at three times it). |
+| `GH_WIDGETS_RESP_MIN_PRS` | `3` | PRs (merged or open) a repo needs before it is ranked at all. |
 
 Same contract as the impact knobs: an unparseable value aborts the run.
 
 ## Usage (manual run)
 
 ```sh
-GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./src/render.py
-GH_USER=octocat GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=/var/www/example/widgets THEME=catppuccin ./src/render.py
+GH_WIDGETS_GH_USER=octocat GH_TOKEN=ghp_xxx GH_WIDGETS_OUT_DIR=./widgets ./src/render.py
+GH_WIDGETS_GH_USER=octocat GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token GH_WIDGETS_OUT_DIR=/var/www/example/widgets GH_WIDGETS_THEME=catppuccin ./src/render.py
 ```
 
 ## Public snapshots
@@ -254,7 +254,7 @@ GitHub rejects a full-year contribution-calendar query with
 `RESOURCE_LIMITS_EXCEEDED` once an account's history is large enough, so the
 renderer caches the data that cannot change and refetches only what can.
 
-- `CACHE_FILE` — cache location, default `/var/lib/gh-widgets/cache.json`.
+- `GH_WIDGETS_CACHE_FILE` — cache location, default `/var/lib/gh-widgets/cache.json`.
   Missing, unreadable, corrupt, or schema-mismatched caches are not errors: the
   run falls back to a full fetch.
 - `cache.json` and `impact-cache.json` are private renderer implementation
@@ -272,7 +272,7 @@ renderer caches the data that cannot change and refetches only what can.
 
 ## Themes
 
-Four built-in palettes. Pick one in `THEME=` or via `--theme`:
+Four built-in palettes. Pick one in `GH_WIDGETS_THEME=` or via `--theme`:
 
 - `tokyonight` (default)
 - `catppuccin`
@@ -302,20 +302,20 @@ shows the current total. It uses the shared card, fonts, and four theme
 palettes; the existing palettes are all dark themes.
 
 ```sh
-GH_STAR_REPOS=Nitjsefnie/Overflow GH_TOKEN_FILE=/etc/gh-widget.token \
-  OUT_DIR=./widgets ./src/render-stars.py
+GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token \
+  GH_WIDGETS_OUT_DIR=./widgets ./src/render-stars.py
 ./src/render-stars.py --repos owner/one,owner/two --token-file /path/to/token \
   --out-dir ./widgets --cache-file ./stars-cache.json --theme catppuccin
 ```
 
-`--repos` overrides the comma-separated `GH_STAR_REPOS` list. Names are
+`--repos` overrides the comma-separated `GH_WIDGETS_GH_STAR_REPOS` list. Names are
 deduplicated case-insensitively, and each repository writes a lowercase
 `stars-<owner>-<repo>.svg` (for Overflow, `stars-nitjsefnie-overflow.svg`).
 A list whose names would produce the same filename is rejected.
 GitHub's canonical `nameWithOwner` casing is used for the card's subtitle,
 title, and description and retained in the cache. Older cache entries without
 it use the first configured spelling of the repository name.
-Only public repositories are published. `OUT_DIR`, `THEME`, `GH_TOKEN`, and `GH_TOKEN_FILE`
+Only public repositories are published. `GH_WIDGETS_OUT_DIR`, `GH_WIDGETS_THEME`, `GH_TOKEN`, and `GH_WIDGETS_GH_TOKEN_FILE`
 and their CLI flags behave like the other renderers.
 
 GitHub supplies timestamps for **current stargazers only**: users who
@@ -328,14 +328,14 @@ is worked around.
 Every run fetches the complete available list through the shared GraphQL
 retry helper, so un-stars are reflected on the next refresh. The separate
 cache defaults to `/var/lib/gh-widgets/stars-cache.json`, configurable with
-`STARS_CACHE_FILE` or `--cache-file`; it ignores the profile's `CACHE_FILE`.
+`GH_WIDGETS_STARS_CACHE_FILE` or `--cache-file`; it ignores the profile's `GH_WIDGETS_CACHE_FILE`.
 Updates use the shared locked, atomic cache writer. A failed fetch uses a
 valid cached history with a visible fetch timestamp; without one it fails
 and leaves the previous SVG intact. An explicitly missing or private repo
 fails even if a formerly public history is cached. No credentials or
 stargazer identities are cached.
 
-Both services in `units/` configure `GH_STAR_REPOS=Nitjsefnie/Overflow` and run
+Both services in `units/` configure `GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow` and run
 the stars renderer after the other renderers, with its cache passed explicitly.
 It has no `--resync`: every run already refetches the current list.
 After deployment, embed Overflow's widget with:
@@ -351,7 +351,7 @@ those owned by every organization returned by the token's `GET /user/orgs`
 membership list. It uses the shared card, fonts, accessibility and four themes.
 
 ```sh
-GH_TOKEN_FILE=/etc/gh-widget.token OUT_DIR=./widgets ./src/render-popularity.py
+GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token GH_WIDGETS_OUT_DIR=./widgets ./src/render-popularity.py
 ./src/render-popularity.py --token-file /path/to/token --out-dir ./widgets --theme catppuccin
 ```
 
@@ -365,7 +365,7 @@ Outsider commits are counted from a fresh blobless, single-branch clone of
 each repository's **default branch**, removed after the count. An author is
 excluded when their lowercased email exactly matches one of your GitHub
 noreply addresses (with or without your numeric account id), an additive
-`GH_EXTRA_EMAILS` address, the public/profile email returned by `GET /user`,
+`GH_WIDGETS_GH_EXTRA_EMAILS` address, the public/profile email returned by `GET /user`,
 or any of `noreply@anthropic.com`,
 `noreply@openai.com`, `noreply@z.ai`, `noreply@openrouter.ai`, and
 `noreply@github.com`. Authors are also excluded when `[bot]` appears in
@@ -373,7 +373,7 @@ their name or email (case-insensitive), or their name exactly matches the
 token account's name or login. All remaining commits count, including authors
 whose email is not linked to a GitHub account. Clone or log failures abort.
 Private owner addresses unavailable to the token can be added with
-`GH_EXTRA_EMAILS`; fetched addresses and noreply identities remain excluded.
+`GH_WIDGETS_GH_EXTRA_EMAILS`; fetched addresses and noreply identities remain excluded.
 Empty repositories contribute zero outsider commits; missing branches in
 nonempty repositories and corrupt histories remain errors.
 
@@ -384,7 +384,7 @@ ties). Scores display as `raw × 10 / top raw` to two decimals: the leader is
 Raw scores are never displayed.
 
 Every run fetches all API data and clones anew; there is no cache or
-`--resync`. `OUT_DIR`, `THEME`, `GH_TOKEN`, `GH_TOKEN_FILE` and their CLI
+`--resync`. `GH_WIDGETS_OUT_DIR`, `GH_WIDGETS_THEME`, `GH_TOKEN`, `GH_WIDGETS_GH_TOKEN_FILE` and their CLI
 flags work like the star-history renderer. Both services in `units/` run it
 after responsiveness. After deployment, embed it with:
 
@@ -444,7 +444,7 @@ PRs while dropping the holiday-weekend tail. Repos with fewer than 4 merged PRs
 fall back to the plain mean so the trim cannot collapse to a single value or an
 empty set.
 
-A repo needs `RESP_MIN_PRS` merged PRs (default 3) to be ranked: a summary over
+A repo needs `GH_WIDGETS_RESP_MIN_PRS` merged PRs (default 3) to be ranked: a summary over
 one or two samples is not an estimate of anything. The excluded tail is
 **stated on the card** — repo count and PR count — rather than quietly dropped,
 along with the number of rows the top-N cut hides.
@@ -496,7 +496,7 @@ against hand-built calendars. Nothing to install.
 
 ## Auditing the blame method
 
-`BLAME_METHOD` selects how per-repo line counts are produced: `targeted` (the
+`GH_WIDGETS_BLAME_METHOD` selects how per-repo line counts are produced: `targeted` (the
 default) blames only the files your own commits touched, `fame` runs git-fame
 over every file, and `both` runs the two and compares them per repo. The fast
 path's failure mode is a silent under-count — a smaller number on the card,
@@ -504,7 +504,7 @@ never an error — so `both` makes the renderer **exit non-zero** on any
 disagreement rather than reporting it into a log.
 
 `.github/workflows/targeted-blame-audit.yml` runs that comparison weekly. It
-must audit the identity that renders your card (`GH_EXTRA_EMAILS`), or it
+must audit the identity that renders your card (`GH_WIDGETS_GH_EXTRA_EMAILS`), or it
 measures a different set of lines than production does.
 
 Comparing two runs only means something if they blame the same code, so pin
@@ -512,7 +512,7 @@ the commits first:
 
 ```sh
 scripts/resolve-repo-pins.py --user <login> --out pins.json
-IMPACT_REPO_PINS=pins.json BLAME_METHOD=both python3 src/render-impact.py --resync
+GH_WIDGETS_IMPACT_REPO_PINS=pins.json GH_WIDGETS_BLAME_METHOD=both python3 src/render-impact.py --resync
 ```
 
 The manifest is `{repo: {branch, head}}`, resolved from the same query the

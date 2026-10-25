@@ -216,7 +216,7 @@ def clone_repo(repo, branch, dest, head=None):
     # quota on a single full clone, so the deadline bounds how long network
     # and scratch-disk growth can continue without truncating repository data.
     # Each later git path/blame command has a 600s deadline and a stdout cap
-    # (GIT_OUTPUT_CAP_MB, default 512 MiB), independent of clone size.
+    # (GH_WIDGETS_GIT_OUTPUT_CAP_MB, default 512 MiB), independent of clone size.
     # Peak memory of a --resync is dominated by concurrent clones, not blame,
     # so cap what each clone's index-pack allocates. Its thread count and delta
     # window buy throughput that GH_WIDGETS_CLONE_LOOKAHEAD concurrent clones

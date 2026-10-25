@@ -50,7 +50,7 @@ maintainer is reachable is worth a great deal more than one that does not.
 The renderers authenticate to the GitHub API with **one GitHub personal access
 token (classic)**, belonging to the account whose profile the cards render.
 The renderers read it from `--token` / `GH_TOKEN`, or from a file named by
-`--token-file` / `GH_TOKEN_FILE`.
+`--token-file` / `GH_WIDGETS_GH_TOKEN_FILE`.
 
 Documented scope: **`public_repo`**. `read:user` is *not* required — nothing
 here reads the account's email address.

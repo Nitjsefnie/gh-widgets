@@ -19,15 +19,15 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=GH_USER=Nitjsefnie
-Environment=GH_TOKEN_FILE=/etc/gh-widget.token
-Environment=OUT_DIR=/var/www/nitjsefni.eu/widgets
-Environment=THEME=tokyonight
-Environment=GH_STAR_REPOS=Nitjsefnie/Overflow
+Environment=GH_WIDGETS_GH_USER=Nitjsefnie
+Environment=GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token
+Environment=GH_WIDGETS_OUT_DIR=/var/www/nitjsefni.eu/widgets
+Environment=GH_WIDGETS_THEME=tokyonight
+Environment=GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow
 # Dropping this makes the blame pass under-count silently, and it bites
 # hardest here: --resync re-blames every repo at once.
-Environment=GH_EXTRA_EMAILS=zmatek.peter@gmail.com
-Environment=CACHE_FILE=/var/lib/gh-widgets/cache.json
+Environment=GH_WIDGETS_GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+Environment=GH_WIDGETS_CACHE_FILE=/var/lib/gh-widgets/cache.json
 Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
 StateDirectory=gh-widgets
 # systemd resets this directory's mode at each start, so declare it here.

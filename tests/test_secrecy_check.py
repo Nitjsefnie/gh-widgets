@@ -15,6 +15,7 @@ the fixture drives the POSIX hook path, which that runner cannot execute (same
 policy as the git-fame shebang fixture).
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -46,11 +47,18 @@ def git_output(*args, cwd):
                           capture_output=True, check=False).stdout
 
 
-def run_script(cwd, script, *args):
+PRE_PUSH = Path(__file__).resolve().parents[1] / "scripts" / "pre-push"
+# The override, in both spellings; cases strip both from the ambient
+# environment, so the scenario a case builds is the only source of either.
+OVERRIDE_NAMES = ("SKIP_SECRECY_CHECK", "GH_WIDGETS_SKIP_SECRECY_CHECK")
+
+
+def run_script(cwd, script, *args, env=None):
     """Run *script* from *cwd* the way the pre-push hook would: direct exec,
     like CreateProcess-free POSIX execution of the shebang script. *args* are
-    passed through for the modes the script takes (e.g. --tree)."""
-    return subprocess.run([str(script), *args], cwd=cwd, text=True,
+    passed through for the modes the script takes (e.g. --tree). *env*, when
+    given, replaces the ambient environment entirely."""
+    return subprocess.run([str(script), *args], cwd=cwd, text=True, env=env,
                           capture_output=True, check=False)
 
 
@@ -373,6 +381,109 @@ class TestTreeScanIsCaseInsensitive(unittest.TestCase):
                          "a case-sensitive history pickaxe would find it too "
                          f"and the catch would not be attributable: "
                          f"{found.strip()}")
+
+
+@unittest.skipIf(
+    sys.platform == "win32",
+    "the fixture drives the POSIX pre-push path -- a shebang script plus "
+    "sed -- which CreateProcess cannot exec and which the runner's bash "
+    "invocations fail silently on; the script had no Windows coverage "
+    "before this change either")
+class TestPrePushOverride(unittest.TestCase):
+    """The hook's override answers to the prefixed name, the bare one
+    falling back (the repository env-prefix policy).
+
+    Every case drives the LIVE scripts/pre-push in a throwaway checkout
+    whose committed secrecy-check.sh copy refuses -- a leak is staged, so
+    exit 0 is possible ONLY through the override, and a refusal names
+    BLOCKED, so exit 1 cannot be a broken hook. That is what makes each
+    row discriminate: the same fixture plus the same check, differing only
+    in which override spelling the environment carries.
+
+    The fallback's semantics mirror the runner's ${GH_WIDGETS_X-$BARE}:
+    prefixed presence decides -- unset falls back to the bare name, while
+    an explicitly EMPTY prefixed value is an override OFF that beats a bare
+    1. The rows pin every arm of that table, plus the clean-tree happy
+    path; each method's docstring names the arm it alone pins.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp, cls.main = make_fixture("ghw-secrecy-prepush-")
+        (cls.main / ".secrecy-literals").write_text(
+            LITERAL + "\n", encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, overrides):
+        """Stage the leak the way a real near-miss would be, run the live
+        hook with both spellings stripped and the scenario's overrides
+        applied, and restore the tree whatever the verdict."""
+        (self.main / "leak.txt").write_text(
+            f"token = {LITERAL}\n", encoding="utf-8")
+        git("add", "leak.txt", cwd=self.main)
+        try:
+            env = {name: value for name, value in os.environ.items()
+                   if name not in OVERRIDE_NAMES}
+            env.update(overrides)
+            return run_script(self.main, PRE_PUSH, env=env)
+        finally:
+            git("rm", "-q", "--cached", "leak.txt", cwd=self.main)
+            (self.main / "leak.txt").unlink()
+
+    def test_bare_one_alone_still_overrides(self):
+        """The fallback keeps its original meaning: bare 1 alone is active."""
+        proc = self.run_hook({"SKIP_SECRECY_CHECK": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("BLOCKED", proc.stderr)
+
+    def test_prefixed_one_wins_over_bare_zero(self):
+        """Both set: the prefixed 1 activates over a bare 0."""
+        proc = self.run_hook({"GH_WIDGETS_SKIP_SECRECY_CHECK": "1",
+                              "SKIP_SECRECY_CHECK": "0"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("BLOCKED", proc.stderr)
+
+    def test_prefixed_zero_wins_over_bare_one(self):
+        """Both set, the other direction: the prefixed 0 refuses over a
+        bare 1 -- the prefixed name decides, never the bare one."""
+        proc = self.run_hook({"GH_WIDGETS_SKIP_SECRECY_CHECK": "0",
+                              "SKIP_SECRECY_CHECK": "1"})
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("BLOCKED", proc.stderr)
+        self.assertIn("GH_WIDGETS_SKIP_SECRECY_CHECK=1 to override.",
+                      proc.stderr)
+
+    def test_prefixed_set_but_empty_is_off(self):
+        """Prefixed presence decides, so an EMPTY prefixed value is an
+        explicit OFF that beats a bare 1 -- present beats merely-set-empty."""
+        proc = self.run_hook({"GH_WIDGETS_SKIP_SECRECY_CHECK": "",
+                              "SKIP_SECRECY_CHECK": "1"})
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("BLOCKED", proc.stderr)
+
+    def test_nothing_set_refuses_and_names_the_prefixed_override(self):
+        """No override anywhere: the check runs and the refusal names the
+        prefixed spelling -- the message is the rename's contract."""
+        proc = self.run_hook({})
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("BLOCKED", proc.stderr)
+        self.assertIn("GH_WIDGETS_SKIP_SECRECY_CHECK=1 to override.",
+                      proc.stderr)
+        self.assertNotIn("SKIP_SECRECY_CHECK=1 to override.",
+                         proc.stderr.replace(
+                             "GH_WIDGETS_SKIP_SECRECY_CHECK=1 to override.",
+                             ""))
+
+    def test_clean_tree_with_no_override_pushes(self):
+        """The happy path: no override, no leak, the hook runs the check and
+        lets the push through -- so the refusals above are the check's
+        verdict, not a hook that always refuses."""
+        proc = run_script(self.main, PRE_PUSH)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("BLOCKED", proc.stderr)
 
 
 if __name__ == "__main__":
