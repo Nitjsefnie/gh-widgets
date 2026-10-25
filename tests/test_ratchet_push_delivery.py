@@ -1,4 +1,4 @@
-"""Execute sibling-artifact reuse, validation, installation and the git boundary."""
+"""Execute reuse, merge, validation, installation and the git boundary."""
 import json
 import os
 import shutil
@@ -27,7 +27,7 @@ def push_body():
 
 
 def boundaries(root):
-    """Record external gh/git invocations and refuse every unmodeled operation."""
+    """Record gh/git invocations and refuse every unmodeled operation."""
     binary = root / "bin"
     binary.mkdir()
     (binary / "gh").write_text(
@@ -71,9 +71,8 @@ def boundaries(root):
 
 def records(record_path):
     if record_path == ".github/size-baseline.json":
-        # Built from literals, not from the committed seed: the validator
-        # must hold for any shape it accepts, and the seed lands after the
-        # suite that judges the landing.
+        # Literals, not the committed seed: the validator must hold for
+        # any accepted shape.
         return ({"schema_version": 1, "baseline": {"one.py": 42}},
                 {"schema_version": 1, "baseline": {"one.py": 41}})
     old = json.loads((ROOT / record_path).read_text())
@@ -84,11 +83,9 @@ def records(record_path):
                    measured_commit=BASE)
     elif record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
-        # The #240 reset leaves `entries` empty for the declared blind
-        # window, so the recorded side gains the entry here rather than
-        # reading it out of the committed document: what the validator
-        # judges is a lowering of a recorded maximum, whatever the
-        # committed document currently records.
+        # The #240 reset leaves `entries` empty, so the recorded side
+        # gains the entry here: the validator judges a lowering of a
+        # recorded maximum, whatever the document currently records.
         envelope = old["populations"]["unit-suite"]["entries"].get(entry)
         if envelope is None:
             envelope = {"min": 9.0, "max": 10.0, "n": 2}
@@ -99,9 +96,7 @@ def records(record_path):
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
     elif record_path == ".github/size-baseline.json":
-        # A count moves DOWN only: never-raised against fetched main is
-        # what the validator judges, and a lowered candidate must stay
-        # deliverable.
+        # A count moves DOWN only: never-raised is what is judged.
         old = {"schema_version": 1, "baseline": {"one.py": 42}}
         new = {"schema_version": 1, "baseline": {"one.py": 41}}
     else:
@@ -126,9 +121,9 @@ class TestRatchetPushDelivery(unittest.TestCase):
         target = root / "main" / record_path
         target.parent.mkdir(parents=True)
         if main_bytes is None:
-            # All three merge inputs share one canonical shape, exactly as
-            # the real writers produce them; divergent fixture formatting
-            # would read as a whole-file rewrite on both sides.
+            # All three merge inputs share one canonical shape, as the
+            # real writers produce; divergent formatting would read as a
+            # whole-file rewrite on both sides.
             main_bytes = (size_document(old["baseline"])
                           if record_path == ".github/size-baseline.json"
                           else (json.dumps(old, sort_keys=True, indent=2)
@@ -148,9 +143,12 @@ class TestRatchetPushDelivery(unittest.TestCase):
             target.with_name("coverage-floor.json").write_bytes(coverage)
         return target
 
+    # pylint: disable-next=too-many-locals
     def _drive(self, record_path, response, *, documents=None, body=None,
                api_fail=False, coverage=None, base_bytes=None,
                main_bytes=None, show_fail=False):
+        real_git = shutil.which("git")
+        assert real_git is not None
         with tempfile.TemporaryDirectory(prefix="ratchet delivery ") as tmp:
             root = Path(tmp)
             target = self._prepare(root, record_path, documents, coverage,
@@ -165,7 +163,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
                        GH_CALLS=str(root / "gh-calls"), GIT_CALLS=str(root / "git-calls"),
                        COMPARISON=json.dumps(response), API_FAIL="yes" if api_fail else "no",
                        BASE_RECORD=str(root / "base-record"),
-                       REAL_GIT=shutil.which("git"),
+                       REAL_GIT=real_git,
                        SHOW_FAIL="yes" if show_fail else "no")
             run = body or push_body()
             run = run[run.index('if [ "$base" != "$fetched" ]; then'):]
@@ -195,9 +193,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_each_record_delivers_and_the_policy_scenarios_hold(self):
         """Per record, its delivered drive; the policy scenarios once.
 
-        The policy arms are record-independent; a record's delivered drive
-        is what differs. Own-record movement is pinned module-wide by
-        test_every_record_is_data... with its subtraction mutant.
+        The policy arms are record-independent; own-record movement is
+        pinned by test_every_record_is_data... with its mutant.
         """
         for own in RECORDS:
             paths = RECORDS - {own}
@@ -263,22 +260,17 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_the_merge_preserves_main_edit_and_delivers_both(self):
-        """Own-record movement plus a non-conflicting in-between edit.
+        """A non-conflicting in-between edit must survive the landing.
 
-        Main added an entry to the size record after the artifact was
-        measured; the artifact lowered a different entry. The delivered
-        document must carry both sides merged against the base copy —
-        the whole-file copy the old apply used would lose main's entry,
-        which is exactly the mutant's tell.
+        The delivered document carries both sides merged against the base
+        copy; the whole-file copy the old apply used loses main's entry,
+        which is the mutant's tell.
         """
         base_bytes = size_document({"a1.py": 300, "one.py": 42})
         main_bytes = size_document({"a0.py": 100, "a1.py": 300,
                                     "one.py": 42})
-        # The two edits sit apart: main inserts a0.py above an entry the
-        # artifact never touches, and the artifact lowers one.py below it —
-        # same map on both sides, so neither side deletes what the other
-        # needs. Adjacent hunks or a deleted entry would conflict, which is
-        # the other branch's own drop case.
+        # The edits sit apart (main inserts above, the artifact lowers
+        # below); adjacent hunks or a deleted entry would conflict.
         merged_bytes = size_document({"a0.py": 100, "a1.py": 300,
                                       "one.py": 41})
         documents = (
@@ -298,12 +290,11 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_a_conflicting_records_edit_drops_green(self):
-        """Main and the artifact touched the same entry: drop, don't lose.
+        """Same entry touched on both sides: drop, not lose.
 
-        The conflict notice is asserted by name: a mutant that delivers on
-        conflict would otherwise fall through to the parse check (conflict
-        markers do not parse) and drop with a different notice, which the
-        verdict alone cannot distinguish.
+        The conflict notice is asserted by name — a deliver-on-conflict
+        mutant falls through to the parse check and drops with a
+        different notice, which the verdict alone cannot distinguish.
         """
         base_bytes = size_document({"one.py": 42})
         main_bytes = size_document({"one.py": 50})
@@ -318,16 +309,15 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_an_unparseable_merged_record_drops_green(self):
-        """A clean line-merge that still produces unparseable JSON drops.
+        """A clean line-merge producing unparseable JSON drops green.
 
         Main appended a broken line where the artifact did not touch, so
-        the textual merge is clean but the result is not JSON; the parse
-        check must drop the run green rather than installing it.
+        the merge is clean but the result is not JSON.
         """
         base_bytes = size_document({"one.py": 42})
         main_bytes = size_document({"one.py": 42}).replace(
             b'{\n', b'{\n  broken\n', 1)
-        result, calls, _written, summary = self._drive(
+        result, calls, _written, _summary = self._drive(
             ".github/size-baseline.json",
             self._comparison({".github/size-baseline.json"}),
             base_bytes=base_bytes, main_bytes=main_bytes)
@@ -338,9 +328,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_an_unreachable_base_record_drops_green(self):
         """No base copy of the record: drop green, name the reason.
 
-        The record first landed on main after the artifact's measured
-        base, so there is nothing to merge against; installing the
-        artifact whole would discard whatever main carries now.
+        The record landed after the measured base; installing whole
+        would discard whatever main carries now.
         """
         result, calls, _written, summary = self._drive(
             ".github/size-baseline.json",
