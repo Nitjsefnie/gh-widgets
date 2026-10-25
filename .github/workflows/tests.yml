@@ -1309,8 +1309,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.actionlint == 'run'
     runs-on: ubuntu-latest
-    # Matches the claim/pr-gate actionlint precedent and caps a hang below GitHub's 6-hour default.
-    timeout-minutes: 10
+    # Matches the fleet's actionlint timeout and caps a hang below GitHub's 6-hour default.
+    timeout-minutes: 15
 
     env:
       # Fork release, not stock rhysd/actionlint: upstream v1.7.12 plus
