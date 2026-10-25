@@ -7,7 +7,6 @@ No network: the identity test drives a fake gql.
 """
 # The null-node fetch contract is pinned at every run shape alongside the
 # module's own suites.
-# pylint: disable=too-many-lines
 import contextlib
 import importlib.util
 import io

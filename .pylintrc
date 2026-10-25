@@ -14,7 +14,9 @@ disable=
     broad-exception-caught,
     broad-exception-raised,
     global-statement,
-    too-few-public-methods
+    too-few-public-methods,
+    # too-many-lines: the size-baseline workflow gates module length.
+    too-many-lines
 max-attributes=30
 max-args=10
 max-positional-arguments=10
