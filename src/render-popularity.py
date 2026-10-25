@@ -32,7 +32,7 @@ def _load_common():
 common = _load_common()
 # Clock alias kept for tests and callers.
 time = common.time
-REQUIRED_COMMON = 16
+REQUIRED_COMMON = 17
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 API = 'https://api.github.com'
@@ -146,6 +146,10 @@ def score_repository(token, repository, user, emails):
         try:
             data, _ = rest(token, f'/repos/{name}/traffic/{endpoint}')
             traffic[endpoint] = data['uniques']
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(
+                f'{name}: unreadable traffic/{endpoint}: '
+                f'{common.http_error_text(exc)}') from exc
         except (urllib.error.URLError, ValueError, KeyError) as exc:
             raise RuntimeError(f'{name}: unreadable traffic/{endpoint}: {exc}') from exc
     outsiders = outsider_commits(repository, user, emails)

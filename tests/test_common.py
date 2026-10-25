@@ -18,7 +18,9 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import urllib.error
 import xml.etree.ElementTree as ET
+from email.message import Message
 from pathlib import Path
 from unittest import mock
 
@@ -947,6 +949,50 @@ class VersionContract(unittest.TestCase):
             src = (here / name).read_text()
             self.assertIn(f"REQUIRED_COMMON = {common.COMMON_VERSION}", src.splitlines(),
                           f"{name} does not pin COMMON_VERSION")
+
+
+class HttpErrorText(unittest.TestCase):
+    def formatted(self, code, msg, headers, fp):
+        error = urllib.error.HTTPError('https://api.github.com/x', code, msg, headers, fp)
+        return common.http_error_text(error)
+
+    def test_status_body_and_exactly_three_rate_limit_headers(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        headers['x-ratelimit-reset'] = '1790000000'
+        headers['X-GitHub-Request-Id'] = 'req-1234'
+        self.assertEqual(self.formatted(
+            403, 'Forbidden', headers, io.BytesIO(b'{"message":"secondary rate limit"}')),
+            'HTTP 403: {"message":"secondary rate limit"} '
+            '[retry-after: 60, x-ratelimit-remaining: 0, x-ratelimit-reset: 1790000000]')
+
+    def test_missing_headers_and_body_show_explicit_markers(self):
+        self.assertEqual(self.formatted(500, 'oops', None, None),
+                         'HTTP 500: (empty body)')
+
+    def test_non_utf8_body_bytes_are_replaced_not_fatal(self):
+        self.assertIn('�', self.formatted(502, 'bad', None, io.BytesIO(b'\xff bad \xfe')))
+
+    def test_long_body_is_truncated_with_a_marker(self):
+        text = self.formatted(429, 'too many', None, io.BytesIO(b'x' * 2500))
+        self.assertIn('x' * 2000 + ' [truncated]', text)
+        self.assertNotIn('x' * 2001, text)
+
+    def test_control_characters_and_newlines_collapse_to_one_line(self):
+        text = self.formatted(403, 'Forbidden', None,
+                              io.BytesIO(b'a\x00b\x1f\nc\rd\te'))
+        self.assertEqual(text, 'HTTP 403: ab c d e')
+
+    def test_unreadable_body_names_it_instead_of_raising(self):
+        class Broken:
+            def read(self):
+                raise OSError('closed')
+
+            def close(self):
+                pass
+        self.assertEqual(self.formatted(502, 'bad', None, Broken()),
+                         'HTTP 502: body unreadable')
 
 
 class FetchIssues(unittest.TestCase):

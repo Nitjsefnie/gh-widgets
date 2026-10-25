@@ -20,6 +20,8 @@ import argparse
 import importlib.util
 import os
 import re
+import sys
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,7 +39,7 @@ def _load_common():
 
 
 common = _load_common()
-REQUIRED_COMMON = 16
+REQUIRED_COMMON = 17
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 gql = common.gql
@@ -237,4 +239,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except urllib.error.HTTPError as e:
+        print(common.http_error_text(e), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)

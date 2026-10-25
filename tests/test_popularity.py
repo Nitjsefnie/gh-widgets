@@ -323,6 +323,22 @@ class Acquisition(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, f'Owner/Repo.*{endpoint}'):
                     popularity.fetch_scores('t')
 
+    def test_rate_limited_traffic_error_carries_body_and_headers(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        error = urllib.error.HTTPError(
+            'url', 403, 'Forbidden', headers,
+            io.BytesIO(b'{"message":"You have exceeded a secondary rate limit"}'))
+        with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                popularity.score_repository('t', {'full_name': 'o/r'}, {}, set())
+        message = str(caught.exception)
+        self.assertIn('unreadable traffic/clones', message)
+        self.assertIn('{"message":"You have exceeded a secondary rate limit"}', message)
+        self.assertIn('retry-after: 60', message)
+        self.assertIn('x-ratelimit-remaining: 0', message)
+
 
 class Overlap(unittest.TestCase):
     """Per-repository git and traffic work overlaps inside one run."""

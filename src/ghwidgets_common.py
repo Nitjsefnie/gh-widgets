@@ -107,6 +107,7 @@ merge_cache = ghwidgets_cache.merge_cache
 save_cache = ghwidgets_cache.save_cache
 validate_cache_shape = ghwidgets_cache.validate_cache_shape
 CacheFallback = ghwidgets_journal.CacheFallback
+http_error_text = ghwidgets_journal.http_error_text
 _LAST_ACQUISITION = getattr(ghwidgets_journal, "_LAST_ACQUISITION")
 _XML_FORBIDDEN = getattr(ghwidgets_journal, "_XML_FORBIDDEN")
 acquisition = ghwidgets_journal.acquisition
@@ -115,7 +116,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped when the interface changes so an older script would misbehave;
 # each script pins the version it expects.
-COMMON_VERSION = 16
+COMMON_VERSION = 17
 
 
 # One import-time switch, shared by all instrumentation in this renderer.
