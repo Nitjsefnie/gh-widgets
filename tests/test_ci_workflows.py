@@ -1569,12 +1569,10 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                 .replace("\n", "\n  ")
                 + "\n}\n").encode("utf-8")
 
-    def test_size_validator_uses_exact_bytes_and_never_raises(self):
+    def test_size_validator_accepts_a_tightened_candidate(self):
         script = self._validator()
         old = {"schema_version": 1, "baseline": {"same.py": 501,
                                                  "down.py": 700}}
-        accepted = {"same.py": 501, "down.py": 640, "new.py": 520}
-        accepted_baseline = {path: count for path, count in accepted.items()}
         with tempfile.TemporaryDirectory() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
@@ -1582,83 +1580,113 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             (repo / ".github/size-baseline.json").write_text(json.dumps(old))
             (data / "base.txt").write_text("a" * 40 + "\n")
             path = data / "size-baseline.json"
+            baseline = dict(old["baseline"])
+            baseline["down.py"] = 640
+            baseline["new.py"] = 520
+            path.write_bytes(self._size_document(baseline))
+            accepted_run = self._run_validator(script, data, repo)
+            self.assertEqual(accepted_run.returncode, 0, accepted_run.stderr)
+            equal = self._size_document(old["baseline"])
+            path.write_bytes(equal)
+            equal_run = self._run_validator(script, data, repo)
+            self.assertEqual(equal_run.returncode, 0, equal_run.stderr)
+            self.assertEqual(equal_run.stdout.strip(), "size-baseline.json")
 
-            def write(document):
-                path.write_bytes(self._size_document(document["baseline"]))
-
-            write({"schema_version": 1, "baseline": accepted_baseline})
-            self.assertEqual(self._run_validator(script, data, repo).returncode,
-                             0)
-            write({"schema_version": 1,
-                   "baseline": {"same.py": 501, "down.py": 700}})
-            self.assertEqual(self._run_validator(script, data, repo).returncode,
-                             0)
-            cases = (
-                ({"same.py": 502}, "rose above fetched main"),
-                ({"new.py": 0}, "positive line count"),
-                ({"new.py": -1}, "positive line count"),
-                ({"new.py": True}, "positive line count"),
-            )
+    def test_size_validator_refuses_raises_and_bad_counts(self):
+        script = self._validator()
+        old = {"schema_version": 1, "baseline": {"same.py": 501,
+                                                 "down.py": 700}}
+        cases = (
+            ({"same.py": 502}, "rose above fetched main"),
+            ({"same.py": 501, "down.py": 701}, "rose above fetched main"),
+            ({"new.py": 0}, "positive line count"),
+            ({"new.py": -1}, "positive line count"),
+            ({"new.py": True}, "positive line count"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
+            data.mkdir()
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github/size-baseline.json").write_text(json.dumps(old))
+            (data / "base.txt").write_text("a" * 40 + "\n")
+            path = data / "size-baseline.json"
             for baseline, message in cases:
                 with self.subTest(baseline=baseline):
-                    write({"schema_version": 1, "baseline": baseline})
+                    path.write_bytes(self._size_document(baseline))
                     result = self._run_validator(script, data, repo)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(message, result.stderr)
 
-            def with_keys(changes):
-                document = {"schema_version": 1,
-                            "baseline": dict(accepted_baseline)}
-                document.update(changes)
-                return document
-
+    def test_size_validator_refuses_bad_document_shapes_and_paths(self):
+        script = self._validator()
+        accepted = {"schema_version": 1, "baseline": {"a.py": 501}}
+        bad_baselines = (
+            {"/abs.py": 10}, {"../out.py": 10}, {"a\\b.py": 10}, {"": 10},
+        )
+        bad_documents = (
+            {"schema_version": 1, "baseline": "no"},
+            {"schema_version": 1, "baseline": []},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
+            data.mkdir()
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github/size-baseline.json").write_text(
+                json.dumps(accepted))
+            (data / "base.txt").write_text("a" * 40 + "\n")
+            path = data / "size-baseline.json"
             for changes, message in (
                     ({"schema_version": 2}, "unsupported schema_version"),
                     ({"schema_version": "1"}, "unsupported schema_version"),
                     ({"extra": 1}, "not the action's document"),
             ):
                 with self.subTest(changes=changes):
-                    path.write_bytes(
-                        json.dumps(with_keys(changes)).encode("utf-8"))
+                    document = dict(accepted)
+                    document.update(changes)
+                    path.write_bytes(json.dumps(document).encode("utf-8"))
                     result = self._run_validator(script, data, repo)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(message, result.stderr)
-
-            for baseline in ({"/abs.py": 10}, {"../out.py": 10},
-                             {"a\\b.py": 10}, {"": 10}):
+            for baseline in bad_baselines:
                 with self.subTest(baseline=baseline):
-                    write({"schema_version": 1, "baseline": baseline})
+                    path.write_bytes(
+                        self._size_document(dict(baseline)))
                     result = self._run_validator(script, data, repo)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn("repository-relative", result.stderr)
-
-            for document in ({"schema_version": 1, "baseline": "no"},
-                             {"schema_version": 1, "baseline": []}):
+            for document in bad_documents:
                 with self.subTest(baseline=document["baseline"]):
-                    write(document)
+                    path.write_bytes(json.dumps(document).encode("utf-8"))
                     result = self._run_validator(script, data, repo)
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn("not a JSON object", result.stderr)
 
+    def test_size_validator_demands_the_writer_serialization(self):
+        script = self._validator()
+        old = {"schema_version": 1, "baseline": {"a.py": 501}}
+        baseline = {"same.py": 501, "down.py": 700}
+        with tempfile.TemporaryDirectory() as tmp:
+            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
+            data.mkdir()
+            (repo / ".github").mkdir(parents=True)
+            (repo / ".github/size-baseline.json").write_text(json.dumps(old))
+            (data / "base.txt").write_text("a" * 40 + "\n")
+            path = data / "size-baseline.json"
             # The writer puts schema_version first; json.dumps with
-            # sort_keys puts baseline first. Both are refused.
+            # sort_keys puts baseline first. Both wrong spellings refused.
             for serialized in (
-                    json.dumps({"schema_version": 1,
-                                "baseline": accepted_baseline}),
-                    json.dumps({"baseline": accepted_baseline,
-                                "schema_version": 1},
+                    json.dumps({"schema_version": 1, "baseline": baseline}),
+                    json.dumps({"baseline": baseline, "schema_version": 1},
                                sort_keys=True, indent=2) + "\n",
             ):
                 path.write_bytes(serialized.encode("utf-8"))
                 result = self._run_validator(script, data, repo)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("serialization", result.stderr)
-
             # A malformed recorded side fails closed before any comparison.
             (repo / ".github/size-baseline.json").write_text(
                 json.dumps({"schema_version": 1, "baseline": ["no"]}))
-            write({"schema_version": 1,
-                   "baseline": {"same.py": 501, "down.py": 700}})
+            path.write_bytes(self._size_document(baseline))
             result = self._run_validator(script, data, repo)
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("not a JSON object", result.stderr)
