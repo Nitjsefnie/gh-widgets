@@ -140,7 +140,9 @@ gate that cannot fire.
 The aggregate job in `tests.yml` reports on every pull request and push to
 `main`, regardless of changed paths (issue #89); branch protection requires
 it instead of the path-filtered gates. The `changes` job decides which gates
-apply to each change.
+apply to each change, and the aggregate also folds two cross-workflow
+verdicts waited for on the head SHA: the `gitleaks` job of `secrets.yml` and
+the `size-baseline` job of `size-baseline.yml`.
 
 The other workflow files in `.github/workflows/` are:
 
@@ -149,9 +151,11 @@ The other workflow files in `.github/workflows/` are:
   credential using digest-pinned Gitleaks 8.30.1 with `--redact`. Its daily cron
   catches commits no workflow saw, and the aggregate check waits for its
   `gitleaks` job on the head SHA.
+- `size-baseline.yml` — gates per-file line counts against committed records;
+  the aggregate check waits for its `size-baseline` job on the head SHA.
 - `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
   higher floor for `ratchet-push.yml` after the successful run.
-- `ratchet-push.yml` — validates the coverage, speed and comment-share artifacts as data,
+- `ratchet-push.yml` — validates the coverage, speed, comment-share and size artifacts as data,
   then uses the protected `main-push` deploy key to commit a tightened record
   to `main`.
 - `comment-share.yml` — checks per-file comment shares and stages tightened records.
@@ -246,12 +250,28 @@ measured value strictly beats, and `ratchet-push.yml` validates and commits
 that data. The feature-gated unit-suite raise above remains the only route that
 moves speed maxima UP.
 
-All three staging steps skip a landed window that changed only
-`gate/coverage-floor.json`, `gate/speed-baseline.json` and/or
-`.github/comment-share.json`. This ends the feedback after one follow-up run,
+All four staging steps skip a landed window that changed only
+`gate/coverage-floor.json`, `gate/speed-baseline.json`,
+`.github/comment-share.json` and/or `.github/size-baseline.json`. This ends
+the feedback after one follow-up run,
 regardless of CPU noise. Coverage would already no-op on an unchanged measured
 floor; its skip is uniform with the other producers. Unknown comparisons and
 missing/new-branch before SHAs stage normally; the push still checks staleness.
+
+### Size baseline
+
+`size-baseline.yml` runs the pinned size-ratchet action at the default 500-line
+per-type ceiling. Pull requests compare every measured file's line count
+against the base record, so a recorded file may not grow and an unrecorded one
+may not exceed its ceiling; main pushes tighten `.github/size-baseline.json`,
+and the successful run stages changes for `ratchet-push.yml` to validate and
+land. A recorded number is never raised and no entry is ever added by hand:
+growth is answered by relocating code into a new file, or by shrinking the
+file. The records file itself is never measured. The size gate supersedes
+pylint's `too-many-lines` (C0302), which is disabled in `.pylintrc` — a
+module-length question is a records question now, not a flat 1000-line cap.
+The reported check name is the job key `size-baseline`, which the required
+`aggregate` check folds the same way it folds the `gitleaks` job.
 
 ### Comment share
 
