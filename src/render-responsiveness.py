@@ -95,7 +95,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 16
+REQUIRED_COMMON = 17
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -587,8 +587,7 @@ if __name__ == "__main__":
     try:
         main()
     except urllib.error.HTTPError as e:
-        print(f"HTTP {e.code}: {e.read().decode(errors='replace')}",
-              file=sys.stderr)
+        print(common.http_error_text(e), file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)

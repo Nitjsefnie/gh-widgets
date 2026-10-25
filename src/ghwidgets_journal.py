@@ -41,6 +41,30 @@ class CacheFallback(namedtuple("CacheFallback", "fetched_at phase error")):
         return text or type(self.error).__name__
 
 
+def http_error_text(exc):
+    """An HTTPError as one journal line: status, sanitised body, rate limits.
+
+    Reads the body once — call this once per exception — caps it at 2000
+    characters, and shows only retry-after, x-ratelimit-remaining and
+    x-ratelimit-reset when present; no other header, no request data.
+    """
+    text = ""
+    if exc.fp is not None:
+        try:
+            text = " ".join(
+                _XML_FORBIDDEN.sub("", exc.read().decode(errors="replace")).split())
+        except OSError:
+            text = "body unreadable"
+    if len(text) > 2000:
+        text = f"{text[:2000]} [truncated]"
+    elif not text:
+        text = "(empty body)"
+    shown = [f"{name}: {exc.headers.get(name)}" for name in (
+        "retry-after", "x-ratelimit-remaining", "x-ratelimit-reset")
+        if exc.headers is not None and exc.headers.get(name) is not None]
+    return f"HTTP {exc.code}: {text}" + (f" [{', '.join(shown)}]" if shown else "")
+
+
 # The acquisition currently running, kept in a one-key dict rather than rebound
 # through `global`. A renderer whose fetch entry point wraps SEVERAL
 # acquisitions cannot hand its caller a phase name the way render.py's

@@ -8,8 +8,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import runpy
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
 from unittest import mock
 
@@ -362,6 +366,32 @@ class InputsAndCLI(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('--repos', proc.stdout)
         self.assertIn('--cache-file', proc.stdout)
+
+
+class HttpErrorAtMain(unittest.TestCase):
+    def test_http_error_prints_body_and_headers_and_exits_1(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        error = urllib.error.HTTPError(
+            'https://api.test/graphql', 403, 'Forbidden', headers,
+            io.BytesIO(b'{"message":"You have exceeded a secondary rate limit"}'))
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / 'cache.json'
+            cache.write_text('{}', encoding='utf-8')
+            stderr = io.StringIO()
+            argv = ['render-stars.py', '--repos', 'o/r', '--cache-file', str(cache),
+                    '--out-dir', str(Path(tmp) / 'out')]
+            with mock.patch.object(sys, 'argv', argv), \
+                    mock.patch.dict(os.environ, {'GH_TOKEN': 't'}), \
+                    mock.patch.object(urllib.request, 'urlopen', side_effect=error), \
+                    contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(str(ROOT / 'src/render-stars.py'), run_name='__main__')
+        self.assertEqual(caught.exception.code, 1)
+        for fragment in ('{"message":"You have exceeded a secondary rate limit"}',
+                         'retry-after: 60', 'x-ratelimit-remaining: 0'):
+            self.assertIn(fragment, stderr.getvalue())
 
 
 if __name__ == '__main__':
