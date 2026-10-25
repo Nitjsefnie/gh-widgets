@@ -6,8 +6,13 @@ name: ratchet push
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
-# Older artifacts may cross changes to OTHER records; their own record or a
-# non-data change invalidates them. Apply-time validation still reads main.
+# An artifact applies by a THREE-WAY MERGE of its document with main's
+# current record, using the record at the measured base (base.txt) as the
+# merge base, so a records edit that landed on main in between is preserved
+# instead of overwritten. A merge conflict, an unparseable merged result, or
+# a measured base that carries no copy of the record drops the run green;
+# every surviving merged document then passes the same apply-time validation
+# as before, which still reads main.
 # A cancelled measuring run publishes no eligible artifact (success is required
 # below); producer cancellation is separate, and the next source push measures again.
 #
@@ -26,8 +31,11 @@ permissions: {}
 
 concurrency:
   # Queue completed measurements so sibling record artifacts can all land.
+  # queue: max keeps pending runs instead of letting a newly queued run
+  # cancel the one pending (the default queue: single drops all but one).
   group: ratchet-push
   cancel-in-progress: false
+  queue: max
 
 jobs:
   push:
@@ -227,17 +235,57 @@ jobs:
             if [ "$decision" != sibling-data ]; then
               echo "::notice::Dropped $record_path from $base: $decision."
               {
-                echo "### Dropped ratchet artifact: own record or measured program may have moved"
+                echo "### Dropped ratchet artifact: a non-data path moved"
                 echo
                 echo "Window $base...$fetched for $record_path: $decision."
-                echo "Only changes to other data records permit reuse; no automatic retry is assumed."
+                echo "Only the four records may move under a reusable artifact; no automatic retry is assumed."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "::notice::Applying $record_path measured at $base across sibling data changes to $fetched."
+            echo "::notice::Applying $record_path measured at $base to $fetched; any records edits main landed in the window are merged and preserved."
           fi
 
-          document_name="$(python3 - "$data" "$repo" <<'PY'
+          # Apply by a three-way merge: main's current record is the "ours"
+          # side, the record at the measured base is the ancestor, and the
+          # artifact document is the incoming side. Records edits main
+          # landed in between survive; a conflict, an unparseable merged
+          # result, or a base that carries no copy of the record drops the
+          # run green. The surviving merged document then passes the same
+          # apply-time validation as before.
+          base_record="$RUNNER_TEMP/ratchet-base-record"
+          merged_record="$RUNNER_TEMP/ratchet-merged-record"
+          if ! git -C "$repo" show "$base:$record_path" > "$base_record" \
+              2>/dev/null; then
+            echo "::notice::Dropped $record_path from $base: the measured base carries no copy of this record to merge against."
+            {
+              echo "### Dropped ratchet artifact: the measured base has no record to merge against"
+              echo
+              echo "The record first landed on main after $base; no automatic retry is assumed. A future source push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cp -- "$repo/$record_path" "$merged_record"
+          if ! git merge-file -L main -L base -L artifact \
+              "$merged_record" "$base_record" "$data/$document_name"; then
+            echo "::notice::Dropped $record_path from $base: main's records edit and the artifact touched the same lines; the merge conflicts."
+            {
+              echo "### Dropped ratchet artifact: the records merge conflicts"
+              echo
+              echo "Main edited $record_path in $base...$fetched on the same lines the artifact changes; no automatic retry is assumed. A future source push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+              "$merged_record" 2>/dev/null; then
+            echo "::notice::Dropped $record_path from $base: the merged document does not parse as JSON."
+            {
+              echo "### Dropped ratchet artifact: the merged record does not parse"
+              echo
+              echo "The three-way merge of $record_path produced unparseable JSON; no automatic retry is assumed. A future source push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          document_name="$(python3 - "$data" "$repo" "$merged_record" <<'PY'
           import json
           import math
           import sys
@@ -404,7 +452,9 @@ jobs:
                   refuse("speed baseline contains no strict maximum reduction")
           elif names == {"base.txt", "comment-share.json"}:
               name = "comment-share.json"
-              source = data / name
+              # The merged document, not the raw artifact: the
+              # validator judges what will actually be installed.
+              source = Path(sys.argv[3])
               old_path = repo / ".github" / name
               old = object_at(old_path) if old_path.exists() else {}
               new = object_at(source)
@@ -428,7 +478,9 @@ jobs:
                           refuse(f"{path}: comment share rose above fetched main")
           elif names == {"base.txt", "size-baseline.json"}:
               name = "size-baseline.json"
-              source = data / name
+              # The merged document, not the raw artifact: the
+              # validator judges what will actually be installed.
+              source = Path(sys.argv[3])
               old_path = repo / ".github" / name
               old = object_at(old_path) if old_path.exists() else {}
               new = object_at(source)
@@ -481,7 +533,7 @@ jobs:
           PY
           )"
 
-          cp -- "$data/$document_name" "$repo/$record_path"
+          cp -- "$merged_record" "$repo/$record_path"
           git -C "$repo" add -- "$record_path"
           if git -C "$repo" diff --cached --quiet; then
             echo "validated ratchet artifact produced no change" >&2

@@ -1091,7 +1091,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def _validator(self):
         run = self._step("Validate and push the ratchet record")["run"]
-        marker = 'document_name="$(python3 - "$data" "$repo" <<\'PY\'\n'
+        marker = ('document_name="$(python3 - "$data" "$repo" '
+                  '"$merged_record" <<\'PY\'\n')
         start = run.index(marker) + len(marker)
         end = run.index("\nPY\n)", start)
         return run[start:end]
@@ -1104,9 +1105,12 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         return run[start:end]
 
     @staticmethod
-    def _run_validator(script, data, repo):
+    def _run_validator(script, data, repo, name):
+        # The third argument is the merged document the validator judges;
+        # these controls validate the raw artifact, so it stands in.
         return subprocess.run(
-            [sys.executable, "-c", script, str(data), str(repo)],
+            [sys.executable, "-c", script, str(data), str(repo),
+             str(data / name)],
             capture_output=True, text=True, check=False)
 
     def test_workflow_run_trigger_and_push_guard_are_exact(self):
@@ -1121,6 +1125,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertEqual(self.workflow["permissions"], {})
         self.assertEqual(self.workflow["concurrency"], {
             "group": "ratchet-push", "cancel-in-progress": False,
+            "queue": "max",
         })
         self.assertEqual(
             " ".join(self.job["if"].split()),
@@ -1379,7 +1384,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             for changes, status, message in cases:
                 with self.subTest(changes=changes):
                     (data / "coverage-floor.json").write_text(json.dumps({**candidate, **changes}))
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "coverage-floor.json")
                     self.assertEqual(result.returncode, status, result.stderr)
                     self.assertIn(message, result.stderr)
                     if status == 0:
@@ -1434,7 +1439,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         (data / "base.txt").write_text("a" * 40 + "\n", encoding="utf-8")
         (data / "speed-baseline.json").write_text(
             json.dumps(candidate), encoding="utf-8")
-        result = self._run_validator(script, data, repo)
+        result = self._run_validator(script, data, repo, "speed-baseline.json")
         self.assertEqual(result.returncode, status, result.stderr)
         if fragment:
             self.assertIn(fragment, result.stderr)
@@ -1580,13 +1585,13 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                             indent=2) + "\n").encode("utf-8")
                     path.write_bytes(canonical)
                     self.assertEqual(path.read_bytes(), canonical)
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "comment-share.json")
                     self.assertEqual(result.returncode, status, result.stderr)
                     self.assertIn(message, result.stderr)
             for serialized in (json.dumps(accepted),
                                json.dumps(accepted, sort_keys=True, indent=2)):
                 path.write_bytes(serialized.encode("utf-8"))
-                result = self._run_validator(script, data, repo)
+                result = self._run_validator(script, data, repo, "comment-share.json")
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("serialization", result.stderr)
 
@@ -1618,11 +1623,11 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             baseline["down.py"] = 640
             baseline["new.py"] = 520
             path.write_bytes(self._size_document(baseline))
-            accepted_run = self._run_validator(script, data, repo)
+            accepted_run = self._run_validator(script, data, repo, "size-baseline.json")
             self.assertEqual(accepted_run.returncode, 0, accepted_run.stderr)
             equal = self._size_document(old["baseline"])
             path.write_bytes(equal)
-            equal_run = self._run_validator(script, data, repo)
+            equal_run = self._run_validator(script, data, repo, "size-baseline.json")
             self.assertEqual(equal_run.returncode, 0, equal_run.stderr)
             self.assertEqual(equal_run.stdout.strip(), "size-baseline.json")
 
@@ -1648,7 +1653,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             for baseline, message in cases:
                 with self.subTest(baseline=baseline):
                     path.write_bytes(self._size_document(baseline))
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "size-baseline.json")
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(message, result.stderr)
 
@@ -1683,20 +1688,20 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                     document = dict(accepted)
                     document.update(changes)
                     path.write_bytes(json.dumps(document).encode("utf-8"))
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "size-baseline.json")
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(message, result.stderr)
             for baseline in bad_baselines:
                 with self.subTest(baseline=baseline):
                     path.write_bytes(
                         self._size_document(dict(baseline)))
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "size-baseline.json")
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn("repository-relative", result.stderr)
             for document in bad_documents:
                 with self.subTest(baseline=document["baseline"]):
                     path.write_bytes(json.dumps(document).encode("utf-8"))
-                    result = self._run_validator(script, data, repo)
+                    result = self._run_validator(script, data, repo, "size-baseline.json")
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn("not a JSON object", result.stderr)
 
@@ -1718,14 +1723,14 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                sort_keys=True, indent=2) + "\n",
             ):
                 path.write_bytes(serialized.encode("utf-8"))
-                result = self._run_validator(script, data, repo)
+                result = self._run_validator(script, data, repo, "size-baseline.json")
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("serialization", result.stderr)
             # A malformed recorded side fails closed before any comparison.
             (repo / ".github/size-baseline.json").write_text(
                 json.dumps({"schema_version": 1, "baseline": ["no"]}))
             path.write_bytes(self._size_document(baseline))
-            result = self._run_validator(script, data, repo)
+            result = self._run_validator(script, data, repo, "size-baseline.json")
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("not a JSON object", result.stderr)
 
