@@ -31,13 +31,11 @@ HEAD_SHA = re.compile(r"[0-9a-f]{40}\Z")
 SECRETS_WORKFLOW = "secrets.yml"
 SECRETS_JOB = "gitleaks"
 SECRETS_RESULT = "secrets"
-SECRETS_WAIT_BOUND_ENV = "GH_WIDGETS_SECRETS_WAIT_BOUND_S"
-DEFAULT_SECRETS_WAIT_BOUND_S = 240
 SIZE_WORKFLOW = "size-baseline.yml"
 SIZE_JOB = "size-baseline"
 SIZE_RESULT = "size-baseline"
-SIZE_WAIT_BOUND_ENV = "GH_WIDGETS_SIZE_WAIT_BOUND_S"
-DEFAULT_SIZE_WAIT_BOUND_S = 240
+SCAN_WAIT_BOUND_ENV = "GH_WIDGETS_SCAN_WAIT_BOUND_S"
+DEFAULT_SCAN_WAIT_BOUND_S = 240
 SECRETS_LABEL = "secrets scan"
 SIZE_LABEL = "size-baseline scan"
 SECRETS_CHECK_INTERVAL_S = 15
@@ -514,36 +512,64 @@ def require_size_scan(repository: str, head_sha: str, wait_bound: int,
 
 
 def _scan_result(environment: dict[str, str], transport: cd.Transport, *,
-                 label: str, workflow: str, job: str, bound_env: str,
-                 default_bound: int) -> Result:
-    raw_bound = environment.get(bound_env, str(default_bound))
-    if not raw_bound.isascii() or not raw_bound.isdigit():
-        return Result(
-            FAILED,
-            f"{bound_env} must be a positive integer; "
-            f"received {raw_bound!r}")
+                 label: str, workflow: str, job: str,
+                 remaining: int) -> Result:
     return require_scan(
         environment.get("GH_WIDGETS_REPOSITORY", ""),
-        environment.get("GH_WIDGETS_HEAD_SHA", ""), int(raw_bound), transport,
+        environment.get("GH_WIDGETS_HEAD_SHA", ""), remaining, transport,
         workflow=workflow, job=job, label=label)
 
 
-def _secret_scan_result(environment: dict[str, str],
-                        transport: cd.Transport) -> Result:
+def _secret_scan_result(environment: dict[str, str], transport: cd.Transport,
+                        remaining: int) -> Result:
     return _scan_result(
         environment, transport, label=SECRETS_LABEL,
-        workflow=SECRETS_WORKFLOW, job=SECRETS_JOB,
-        bound_env=SECRETS_WAIT_BOUND_ENV,
-        default_bound=DEFAULT_SECRETS_WAIT_BOUND_S)
+        workflow=SECRETS_WORKFLOW, job=SECRETS_JOB, remaining=remaining)
 
 
-def _size_scan_result(environment: dict[str, str],
-                      transport: cd.Transport) -> Result:
+def _size_scan_result(environment: dict[str, str], transport: cd.Transport,
+                      remaining: int) -> Result:
     return _scan_result(
         environment, transport, label=SIZE_LABEL,
-        workflow=SIZE_WORKFLOW, job=SIZE_JOB,
-        bound_env=SIZE_WAIT_BOUND_ENV,
-        default_bound=DEFAULT_SIZE_WAIT_BOUND_S)
+        workflow=SIZE_WORKFLOW, job=SIZE_JOB, remaining=remaining)
+
+
+def _exhausted_row(label: str) -> Result:
+    return Result(
+        FAILED,
+        f"the {label} had no wait budget left in the shared "
+        f"{SCAN_WAIT_BOUND_ENV} deadline")
+
+
+def _cross_workflow_rows(environment: dict[str, str],
+                         transport: cd.Transport) -> dict[str, Result]:
+    """Run both scans against ONE shared wall-clock deadline.
+
+    The budget is read once and the deadline is fixed once; each scan
+    receives only what remains of it, so the aggregate always finishes
+    within one bound and can print its verdict summary. A scan whose
+    budget is spent fails closed without querying anything.
+    """
+    raw_bound = environment.get(
+        SCAN_WAIT_BOUND_ENV, str(DEFAULT_SCAN_WAIT_BOUND_S))
+    if not raw_bound.isascii() or not raw_bound.isdigit():
+        refusal = Result(
+            FAILED,
+            f"{SCAN_WAIT_BOUND_ENV} must be a positive integer; "
+            f"received {raw_bound!r}")
+        return {SECRETS_RESULT: refusal, SIZE_RESULT: refusal}
+    deadline = time.monotonic() + int(raw_bound)
+    rows = {}
+    for name, label, scan in (
+            (SECRETS_RESULT, SECRETS_LABEL, _secret_scan_result),
+            (SIZE_RESULT, SIZE_LABEL, _size_scan_result),
+    ):
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            rows[name] = _exhausted_row(label)
+        else:
+            rows[name] = scan(environment, transport, remaining)
+    return rows
 
 
 def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
@@ -720,8 +746,7 @@ def main(argv: list[str] | None = None, *, transport: cd.Transport | None = None
     try:
         results = _context_results(environment, api)
         if _needs_exit_code(results) == 0:
-            results[SECRETS_RESULT] = _secret_scan_result(environment, api)
-            results[SIZE_RESULT] = _size_scan_result(environment, api)
+            results.update(_cross_workflow_rows(environment, api))
         else:
             for name, label in ((SECRETS_RESULT, SECRETS_LABEL),
                                 (SIZE_RESULT, SIZE_LABEL)):

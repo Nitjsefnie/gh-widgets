@@ -794,8 +794,6 @@ class SecretScanTests(unittest.TestCase):
     def test_workflow_dispatch_without_a_scan_fails_after_the_bound(self):
         transport = FakeTransport({
             SECRETS_RUNS_PATH: [],
-            SIZE_RUNS_PATH: [self.size_run],
-            self.size_jobs_path: [_size_job()],
         })
         timer = FakeClock()
         stdout = io.StringIO()
@@ -809,9 +807,14 @@ class SecretScanTests(unittest.TestCase):
                    if line.startswith("| secrets |"))
         self.assertIn("FAILED", row)
         self.assertIn("no secrets.yml run", row)
+        # The shared deadline is spent by the secrets wait, so the size row
+        # fails closed without a single size query against the transport.
         size_row = next(line for line in stdout.getvalue().splitlines()
                         if line.startswith("| size-baseline |"))
-        self.assertIn("PASSED", size_row)
+        self.assertIn("FAILED", size_row)
+        self.assertIn("no wait budget left", size_row)
+        self.assertEqual([call for call in transport.calls
+                          if "size-baseline" in call[0]], [])
 
 
 class SecretScanTransportControls(unittest.TestCase):
@@ -1048,36 +1051,58 @@ class SizeScanTests(unittest.TestCase):
                 label = "no conclusion" if conclusion is None else conclusion
                 self.assertIn(f"concluded {label}", result.detail)
 
-    def test_size_bound_env_is_read_and_validated_for_size(self):
+    def test_a_shared_bound_env_is_validated_once_for_both_scans(self):
         environment = _dispatch_environment()
-        environment["GH_WIDGETS_SIZE_WAIT_BOUND_S"] = "soon"
+        environment["GH_WIDGETS_SCAN_WAIT_BOUND_S"] = "soon"
         transport = FakeTransport()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             status = ag.main(environ=environment, transport=transport)
         self.assertEqual(status, 1)
-        row = next(line for line in stdout.getvalue().splitlines()
-                   if line.startswith("| size-baseline |"))
-        self.assertIn("GH_WIDGETS_SIZE_WAIT_BOUND_S", row)
-        self.assertIn("positive integer", row)
+        for name in ("| secrets |", "| size-baseline |"):
+            row = next(line for line in stdout.getvalue().splitlines()
+                       if line.startswith(name))
+            self.assertIn("GH_WIDGETS_SCAN_WAIT_BOUND_S", row)
+            self.assertIn("positive integer", row)
+        self.assertEqual(transport.calls, [])
 
-    def test_the_size_and_secrets_folds_use_distinct_wait_bounds(self):
+    def test_the_second_scan_cannot_restart_a_fresh_wait_bound(self):
+        """Both scans draw down ONE shared deadline.
+
+        The secrets scan burns the whole budget polling an unfinished run;
+        the size scan then gets nothing left and must fail closed WITHOUT
+        querying, instead of restarting a fresh full bound. That is what
+        keeps the aggregate inside one bound so it can always still print
+        its verdict table.
+        """
         environment = _dispatch_environment()
-        environment["GH_WIDGETS_SECRETS_WAIT_BOUND_S"] = "soon"
-        transport = FakeTransport({
+        environment["GH_WIDGETS_SCAN_WAIT_BOUND_S"] = "240"
+        running = _secret_run(7, "2026-09-07T11:00:00Z",
+                              status="in_progress", conclusion=None)
+        size_calls = FakeTransport({
+            SECRETS_RUNS_PATH: [running],
             SIZE_RUNS_PATH: [self.size_run],
             self.size_jobs_path: [_size_job()],
         })
+        timer = FakeClock()
         stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            status = ag.main(environ=environment, transport=transport)
+        with mock.patch.object(ag.time, "monotonic", timer.clock), \
+                mock.patch.object(ag.time, "sleep", timer.sleep), \
+                contextlib.redirect_stdout(stdout):
+            started = timer.clock()
+            status = ag.main(environ=environment, transport=size_calls)
+        elapsed = timer.clock() - started
         self.assertEqual(status, 1)
-        secrets_row = next(line for line in stdout.getvalue().splitlines()
-                           if line.startswith("| secrets |"))
-        self.assertIn("GH_WIDGETS_SECRETS_WAIT_BOUND_S", secrets_row)
         size_row = next(line for line in stdout.getvalue().splitlines()
                         if line.startswith("| size-baseline |"))
-        self.assertIn("PASSED", size_row)
+        self.assertIn("FAILED", size_row)
+        self.assertIn("no wait budget left", size_row)
+        self.assertLessEqual(elapsed, 240.5)
+        size_queries = [call for call in size_calls.calls
+                        if call[0] in (SIZE_RUNS_PATH, self.size_jobs_path)]
+        self.assertEqual(size_queries, [])
+
+
 
 
 class AggregateSummaryTests(unittest.TestCase):

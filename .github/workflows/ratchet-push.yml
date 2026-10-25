@@ -210,7 +210,7 @@ jobs:
                   raise ValueError("unknown ratchet record")
               # Every records file is data: apply-time validation still
               # judges the candidate against fetched main, so a window that
-              # landed any record — this artifact's own included — can reuse.
+              # landed any record, including this artifact, can reuse.
               blocked = changed - records
               if blocked:
                   print("non-data paths moved: "
@@ -433,25 +433,26 @@ jobs:
               old = object_at(old_path) if old_path.exists() else {}
               new = object_at(source)
               if set(new) != {"schema_version", "baseline"}:
-                  refuse("size-baseline.json is not the action's document")
+                  refuse("size-baseline.json has an unexpected document key set")
               if type(new["schema_version"]) is not int \
                       or new["schema_version"] != 1:
                   refuse("size-baseline.json has an unsupported schema_version")
               baseline = new["baseline"]
               if type(baseline) is not dict:
-                  refuse("size-baseline.json's baseline is not a JSON object")
-              expected = ('{\n  "schema_version": 1,\n  "baseline": '
+                  refuse("size-baseline.json has a baseline that is not "
+                         "a JSON object")
+              expected = ("{\n  \"schema_version\": 1,\n  \"baseline\": "
                           + json.dumps(baseline, indent=2, sort_keys=True)
                           .replace("\n", "\n  ")
                           + "\n}\n")
               if source.read_bytes() != expected.encode("utf-8"):
                   refuse("size-baseline.json does not use the action "
-                         "writer's serialization")
+                         "writer\u0027s serialization")
               old_map = old.get("baseline")
               if old_map is None:
                   old_map = {}
               if type(old_map) is not dict:
-                  refuse("size-baseline.json's recorded baseline is not "
+                  refuse("the recorded baseline is not "
                          "a JSON object")
 
               def checked_map(mapping):

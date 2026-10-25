@@ -414,7 +414,7 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         aggregate = _job_blocks(tests_text)["aggregate"]
         step = self._named_step(aggregate, "Aggregate CI gates")
         self.assertRegex(step,
-                         r"(?m)^          GH_WIDGETS_SECRETS_WAIT_BOUND_S: '240'$")
+                         r"(?m)^          GH_WIDGETS_SCAN_WAIT_BOUND_S: '240'$")
         self.assertRegex(
             step,
             r"(?m)^          GH_WIDGETS_HEAD_SHA: \$\{\{ github\.event\.pull_request\."
@@ -1291,8 +1291,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                           data=str(data),
                                           document_name=document_name),
                         capture_output=True, text=True, check=False)
-            self.assertEqual(mapped.returncode, 0, mapped.stderr)
-            self.assertEqual(mapped.stdout.strip(), record_path)
+                    self.assertEqual(mapped.returncode, 0, mapped.stderr)
+                    self.assertEqual(mapped.stdout.strip(), record_path)
 
     def _run_rejected_push(self, remote_main):
         run = self._step("Validate and push the ratchet record")["run"]
@@ -1656,6 +1656,10 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         accepted = {"schema_version": 1, "baseline": {"a.py": 501}}
         bad_baselines = (
             {"/abs.py": 10}, {"../out.py": 10}, {"a\\b.py": 10}, {"": 10},
+            # Each of the next two is refused by exactly one conjunct limb:
+            # dropping the path-normalization limb or the control-character
+            # limb alone must fail this control, not a sibling's.
+            {"./a.py": 10}, {"\ta.py": 10},
         )
         bad_documents = (
             {"schema_version": 1, "baseline": "no"},
@@ -1672,7 +1676,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             for changes, message in (
                     ({"schema_version": 2}, "unsupported schema_version"),
                     ({"schema_version": "1"}, "unsupported schema_version"),
-                    ({"extra": 1}, "not the action's document"),
+                    ({"extra": 1}, "unexpected document key set"),
             ):
                 with self.subTest(changes=changes):
                     document = dict(accepted)
