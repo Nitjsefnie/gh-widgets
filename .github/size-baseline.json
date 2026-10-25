@@ -15,7 +15,7 @@
     "src/render-impact.py": 776,
     "src/render-responsiveness.py": 594,
     "src/render.py": 1000,
-    "tests/test_aggregate_gate.py": 1206,
+    "tests/test_aggregate_gate.py": 1204,
     "tests/test_baseline.py": 914,
     "tests/test_changes_detect.py": 745,
     "tests/test_ci_workflows.py": 1764,
