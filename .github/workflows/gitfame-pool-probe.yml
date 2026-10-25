@@ -70,12 +70,12 @@ jobs:
 
       - name: Build a virtualenv per requested arm
         env:
-          ARMS: ${{ inputs.arms }}
-          NEW_REF: ${{ inputs.new_ref }}
+          GH_WIDGETS_ARMS: ${{ inputs.arms }}
+          GH_WIDGETS_NEW_REF: ${{ inputs.new_ref }}
         run: |
           set -euo pipefail
           FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
-          for arm in $ARMS; do
+          for arm in $GH_WIDGETS_ARMS; do
             build="${arm%%:*}"
             # `[ -d x ] && continue` would be the natural spelling and is a
             # trap under `set -e`: when the directory is ABSENT the list exits
@@ -83,7 +83,7 @@ jobs:
             if [ -d "/tmp/venv-$build" ]; then continue; fi
             case "$build" in
               fork) spec="git-fame @ $FORK_PIN" ;;
-              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$NEW_REF" ;;
+              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GH_WIDGETS_NEW_REF" ;;
               *)    echo "FATAL: unknown build arm '$build'"; exit 1 ;;
             esac
             python3 -m venv "/tmp/venv-$build"
@@ -95,12 +95,12 @@ jobs:
 
       - name: Clone the target once, reuse for every arm
         env:
-          REPO: ${{ inputs.repo }}
+          GH_WIDGETS_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
           # One clone shared by all arms: cloning per arm would put the repo's
           # own churn between them and make the runs incomparable.
-          git clone -q --single-branch "https://github.com/$REPO.git" /tmp/target
+          git clone -q --single-branch "https://github.com/$GH_WIDGETS_REPO.git" /tmp/target
           echo "files: $(git -C /tmp/target ls-files | wc -l)"
           echo "--- 10 largest tracked files (bytes) ---"
           # NOT `... | sort | head`: under `set -o pipefail` head closes the
@@ -111,10 +111,10 @@ jobs:
 
       - name: Profile each arm
         env:
-          ARMS: ${{ inputs.arms }}
+          GH_WIDGETS_ARMS: ${{ inputs.arms }}
         run: |
           set -euo pipefail
-          for arm in $ARMS; do
+          for arm in $GH_WIDGETS_ARMS; do
             build="${arm%%:*}"
             jobs=""
             case "$arm" in *:*) jobs="-j ${arm##*:}" ;; esac
@@ -133,7 +133,7 @@ jobs:
           import os
           import re
           rows = []
-          for arm in os.environ["ARMS"].split():
+          for arm in os.environ["GH_WIDGETS_ARMS"].split():
               build = arm.replace(":", "-")
               t = open(f"/tmp/{build}.time").read()
               user = float(re.search(r"User time \(seconds\): ([\d.]+)", t).group(1))
@@ -154,14 +154,14 @@ jobs:
       - name: The arms must agree, or the faster one is just wrong
         if: always()
         env:
-          ARMS: ${{ inputs.arms }}
+          GH_WIDGETS_ARMS: ${{ inputs.arms }}
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
           import json
           import os
           import sys
-          builds = [a.replace(":", "-") for a in os.environ["ARMS"].split()]
+          builds = [a.replace(":", "-") for a in os.environ["GH_WIDGETS_ARMS"].split()]
           if len(builds) < 2:
               print("single arm, nothing to compare")
               sys.exit(0)

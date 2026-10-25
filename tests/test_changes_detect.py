@@ -472,8 +472,8 @@ class AcquisitionTests(unittest.TestCase):
     def test_schedule_reports_gate_integrity_as_unconditional(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            status = cd.main(environ={'EVENT_NAME': 'schedule',
-                                      'SCHEDULE': cd.AUDIT_CRON},
+            status = cd.main(environ={'GH_WIDGETS_EVENT_NAME': 'schedule',
+                                      'GH_WIDGETS_SCHEDULE': cd.AUDIT_CRON},
                              transport=FakeTransport())
         self.assertEqual(status, 0)
         self.assertIn('gate-integrity=run', output.getvalue())
@@ -492,11 +492,11 @@ class FailClosedTests(unittest.TestCase):
             }), encoding="utf-8")
             output_path = root / "github-output.txt"
             environment = {
-                "EVENT_NAME": "push",
-                "EVENT_PATH": str(payload_path),
-                "REPOSITORY": "owner/repo",
-                "DEFAULT_BRANCH": "main",
-                "HEAD_SHA": "a" * 40,
+                "GH_WIDGETS_EVENT_NAME": "push",
+                "GH_WIDGETS_EVENT_PATH": str(payload_path),
+                "GH_WIDGETS_REPOSITORY": "owner/repo",
+                "GH_WIDGETS_DEFAULT_BRANCH": "main",
+                "GH_WIDGETS_HEAD_SHA": "a" * 40,
                 "GITHUB_OUTPUT": str(output_path),
             }
             output, error = io.StringIO(), io.StringIO()
@@ -541,9 +541,9 @@ class DefaultBranchPushTests(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 status = cd.main(environ={
-                    "EVENT_NAME": "push", "EVENT_PATH": str(event_path),
-                    "REPOSITORY": "owner/repo", "HEAD_SHA": "a" * 40,
-                    "DEFAULT_BRANCH": default_branch,
+                    "GH_WIDGETS_EVENT_NAME": "push", "GH_WIDGETS_EVENT_PATH": str(event_path),
+                    "GH_WIDGETS_REPOSITORY": "owner/repo", "GH_WIDGETS_HEAD_SHA": "a" * 40,
+                    "GH_WIDGETS_DEFAULT_BRANCH": default_branch,
                     "GITHUB_OUTPUT": str(output_path),
                 }, transport=transport)
             self.assertEqual(status, 0, output.getvalue())
@@ -622,11 +622,11 @@ class ReportingTests(unittest.TestCase):
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 status = cd.main(environ={
-                    "EVENT_NAME": "push",
-                    "EVENT_PATH": str(event_path),
-                    "REPOSITORY": "owner/repo",
-                    "HEAD_SHA": "a" * 40,
-                    "DEFAULT_BRANCH": "main",
+                    "GH_WIDGETS_EVENT_NAME": "push",
+                    "GH_WIDGETS_EVENT_PATH": str(event_path),
+                    "GH_WIDGETS_REPOSITORY": "owner/repo",
+                    "GH_WIDGETS_HEAD_SHA": "a" * 40,
+                    "GH_WIDGETS_DEFAULT_BRANCH": "main",
                 }, transport=FakeTransport(responses={
                     compare: {"status": "identical", "files": []},
                 }))
@@ -643,7 +643,7 @@ class ReportingTests(unittest.TestCase):
         dispatch = io.StringIO()
         with contextlib.redirect_stdout(dispatch):
             self.assertEqual(cd.main(environ={
-                "EVENT_NAME": "workflow_dispatch",
+                "GH_WIDGETS_EVENT_NAME": "workflow_dispatch",
             }, transport=FakeTransport()), 0)
         lines = dispatch.getvalue().splitlines()
         self.assertEqual(len(lines), len(cd.GATES) + len(cd.GATES))
@@ -653,8 +653,8 @@ class ReportingTests(unittest.TestCase):
         schedule = io.StringIO()
         with contextlib.redirect_stdout(schedule):
             self.assertEqual(cd.main(environ={
-                "EVENT_NAME": "schedule",
-                "SCHEDULE": cd.AUDIT_CRON,
+                "GH_WIDGETS_EVENT_NAME": "schedule",
+                "GH_WIDGETS_SCHEDULE": cd.AUDIT_CRON,
             }, transport=FakeTransport()), 0)
         self.assertIn("audit: run — schedule matches 12 4 * * *",
                       schedule.getvalue())
@@ -669,10 +669,10 @@ class ReportingTests(unittest.TestCase):
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 status = cd.main(environ={
-                    "EVENT_NAME": "pull_request",
-                    "EVENT_PATH": str(event_path),
-                    "REPOSITORY": "owner/repo",
-                    "PR_NUMBER": "37",
+                    "GH_WIDGETS_EVENT_NAME": "pull_request",
+                    "GH_WIDGETS_EVENT_PATH": str(event_path),
+                    "GH_WIDGETS_REPOSITORY": "owner/repo",
+                    "GH_WIDGETS_PR_NUMBER": "37",
                 }, transport=FakeTransport(responses={
                     api_path: [{"filename": "docs/guide.md"}],
                 }))
@@ -686,7 +686,7 @@ class ReportingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ghw-payload-error-") as temp:
             path = Path(temp) / "event.json"
             for event_path, reason in (
-                    ("", "no EVENT_PATH"),
+                    ("", "no GH_WIDGETS_EVENT_PATH"),
                     (str(path), "cannot read event"),
                     (str(path), "not a JSON object")):
                 path.write_text("{" if reason == "cannot read event" else "[]",
@@ -694,8 +694,8 @@ class ReportingTests(unittest.TestCase):
                 stdout = io.StringIO()
                 with contextlib.redirect_stdout(stdout):
                     status = cd.main(environ={
-                        "EVENT_NAME": "push",
-                        "EVENT_PATH": event_path,
+                        "GH_WIDGETS_EVENT_NAME": "push",
+                        "GH_WIDGETS_EVENT_PATH": event_path,
                         "GITHUB_OUTPUT": "",
                     }, transport=FakeTransport())
                 self.assertEqual(status, 0)
@@ -708,7 +708,7 @@ class ReportingTests(unittest.TestCase):
             with contextlib.redirect_stdout(stdout):
                 with contextlib.redirect_stderr(stderr):
                     status = cd.main(environ={
-                        "EVENT_NAME": "workflow_dispatch",
+                        "GH_WIDGETS_EVENT_NAME": "workflow_dispatch",
                         "GITHUB_OUTPUT": temp,
                     }, transport=FakeTransport())
             self.assertEqual(status, 1)
@@ -725,10 +725,10 @@ class ReportingTests(unittest.TestCase):
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 status = cd.main(environ={
-                    "EVENT_NAME": "push",
-                    "EVENT_PATH": str(path),
-                    "REPOSITORY": "owner/repo",
-                    "HEAD_SHA": "a" * 40,
+                    "GH_WIDGETS_EVENT_NAME": "push",
+                    "GH_WIDGETS_EVENT_PATH": str(path),
+                    "GH_WIDGETS_REPOSITORY": "owner/repo",
+                    "GH_WIDGETS_HEAD_SHA": "a" * 40,
                     "GITHUB_OUTPUT": "",
                 }, transport=FakeTransport(responses={
                     api_path: {"status": "ahead", "files": [

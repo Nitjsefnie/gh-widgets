@@ -94,7 +94,7 @@ belong in the gate, and neither does one that costs more than the thing it
 measures. Both were tried; both lost on numbers.
 
 ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in
-its own step, and exports the result as GH_COUNTER_METRIC; the raw path
+its own step, and exports the result as GH_WIDGETS_GH_COUNTER_METRIC; the raw path
 honours that variable and does not have to be asked. Two call sites in one
 comparison that picked different instruments would produce two incomparable
 numbers. The calibrated path takes no env: --calibrated selects it, and
@@ -185,12 +185,9 @@ CPU_METRIC = "cpu_time"
 # cost mixes; the docstring records the fit and its limits.
 CALIBRATED_METRIC = "cpu_time_ratio"
 # The metric names this file is willing to record. Anything else arriving in
-# GH_COUNTER_METRIC is a stale export from a shape this file has left
-# behind, and it is refused rather than measured — a number recorded under a
-# name this file does not define is the exact failure the baseline's metric
-# check exists to catch, and it should never get that far.
+# METRIC_ENV is a stale export from a shape this file has left behind, and it is refused rather than measured — a number recorded under a name this file does not define is the exact failure the baseline's metric check exists to catch, and it should never get that far.
 METRICS = (CPU_METRIC, CALIBRATED_METRIC)
-METRIC_ENV = "GH_COUNTER_METRIC"
+METRIC_ENV = "GH_WIDGETS_GH_COUNTER_METRIC"
 # Read by the probe and printed next to the instrument, because a reader
 # deciding whether to trust a fallback needs to know whether it was the kernel
 # that forbade the primary, not whether the binary was missing.

@@ -104,14 +104,14 @@ def _secret_job(conclusion: str | None = "success", name="gitleaks"):
 
 def _dispatch_environment():
     return {
-        "NEEDS_JSON": json.dumps(_all_success()),
-        "EVENT_NAME": "workflow_dispatch",
-        "REPOSITORY": "owner/repo",
-        "RUN_ID": "5",
-        "HEAD_BRANCH": "feature",
-        "HEAD_SHA": HEAD_SHA,
-        "DEFAULT_BRANCH": "main",
-        "EVENT_PATH": "",
+        "GH_WIDGETS_NEEDS_JSON": json.dumps(_all_success()),
+        "GH_WIDGETS_EVENT_NAME": "workflow_dispatch",
+        "GH_WIDGETS_REPOSITORY": "owner/repo",
+        "GH_WIDGETS_RUN_ID": "5",
+        "GH_WIDGETS_HEAD_BRANCH": "feature",
+        "GH_WIDGETS_HEAD_SHA": HEAD_SHA,
+        "GH_WIDGETS_DEFAULT_BRANCH": "main",
+        "GH_WIDGETS_EVENT_PATH": "",
     }
 
 
@@ -949,7 +949,7 @@ class AggregateSummaryTests(unittest.TestCase):
         environment = _dispatch_environment()
         needs = _all_success()
         needs["speed"]["result"] = "failure"
-        environment["NEEDS_JSON"] = json.dumps(needs)
+        environment["GH_WIDGETS_NEEDS_JSON"] = json.dumps(needs)
         transport = FakeTransport()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -965,14 +965,14 @@ class AggregateSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ghw-aggregate-summary-") as temp:
             summary = Path(temp) / "summary.md"
             environment = {
-                "NEEDS_JSON": json.dumps(_all_success()),
-                "EVENT_NAME": "workflow_dispatch",
-                "REPOSITORY": "owner/repo",
-                "RUN_ID": "5",
-                "HEAD_BRANCH": "feature",
-                "HEAD_SHA": "a" * 40,
-                "DEFAULT_BRANCH": "main",
-                "EVENT_PATH": "",
+                "GH_WIDGETS_NEEDS_JSON": json.dumps(_all_success()),
+                "GH_WIDGETS_EVENT_NAME": "workflow_dispatch",
+                "GH_WIDGETS_REPOSITORY": "owner/repo",
+                "GH_WIDGETS_RUN_ID": "5",
+                "GH_WIDGETS_HEAD_BRANCH": "feature",
+                "GH_WIDGETS_HEAD_SHA": "a" * 40,
+                "GH_WIDGETS_DEFAULT_BRANCH": "main",
+                "GH_WIDGETS_EVENT_PATH": "",
                 "GITHUB_STEP_SUMMARY": str(summary),
             }
             transport = FakeTransport({
@@ -994,8 +994,8 @@ class AggregateSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ghw-aggregate-error-") as temp:
             summary = Path(temp) / "summary.md"
             environment = {
-                "NEEDS_JSON": "{",
-                "EVENT_NAME": "workflow_dispatch",
+                "GH_WIDGETS_NEEDS_JSON": "{",
+                "GH_WIDGETS_EVENT_NAME": "workflow_dispatch",
                 "GITHUB_STEP_SUMMARY": str(summary),
             }
             stdout, stderr = io.StringIO(), io.StringIO()
@@ -1008,7 +1008,7 @@ class AggregateSummaryTests(unittest.TestCase):
                 sum(1 for line in stdout.getvalue().splitlines()
                     if line.startswith("| ") and " | FAILED | " in line),
                 len(cd.GATES) + 1)
-            self.assertIn("NEEDS_JSON", stderr.getvalue())
+            self.assertIn("GH_WIDGETS_NEEDS_JSON", stderr.getvalue())
             self.assertEqual(summary.read_text(encoding="utf-8"),
                              stdout.getvalue())
 

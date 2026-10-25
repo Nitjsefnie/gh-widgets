@@ -125,7 +125,8 @@ class TestCoverageRatchetStaging(unittest.TestCase):
             (root / "coverage.json").write_text(json.dumps(_report(
                 percent=percent, statements=1000,
                 missing=1000 - round(percent * 10), files=document["files"])))
-            environment = dict(os.environ, GITHUB_SHA="a" * 40, RATCHET_BEFORE="",
+            environment = dict(os.environ, GITHUB_SHA="a" * 40,
+                               GH_WIDGETS_RATCHET_BEFORE="",
                                PATH=f"{binary}{os.pathsep}{os.environ['PATH']}",
                                GITHUB_STEP_SUMMARY=str(root / "summary.md"),
                                GITHUB_OUTPUT=str(root / "output.txt"),

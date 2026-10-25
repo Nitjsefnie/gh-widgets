@@ -319,20 +319,21 @@ exit 1
     def _env(self, **overrides):
         env = dict(os.environ)
         for name in ("POLL_INTERVAL_SECONDS", "WAIT_DEADLINE_SECONDS",
-                     "WAIVE", "GITHUB_STEP_SUMMARY", "SELF"):
+                     "GH_WIDGETS_WAIVE", "GITHUB_STEP_SUMMARY",
+                     "GH_WIDGETS_SELF"):
             env.pop(name, None)
         env.update({
             "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
             "GH_TOKEN": "stub-token",
-            "REPO": self.REPO,
-            "SHA": self.SHA,
-            "TAG": self.TAG,
-            "WAIVE": "",
+            "GH_WIDGETS_REPO": self.REPO,
+            "GH_WIDGETS_SHA": self.SHA,
+            "GH_WIDGETS_TAG": self.TAG,
+            "GH_WIDGETS_WAIVE": "",
             "GITHUB_STEP_SUMMARY": str(self.root / "summary.md"),
             # What the workflow's `${{ github.job }}` renders to, read out
-            # of the workflow rather than typed here — see where SELF is
-            # pinned, in the gates class.
-            "SELF": self._own_check_name(),
+            # of the workflow rather than typed here — see where
+            # GH_WIDGETS_SELF is pinned, in the gates class.
+            "GH_WIDGETS_SELF": self._own_check_name(),
         })
         env.update(overrides)
         return env
@@ -784,7 +785,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self._write_runs([(status, conclusion, "speed")]
                                  + self._without("speed"))
                 done = self._execute(
-                    "Wait for the other gates on this commit", WAIVE="speed")
+                    "Wait for the other gates on this commit",
+                    GH_WIDGETS_WAIVE="speed")
 
                 self.assertEqual(done.returncode, 0,
                                  done.stdout + done.stderr)
@@ -925,7 +927,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 self._write_runs(self._without("speed", *missing))
                 done = self._execute(
                     "Wait for the other gates on this commit",
-                    WAIVE=waive, **self.NO_WAIT)
+                    GH_WIDGETS_WAIVE=waive, **self.NO_WAIT)
                 out = done.stdout + done.stderr
 
                 self.assertEqual(done.returncode, expected, out)
@@ -1000,7 +1002,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
             text,
             r"  push:\n    branches: \[main\]\n    paths:\n"
             r"      - 'VERSION'\n  workflow_dispatch:")
-        self.assertIn("WAIVE: ${{ inputs.waive }}", text)
+        self.assertIn("GH_WIDGETS_WAIVE: ${{ inputs.waive }}", text)
 
     def test_manifest_names_the_workflows_a_version_push_schedules(self):
         text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
@@ -1106,8 +1108,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         own = self._own_check_name()
         block = self._run_block("Wait for the other gates on this commit")
 
-        self.assertIn("SELF: ${{ github.job }}", text)
-        self.assertIn('-v self="$SELF"', block)
+        self.assertIn("GH_WIDGETS_SELF: ${{ github.job }}", text)
+        self.assertIn('-v self="$GH_WIDGETS_SELF"', block)
         self.assertNotIn(f'self="{own}"', block)
         # A second exclusion is the shape a drifted copy takes, and a
         # hard-coded literal left alongside the real one would satisfy every
@@ -1291,8 +1293,9 @@ read after it, each driven against a stubbed `gh`.
 
         self.assertEqual(guard("Refuse to re-release an existing tag"),
                          guard("Create the release"))
-        self.assertIn('gh api "repos/$REPO/commits/$TAG" --jq .sha',
-                      guard("Create the release")[0])
+        self.assertIn(
+            'gh api "repos/$GH_WIDGETS_REPO/commits/$GH_WIDGETS_TAG" --jq .sha',
+            guard("Create the release")[0])
 
 
 if __name__ == "__main__":

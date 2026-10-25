@@ -112,8 +112,10 @@ class TestRatchetPushDelivery(unittest.TestCase):
             target = self._prepare(root, record_path, documents, coverage)
             env = dict(os.environ, PATH=str(boundaries(root)) + os.pathsep + os.environ["PATH"],
                        base=BASE, fetched=TIP, record_path=record_path, document_name=Path(record_path).name,
-                       data=str(root / "data"), repo=str(root / "main"), REPO="owner/repo",
-                       RUN_ID="12345678", RUNNER_TEMP=str(root), GITHUB_STEP_SUMMARY=str(root / "summary"),
+                       data=str(root / "data"), repo=str(root / "main"),
+                       GH_WIDGETS_REPO="owner/repo",
+                       GH_WIDGETS_RUN_ID="12345678", RUNNER_TEMP=str(root),
+                       GITHUB_STEP_SUMMARY=str(root / "summary"),
                        GH_CALLS=str(root / "gh-calls"), GIT_CALLS=str(root / "git-calls"),
                        COMPARISON=json.dumps(response), API_FAIL="yes" if api_fail else "no")
             run = body or push_body()

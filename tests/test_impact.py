@@ -826,7 +826,7 @@ class EnvDefaults(unittest.TestCase):
 
 
 class TestRepoPins(unittest.TestCase):
-    """`IMPACT_REPO_PINS` fixes the commit each repo is blamed at.
+    """`GH_WIDGETS_IMPACT_REPO_PINS` fixes the commit each repo is blamed at.
 
     Without it, two runs — or two arms of one comparison — clone whatever the
     default branch tips are at the moment each clone happens, so a repo that

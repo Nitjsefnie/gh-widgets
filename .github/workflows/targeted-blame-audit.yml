@@ -2,11 +2,13 @@ name: targeted-blame-audit
 
 # Proves the counting method production actually renders with.
 #
-# render-impact.py defaults to BLAME_METHOD=targeted: it blames only the files
+# render-impact.py defaults to GH_WIDGETS_BLAME_METHOD=targeted: it blames only
+# the files
 # our own commits touched, rather than running git-fame over every file. That
 # is ~9x faster and its failure mode is a SILENT UNDER-COUNT — a smaller number
 # on the card, never an error — so it cannot be left to a human to think of
-# checking. BLAME_METHOD=both runs git-fame as well and compares the two per
+# checking. GH_WIDGETS_BLAME_METHOD=both runs git-fame as well and compares
+# the two per
 # repo; the renderer exits non-zero on any disagreement, which is what fails
 # this workflow.
 #
@@ -62,10 +64,10 @@ jobs:
       # A schedule event carries NO inputs, so every `inputs.x` resolves
       # through its `|| default`. Without that the audit would run with an
       # empty identity and pass by measuring the wrong thing.
-      GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+      GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
-      GITFAME_REF: ${{ inputs.gitfame_ref || '65925d8263576dc02510f06aadbcf0386d4edada' }}
+      GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
+      GH_WIDGETS_GITFAME_REF: ${{ inputs.gitfame_ref || '65925d8263576dc02510f06aadbcf0386d4edada' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,7 +84,7 @@ jobs:
       - name: Install the git-fame build production is pinned to
         run: |
           set -euo pipefail
-          pip install -q "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GITFAME_REF"
+          pip install -q "git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GH_WIDGETS_GITFAME_REF"
           git-fame --version
           # Without --jobs the reference arm is a different workload (serial
           # blame), which is slow enough to time the job out rather than fail
@@ -96,13 +98,13 @@ jobs:
 
       - name: Blame every repo both ways, at the pinned commits
         env:
-          BLAME_METHOD: both
-          IMPACT_REPO_PINS: /tmp/pins.json
-          OUT_DIR: /tmp/out
+          GH_WIDGETS_BLAME_METHOD: both
+          GH_WIDGETS_IMPACT_REPO_PINS: /tmp/pins.json
+          GH_WIDGETS_OUT_DIR: /tmp/out
         run: |
           set -euo pipefail
           mkdir -p /tmp/out
-          echo "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS"
+          echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS"
           # pipefail is load-bearing: the renderer's exit code IS the verdict,
           # and tee would otherwise report the pipeline as successful.
           python3 src/render-impact.py --resync \

@@ -47,16 +47,16 @@ jobs:
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_WIDGETS_REPO: ${{ github.repository }}
+          GH_WIDGETS_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           if ! gh api -H 'Cache-Control: no-cache' --paginate \
-            "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            "repos/$GH_WIDGETS_REPO/actions/runs/$GH_WIDGETS_RUN_ID/artifacts" \
             --jq '.artifacts[] | select(.expired != true) | .name' \
             > artifact-names.txt
           then
-            echo "listing artifacts for run $RUN_ID failed" >&2
+            echo "listing artifacts for run $GH_WIDGETS_RUN_ID failed" >&2
             exit 1
           fi
           if grep -qx 'ratchet-push' artifact-names.txt; then
@@ -79,19 +79,20 @@ jobs:
         if: steps.artifact.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
+          GH_WIDGETS_REPO: ${{ github.repository }}
+          GH_WIDGETS_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
 
-          if [ -z "${MASTER_PUSH_DEPLOY_KEY:-}" ]; then
-            echo "MASTER_PUSH_DEPLOY_KEY is empty: the main-push environment is missing its secret" >&2
+          if [ -z "${GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY:-}" ]; then
+            echo "GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY is empty: the main-push" \
+                 "environment is missing its secret" >&2
             exit 1
           fi
-          case "$RUN_ID" in
+          case "$GH_WIDGETS_RUN_ID" in
             ''|*[!0-9]*)
-              echo "workflow_run id is not numeric: $RUN_ID" >&2
+              echo "workflow_run id is not numeric: $GH_WIDGETS_RUN_ID" >&2
               exit 1
               ;;
           esac
@@ -144,7 +145,7 @@ jobs:
 
           eval "$(ssh-agent -s)" >/dev/null
           trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
-          ssh-add <(printf '%s\n' "$MASTER_PUSH_DEPLOY_KEY") >/dev/null
+          ssh-add <(printf '%s\n' "$GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY") >/dev/null
           mkdir -p "$HOME/.ssh"
           known_hosts="$RUNNER_TEMP/ratchet-known-hosts"
           # Pinned from GitHub's Meta endpoint:
@@ -157,7 +158,7 @@ jobs:
           export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts -o BatchMode=yes"
 
           git init -q "$repo"
-          git -C "$repo" remote add origin "git@github.com:$REPO.git"
+          git -C "$repo" remote add origin "git@github.com:$GH_WIDGETS_REPO.git"
           git -C "$repo" fetch --quiet origin main
           git -C "$repo" checkout -q -B ratchet FETCH_HEAD
           fetched="$(git -C "$repo" rev-parse HEAD)"
@@ -165,7 +166,7 @@ jobs:
           if [ "$base" != "$fetched" ]; then
             comparison="$RUNNER_TEMP/ratchet-comparison.json"
             if gh api -H 'Cache-Control: no-cache' --paginate --slurp \
-              "repos/$REPO/compare/$base...$fetched?per_page=100" > "$comparison"
+              "repos/$GH_WIDGETS_REPO/compare/$base...$fetched?per_page=100" > "$comparison"
             then
               decision="$(python3 - "$comparison" "$record_path" <<'PY'
           import json
@@ -442,7 +443,7 @@ jobs:
           git -C "$repo" commit -m "$subject"
 
           if git -C "$repo" push origin HEAD:refs/heads/main; then
-            echo "ratchet record pushed from run $RUN_ID"
+            echo "ratchet record pushed from run $GH_WIDGETS_RUN_ID"
             exit 0
           fi
           if ! git -C "$repo" fetch --quiet origin main; then

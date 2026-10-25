@@ -57,7 +57,8 @@ on:
         default: "both"
       extra_emails:
         description: >-
-          GH_EXTRA_EMAILS, mirroring units/gh-widgets.service. Without it the
+          GH_WIDGETS_GH_EXTRA_EMAILS, mirroring units/gh-widgets.service.
+          Without it the
           audit certifies a DIFFERENT email set than the one that renders the
           real card, and line ownership is an exact match against that set.
         required: false
@@ -112,7 +113,7 @@ jobs:
       - name: Preflight — can this token read the public identity?
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LOGIN: ${{ inputs.user || 'Nitjsefnie' }}
+          GH_WIDGETS_LOGIN: ${{ inputs.user || 'Nitjsefnie' }}
         run: |
           set -euo pipefail
           # Every query in ghwidgets_common.py is `user(login: $login)` over
@@ -120,7 +121,7 @@ jobs:
           # here in seconds rather than 20 minutes into a measurement.
           resp=$(curl -sS -H "Authorization: bearer $GH_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"query\":\"query(\$l:String!){user(login:\$l){login databaseId organizations(first:5){nodes{login}}}}\",\"variables\":{\"l\":\"$LOGIN\"}}" \
+            -d "{\"query\":\"query(\$l:String!){user(login:\$l){login databaseId organizations(first:5){nodes{login}}}}\",\"variables\":{\"l\":\"$GH_WIDGETS_LOGIN\"}}" \
             https://api.github.com/graphql)
           echo "$resp"
           python3 - "$resp" <<'PYEOF'
@@ -137,18 +138,18 @@ jobs:
 
       - name: Build a virtualenv per requested arm
         env:
-          BUILDS: ${{ inputs.builds || 'new' }}
-          NEW_REF: ${{ inputs.new_ref || 'perf-blame' }}
+          GH_WIDGETS_BUILDS: ${{ inputs.builds || 'new' }}
+          GH_WIDGETS_NEW_REF: ${{ inputs.new_ref || 'perf-blame' }}
         run: |
           set -euo pipefail
           # One venv per arm, built only for the arms actually requested, so a
           # single-arm attribution run does not pay for the others.
           FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
-          for build in $BUILDS; do
+          for build in $GH_WIDGETS_BUILDS; do
             case "$build" in
               fork) spec="git-fame @ $FORK_PIN" ;;
               up)   spec="git-fame==4.0.0" ;;
-              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$NEW_REF" ;;
+              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GH_WIDGETS_NEW_REF" ;;
               *)    echo "FATAL: unknown build arm '$build'"; exit 1 ;;
             esac
             python3 -m venv "/tmp/venv-$build"
@@ -301,7 +302,7 @@ jobs:
       - name: Resolve one commit per repo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+          GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
         run: |
           set -euo pipefail
           # Every arm blames the same trees. Without this, the arms clone
@@ -340,22 +341,22 @@ jobs:
       - name: Measure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
-          REPEATS: ${{ inputs.repeats || '1' }}
-          BUILDS: ${{ inputs.builds || 'new' }}
-          CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead || '3' }}
-          BLAME_METHOD: ${{ inputs.blame_method || 'both' }}
-          GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
+          GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+          GH_WIDGETS_REPEATS: ${{ inputs.repeats || '1' }}
+          GH_WIDGETS_BUILDS: ${{ inputs.builds || 'new' }}
+          GH_WIDGETS_CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead || '3' }}
+          GH_WIDGETS_BLAME_METHOD: ${{ inputs.blame_method || 'both' }}
+          GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
         run: |
           set -euo pipefail
-          echo "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD BLAME_METHOD=$BLAME_METHOD"
-          echo "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS"
+          echo "GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD"
+          echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS"
           mkdir -p /tmp/results
           # Interleave the builds (fork, up, fork, up) rather than grouping
           # them, so any drift in the runner or in upstream repo state is
           # spread across both arms instead of loading one of them.
-          for rep in $(seq 1 "$REPEATS"); do
-            for build in $BUILDS; do
+          for rep in $(seq 1 "$GH_WIDGETS_REPEATS"); do
+            for build in $GH_WIDGETS_BUILDS; do
               LABEL="$build-$rep"
               echo "::group::$LABEL"
               # A fresh cgroup per run: memory.peak is a high-water mark and
@@ -384,15 +385,15 @@ jobs:
                 --stderr "/tmp/results/$LABEL.err" \
                 -- env \
                   "PATH=/tmp/venv-$build/bin:$PATH" \
-                  "GH_USER=$GH_USER" \
+                  "GH_WIDGETS_GH_USER=$GH_WIDGETS_GH_USER" \
                   "GH_TOKEN=$GH_TOKEN" \
-                  "OUT_DIR=/tmp/out-$LABEL" \
-                  "CACHE_FILE=/tmp/cache-$LABEL.json" \
+                  "GH_WIDGETS_OUT_DIR=/tmp/out-$LABEL" \
+                  "GH_WIDGETS_CACHE_FILE=/tmp/cache-$LABEL.json" \
                   "GH_WIDGETS_DEBUG_TIMING=1" \
-                  "CLONE_LOOKAHEAD=$CLONE_LOOKAHEAD" \
-                  "BLAME_METHOD=$BLAME_METHOD" \
-                  "GH_EXTRA_EMAILS=$GH_EXTRA_EMAILS" \
-                  "IMPACT_REPO_PINS=/tmp/pins.json" \
+                  "GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD" \
+                  "GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD" \
+                  "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS" \
+                  "GH_WIDGETS_IMPACT_REPO_PINS=/tmp/pins.json" \
                   python3 "$GITHUB_WORKSPACE/src/render-impact.py" --resync
               echo "--- which method and build actually ran ---"
               # Every run identifies its method; only the methods that USE
@@ -400,7 +401,7 @@ jobs:
               # the git-fame line unconditionally fails every `targeted` run.
               grep -m1 '^blame-method:' "/tmp/results/$LABEL.out" || \
                 { echo "FATAL: no blame-method line — the run is unidentified"; exit 1; }
-              if [ "$BLAME_METHOD" != "targeted" ]; then
+              if [ "$GH_WIDGETS_BLAME_METHOD" != "targeted" ]; then
                 grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
                   { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
               fi
@@ -511,7 +512,7 @@ jobs:
               txt = open(f"/tmp/results/{label}.out", errors="replace").read()
               cmps = re.findall(r"^\s+compare (\S+): .*?(ok|MISMATCH)", txt, re.M)
               if not cmps:
-                  print(f"{label}: no comparison ran (BLAME_METHOD != both)")
+                  print(f"{label}: no comparison ran (GH_WIDGETS_BLAME_METHOD != both)")
                   continue
               bad = [r for r, v in cmps if v == "MISMATCH"]
               print(f"{label}: {len(cmps) - len(bad)}/{len(cmps)} repos agree"

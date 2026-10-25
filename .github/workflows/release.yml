@@ -84,9 +84,9 @@ jobs:
       - name: Refuse to re-release an existing tag
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ inputs.sha || github.sha }}
+          GH_WIDGETS_TAG: ${{ steps.version.outputs.tag }}
+          GH_WIDGETS_REPO: ${{ github.repository }}
+          GH_WIDGETS_SHA: ${{ inputs.sha || github.sha }}
         # A bump to a version that already exists means either a mistaken
         # edit or a rerun after a partial failure. Both want a human, and
         # both are silent if this step is a no-op instead of an error.
@@ -123,27 +123,27 @@ jobs:
         # this token cannot see, say), so it lands in the refuse arm — which
         # is the correct answer for it.
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — VERSION was set to a" >&2
+          if gh release view "$GH_WIDGETS_TAG" >/dev/null 2>&1; then
+            echo "Release $GH_WIDGETS_TAG already exists — VERSION was set to a" >&2
             echo "version that has already shipped. Bump it further, or" >&2
             echo "delete that release if it was cut in error." >&2
             exit 1
           fi
-          existing="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
+          existing="$(gh api "repos/$GH_WIDGETS_REPO/commits/$GH_WIDGETS_TAG" --jq .sha 2>&1)" || {
             case "$existing" in
               *"No commit found for SHA"*) existing="" ;;
               *)
-                echo "Could not resolve $TAG — refusing to guess." >&2
+                echo "Could not resolve $GH_WIDGETS_TAG — refusing to guess." >&2
                 echo "$existing" >&2
                 exit 1
                 ;;
             esac
           }
-          if [ -n "$existing" ] && [ "$existing" != "$SHA" ]; then
-            echo "Tag $TAG already points at $existing, not at $SHA." >&2
+          if [ -n "$existing" ] && [ "$existing" != "$GH_WIDGETS_SHA" ]; then
+            echo "Tag $GH_WIDGETS_TAG already points at $existing, not at $GH_WIDGETS_SHA." >&2
             echo "gh release create reuses a tag and ignores --target, so" >&2
-            echo "releasing now would publish $TAG for the OLD commit while" >&2
-            echo "this run's checks describe $SHA." >&2
+            echo "releasing now would publish $GH_WIDGETS_TAG for the OLD commit while" >&2
+            echo "this run's checks describe $GH_WIDGETS_SHA." >&2
             echo "Move or delete that tag by hand if it is in the way — a" >&2
             echo "tag-protection ruleset on refs/tags/v* is the likely" >&2
             echo "reason it cannot be moved, and this workflow will not do" >&2
@@ -151,18 +151,18 @@ jobs:
             exit 1
           fi
           if [ -n "$existing" ]; then
-            echo "$TAG already points at $SHA — a rerun after a partial failure"
+            echo "$GH_WIDGETS_TAG already points at $GH_WIDGETS_SHA — a rerun after a partial failure"
           else
-            echo "$TAG is free"
+            echo "$GH_WIDGETS_TAG is free"
           fi
 
       - name: Wait for the other gates on this commit
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.sha || github.sha }}
-          REPO: ${{ github.repository }}
-          WAIVE: ${{ inputs.waive }}
-          SELF: ${{ github.job }}
+          GH_WIDGETS_SHA: ${{ inputs.sha || github.sha }}
+          GH_WIDGETS_REPO: ${{ github.repository }}
+          GH_WIDGETS_WAIVE: ${{ inputs.waive }}
+          GH_WIDGETS_SELF: ${{ github.job }}
         # Polls this commit's checks and, for comment-share-only windows,
         # the nearest code ancestor until the manifest is satisfied.
         #
@@ -232,7 +232,7 @@ jobs:
           # The only way out of the manifest is to say so out loud. A
           # dispatch can waive; a push has no inputs, so a push-triggered
           # release can never waive anything.
-          IFS=', ' read -r -a requested <<< "${WAIVE:-}"
+          IFS=', ' read -r -a requested <<< "${GH_WIDGETS_WAIVE:-}"
           required=()
           waived=()
           for entry in "${manifest[@]}"; do
@@ -270,7 +270,7 @@ jobs:
           # Poll 1 always runs; consult the deadline between polls (#239).
           while :; do
             tip_runs="$(gh api --paginate -H "Cache-Control: no-cache" \
-              "repos/$REPO/commits/$SHA/check-runs" \
+              "repos/$GH_WIDGETS_REPO/commits/$GH_WIDGETS_SHA/check-runs" \
               --jq '.check_runs[] | "\(.status)\t\(.conclusion)\t\(.name)"')"
             tip_complete="$(printf '%s\n' "$tip_runs" \
               | awk -F'\t' -v gates="${required[*]}" '
@@ -288,18 +288,18 @@ jobs:
                   }')"
             # Compare landed first-parent windows; one exclusive record
             # file cannot be the compare API's truncated 300-file list.
-            check_shas=("$SHA")
-            cursor="$SHA"
+            check_shas=("$GH_WIDGETS_SHA")
+            cursor="$GH_WIDGETS_SHA"
             while [ "$tip_complete" != yes ]; do
               parent="$(gh api -H "Cache-Control: no-cache" \
-                "repos/$REPO/commits/$cursor" --jq '.parents[0].sha')"
+                "repos/$GH_WIDGETS_REPO/commits/$cursor" --jq '.parents[0].sha')"
               if ! printf '%s\n' "$parent" | grep -Eq '^[0-9a-fA-F]{40}$'; then
                 echo "Unknown first parent for $cursor — refusing." >&2
                 exit 1
               fi
               comparison="$(gh api --paginate --slurp \
                 -H "Cache-Control: no-cache" \
-                "repos/$REPO/compare/$parent...$cursor")"
+                "repos/$GH_WIDGETS_REPO/compare/$parent...$cursor")"
               window="$(jq -er '
                 .[0] |
                 if .status != "ahead" or (.files | type) != "array"
@@ -324,17 +324,17 @@ jobs:
               if [ "$check_sha" != "$code_sha" ]; then data_window=yes; fi
               echo "Checking gates on $check_sha (comment-share: $data_window)"
               runs="$tip_runs"
-              if [ "$check_sha" != "$SHA" ]; then
+              if [ "$check_sha" != "$GH_WIDGETS_SHA" ]; then
                 runs="$(gh api --paginate \
                 -H "Cache-Control: no-cache" \
-                "repos/$REPO/commits/$check_sha/check-runs" \
+                "repos/$GH_WIDGETS_REPO/commits/$check_sha/check-runs" \
                 --jq '.check_runs[]
                       | "\(.status)\t\(.conclusion)\t\(.name)"')"
               fi
               # This job's own check run, and nothing else. A check whose
               # name merely starts with this one is left in.
               reported="$(printf '%s\n' "$runs" \
-                | awk -F'\t' -v self="$SELF" 'NF && $3 != self')"
+                | awk -F'\t' -v self="$GH_WIDGETS_SELF" 'NF && $3 != self')"
 
               # Incidental checks — anything that is not a manifest entry —
               # keep the inherited wider acceptance set, so today's
@@ -370,7 +370,7 @@ jobs:
                     lint|pyright|speed|pip-audit|analyze|unittest) allow_skipped=yes ;;
                   esac
                   # Intermediate records need not have been push tips.
-                  if [ "$check_sha" != "$SHA" ] || [ "$entry" = coverage-ratchet ]; then
+                  if [ "$check_sha" != "$GH_WIDGETS_SHA" ] || [ "$entry" = coverage-ratchet ]; then
                     allow_missing=yes
                   fi
                 fi
@@ -445,7 +445,7 @@ jobs:
             exit 0
           done
           echo "Timed out after ${WAIT_DEADLINE_SECONDS}s waiting for" >&2
-          echo "checks on $SHA." >&2
+          echo "checks on $GH_WIDGETS_SHA." >&2
           if [ -n "$missing" ]; then
             echo "These gates never reported a check run:$missing" >&2
           fi
@@ -454,9 +454,9 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          SHA: ${{ inputs.sha || github.sha }}
-          REPO: ${{ github.repository }}
+          GH_WIDGETS_TAG: ${{ steps.version.outputs.tag }}
+          GH_WIDGETS_SHA: ${{ inputs.sha || github.sha }}
+          GH_WIDGETS_REPO: ${{ github.repository }}
         # --generate-notes builds the changelog from the commits since the
         # previous release, so the release body stays honest without anyone
         # maintaining a CHANGELOG by hand.
@@ -469,26 +469,26 @@ jobs:
         # asserts that — because a second, drifted copy of a guard is worse
         # than no second copy.
         run: |
-          existing="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
+          existing="$(gh api "repos/$GH_WIDGETS_REPO/commits/$GH_WIDGETS_TAG" --jq .sha 2>&1)" || {
             case "$existing" in
               *"No commit found for SHA"*) existing="" ;;
               *)
-                echo "Could not resolve $TAG — refusing to guess." >&2
+                echo "Could not resolve $GH_WIDGETS_TAG — refusing to guess." >&2
                 echo "$existing" >&2
                 exit 1
                 ;;
             esac
           }
-          if [ -n "$existing" ] && [ "$existing" != "$SHA" ]; then
-            echo "Tag $TAG appeared at $existing while this run was" >&2
-            echo "waiting; refusing to publish $TAG for $SHA against it." >&2
+          if [ -n "$existing" ] && [ "$existing" != "$GH_WIDGETS_SHA" ]; then
+            echo "Tag $GH_WIDGETS_TAG appeared at $existing while this run was" >&2
+            echo "waiting; refusing to publish $GH_WIDGETS_TAG for $GH_WIDGETS_SHA against it." >&2
             echo "A tag-protection ruleset on refs/tags/v* is the likely" >&2
             echo "reason it cannot be moved. This job will not move it." >&2
             exit 1
           fi
-          gh release create "$TAG" \
-            --target "$SHA" \
-            --title "$TAG" \
+          gh release create "$GH_WIDGETS_TAG" \
+            --target "$GH_WIDGETS_SHA" \
+            --title "$GH_WIDGETS_TAG" \
             --generate-notes
           # Three outcomes, not two, and they do not deserve the same
           # advice. Publishing is already done and this step undoes nothing
@@ -502,22 +502,22 @@ jobs:
           #     That IS evidence of a bad release, and the only remedy is a
           #     human, because this job will not delete anything.
           #   it resolved here — the ordinary case.
-          resolved="$(gh api "repos/$REPO/commits/$TAG" --jq .sha 2>&1)" || {
-            echo "Could not re-resolve $TAG after publishing, so this" >&2
+          resolved="$(gh api "repos/$GH_WIDGETS_REPO/commits/$GH_WIDGETS_TAG" --jq .sha 2>&1)" || {
+            echo "Could not re-resolve $GH_WIDGETS_TAG after publishing, so this" >&2
             echo "run cannot tell you which commit the release points" >&2
-            echo "at. It may well be $SHA. Check the tag and the" >&2
+            echo "at. It may well be $GH_WIDGETS_SHA. Check the tag and the" >&2
             echo "release yourself before trusting or deleting either." >&2
             exit 1
           }
-          if [ "$resolved" != "$SHA" ]; then
-            echo "$TAG now resolves to $resolved, not $SHA" >&2
+          if [ "$resolved" != "$GH_WIDGETS_SHA" ]; then
+            echo "$GH_WIDGETS_TAG now resolves to $resolved, not $GH_WIDGETS_SHA" >&2
             echo "The release points at the wrong commit. Treat it as" >&2
             echo "unreviewed and delete it by hand." >&2
             exit 1
           fi
-          echo "Released $TAG at $SHA"
+          echo "Released $GH_WIDGETS_TAG at $GH_WIDGETS_SHA"
           {
-            echo "### Released [\`$TAG\`](https://github.com/${{ github.repository }}/releases/tag/$TAG)"
+            echo "### Released [\`$GH_WIDGETS_TAG\`](https://github.com/${{ github.repository }}/releases/tag/$GH_WIDGETS_TAG)"
             echo
-            echo "Commit \`$SHA\`, after every check on it passed."
+            echo "Commit \`$GH_WIDGETS_SHA\`, after every check on it passed."
           } >> "$GITHUB_STEP_SUMMARY"

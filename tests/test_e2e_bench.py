@@ -351,7 +351,7 @@ class TestHarness(unittest.TestCase):
         # Ambient-proof: under the workflow's unit step the ambient pin is
         # cpu_time_ratio, which the harness's raw measurements refuse; this
         # file drives the renderer side, which measures raw.
-        env.pop("GH_COUNTER_METRIC", None)
+        env.pop("GH_WIDGETS_GH_COUNTER_METRIC", None)
         env.pop("GH_WIDGETS_OBSERVE_RENDERER_RATIO", None)
         env["GH_WIDGETS_GH_BENCH_FIXTURE_ROOT"] = str(self.fixture_root)
         return subprocess.run(command, env=env, capture_output=True,
@@ -394,7 +394,7 @@ class TestHarness(unittest.TestCase):
         self.write_stubs()
         report = self.root / "observations.xml"
         output = io.StringIO()
-        env = {"GH_COUNTER_METRIC": "cpu_time",
+        env = {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time",
                "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
                "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
         original_calibrated = e2e_bench.counter.measure_calibrated
@@ -442,7 +442,7 @@ class TestHarness(unittest.TestCase):
     def test_failed_ratio_observation_keeps_raw_result(self):
         self.write_stubs()
         with mock.patch.dict(os.environ, {
-                "GH_COUNTER_METRIC": "cpu_time",
+                "GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time",
                 "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1"}), \
                 mock.patch.object(e2e_bench.counter, "measure_calibrated",
                                   side_effect=e2e_bench.counter.CounterError(
@@ -460,7 +460,7 @@ class TestHarness(unittest.TestCase):
         self.write_stubs()
         report = self.root / "ratio.xml"
         output = io.StringIO()
-        env = {"GH_COUNTER_METRIC": "cpu_time_ratio",
+        env = {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
                "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
                "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
         # Fixed child costs distinguish the ratio from raw CPU and wall.
@@ -509,7 +509,7 @@ class TestHarness(unittest.TestCase):
             self.assertGreater(_number(case, "gh-wall"), 0)
 
     def test_renderer_refuses_foreign_metric(self):
-        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "foreign"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_COUNTER_METRIC": "foreign"}):
             result = e2e_bench._run_renderer(  # pylint: disable=protected-access
                 Path("missing.py"), self.repo_root, {})
         self.assertIn("refusing to measure", result["failure"])

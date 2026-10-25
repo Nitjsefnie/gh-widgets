@@ -163,7 +163,7 @@ jobs:
         # improvement leaves the candidate byte-identical and stages nothing.
         env:
           GH_TOKEN: ${{ github.token }}
-          RATCHET_BEFORE: ${{ github.event.before }}
+          GH_WIDGETS_RATCHET_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           if python3 scripts/ci/changes_detect.py --ratchet-data-only; then

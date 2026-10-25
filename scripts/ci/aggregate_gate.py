@@ -31,7 +31,7 @@ HEAD_SHA = re.compile(r"[0-9a-f]{40}\Z")
 SECRETS_WORKFLOW = "secrets.yml"
 SECRETS_JOB = "gitleaks"
 SECRETS_RESULT = "secrets"
-SECRETS_WAIT_BOUND_ENV = "SECRETS_WAIT_BOUND_S"
+SECRETS_WAIT_BOUND_ENV = "GH_WIDGETS_SECRETS_WAIT_BOUND_S"
 DEFAULT_SECRETS_WAIT_BOUND_S = 240
 SECRETS_CHECK_INTERVAL_S = 15
 # Leave half a second for the aggregate row, step summary write, and exit.
@@ -91,7 +91,7 @@ def allowed_results(name: str) -> frozenset[str]:
 def classify_needs(needs: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Separate hard need failures from cancellations requiring evidence."""
     if not isinstance(needs, dict):
-        raise AggregationError("NEEDS_JSON must be an object")
+        raise AggregationError("GH_WIDGETS_NEEDS_JSON must be an object")
     hard = []
     cancelled = []
     for name, details in needs.items():
@@ -431,7 +431,8 @@ def require_secret_scan(repository: str, head_sha: str, wait_bound: int,
     """Wait for the newest secrets run on one head SHA and judge its job."""
     if not isinstance(wait_bound, int) or isinstance(wait_bound, bool) \
             or wait_bound <= 0:
-        return Result(FAILED, "SECRETS_WAIT_BOUND_S must be a positive integer")
+        return Result(
+            FAILED, f"{SECRETS_WAIT_BOUND_ENV} must be a positive integer")
     clock = time.monotonic if clock is None else clock
     sleep = time.sleep if sleep is None else sleep
     started_at = clock()
@@ -478,8 +479,8 @@ def _secret_scan_result(environment: dict[str, str],
             f"{SECRETS_WAIT_BOUND_ENV} must be a positive integer; "
             f"received {raw_bound!r}")
     return require_secret_scan(
-        environment.get("REPOSITORY", ""),
-        environment.get("HEAD_SHA", ""), int(raw_bound), transport)
+        environment.get("GH_WIDGETS_REPOSITORY", ""),
+        environment.get("GH_WIDGETS_HEAD_SHA", ""), int(raw_bound), transport)
 
 
 def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
@@ -510,7 +511,7 @@ def decide(needs: dict[str, Any], applicability: dict[str, str], *,
            superseded_by: SupersessionProof | None = None) -> dict[str, Result]:
     """Classify needs and cross-check their terminal state against paths."""
     if not isinstance(needs, dict):
-        raise AggregationError("NEEDS_JSON must be an object")
+        raise AggregationError("GH_WIDGETS_NEEDS_JSON must be an object")
     missing = EXPECTED_NEEDS - set(needs)
     extra = set(needs) - EXPECTED_NEEDS
     if missing or extra:
@@ -590,7 +591,7 @@ def _payload(event: str, path: str) -> dict:
     if event not in {"push", "pull_request"}:
         return {}
     if not path:
-        raise AggregationError(f"{event} has no EVENT_PATH")
+        raise AggregationError(f"{event} has no GH_WIDGETS_EVENT_PATH")
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -603,20 +604,23 @@ def _payload(event: str, path: str) -> dict:
 def _context_results(environment: dict[str, str],
                      transport: cd.Transport) -> dict[str, Result]:
     try:
-        needs = json.loads(environment["NEEDS_JSON"])
+        needs = json.loads(environment["GH_WIDGETS_NEEDS_JSON"])
     except (KeyError, ValueError) as exc:
-        raise AggregationError("NEEDS_JSON is missing or not JSON") from exc
-    event = environment.get("EVENT_NAME", "")
-    payload = _payload(event, environment.get("EVENT_PATH", ""))
+        raise AggregationError(
+            "GH_WIDGETS_NEEDS_JSON is missing or not JSON") from exc
+    event = environment.get("GH_WIDGETS_EVENT_NAME", "")
+    payload = _payload(event, environment.get("GH_WIDGETS_EVENT_PATH", ""))
     applicability = cd.classify_event(
-        event, transport=transport, repository=environment.get("REPOSITORY", ""),
-        payload=payload, sha=environment.get("HEAD_SHA", ""),
-        pr_number=environment.get("PR_NUMBER", ""),
-        default_branch=environment.get("DEFAULT_BRANCH", ""))
+        event, transport=transport,
+        repository=environment.get("GH_WIDGETS_REPOSITORY", ""),
+        payload=payload, sha=environment.get("GH_WIDGETS_HEAD_SHA", ""),
+        pr_number=environment.get("GH_WIDGETS_PR_NUMBER", ""),
+        default_branch=environment.get("GH_WIDGETS_DEFAULT_BRANCH", ""))
     return evaluate(
-        needs, applicability, repository=environment.get("REPOSITORY", ""),
-        run_id=environment.get("RUN_ID", ""),
-        branch=environment.get("HEAD_BRANCH", ""), transport=transport)
+        needs, applicability,
+        repository=environment.get("GH_WIDGETS_REPOSITORY", ""),
+        run_id=environment.get("GH_WIDGETS_RUN_ID", ""),
+        branch=environment.get("GH_WIDGETS_HEAD_BRANCH", ""), transport=transport)
 
 
 def _failed_rows(reason: str) -> dict[str, Result]:

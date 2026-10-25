@@ -281,11 +281,11 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         base.write_text(json.dumps(document()), encoding="utf-8")
         script = ("set -euo pipefail\n"
                   f'RUNNER_TEMP="{root}"\n'
-                  f'BASELINE="{base}"\n'
+                  f'GH_WIDGETS_BASELINE="{base}"\n'
                   + fragment
                   + 'printf "%s\\n" "${removals[@]+${removals[@]}}"\n')
         done = self.steps.bash(script, root, "head",
-                               self.steps.env_for({"BASELINE": "x"}, root))
+                               self.steps.env_for({"GH_WIDGETS_BASELINE": "x"}, root))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         return done.stdout.split()
 
@@ -297,7 +297,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         Sliced out of the `speed` job in `tests.yml` from the declaration
         block's header through the loop that builds the comparator args.
         The fragment reads the base copy from $RUNNER_TEMP and the head from
-        $BASELINE, exactly as the step does.
+        $GH_WIDGETS_BASELINE, exactly as the step does.
         """
         block = self.steps.step_run(
             "The committed baseline only ratchets down")[2]
@@ -313,12 +313,12 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         fixture.commit(message or "Change baseline", new_doc, extra)
         script = ("set -euo pipefail\n"
                   f'RUNNER_TEMP="{root}"\n'
-                  'BASELINE="gate/speed-baseline.json"\n'
+                  'GH_WIDGETS_BASELINE="gate/speed-baseline.json"\n'
                   f'base_tip="{fixture.base}"\n'
                   + fragment
                   + 'printf "%s\\n" "${raises_args[@]+${raises_args[@]}}"\n')
         return self.steps.bash(script, root, "head",
-                               self.steps.env_for({"BASELINE": "x"}, root)), fixture
+                               self.steps.env_for({"GH_WIDGETS_BASELINE": "x"}, root)), fixture
 
     def _derived_raises(self, old_doc, new_doc, message=""):
         done, _fixture = self._raise_step(old_doc, new_doc, message)
@@ -477,8 +477,8 @@ class TestMainPushRatchet(unittest.TestCase):
         declared, working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
         env = self.steps.env_for(
-            declared, self.root, EVENT_NAME="push",
-            BEFORE_SHA=fixture.base if before is None else before)
+            declared, self.root, GH_WIDGETS_EVENT_NAME="push",
+            GH_WIDGETS_BEFORE_SHA=fixture.base if before is None else before)
         self.assertFalse(fixture.base_path.exists(),
                          "the step must extract the previous tip's baseline")
         return self.steps.bash(block, self.root, working_dir, env)
@@ -493,8 +493,10 @@ class TestMainPushRatchet(unittest.TestCase):
             "(github.event_name == 'push' && github.ref == 'refs/heads/main') }}")
         declared = self.steps.step_run(
             "The committed baseline only ratchets down")[0]
-        self.assertEqual(declared["EVENT_NAME"], "${{ github.event_name }}")
-        self.assertEqual(declared["BEFORE_SHA"], "${{ github.event.before }}")
+        self.assertEqual(declared["GH_WIDGETS_EVENT_NAME"],
+                         "${{ github.event_name }}")
+        self.assertEqual(declared["GH_WIDGETS_BEFORE_SHA"],
+                         "${{ github.event.before }}")
 
     @REQUIRES_POSIX_SHELL
     def test_non_feature_squash_landing_is_refused_on_push_route(self):
@@ -531,7 +533,7 @@ class TestMainPushRatchet(unittest.TestCase):
         self.fixture.commit(self.fixture.MESSAGE, self.fixture.new)
         result = self._push_step(before="")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("BEFORE_SHA is empty", result.stderr)
+        self.assertIn("GH_WIDGETS_BEFORE_SHA is empty", result.stderr)
 
     @REQUIRES_POSIX_SHELL
     def test_force_push_landing_fails_closed_on_push_route(self):
