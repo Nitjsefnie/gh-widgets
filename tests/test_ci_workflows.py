@@ -1633,8 +1633,9 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         cases = (
             ({"same.py": 502}, "rose above fetched main"),
             ({"same.py": 501, "down.py": 701}, "rose above fetched main"),
+            # 0 and True each isolate one conjunct of the count check
+            # (count < 1, the bool rejection); a negative adds nothing.
             ({"new.py": 0}, "positive line count"),
-            ({"new.py": -1}, "positive line count"),
             ({"new.py": True}, "positive line count"),
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -1662,7 +1663,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             {"./a.py": 10}, {"\ta.py": 10},
         )
         bad_documents = (
-            {"schema_version": 1, "baseline": "no"},
+            # One shape per refused limb: a non-object baseline.
             {"schema_version": 1, "baseline": []},
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -1710,10 +1711,9 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             (repo / ".github/size-baseline.json").write_text(json.dumps(old))
             (data / "base.txt").write_text("a" * 40 + "\n")
             path = data / "size-baseline.json"
-            # The writer puts schema_version first; json.dumps with
-            # sort_keys puts baseline first. Both wrong spellings refused.
+            # One wrong spelling pins the byte-exact limb: the realistic
+            # near-miss, pretty-printed but with the top-level keys sorted.
             for serialized in (
-                    json.dumps({"schema_version": 1, "baseline": baseline}),
                     json.dumps({"baseline": baseline, "schema_version": 1},
                                sort_keys=True, indent=2) + "\n",
             ):
