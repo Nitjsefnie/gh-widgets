@@ -132,8 +132,8 @@
     408
   ],
   "scripts/resolve-repo-pins.py": [
-    1126,
-    3686
+    1125,
+    3811
   ],
   "scripts/secrecy-check.sh": [
     918,
@@ -214,10 +214,6 @@
   "tests/test_owner_locks.py": [
     624,
     788
-  ],
-  "tests/test_pins.py": [
-    530,
-    2895
   ],
   "tests/test_release_workflow.py": [
     11544,
