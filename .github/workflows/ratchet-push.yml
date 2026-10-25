@@ -453,28 +453,22 @@ jobs:
               if type(old_map) is not dict:
                   refuse("size-baseline.json's recorded baseline is not "
                          "a JSON object")
-              for path, count in old_map.items():
-                  if not path or PurePosixPath(path).is_absolute() \
-                          or ".." in PurePosixPath(path).parts \
-                          or str(PurePosixPath(path)) != path \
-                          or "\\" in path \
-                          or any(ord(char) < 32 or ord(char) == 127
-                                 for char in path):
-                      refuse(f"{path!r}: expected a repository-relative path")
-                  if isinstance(count, bool) or not isinstance(count, int) \
-                          or count < 1:
-                      refuse(f"{path}: expected a positive line count")
-              for path, count in baseline.items():
-                  if not path or PurePosixPath(path).is_absolute() \
-                          or ".." in PurePosixPath(path).parts \
-                          or str(PurePosixPath(path)) != path \
-                          or "\\" in path \
-                          or any(ord(char) < 32 or ord(char) == 127
-                                 for char in path):
-                      refuse(f"{path!r}: expected a repository-relative path")
-                  if isinstance(count, bool) or not isinstance(count, int) \
-                          or count < 1:
-                      refuse(f"{path}: expected a positive line count")
+
+              def checked_map(mapping):
+                  for path, count in mapping.items():
+                      if not path or PurePosixPath(path).is_absolute() \
+                              or ".." in PurePosixPath(path).parts \
+                              or str(PurePosixPath(path)) != path \
+                              or "\\" in path \
+                              or any(ord(char) < 32 or ord(char) == 127
+                                     for char in path):
+                          refuse(f"{path!r}: expected a repository-relative path")
+                      if isinstance(count, bool) \
+                              or not isinstance(count, int) or count < 1:
+                          refuse(f"{path}: expected a positive line count")
+
+              checked_map(old_map)
+              checked_map(baseline)
               for path, count in baseline.items():
                   if path in old_map and count > old_map[path]:
                       refuse(f"{path}: line count rose above fetched main")
