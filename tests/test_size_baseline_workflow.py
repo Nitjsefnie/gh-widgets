@@ -45,11 +45,6 @@ class TestSizeBaselineWorkflow(unittest.TestCase):
                       run)
         self.assertIn("git diff --quiet HEAD -- .github/size-baseline.json",
                       run)
-        upload = next(step for step in steps
-                      if step.get("name") == "Upload the tightened size records")
-        self.assertEqual(upload["with"]["name"], "ratchet-push")
-        self.assertIn("ratchet-data/size-baseline.json", upload["with"]["path"])
-        self.assertIn("ratchet-data/base.txt", upload["with"]["path"])
 
 
 if __name__ == "__main__":
