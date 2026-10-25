@@ -23,6 +23,8 @@ PRODUCERS = {
     ("tests.yml", "speed", "Upload the tightened speed baseline"),
     ("coverage-ratchet.yml", "measure", "Upload the tightened coverage floor"),
     ("comment-share.yml", "comment-share", "Upload the tightened comment shares"),
+    ("size-baseline.yml", "size-baseline",
+     "Upload the tightened size records"),
 }
 
 
@@ -71,7 +73,7 @@ class TestUploadNamespaces(unittest.TestCase):
 class TestRatchetDataWindow(unittest.TestCase):
     def test_only_complete_data_windows_skip_and_name_the_compared_shas(self):
         records = {"gate/coverage-floor.json", "gate/speed-baseline.json",
-                   ".github/comment-share.json"}
+                   ".github/comment-share.json", ".github/size-baseline.json"}
         self.assertEqual(cd.RATCHET_DATA, records)
         environment = {"GITHUB_REPOSITORY": "owner/repo",
                        "GITHUB_SHA": "b" * 40,
@@ -140,8 +142,13 @@ class TestStagingCallers(unittest.TestCase):
         boundary.chmod(0o755)
         boundary = binary / "git"
         boundary.write_text("#!/bin/sh\n"
-                            "test \"$*\" = 'diff --quiet HEAD -- .github/comment-share.json' "
-                            "|| exit 97\nexit \"$DIFF_STATUS\"\n", encoding="utf-8")
+                            "case \"$*\" in\n"
+                            "  'diff --quiet HEAD -- .github/comment-share.json'"
+                            "|'diff --quiet HEAD -- .github/size-baseline.json')"
+                            " ;;\n"
+                            "  *) exit 97 ;;\n"
+                            "esac\n"
+                            "exit \"$DIFF_STATUS\"\n", encoding="utf-8")
         boundary.chmod(0o755)
         # The speed writer is covered through its real CLI in test_speed_ratchet.
         # Here its process boundary returns a candidate so deleting the skip
@@ -162,6 +169,7 @@ class TestStagingCallers(unittest.TestCase):
             json.dumps({"floor": 80 if unchanged else 81}))
         (root / ".github").mkdir()
         (root / ".github/comment-share.json").write_text('{"x.py": [1, 5]}\n')
+        (root / ".github/size-baseline.json").write_text('{}\n')
         reports = root / "reports"
         reports.mkdir()
         (reports / "bench-head-1.xml").touch()

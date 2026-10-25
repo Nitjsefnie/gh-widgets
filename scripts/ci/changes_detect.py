@@ -49,7 +49,7 @@ AUDIT_CRON = "12 4 * * *"
 CODEQL_CRON = "47 3 * * 3"
 RATCHET_DATA = frozenset({
     "gate/coverage-floor.json", "gate/speed-baseline.json",
-    ".github/comment-share.json",
+    ".github/comment-share.json", ".github/size-baseline.json",
 })
 
 
