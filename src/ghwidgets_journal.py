@@ -53,7 +53,7 @@ def http_error_text(exc):
         try:
             text = " ".join(
                 _XML_FORBIDDEN.sub("", exc.read().decode(errors="replace")).split())
-        except OSError:
+        except (OSError, ValueError):
             text = "body unreadable"
     if len(text) > 2000:
         text = f"{text[:2000]} [truncated]"
