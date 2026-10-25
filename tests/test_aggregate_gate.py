@@ -1,6 +1,5 @@
 """Needs-based verdicts for the consolidated CI aggregate job."""
 # Existing workflow/aggregate controls stay together in these test modules.
-# pylint: disable=too-many-lines
 import contextlib
 import io
 import json
@@ -29,6 +28,13 @@ def _all_success():
 def _with_secret_result(results, verdict=ag.PASSED):
     complete = dict(results)
     complete["secrets"] = ag.Result(verdict, "gitleaks job concluded success")
+    return complete
+
+
+def _with_scan_results(results, verdict=ag.PASSED):
+    complete = _with_secret_result(results, verdict)
+    complete["size-baseline"] = ag.Result(
+        verdict, "size-baseline job concluded success")
     return complete
 
 
@@ -83,6 +89,9 @@ HEAD_SHA = "a" * 40
 SECRETS_RUNS_PATH = (
     "repos/owner/repo/actions/workflows/secrets.yml/runs"
     f"?head_sha={HEAD_SHA}&per_page=100")
+SIZE_RUNS_PATH = (
+    "repos/owner/repo/actions/workflows/size-baseline.yml/runs"
+    f"?head_sha={HEAD_SHA}&per_page=100")
 
 
 def _secret_run(identifier, started, *, status="completed",
@@ -100,6 +109,10 @@ def _secret_run(identifier, started, *, status="completed",
 
 def _secret_job(conclusion: str | None = "success", name="gitleaks"):
     return {"name": name, "status": "completed", "conclusion": conclusion}
+
+
+def _size_job(conclusion: str | None = "success"):
+    return _secret_job(conclusion, name="size-baseline")
 
 
 def _dispatch_environment():
@@ -368,7 +381,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
                      pull_requests=[{"number": 42}])
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
 
     def test_push_cancellation_is_never_excused_by_a_newer_pr_run(self):
         mine = _run(1, "2026-09-07T10:00:00Z", event="push")
@@ -376,7 +389,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
         results, transport = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
         self.assertEqual(transport.calls,
                          [("repos/owner/repo/actions/runs/1", False, True)])
 
@@ -388,7 +401,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
         results, transport = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
         self.assertEqual(transport.calls,
                          [("repos/owner/repo/actions/runs/1", False, True)])
 
@@ -409,7 +422,7 @@ class SupersessionTests(CancelledRunMixin, unittest.TestCase):
             branch="feature", transport=transport)
         self.assertEqual(result["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", result["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(result)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(result)), 1)
 
     def test_deliberate_cancel_fails_and_does_not_fail_other_gate_rows(self):
         own_path = "repos/owner/repo/actions/runs/1"
@@ -459,7 +472,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
 
     def test_newer_run_with_a_different_pr_number_is_deliberate(self):
         mine = _run(1, "2026-09-07T10:00:00Z",
@@ -469,7 +482,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
 
     def test_unattributed_fork_pr_uses_degraded_same_repo_branch_proof(self):
         mine = _run(1, "2026-09-07T10:00:00Z", pull_requests=[])
@@ -481,7 +494,7 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
                       results["speed"].detail)
         self.assertIn("two PRs from one fork branch are indistinguishable",
                       results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 0)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 0)
 
     def test_missing_association_on_either_run_uses_degraded_fallback(self):
         attributed = _run(1, "2026-09-07T10:00:00Z",
@@ -507,13 +520,16 @@ class SupersessionAttributionTests(CancelledRunMixin, unittest.TestCase):
         results, _ = self._cancelled_speed(mine, newer)
         self.assertEqual(results["speed"].verdict, ag.FAILED)
         self.assertIn("deliberate", results["speed"].detail)
-        self.assertEqual(ag.exit_code(_with_secret_result(results)), 1)
+        self.assertEqual(ag.exit_code(_with_scan_results(results)), 1)
 
 
 class SecretScanTests(unittest.TestCase):
     def setUp(self):
         self.secret_run = _secret_run(7, "2026-09-07T11:00:00Z")
         self.jobs_path = "repos/owner/repo/actions/runs/7/jobs?per_page=100"
+        self.size_run = _secret_run(9, "2026-09-07T11:00:00Z")
+        self.size_jobs_path = (
+            "repos/owner/repo/actions/runs/9/jobs?per_page=100")
 
     def _scan(self, runs, jobs, *, bound=30, clock=None):
         transport = FakeTransport({
@@ -530,6 +546,8 @@ class SecretScanTests(unittest.TestCase):
         transport = FakeTransport({
             SECRETS_RUNS_PATH: [self.secret_run],
             self.jobs_path: [_secret_job()],
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
         })
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -537,7 +555,8 @@ class SecretScanTests(unittest.TestCase):
                              transport=transport)
         self.assertEqual(status, 0)
         self.assertIn("| secrets | PASSED |", stdout.getvalue())
-        self.assertEqual(ag.exit_code(_with_secret_result(
+        self.assertIn("| size-baseline | PASSED |", stdout.getvalue())
+        self.assertEqual(ag.exit_code(_with_scan_results(
             ag.decide(_all_success(), _applicability()))), 0)
 
     def test_run_success_does_not_hide_a_failed_gitleaks_job(self):
@@ -545,6 +564,8 @@ class SecretScanTests(unittest.TestCase):
         transport = FakeTransport({
             SECRETS_RUNS_PATH: [run],
             self.jobs_path: [_secret_job("failure")],
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
         })
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -562,6 +583,8 @@ class SecretScanTests(unittest.TestCase):
         transport = FakeTransport({
             SECRETS_RUNS_PATH: [run],
             self.jobs_path: [_secret_job("success")],
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
         })
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -569,6 +592,7 @@ class SecretScanTests(unittest.TestCase):
                              transport=transport)
         self.assertEqual(status, 0)
         self.assertIn("| secrets | PASSED |", stdout.getvalue())
+        self.assertIn("| size-baseline | PASSED |", stdout.getvalue())
 
     def test_runs_returned_for_another_head_sha_are_rejected(self):
         wrong_sha = _secret_run(7, "2026-09-07T11:00:00Z")
@@ -768,7 +792,11 @@ class SecretScanTests(unittest.TestCase):
         self.assertIn("JSON", result.detail)
 
     def test_workflow_dispatch_without_a_scan_fails_after_the_bound(self):
-        transport = FakeTransport({SECRETS_RUNS_PATH: []})
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [],
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
+        })
         timer = FakeClock()
         stdout = io.StringIO()
         with mock.patch.object(ag.time, "monotonic", timer.clock), \
@@ -781,6 +809,9 @@ class SecretScanTests(unittest.TestCase):
                    if line.startswith("| secrets |"))
         self.assertIn("FAILED", row)
         self.assertIn("no secrets.yml run", row)
+        size_row = next(line for line in stdout.getvalue().splitlines()
+                        if line.startswith("| size-baseline |"))
+        self.assertIn("PASSED", size_row)
 
 
 class SecretScanTransportControls(unittest.TestCase):
@@ -929,11 +960,132 @@ class SecretScanTimingTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
 
 
+class SizeScanTests(unittest.TestCase):
+    """The size fold: the secrets machinery over the size-baseline workflow."""
+
+    def setUp(self):
+        self.size_run = _secret_run(9, "2026-09-07T11:00:00Z")
+        self.size_jobs_path = (
+            "repos/owner/repo/actions/runs/9/jobs?per_page=100")
+
+    def _scan(self, runs, jobs, *, bound=30):
+        transport = FakeTransport({
+            SIZE_RUNS_PATH: runs,
+            self.size_jobs_path: jobs,
+        })
+        timer = FakeClock()
+        result = ag.require_size_scan(
+            "owner/repo", HEAD_SHA, bound, transport,
+            clock=timer.clock, sleep=timer.sleep)
+        return result, transport, timer
+
+    def test_queries_the_size_workflow_and_pins_head_sha_pagination(self):
+        transport = FakeTransport({
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
+        })
+        result = ag.require_size_scan(
+            "owner/repo", HEAD_SHA, 30, transport,
+            clock=FakeClock().clock, sleep=FakeClock().sleep)
+        self.assertEqual(result.verdict, ag.PASSED)
+        self.assertEqual(transport.calls, [
+            (SIZE_RUNS_PATH, True, True),
+            (self.size_jobs_path, True, True),
+        ])
+
+    def test_a_failed_size_job_fails_the_aggregate(self):
+        stdout = io.StringIO()
+        transport = FakeTransport({
+            SECRETS_RUNS_PATH: [_secret_run(7, "2026-09-07T11:00:00Z")],
+            "repos/owner/repo/actions/runs/7/jobs?per_page=100": [
+                _secret_job()],
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job("failure")],
+        })
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=_dispatch_environment(),
+                             transport=transport)
+        self.assertEqual(status, 1)
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| size-baseline |"))
+        self.assertIn("FAILED", row)
+        self.assertIn("size-baseline", row)
+        self.assertIn("concluded failure", row)
+
+    def test_a_size_run_for_another_head_sha_is_rejected(self):
+        wrong_sha = _secret_run(9, "2026-09-07T11:00:00Z")
+        wrong_sha["head_sha"] = "b" * 40
+        result, transport, _timer = self._scan([wrong_sha], [])
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("outside GH_WIDGETS_HEAD_SHA", result.detail)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_no_size_run_within_bound_names_the_workflow(self):
+        result, transport, _timer = self._scan([], [], bound=30)
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("no size-baseline.yml run", result.detail)
+        self.assertIn(HEAD_SHA, result.detail)
+        self.assertGreater(len(transport.calls), 1)
+
+    def test_missing_or_ambiguous_size_job_fails_with_its_detail(self):
+        result, _transport, _ = self._scan(
+            [self.size_run], [_secret_job(name="setup")])
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("no job named size-baseline", result.detail)
+        self.assertIn("setup", result.detail)
+        result, _transport, _ = self._scan(
+            [self.size_run], [_size_job(), _size_job()])
+        self.assertEqual(result.verdict, ag.FAILED)
+        self.assertIn("2 jobs named size-baseline", result.detail)
+
+    def test_every_non_success_size_conclusion_fails_with_that_conclusion(self):
+        for conclusion in ("skipped", "cancelled", "timed_out", "neutral",
+                           None):
+            with self.subTest(conclusion=conclusion):
+                result, _transport, _ = self._scan(
+                    [self.size_run], [_size_job(conclusion)])
+                self.assertEqual(result.verdict, ag.FAILED)
+                label = "no conclusion" if conclusion is None else conclusion
+                self.assertIn(f"concluded {label}", result.detail)
+
+    def test_size_bound_env_is_read_and_validated_for_size(self):
+        environment = _dispatch_environment()
+        environment["GH_WIDGETS_SIZE_WAIT_BOUND_S"] = "soon"
+        transport = FakeTransport()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=environment, transport=transport)
+        self.assertEqual(status, 1)
+        row = next(line for line in stdout.getvalue().splitlines()
+                   if line.startswith("| size-baseline |"))
+        self.assertIn("GH_WIDGETS_SIZE_WAIT_BOUND_S", row)
+        self.assertIn("positive integer", row)
+
+    def test_the_size_and_secrets_folds_use_distinct_wait_bounds(self):
+        environment = _dispatch_environment()
+        environment["GH_WIDGETS_SECRETS_WAIT_BOUND_S"] = "soon"
+        transport = FakeTransport({
+            SIZE_RUNS_PATH: [self.size_run],
+            self.size_jobs_path: [_size_job()],
+        })
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = ag.main(environ=environment, transport=transport)
+        self.assertEqual(status, 1)
+        secrets_row = next(line for line in stdout.getvalue().splitlines()
+                           if line.startswith("| secrets |"))
+        self.assertIn("GH_WIDGETS_SECRETS_WAIT_BOUND_S", secrets_row)
+        size_row = next(line for line in stdout.getvalue().splitlines()
+                        if line.startswith("| size-baseline |"))
+        self.assertIn("PASSED", size_row)
+
+
 class AggregateSummaryTests(unittest.TestCase):
     def test_table_includes_every_gate_and_escapes_details(self):
         result = ag.decide(_all_success(), _applicability())
         result["tests"] = ag.Result(ag.FAILED, "bad | detail\nnext")
         result["secrets"] = ag.Result(ag.PASSED, "clean")
+        result["size-baseline"] = ag.Result(ag.PASSED, "clean")
         rendered = ag.render_summary(result)
         self.assertIn("### Aggregate CI gates", rendered)
         self.assertIn("| Gate | Result | Detail |", rendered)
@@ -944,6 +1096,9 @@ class AggregateSummaryTests(unittest.TestCase):
         results = ag.decide(_all_success(), _applicability())
         with self.assertRaisesRegex(ag.AggregationError, "incomplete"):
             ag.exit_code(results)
+        # Either cross-workflow row missing leaves the aggregate incomplete.
+        with self.assertRaisesRegex(ag.AggregationError, "incomplete"):
+            ag.exit_code(_with_secret_result(results))
 
     def test_failed_needs_do_not_wait_for_the_secret_scan(self):
         environment = _dispatch_environment()
@@ -960,6 +1115,10 @@ class AggregateSummaryTests(unittest.TestCase):
                    if line.startswith("| secrets |"))
         self.assertIn("FAILED", row)
         self.assertIn("another aggregate gate already failed", row)
+        size_row = next(line for line in stdout.getvalue().splitlines()
+                        if line.startswith("| size-baseline |"))
+        self.assertIn("FAILED", size_row)
+        self.assertIn("another aggregate gate already failed", size_row)
 
     def test_dispatch_main_writes_the_table_to_stdout_and_step_summary(self):
         with tempfile.TemporaryDirectory(prefix="ghw-aggregate-summary-") as temp:
@@ -980,6 +1139,10 @@ class AggregateSummaryTests(unittest.TestCase):
                     _secret_run(7, "2026-09-07T11:00:00Z")],
                 "repos/owner/repo/actions/runs/7/jobs?per_page=100": [
                     _secret_job()],
+                SIZE_RUNS_PATH: [
+                    _secret_run(9, "2026-09-07T11:00:00Z")],
+                "repos/owner/repo/actions/runs/9/jobs?per_page=100": [
+                    _size_job()],
             })
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
@@ -987,6 +1150,7 @@ class AggregateSummaryTests(unittest.TestCase):
                                  transport=transport)
             self.assertEqual(status, 0)
             self.assertIn("### Aggregate CI gates", stdout.getvalue())
+            self.assertIn("| size-baseline | PASSED |", stdout.getvalue())
             self.assertEqual(summary.read_text(encoding="utf-8"),
                              stdout.getvalue())
 
@@ -1007,7 +1171,7 @@ class AggregateSummaryTests(unittest.TestCase):
             self.assertEqual(
                 sum(1 for line in stdout.getvalue().splitlines()
                     if line.startswith("| ") and " | FAILED | " in line),
-                len(cd.GATES) + 1)
+                len(cd.GATES) + 2)
             self.assertIn("GH_WIDGETS_NEEDS_JSON", stderr.getvalue())
             self.assertEqual(summary.read_text(encoding="utf-8"),
                              stdout.getvalue())
