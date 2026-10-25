@@ -40,9 +40,10 @@ class TestTheWorkflowText(unittest.TestCase):
     def test_renderer_rounds_keep_the_head_side_and_the_selfcheck(self):
         block = self._run_block("Run renderer workloads")
         self.assertIn('--work-root "$RUNNER_TEMP/gh7-bench"', block)
-        self.assertIn('--junit-file "$REPORTS/bench-head-$round.xml"', block)
+        self.assertIn('--junit-file "$GH_WIDGETS_REPORTS/bench-head-$round.xml"',
+                      block)
         self.assertIn("--repo-root .", block)
-        self.assertIn('if [ "$round" -eq "$ROUNDS" ]; then', block)
+        self.assertIn('if [ "$round" -eq "$GH_WIDGETS_ROUNDS" ]; then', block)
         self.assertIn("selfcheck=(--selfcheck)", block)
         # Head only: there is no base checkout any more. A leftover --side
         # loop would measure nothing, because there is nothing to measure it
@@ -71,7 +72,9 @@ class TestTheWorkflowText(unittest.TestCase):
         """
         block = self._run_block("The committed baseline only ratchets down")
         self.assertIn("# SLOPE-DECLARED REMOVALS", block)
-        self.assertIn('"$RUNNER_TEMP/base-baseline.json" "$BASELINE"', block)
+        self.assertIn(
+            '"$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE"',
+            block)
         self.assertIn('--ratchet-allow-removal "$population:entries:$node"',
                       block)
         # The declaration reads both documents, and the comparator still

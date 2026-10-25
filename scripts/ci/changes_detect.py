@@ -230,7 +230,8 @@ def changed_files(transport: Transport, repository: str, *, event: str,
     payload = payload or {}
     before, after = _sha(payload.get("before")), _sha(payload.get("after"))
     if after != _sha(sha):
-        raise DetectionError("push event after does not match HEAD_SHA")
+        raise DetectionError(
+            "push event after does not match GH_WIDGETS_HEAD_SHA")
     return _compare_files(transport, repository, before, after, default_branch,
                           ref=payload.get("ref", ""))
 
@@ -334,7 +335,7 @@ def _payload(event: str, path: str) -> dict:
     if event not in {"push", "pull_request"}:
         return {}
     if not path:
-        raise DetectionError(f"{event} has no EVENT_PATH")
+        raise DetectionError(f"{event} has no GH_WIDGETS_EVENT_PATH")
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -347,13 +348,13 @@ def _payload(event: str, path: str) -> dict:
 def _detect(environment: dict[str, str],
             transport: Transport | None) -> tuple[str, dict[str, str], set[str] | None,
                                                   bool, str]:
-    event = environment.get("EVENT_NAME", "")
+    event = environment.get("GH_WIDGETS_EVENT_NAME", "")
     changed = None
     capped = False
     fallback = ""
     try:
-        repository = environment.get("REPOSITORY", "")
-        payload = _payload(event, environment.get("EVENT_PATH", ""))
+        repository = environment.get("GH_WIDGETS_REPOSITORY", "")
+        payload = _payload(event, environment.get("GH_WIDGETS_EVENT_PATH", ""))
         api = transport or GhTransport(environment)
         if event in {"push", "pull_request"}:
             tag_ref = _tag_ref(payload) if event == "push" else None
@@ -364,18 +365,20 @@ def _detect(environment: dict[str, str],
             else:
                 changed, capped = changed_files(
                     api, repository, event=event,
-                    sha=environment.get("HEAD_SHA", ""),
-                    pr_number=environment.get("PR_NUMBER", ""),
-                    default_branch=environment.get("DEFAULT_BRANCH", ""),
+                    sha=environment.get("GH_WIDGETS_HEAD_SHA", ""),
+                    pr_number=environment.get("GH_WIDGETS_PR_NUMBER", ""),
+                    default_branch=environment.get(
+                        "GH_WIDGETS_DEFAULT_BRANCH", ""),
                     payload=payload)
                 decisions = classify(changed, capped=capped)
         else:
             decisions = classify_event(
                 event, transport=api, repository=repository, payload=payload,
-                schedule=environment.get("SCHEDULE", ""),
-                sha=environment.get("HEAD_SHA", ""),
-                pr_number=environment.get("PR_NUMBER", ""),
-                default_branch=environment.get("DEFAULT_BRANCH", ""))
+                schedule=environment.get("GH_WIDGETS_SCHEDULE", ""),
+                sha=environment.get("GH_WIDGETS_HEAD_SHA", ""),
+                pr_number=environment.get("GH_WIDGETS_PR_NUMBER", ""),
+                default_branch=environment.get(
+                    "GH_WIDGETS_DEFAULT_BRANCH", ""))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         decisions, fallback = _all_run(
             f"changed-path detection failed ({exc}); running every gate")
@@ -404,7 +407,7 @@ def ratchet_data_only(environment: dict[str, str],
     Reuse the gate detector's no-cache transport, compare cap and rename
     handling: a rename from source into a record is still a source change.
     """
-    before = environment.get("RATCHET_BEFORE", "")
+    before = environment.get("GH_WIDGETS_RATCHET_BEFORE", "")
     head = environment.get("GITHUB_SHA", "")
     if not before or before == "0" * 40:
         return False

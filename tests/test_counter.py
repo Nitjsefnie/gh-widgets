@@ -229,14 +229,14 @@ class TestTheRemovedInstrument(unittest.TestCase):
                          (counter.CPU_METRIC, counter.CALIBRATED_METRIC))
 
     def test_an_environment_naming_the_removed_instrument_is_refused(self):
-        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_COUNTER_METRIC": "syscalls"}):
             with self.assertRaises(counter.CounterError) as caught:
                 counter.choose_metric()
         self.assertIn("syscalls", str(caught.exception))
 
     @REQUIRES_BENCH
     def test_the_refusal_survives_the_public_measure_call(self):
-        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "syscalls"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_COUNTER_METRIC": "syscalls"}):
             with self.assertRaises(counter.CounterError):
                 counter.measure([sys.executable, "-c", "pass"])
 
@@ -430,11 +430,12 @@ class TestTheBenchPredicate(unittest.TestCase):
 
 class TestMetricChoice(unittest.TestCase):
     def test_the_jobs_export_is_honoured_verbatim(self):
-        # The workflow pins GH_COUNTER_METRIC explicitly in both measurement
-        # steps rather than relying on a fallback, so the instrument a
-        # population is judged by is visible in the workflow rather than
-        # buried here. This is what that pin resolves to.
-        with mock.patch.dict(os.environ, {"GH_COUNTER_METRIC": "cpu_time"}):
+        # The workflow pins GH_WIDGETS_GH_COUNTER_METRIC explicitly in both
+        # measurement steps rather than relying on a fallback, so the
+        # instrument a population is judged by is visible in the workflow
+        # rather than buried here. This is what that pin resolves to.
+        with mock.patch.dict(os.environ,
+                             {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time"}):
             self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
         self.assertEqual(counter.choose_metric("cpu_time"), counter.CPU_METRIC)
 

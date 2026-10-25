@@ -74,7 +74,8 @@ class TestRatchetDataWindow(unittest.TestCase):
                    ".github/comment-share.json"}
         self.assertEqual(cd.RATCHET_DATA, records)
         environment = {"GITHUB_REPOSITORY": "owner/repo",
-                       "GITHUB_SHA": "b" * 40, "RATCHET_BEFORE": "a" * 40}
+                       "GITHUB_SHA": "b" * 40,
+                       "GH_WIDGETS_RATCHET_BEFORE": "a" * 40}
         endpoint = f"repos/owner/repo/compare/{'a' * 40}...{'b' * 40}"
         cases = [(list(records), 0), (["src/render.py"], 1), ([], 1)]
         cases.extend(([path], 0) for path in records)
@@ -93,7 +94,8 @@ class TestRatchetDataWindow(unittest.TestCase):
 
     def test_unknown_or_incomplete_windows_stage_normally(self):
         environment = {"GITHUB_REPOSITORY": "owner/repo",
-                       "GITHUB_SHA": "b" * 40, "RATCHET_BEFORE": "a" * 40}
+                       "GITHUB_SHA": "b" * 40,
+                       "GH_WIDGETS_RATCHET_BEFORE": "a" * 40}
         endpoint = f"repos/owner/repo/compare/{'a' * 40}...{'b' * 40}"
         cases = (None, {}, {"status": "behind", "files": []},
                  {"status": "ahead", "files": [{}]},
@@ -112,7 +114,8 @@ class TestRatchetDataWindow(unittest.TestCase):
         for before in ("", "0" * 40):
             transport = FakeTransport()
             self.assertFalse(cd.ratchet_data_only(
-                {**environment, "RATCHET_BEFORE": before}, transport))
+                {**environment, "GH_WIDGETS_RATCHET_BEFORE": before},
+                transport))
             self.assertEqual(transport.calls, [])
 
 
@@ -164,10 +167,13 @@ class TestStagingCallers(unittest.TestCase):
         (reports / "bench-head-1.xml").touch()
         output = root / "output"
         environment = dict(os.environ, PATH=f"{binary}{os.pathsep}{os.environ['PATH']}",
-                           GITHUB_SHA="b" * 40, RATCHET_BEFORE="a" * 40,
+                           GITHUB_SHA="b" * 40,
+                           GH_WIDGETS_RATCHET_BEFORE="a" * 40,
                            GITHUB_REPOSITORY="owner/repo", RUNNER_TEMP=str(root),
-                           GITHUB_OUTPUT=str(output), BASELINE="gate/speed-baseline.json",
-                           GITHUB_STEP_SUMMARY=str(root / "summary"), REPORTS=str(reports),
+                           GITHUB_OUTPUT=str(output),
+                           GH_WIDGETS_BASELINE="gate/speed-baseline.json",
+                           GITHUB_STEP_SUMMARY=str(root / "summary"),
+                           GH_WIDGETS_REPORTS=str(reports),
                            DIFF_STATUS="0" if unchanged else "1",
                            COMPARE_RESPONSE=json.dumps({"status": "ahead", "files": [
                                {"filename": "gate/speed-baseline.json" if data_only
@@ -188,7 +194,9 @@ class TestStagingCallers(unittest.TestCase):
         for filename, job_id, _ in PRODUCERS:
             steps = workflows()[filename]["jobs"][job_id]["steps"]
             step = next(s for s in steps if s.get("id") in {"stage", "tighten"})
-            self.assertEqual(step["env"]["RATCHET_BEFORE"], "${{ github.event.before }}")
+            self.assertEqual(
+                step["env"]["GH_WIDGETS_RATCHET_BEFORE"],
+                "${{ github.event.before }}")
             self.assertEqual(step["env"]["GH_TOKEN"], "${{ github.token }}")
             for data_only, unchanged in ((False, False), (False, True), (True, False)):
                 with self.subTest(workflow=filename, data_only=data_only, unchanged=unchanged):

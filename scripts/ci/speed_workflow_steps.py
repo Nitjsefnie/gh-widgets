@@ -127,19 +127,19 @@ class StepRunner:
     def env_for(self, declared, root, **extra):
         """A step's environment against the synthetic tree.
 
-        REPO and REPORTS are `${{ }}` expressions the runner expands; here
-        they stand for the tree's own paths, which is what makes these tests
-        about the PATHS rather than about the shell.
+        GH_WIDGETS_REPO and GH_WIDGETS_REPORTS are `${{ }}` expressions the
+        runner expands; here they stand for the tree's own paths, which is
+        what makes these tests about the PATHS rather than about the shell.
         """
         return {**os.environ,
                 **{k: v for k, v in declared.items() if "${{" not in v},
-                "REPO": str(root / "head"),
-                "REPORTS": str(root / "reports"),
+                "GH_WIDGETS_REPO": str(root / "head"),
+                "GH_WIDGETS_REPORTS": str(root / "reports"),
                 "RUNNER_TEMP": str(root),
                 "GITHUB_STEP_SUMMARY": str(root / "summary.md"),
                 "GITHUB_OUTPUT": str(root / "output.txt"),
                 "GITHUB_ENV": str(root / "env.txt"),
-                "ALLOWED_WORKLOAD_REMOVALS": "",
+                "GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS": "",
                 **extra}
 
     @staticmethod

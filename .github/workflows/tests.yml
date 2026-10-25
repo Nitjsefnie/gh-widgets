@@ -66,13 +66,13 @@ jobs:
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_PATH: ${{ github.event_path }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SCHEDULE: ${{ github.event.schedule }}
+          GH_WIDGETS_EVENT_NAME: ${{ github.event_name }}
+          GH_WIDGETS_EVENT_PATH: ${{ github.event_path }}
+          GH_WIDGETS_REPOSITORY: ${{ github.repository }}
+          GH_WIDGETS_HEAD_SHA: ${{ github.sha }}
+          GH_WIDGETS_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_WIDGETS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_WIDGETS_SCHEDULE: ${{ github.event.schedule }}
         run: python3 scripts/ci/changes_detect.py
 
   unittest:
@@ -152,10 +152,10 @@ jobs:
         # imports it.
         env:
           # Undefined on the other five cells, so these read as "" there.
-          MEASURED: ${{ matrix.measured }}
+          GH_WIDGETS_MEASURED: ${{ matrix.measured }}
           GH_WIDGETS_REQUIRE_GIT_FAME: ${{ matrix.measured }}
         run: |
-          if [ "$MEASURED" = "true" ]; then
+          if [ "$GH_WIDGETS_MEASURED" = "true" ]; then
             # Every shipped source family is in the population, scripts/
             # included: resolve-repo-pins.py, compare_counters.py and the
             # three bench files all run in workflows below, so omitting them
@@ -535,7 +535,8 @@ jobs:
     # budget". No ceiling is written here: test_baseline.py recomputes every
     # one, CPU and wall, from the document.
     #
-    # ROUNDS stays 2, and for two reasons that are not the same reason.
+    # GH_WIDGETS_ROUNDS stays 2, and for two reasons that are not the same
+    # reason.
     # --selfcheck compares SVG bytes across head rounds and needs at least two,
     # and that control is byte-identity, not timing, so nothing about the
     # instrument could have weakened it. Separately, the minimum across rounds is
@@ -622,10 +623,11 @@ jobs:
       # re-derived whenever the cell or the instrument changes. This one
       # bounds the TOTAL across the shared population — a second, weaker net
       # for a case where every entry is under its own tolerance but the sum
-      # has drifted. Named TOTAL_BUDGET rather than MAX_REGRESSION so nobody
+      # has drifted. Named GH_WIDGETS_TOTAL_BUDGET rather than MAX_REGRESSION
+      # so nobody
       # reads an env var as the gate's threshold when it is not.
-      TOTAL_BUDGET: "0.30"
-      ROUNDS: "2"
+      GH_WIDGETS_TOTAL_BUDGET: "0.30"
+      GH_WIDGETS_ROUNDS: "2"
 
       # ONE CONVENTION FOR PATHS IN THIS FILE, because three defects in this
       # branch were all the same mistake: a path resolved against the wrong
@@ -639,13 +641,14 @@ jobs:
       #
       # So: THE CHECKOUT IS THE WORKING DIRECTORY. Every step that touches
       # the repository declares `working-directory: head` and therefore uses
-      # repository-relative paths throughout, including BASELINE below.
+      # repository-relative paths throughout, including GH_WIDGETS_BASELINE
+      # below.
       # NOTHING A STEP WRITES GOES INSIDE THE CHECKOUT: reports and scratch
-      # use $REPORTS or $RUNNER_TEMP, which are absolute and named as such.
+      # use $GH_WIDGETS_REPORTS or $RUNNER_TEMP, which are absolute and named as such.
       # There are exactly two roots in this file and they are named here.
-      BASELINE: gate/speed-baseline.json
-      REPO: ${{ github.workspace }}/head
-      REPORTS: ${{ github.workspace }}/reports
+      GH_WIDGETS_BASELINE: gate/speed-baseline.json
+      GH_WIDGETS_REPO: ${{ github.workspace }}/head
+      GH_WIDGETS_REPORTS: ${{ github.workspace }}/reports
 
     steps:
       - name: Check out this commit
@@ -706,17 +709,17 @@ jobs:
         working-directory: head
         env:
           # The calibrated ratio; the baseline records it for the unit suite.
-          GH_COUNTER_METRIC: cpu_time_ratio
+          GH_WIDGETS_GH_COUNTER_METRIC: cpu_time_ratio
         run: |
-          mkdir -p "$REPORTS"
-          for round in $(seq 1 "$ROUNDS"); do
+          mkdir -p "$GH_WIDGETS_REPORTS"
+          for round in $(seq 1 "$GH_WIDGETS_ROUNDS"); do
             echo "::group::unit suite round $round"
             status=0
             python3 scripts/ci/counter.py \
               --calibrated \
-              --junit-file "$REPORTS/unit-$round.xml" \
+              --junit-file "$GH_WIDGETS_REPORTS/unit-$round.xml" \
               --name 'counter::unit-suite' \
-              --cwd "$REPO" \
+              --cwd "$GH_WIDGETS_REPO" \
               --timeout 3600 \
               -- python3 -m unittest discover || status=$?
             echo "unit suite round $round exited $status" \
@@ -725,8 +728,8 @@ jobs:
           done
 
           missing=0
-          for round in $(seq 1 "$ROUNDS"); do
-            f="$REPORTS/unit-$round.xml"
+          for round in $(seq 1 "$GH_WIDGETS_ROUNDS"); do
+            f="$GH_WIDGETS_REPORTS/unit-$round.xml"
             if [ ! -s "$f" ]; then
               echo "MISSING or empty: $f" >&2
               missing=1
@@ -737,7 +740,7 @@ jobs:
             echo "which is a setup failure, not a counter result." >&2
             exit 1
           fi
-          ls -la "$REPORTS/"
+          ls -la "$GH_WIDGETS_REPORTS/"
 
       - name: Collect the unit-test population
         # A collection pass, not a test run: discovery imports the test
@@ -748,36 +751,36 @@ jobs:
         # either.
         working-directory: head
         run: |
-          mkdir -p "$REPORTS"
+          mkdir -p "$GH_WIDGETS_REPORTS"
           python3 scripts/ci/compare_counters.py \
-            --print-population tests > "$REPORTS/unit-population.txt"
-          wc -l "$REPORTS/unit-population.txt"
+            --print-population tests > "$GH_WIDGETS_REPORTS/unit-population.txt"
+          wc -l "$GH_WIDGETS_REPORTS/unit-population.txt"
 
       - name: Run renderer workloads
         env:
           GH_WIDGETS_GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
           # Both populations use calibrated ratios; pin the instrument here
           # so renderer measurements agree with their committed baseline.
-          GH_COUNTER_METRIC: cpu_time_ratio
+          GH_WIDGETS_GH_COUNTER_METRIC: cpu_time_ratio
         working-directory: head
         run: |
-          mkdir -p "$REPORTS"
-          for round in $(seq 1 "$ROUNDS"); do
+          mkdir -p "$GH_WIDGETS_REPORTS"
+          for round in $(seq 1 "$GH_WIDGETS_ROUNDS"); do
             echo "::group::renderer round $round"
             selfcheck=()
-            if [ "$round" -eq "$ROUNDS" ]; then
+            if [ "$round" -eq "$GH_WIDGETS_ROUNDS" ]; then
               selfcheck=(--selfcheck)
             fi
             python3 scripts/bench/e2e_bench.py \
               --side head \
               --repo-root . \
               --round "$round" \
-              --junit-file "$REPORTS/bench-head-$round.xml" \
+              --junit-file "$GH_WIDGETS_REPORTS/bench-head-$round.xml" \
               --work-root "$RUNNER_TEMP/gh7-bench" \
               "${selfcheck[@]}"
             echo "::endgroup::"
           done
-          ls -la "$REPORTS/"
+          ls -la "$GH_WIDGETS_REPORTS/"
 
       - name: Compare
         env:
@@ -803,13 +806,13 @@ jobs:
           #
           # Every name added weakens the gate for every later commit, so it
           # belongs in the same commit as the change that motivates it.
-          ALLOWED_WORKLOAD_REMOVALS: ""
+          GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS: ""
         # The comparator comes from the HEAD checkout, so an improvement to
         # the comparison itself takes effect on the commit that makes it
         # rather than one baseline re-derivation later.
         #
         # working-directory: head IS LOAD-BEARING HERE, and for a reason worth
-        # reading twice. `$BASELINE` is repository-relative, so a step running
+        # reading twice. `$GH_WIDGETS_BASELINE` is repository-relative, so a step running
         # in the WORKSPACE resolves it against the workspace and silently
         # finds nothing: the job then reports "No baseline to compare
         # against" — a legitimate GREEN — while a baseline sits unread in the
@@ -825,11 +828,11 @@ jobs:
           # still has to match, or the two sides were not asked the same
           # question.
           if python3 scripts/ci/compare_counters.py \
-            --baseline "$BASELINE" \
+            --baseline "$GH_WIDGETS_BASELINE" \
             --population unit-suite \
-            --head "$REPORTS/unit-1.xml" "$REPORTS/unit-2.xml" \
-            --population-file "$REPORTS/unit-population.txt" \
-            --max-regression "$TOTAL_BUDGET" \
+            --head "$GH_WIDGETS_REPORTS/unit-1.xml" "$GH_WIDGETS_REPORTS/unit-2.xml" \
+            --population-file "$GH_WIDGETS_REPORTS/unit-population.txt" \
+            --max-regression "$GH_WIDGETS_TOTAL_BUDGET" \
             --base-label 'the committed baseline, unit suite' \
             --summary-file "$GITHUB_STEP_SUMMARY"; then
             unit_status=0
@@ -853,8 +856,8 @@ jobs:
           # list — which is what "deliberately no longer measured" means.
           removals=()
           allowed=()
-          if [ -n "${ALLOWED_WORKLOAD_REMOVALS:-}" ]; then
-            IFS=',' read -ra allowed <<< "$ALLOWED_WORKLOAD_REMOVALS"
+          if [ -n "${GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS:-}" ]; then
+            IFS=',' read -ra allowed <<< "$GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS"
             for name in "${allowed[@]}"; do
               # `if`, not `[ -n ... ] && append`: under bash -e a false test
               # as the last command in the loop body becomes the loop's own
@@ -915,15 +918,15 @@ jobs:
           # it was measured over, and this is the id list that digest is
           # about. Written from the same $listing the required names come
           # from, so the two cannot disagree.
-          printf '%s\n' "$listing" > "$REPORTS/renderer-population.txt"
+          printf '%s\n' "$listing" > "$GH_WIDGETS_REPORTS/renderer-population.txt"
 
           # shellcheck disable=SC2046
           if python3 scripts/ci/compare_counters.py \
-            --baseline "$BASELINE" \
+            --baseline "$GH_WIDGETS_BASELINE" \
             --population renderer-workloads \
-            --head $(ls "$REPORTS"/bench-head-*.xml) \
-            --population-file "$REPORTS/renderer-population.txt" \
-            --max-regression "$TOTAL_BUDGET" \
+            --head $(ls "$GH_WIDGETS_REPORTS"/bench-head-*.xml) \
+            --population-file "$GH_WIDGETS_REPORTS/renderer-population.txt" \
+            --max-regression "$GH_WIDGETS_TOTAL_BUDGET" \
             --base-label 'the committed baseline, renderer workloads' \
             --summary-file "$GITHUB_STEP_SUMMARY" \
             "${workloads[@]}" "${removals[@]}"; then
@@ -945,7 +948,7 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-          RATCHET_BEFORE: ${{ github.event.before }}
+          GH_WIDGETS_RATCHET_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           if python3 scripts/ci/changes_detect.py --ratchet-data-only; then
@@ -955,7 +958,7 @@ jobs:
           stage="$RUNNER_TEMP/ratchet-data"
           mkdir -p "$stage"
           renderer_reports=()
-          for report in "$REPORTS"/bench-head-*.xml; do
+          for report in "$GH_WIDGETS_REPORTS"/bench-head-*.xml; do
             if [ ! -f "$report" ]; then
               echo "::error::renderer report is missing: $report" >&2
               exit 1
@@ -963,13 +966,13 @@ jobs:
             renderer_reports+=(--renderer-report "$report")
           done
           python3 scripts/ci/speed_ratchet.py \
-            --baseline "$BASELINE" \
+            --baseline "$GH_WIDGETS_BASELINE" \
             --output "$stage/speed-baseline.json" \
-            --unit-report "$REPORTS/unit-1.xml" \
-            --unit-report "$REPORTS/unit-2.xml" \
-            --unit-population-file "$REPORTS/unit-population.txt" \
+            --unit-report "$GH_WIDGETS_REPORTS/unit-1.xml" \
+            --unit-report "$GH_WIDGETS_REPORTS/unit-2.xml" \
+            --unit-population-file "$GH_WIDGETS_REPORTS/unit-population.txt" \
             "${renderer_reports[@]}" \
-            --renderer-population-file "$REPORTS/renderer-population.txt"
+            --renderer-population-file "$GH_WIDGETS_REPORTS/renderer-population.txt"
           if [ -f "$stage/speed-baseline.json" ]; then
             printf '%s\n' "$GITHUB_SHA" > "$stage/base.txt"
             echo 'changed=true' >> "$GITHUB_OUTPUT"
@@ -1017,9 +1020,9 @@ jobs:
         # to run there. See the comment above.
         working-directory: head
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          WORKSPACE: ${{ github.workspace }}
+          GH_WIDGETS_EVENT_NAME: ${{ github.event_name }}
+          GH_WIDGETS_BEFORE_SHA: ${{ github.event.before }}
+          GH_WIDGETS_WORKSPACE: ${{ github.workspace }}
         run: |
           # A missing checkout is a setup failure, never a successful skip.
           if ! git rev-parse --git-dir >/dev/null 2>&1; then
@@ -1028,7 +1031,7 @@ jobs:
                  "working-directory: head" >&2
             exit 1
           fi
-          if [ "$EVENT_NAME" = "pull_request" ]; then
+          if [ "$GH_WIDGETS_EVENT_NAME" = "pull_request" ]; then
           shallow="$(git rev-parse --is-shallow-repository)"
           parents="$(git show -s --format=%P HEAD)"
           if [ "$shallow" = "true" ]; then
@@ -1049,47 +1052,47 @@ jobs:
               exit 1
             fi
           fi
-          baseline_at_base="$BASELINE"
+          baseline_at_base="$GH_WIDGETS_BASELINE"
           # The parent of the layout migration stores this same record at root.
           if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null &&
              git cat-file -e "$base_tip:speed-baseline.json" 2>/dev/null; then
             baseline_at_base=speed-baseline.json
           fi
           if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null; then
-            echo "No $BASELINE at the base tip, so there is nothing to" \
+            echo "No $GH_WIDGETS_BASELINE at the base tip, so there is nothing to" \
                  "ratchet against."
             exit 0
           fi
           git show "$base_tip:$baseline_at_base" > "$RUNNER_TEMP/base-baseline.json"
           else
-            if [ -z "$BEFORE_SHA" ]; then
-              echo "::error::BEFORE_SHA is empty; the landed range cannot be" \
-                   "verified — failing closed" >&2
+            if [ -z "$GH_WIDGETS_BEFORE_SHA" ]; then
+              echo "::error::GH_WIDGETS_BEFORE_SHA is empty; the landed range" \
+                   "cannot be verified — failing closed" >&2
               exit 1
             fi
-            if [ -z "${BEFORE_SHA//0/}" ]; then
+            if [ -z "${GH_WIDGETS_BEFORE_SHA//0/}" ]; then
               echo "::error::a newly created main ref has no previous tip;" \
                    "the landed range cannot be verified — failing closed" >&2
               exit 1
             fi
-            if ! git fetch --no-tags --unshallow origin "$BEFORE_SHA" "$(git rev-parse HEAD)"; then
+            if ! git fetch --no-tags --unshallow origin "$GH_WIDGETS_BEFORE_SHA" "$(git rev-parse HEAD)"; then
               echo "::error::Could not fetch both landed-window tips;" \
                    "failing closed" >&2
               exit 1
             fi
-            if ! git merge-base --is-ancestor "$BEFORE_SHA" HEAD; then
+            if ! git merge-base --is-ancestor "$GH_WIDGETS_BEFORE_SHA" HEAD; then
               echo "::error::previous main tip is not an ancestor of HEAD;" \
                    "a force-push has no verifiable landed window — failing closed" >&2
               exit 1
             fi
-            base_tip="$BEFORE_SHA"
-            baseline_at_base="$BASELINE"
+            base_tip="$GH_WIDGETS_BEFORE_SHA"
+            baseline_at_base="$GH_WIDGETS_BASELINE"
             if ! git cat-file -e "$base_tip:$baseline_at_base" 2>/dev/null &&
                git cat-file -e "$base_tip:speed-baseline.json" 2>/dev/null; then
               baseline_at_base=speed-baseline.json
             fi
             if ! git cat-file -e "$base_tip:$baseline_at_base"; then
-              echo "::error::No $BASELINE at the previous main tip;" \
+              echo "::error::No $GH_WIDGETS_BASELINE at the previous main tip;" \
                    "failing closed" >&2
               exit 1
             fi
@@ -1150,7 +1153,7 @@ jobs:
           # redefines a wall record. After the seeds land the loop is silent
           # again — an entry main still records is no removal — so main's
           # own pushes keep passing this step unchanged.
-          slope_removals="$(python3 - "$RUNNER_TEMP/base-baseline.json" "$BASELINE" <<'PY'
+          slope_removals="$(python3 - "$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -1185,7 +1188,7 @@ jobs:
           # 1) otherwise. Its exit, 2 for unreadable history included, fails
           # this step inside the $(...) under GitHub's default bash -e.
           raise_slots="$(python3 scripts/ci/ratchet_declarations.py \
-              "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
+              "$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE" \
               --base "$base_tip" --head HEAD)"
           raises_args=()
           while IFS= read -r slot; do
@@ -1198,7 +1201,7 @@ jobs:
           fi
 
           python3 scripts/ci/compare_counters.py \
-            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$BASELINE" \
+            --ratchet-baselines "$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE" \
             "${removals[@]}" "${raises_args[@]}"
 
       - name: Upload JUnit reports
@@ -1317,11 +1320,11 @@ jobs:
       # (issue #125): it fails the job with 'unexpected key "queue" for
       # "concurrency" section'. Return to rhysd's own release once it
       # ships the key.
-      ACTIONLINT_VERSION: 1.7.12-queue.1
-      ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
+      GH_WIDGETS_ACTIONLINT_VERSION: 1.7.12-queue.1
+      GH_WIDGETS_ACTIONLINT_REPO: Nitjsefnie-OSC/actionlint
       # sha256 of actionlint_1.7.12-queue.1_linux_amd64.tar.gz, from the
       # release's own checksums file. Bump all three together.
-      ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
+      GH_WIDGETS_ACTIONLINT_SHA256: dcc2c42a7caaa197dfe63584a3851f62ef260f80b2cf221baaf05479661e1521
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1342,10 +1345,10 @@ jobs:
         # install script: `curl | bash` would make this job trust whatever
         # that URL serves at run time.
         run: |
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tarball="actionlint_${GH_WIDGETS_ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl -fsSL --retry 3 -o "$tarball" \
-            "https://github.com/${ACTIONLINT_REPO}/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+            "https://github.com/${GH_WIDGETS_ACTIONLINT_REPO}/releases/download/v${GH_WIDGETS_ACTIONLINT_VERSION}/${tarball}"
+          echo "${GH_WIDGETS_ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
           ./actionlint --version
 
@@ -1477,8 +1480,8 @@ jobs:
 
       - name: Package the comment for the trusted commenter
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: printf '%s\n' "$PR_NUMBER" > pr-number.txt
+          GH_WIDGETS_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s\n' "$GH_WIDGETS_PR_NUMBER" > pr-number.txt
 
       - name: Upload the comment for the trusted commenter
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1514,14 +1517,14 @@ jobs:
       - name: Aggregate CI gates
         env:
           GH_TOKEN: ${{ github.token }}
-          NEEDS_JSON: ${{ toJSON(needs) }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          SECRETS_WAIT_BOUND_S: '240'
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_PATH: ${{ github.event_path }}
+          GH_WIDGETS_NEEDS_JSON: ${{ toJSON(needs) }}
+          GH_WIDGETS_REPOSITORY: ${{ github.repository }}
+          GH_WIDGETS_RUN_ID: ${{ github.run_id }}
+          GH_WIDGETS_HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          GH_WIDGETS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_WIDGETS_SECRETS_WAIT_BOUND_S: '240'
+          GH_WIDGETS_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_WIDGETS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_WIDGETS_EVENT_NAME: ${{ github.event_name }}
+          GH_WIDGETS_EVENT_PATH: ${{ github.event_path }}
         run: python3 scripts/ci/aggregate_gate.py

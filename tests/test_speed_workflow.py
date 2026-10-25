@@ -170,7 +170,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          "scripts/bench/e2e_bench.py"):
             self._install(head, REPO_ROOT / relative)
         self._install_counter(head)
-        reports = root / "reports"          # == $REPORTS, outside the checkout
+        reports = root / "reports"          # == $GH_WIDGETS_REPORTS, outside
         self._write_reports(reports, unit_counter, workload_counter,
                             omit_renderer, metric, wall, unit_metric)
         if population:
@@ -319,7 +319,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         declared, working_dir, step_block = self.steps.step_run("Compare")
         env = self.steps.env_for(
             declared, root,
-            ALLOWED_WORKLOAD_REMOVALS=allowed_removals, **(env_extra or {}))
+            GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS=allowed_removals,
+            **(env_extra or {}))
         completed = self.steps.bash(block or step_block, root, working_dir, env)
         summary = root / "summary.md"
         return completed, (summary.read_text(encoding="utf-8")
@@ -366,10 +367,12 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_both_measurement_steps_pin_the_instrument(self):
         # Pinned rather than inherited: the instrument a population is judged
         # by should be visible in the workflow for both populations.
-        self.assertEqual(self.steps.step_run("Measure the unit suite")[0]
-                         ["GH_COUNTER_METRIC"], "cpu_time_ratio")
+        self.assertEqual(
+            self.steps.step_run("Measure the unit suite")[0]
+            ["GH_WIDGETS_GH_COUNTER_METRIC"], "cpu_time_ratio")
         renderer_env = self.steps.step_run("Run renderer workloads")[0]
-        self.assertEqual(renderer_env["GH_COUNTER_METRIC"], "cpu_time_ratio")
+        self.assertEqual(renderer_env["GH_WIDGETS_GH_COUNTER_METRIC"],
+                         "cpu_time_ratio")
         self.assertNotIn("GH_WIDGETS_OBSERVE_RENDERER_RATIO", renderer_env)
 
     def test_the_unit_suite_step_measures_calibrated(self):
@@ -822,12 +825,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_COUNTER_METRIC": "cpu_time_ratio", "ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+                    "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         completed = self.steps.bash(block, root, working_dir, env)
         self.assertEqual(completed.returncode, 0,
                          completed.stdout[-2000:] + completed.stderr[-2000:])
-        report = ET.parse(Path(env["REPORTS"]) / "unit-1.xml").getroot()
+        report = ET.parse(
+            Path(env["GH_WIDGETS_REPORTS"]) / "unit-1.xml").getroot()
         failure = report.find(".//failure")
         self.assertEqual(report.get("failures"), "0",
                          failure.text if failure is not None
@@ -851,15 +856,17 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_COUNTER_METRIC": "cpu_time_ratio", "ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+                    "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
-        reports = Path(env["REPORTS"])
+        reports = Path(env["GH_WIDGETS_REPORTS"])
         completed = self.steps.bash(block, root, working_dir, env)
         self.assertEqual(completed.returncode, 0,
                          completed.stdout[-2000:] + completed.stderr[-2000:])
         written = sorted(p.name for p in reports.glob("unit-*.xml"))
         self.assertEqual(written, ["unit-1.xml"],
-                         "the step must write its JUnit into $REPORTS, where "
+                         "the step must write its JUnit into "
+                         "$GH_WIDGETS_REPORTS, where "
                          "the Compare step looks for it")
 
     @REQUIRES_BENCH
@@ -876,18 +883,21 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_COUNTER_METRIC": "cpu_time_ratio", "ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+                    "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         broken = self.steps.bash(block, root, None, env)
         self.assertNotEqual(broken.returncode, 0)
-        written = sorted(p.name for p in Path(env["REPORTS"]).glob("unit-*.xml"))
+        written = sorted(p.name for p in
+                         Path(env["GH_WIDGETS_REPORTS"]).glob("unit-*.xml"))
         self.assertEqual(written, [])
 
     @REQUIRES_BENCH
     def test_the_compare_step_FINDS_the_baseline_in_the_checkout(self):
         """The defect that made four dispatch runs green for the wrong reason.
 
-        `--baseline "$BASELINE"` names a REPOSITORY-relative file. A step
+        `--baseline "$GH_WIDGETS_BASELINE"` names a REPOSITORY-relative
+        file. A step
         rooted at the workspace resolves it against the workspace, finds
         nothing, and the comparator takes its missing-baseline path — a
         legitimate GREEN, with a baseline unread in the tree. This builds the
@@ -999,7 +1009,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         "the maximum" would be read as the threshold and is not."""
         text = self.steps.job_text()
         self.assertNotIn("      MAX_REGRESSION:", text)
-        self.assertIn('TOTAL_BUDGET: "0.30"', text)
+        self.assertIn('GH_WIDGETS_TOTAL_BUDGET: "0.30"', text)
         self.assertIn("NOT THE THRESHOLD", text)
 
     @REQUIRES_BENCH
@@ -1092,7 +1102,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_declared_workload_removal_passes_the_compare_step(self):
         """The exemption surface, for a workload the harness still lists.
 
-        This is the only state ALLOWED_WORKLOAD_REMOVALS can actually reach:
+        This is the only state GH_WIDGETS_ALLOWED_WORKLOAD_REMOVALS can
+        actually reach:
         the harness keeps measuring the workload, so the report contains it,
         and the gate is told not to require it. A genuine retirement — a
         renderer actually deleted — does NOT come through here; see
@@ -1301,7 +1312,7 @@ class TestPullRequestRatchet(unittest.TestCase):
         declared, working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
         env = self.steps.env_for(declared, self.root,
-                                 EVENT_NAME="pull_request", BASE_REF="main")
+                                 GH_WIDGETS_EVENT_NAME="pull_request")
         return self.steps.bash(block, self.root, working_dir, env)
 
     @REQUIRES_POSIX_SHELL

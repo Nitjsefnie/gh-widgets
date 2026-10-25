@@ -391,7 +391,8 @@ def _write_junit(path, results):
     metrics = {result["metric"] for result in results if result["metric"]}
     if len(metrics) > 1:
         # Every workload in one run is measured by one instrument, because the
-        # job exported GH_COUNTER_METRIC from a single probe. Two names here
+        # job exported GH_WIDGETS_GH_COUNTER_METRIC from a single probe. Two names
+        # here
         # means the probe was not the single authority it is supposed to be,
         # and a suite carrying two instruments has no total.
         raise SystemExit(

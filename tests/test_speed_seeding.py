@@ -141,7 +141,8 @@ class TestSpeedSeeding(unittest.TestCase):
         """The STEP's slope-declared removal fragment, run over two documents.
 
         Sliced from the fragment's marker to its `done`, with the base copy
-        at $RUNNER_TEMP and the head copy at $BASELINE, exactly where the
+        at $RUNNER_TEMP and the head copy at $GH_WIDGETS_BASELINE, exactly
+        where the
         step leaves them; both declaration conditions run against real
         files, because the loop reads the documents rather than trusting.
         """
@@ -163,7 +164,7 @@ class TestSpeedSeeding(unittest.TestCase):
             json.dumps(new_doc), encoding="utf-8")
         script = ("set -euo pipefail\n"
                   f'RUNNER_TEMP="{root}"\n'
-                  'BASELINE="gate/speed-baseline.json"\n'
+                  'GH_WIDGETS_BASELINE="gate/speed-baseline.json"\n'
                   + fragment
                   + 'printf "%s\\n" "${removals[@]+${removals[@]}}"\n')
         done = self.steps.bash(script, root, "head",

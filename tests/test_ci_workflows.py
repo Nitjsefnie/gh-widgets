@@ -415,10 +415,10 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         aggregate = _job_blocks(tests_text)["aggregate"]
         step = self._named_step(aggregate, "Aggregate CI gates")
         self.assertRegex(step,
-                         r"(?m)^          SECRETS_WAIT_BOUND_S: '240'$")
+                         r"(?m)^          GH_WIDGETS_SECRETS_WAIT_BOUND_S: '240'$")
         self.assertRegex(
             step,
-            r"(?m)^          HEAD_SHA: \$\{\{ github\.event\.pull_request\."
+            r"(?m)^          GH_WIDGETS_HEAD_SHA: \$\{\{ github\.event\.pull_request\."
             r"head\.sha \|\| github\.sha \}\}$")
         self.assertRegex(aggregate,
                          r"(?m)^    timeout-minutes: 5$")
@@ -907,10 +907,10 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
                 GH_TOKEN="test-token",
                 GH_CALLS=str(calls_path),
                 GH_SCENARIO=json.dumps(scenario),
-                REPO="owner/repo",
-                HEAD_SHA=expected_sha,
-                HEAD_REPO="owner/repo",
-                PR_NUMBER="42")
+                GH_WIDGETS_REPO="owner/repo",
+                GH_WIDGETS_HEAD_SHA=expected_sha,
+                GH_WIDGETS_HEAD_REPO="owner/repo",
+                GH_WIDGETS_PR_NUMBER="42")
             result = subprocess.run(
                 ["bash", "-e", "-o", "pipefail", "-c",
                  self._post_step_script()],
@@ -984,11 +984,11 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         self.assertIn("--paginate", artifact_lookup.get("run", ""))
         self.assertEqual([step["uses"] for step in steps if "uses" in step],
                          [downloads[0]["uses"]])
-        self.assertIn("HEAD_REPO", scripts)
+        self.assertIn("GH_WIDGETS_HEAD_REPO", scripts)
         self.assertIn(".head.sha", scripts)
         self.assertIn(".head.repo.full_name", scripts)
         self.assertIn("test -f pr-number.txt", scripts)
-        self.assertIn('if [ "$claimed" != "$PR_NUMBER" ]; then', scripts)
+        self.assertIn('if [ "$claimed" != "$GH_WIDGETS_PR_NUMBER" ]; then', scripts)
         self.assertIn("<!-- gh-widgets-diff-coverage -->", scripts)
         self.assertIn("gh api -X POST", scripts)
         self.assertIn("gh api -X PATCH", scripts)
@@ -997,13 +997,15 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
         post_step = next(step for step in steps
                          if step.get("name") == "Post or update the pull request comment")
         post_script = post_step.get("run", "")
-        number_check = post_script.index('if [ "$claimed" != "$PR_NUMBER" ]; then')
+        number_check = post_script.index(
+            'if [ "$claimed" != "$GH_WIDGETS_PR_NUMBER" ]; then')
         self.assertLess(number_check, post_script.index("gh api -X POST"))
         self.assertLess(number_check, post_script.index("gh api -X PATCH"))
         self.assertRegex(
             post_script,
-            r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$REPO/issues/\$PR_NUMBER/comments\"")
-        self.assertIn("[ \"$current_head_repo\" != \"$HEAD_REPO\" ]", post_script)
+            r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$GH_WIDGETS_REPO/issues/\$GH_WIDGETS_PR_NUMBER/comments\"")
+        self.assertIn("[ \"$current_head_repo\" != \"$GH_WIDGETS_HEAD_REPO\" ]",
+                      post_script)
 
     @REQUIRES_POSIX_SHELL
     def test_trusted_writer_refuses_each_head_identity_mismatch(self):
@@ -1137,7 +1139,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertIn("--paginate", listing["run"])
         self.assertIn("select(.expired != true)", listing["run"])
         self.assertIn("ratchet-push", listing["run"])
-        self.assertEqual(listing["env"]["RUN_ID"],
+        self.assertEqual(listing["env"]["GH_WIDGETS_RUN_ID"],
                          "${{ github.event.workflow_run.id }}")
 
         downloads = [step for step in self.steps
@@ -1165,8 +1167,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                 PATH=f"{binary}{os.pathsep}{os.environ['PATH']}",
                 GH_ARGUMENTS=str(calls),
                 GH_TOKEN="fixture-" + "token",
-                REPO="owner/repo",
-                RUN_ID="12345678",
+                GH_WIDGETS_REPO="owner/repo",
+                GH_WIDGETS_RUN_ID="12345678",
                 GITHUB_OUTPUT=str(output))
             result = subprocess.run(
                 ["bash", "-e", "-o", "pipefail", "-c", listing["run"]],
@@ -1223,9 +1225,9 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             directory = Path(tmp)
             environment = dict(
                 os.environ,
-                MASTER_PUSH_DEPLOY_KEY="",
-                REPO="owner/repo",
-                RUN_ID="12345678",
+                GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY="",
+                GH_WIDGETS_REPO="owner/repo",
+                GH_WIDGETS_RUN_ID="12345678",
                 RUNNER_TEMP=str(directory),
             )
             result = subprocess.run(
@@ -1233,7 +1235,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                 cwd=directory, env=environment, capture_output=True,
                 text=True, check=False, timeout=10)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("MASTER_PUSH_DEPLOY_KEY is empty", result.stderr)
+        self.assertIn("GH_WIDGETS_MASTER_PUSH_DEPLOY_KEY is empty",
+                      result.stderr)
 
     @REQUIRES_POSIX_SHELL
     def test_artifact_preflight_accepts_one_sha_line_and_rejects_extra_files(self):
