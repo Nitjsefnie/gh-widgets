@@ -971,6 +971,20 @@ class HttpErrorText(unittest.TestCase):
         self.assertEqual(self.formatted(500, 'oops', None, None),
                          'HTTP 500: (empty body)')
 
+    def test_present_but_empty_body_shows_the_empty_marker(self):
+        self.assertEqual(self.formatted(403, 'Forbidden', None, io.BytesIO(b'')),
+                         'HTTP 403: (empty body)')
+
+    def test_a_closed_body_reads_as_unreadable_not_a_crash(self):
+        class Closed:
+            def read(self):
+                raise ValueError('I/O operation on closed file')
+
+            def close(self):
+                pass
+        self.assertEqual(self.formatted(502, 'bad', None, Closed()),
+                         'HTTP 502: body unreadable')
+
     def test_non_utf8_body_bytes_are_replaced_not_fatal(self):
         self.assertIn('�', self.formatted(502, 'bad', None, io.BytesIO(b'\xff bad \xfe')))
 

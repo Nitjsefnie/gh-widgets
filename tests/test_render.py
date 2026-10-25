@@ -14,11 +14,15 @@ import json
 import math
 import os
 import re
+import runpy
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
+from email.message import Message
 from pathlib import Path
 from typing import Optional
 from unittest import mock
@@ -1217,6 +1221,33 @@ class SvgInputEscaping(unittest.TestCase):
         texts = root.findall(f".//{{{self.SVG_NS}}}text")
 
         self.assertEqual(texts[0].text, "AB")
+
+
+class HttpErrorAtMain(unittest.TestCase):
+    def test_http_error_prints_body_and_headers_and_exits_1(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        error = urllib.error.HTTPError(
+            'https://api.test/x', 403, 'Forbidden', headers,
+            io.BytesIO(b'{"message":"secondary rate limit"}'))
+        with tempfile.TemporaryDirectory() as tmp:
+            stderr = io.StringIO()
+            argv = ['render.py', '--user', 'o', '--token', 't',
+                    '--out-dir', str(Path(tmp) / 'out')]
+            with mock.patch.object(sys, 'argv', argv), \
+                    mock.patch.dict(os.environ, {
+                        'GH_WIDGETS_CACHE_FILE': str(Path(tmp) / 'cache.json')}), \
+                    mock.patch.object(urllib.request, 'urlopen', side_effect=error), \
+                    redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(
+                        str(Path(__file__).resolve().parents[1] / 'src/render.py'),
+                        run_name='__main__')
+        self.assertEqual(caught.exception.code, 1)
+        for fragment in ('{"message":"secondary rate limit"}',
+                         'retry-after: 60', 'x-ratelimit-remaining: 0'):
+            self.assertIn(fragment, stderr.getvalue())
 
 
 if __name__ == "__main__":

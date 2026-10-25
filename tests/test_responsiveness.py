@@ -14,11 +14,15 @@ import io
 import json
 import os
 import re
+import runpy
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from email.message import Message
 from pathlib import Path
 from unittest import mock
 
@@ -814,3 +818,29 @@ class CacheStaleness(unittest.TestCase):
     def test_an_unparseable_stamp_is_treated_as_stale(self):
         """Unreadable provenance is a reason to warn, not to stay silent."""
         self.assertTrue(resp.cache_is_stale("not-a-date"))
+
+
+class HttpErrorAtMain(unittest.TestCase):
+    def test_http_error_prints_body_and_headers_and_exits_1(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        error = urllib.error.HTTPError(
+            'https://api.test/x', 403, 'Forbidden', headers,
+            io.BytesIO(b'{"message":"secondary rate limit"}'))
+        with tempfile.TemporaryDirectory() as tmp:
+            stderr = io.StringIO()
+            argv = ['render-responsiveness.py', '--user', 'o', '--token', 't',
+                    '--cache-file', str(Path(tmp) / 'impact-cache.json'),
+                    '--out-dir', str(Path(tmp) / 'out')]
+            with mock.patch.object(sys, 'argv', argv), \
+                    mock.patch.object(urllib.request, 'urlopen', side_effect=error), \
+                    redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(
+                        str(Path(__file__).resolve().parents[1] / 'src/render-responsiveness.py'),
+                        run_name='__main__')
+        self.assertEqual(caught.exception.code, 1)
+        for fragment in ('{"message":"secondary rate limit"}',
+                         'retry-after: 60', 'x-ratelimit-remaining: 0'):
+            self.assertIn(fragment, stderr.getvalue())

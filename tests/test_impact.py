@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -24,9 +25,12 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
+import urllib.request
 from concurrent import futures
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
+from email.message import Message
 from pathlib import Path
 from unittest import mock
 
@@ -1034,3 +1038,29 @@ class TestMethodAgreementGate(unittest.TestCase):
 
     def test_gate_is_inert_under_the_shipped_default(self):
         self.assertIsNone(self.gate("targeted", []))
+
+
+class HttpErrorAtMain(unittest.TestCase):
+    def test_http_error_prints_body_and_headers_and_exits_1(self):
+        headers = Message()
+        headers['retry-after'] = '60'
+        headers['x-ratelimit-remaining'] = '0'
+        error = urllib.error.HTTPError(
+            'https://api.test/x', 403, 'Forbidden', headers,
+            io.BytesIO(b'{"message":"secondary rate limit"}'))
+        with tempfile.TemporaryDirectory() as tmp:
+            stderr = io.StringIO()
+            argv = ['render-impact.py', '--user', 'o', '--token', 't',
+                    '--cache-file', str(Path(tmp) / 'impact-cache.json'),
+                    '--out-dir', str(Path(tmp) / 'out')]
+            with mock.patch.object(sys, 'argv', argv), \
+                    mock.patch.object(urllib.request, 'urlopen', side_effect=error), \
+                    redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_path(
+                        str(Path(__file__).resolve().parents[1] / 'src/render-impact.py'),
+                        run_name='__main__')
+        self.assertEqual(caught.exception.code, 1)
+        for fragment in ('{"message":"secondary rate limit"}',
+                         'retry-after: 60', 'x-ratelimit-remaining: 0'):
+            self.assertIn(fragment, stderr.getvalue())
