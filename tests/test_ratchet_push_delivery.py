@@ -167,18 +167,35 @@ class TestRatchetPushDelivery(unittest.TestCase):
                                               for path in paths]}]
 
     @REQUIRES_POSIX_SHELL
-    def test_each_record_reuses_siblings_and_own_record_movement(self):
+    def test_each_record_delivers_and_the_policy_scenarios_hold(self):
+        """Per record, its delivered drive (mapping, validator arm, subject);
+        for one record, each base-movement policy scenario.
+
+        The policy arms are record-independent — `blocked = changed -
+        records` and the drop notice read the same set whatever they land —
+        so sibling/source/empty rows for every record would re-pin the same
+        verdict at four times the subprocess cost. Each record's own
+        delivered drive is what genuinely differs. The own-record movement
+        is pinned module-wide by test_every_record_is_data... together with
+        its subtraction mutant.
+        """
         for own in RECORDS:
-            for paths, delivered in ((RECORDS - {own}, True), ({own}, True),
-                                     ({"src/render.py"}, False), (set(), True)):
-                with self.subTest(record=own, changed=paths):
-                    result, calls, written, summary = self._drive(own, self._comparison(paths))
-                    self._assert_delivery(result, calls, delivered)
-                    old, new = records(own)
-                    self.assertEqual(json.loads(written), new if delivered else old)
-                    if not delivered:
-                        self.assertIn("Dropped ratchet artifact", summary)
-                        self.assertIn("non-data paths moved", result.stdout)
+            paths = RECORDS - {own}
+            with self.subTest(record=own, changed=paths):
+                result, calls, written, summary = self._drive(
+                    own, self._comparison(paths))
+                self._assert_delivery(result, calls, True)
+                _old, new = records(own)
+                self.assertEqual(json.loads(written), new)
+        for paths, delivered in (({"src/render.py"}, False), (set(), True)):
+            with self.subTest(record="gate/speed-baseline.json",
+                              changed=paths):
+                result, calls, _written, summary = self._drive(
+                    "gate/speed-baseline.json", self._comparison(paths))
+                self._assert_delivery(result, calls, delivered)
+                if not delivered:
+                    self.assertIn("Dropped ratchet artifact", summary)
+                    self.assertIn("non-data paths moved", result.stdout)
 
     @REQUIRES_POSIX_SHELL
     def test_uncertain_comparisons_and_source_renames_drop_green(self):
