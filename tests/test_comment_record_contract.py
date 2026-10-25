@@ -81,7 +81,8 @@ class TestCommentRecordContract(unittest.TestCase):
                     (data / "comment-share.json").write_bytes(raw)
                     # These extract and execute the shipped inline block.
                     # pylint: disable-next=protected-access
-                    result = case._run_validator(case._validator(), data, repo)
+                    result = case._run_validator(case._validator(), data, repo,
+                                                 "comment-share.json")
                     if accepted:
                         self.assertEqual(decoder(raw), document)
                         self.assertEqual(result.returncode, 0, result.stderr)
