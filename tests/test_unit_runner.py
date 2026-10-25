@@ -16,12 +16,12 @@ COMMANDS = ('gh', 'render-gh-widgets.py', 'render-impact.py',
             'render-responsiveness.py', 'render-stars.py', 'render-popularity.py')
 STUB = '''import json, os, sys, time
 from pathlib import Path
-root = Path(os.environ['OUT_DIR'])
+root = Path(os.environ['GH_WIDGETS_OUT_DIR'])
 step = sys.argv[1]
 (root / (step + '.start')).write_text(json.dumps({
     'time': time.monotonic(), 'args': sys.argv[2:],
-    'orgs': os.environ.get('GH_EXTRA_ORGS'),
-    'cache': os.environ.get('CACHE_FILE')}))
+    'orgs': os.environ.get('GH_WIDGETS_GH_EXTRA_ORGS'),
+    'cache': os.environ.get('GH_WIDGETS_CACHE_FILE')}))
 time.sleep(json.loads(os.environ['GH_WIDGETS_STUB_DELAYS']).get(step, 0))
 failed = os.environ.get('GH_WIDGETS_STUB_FAIL') == step
 if step == 'lookup':
@@ -33,7 +33,8 @@ sys.exit(7 if failed else 0)
 '''
 
 
-def run_unit(unit, fail='', delays=None, timing=''):  # pylint: disable=too-many-locals
+def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed'):
+    # pylint: disable=too-many-locals
     """Relocate deployed command paths only; execute the unit's actual argv."""
     starts = [line.split('=', 1)[1] for line in
               (ROOT / 'units' / unit).read_text(encoding='utf-8').splitlines()
@@ -56,11 +57,25 @@ def run_unit(unit, fail='', delays=None, timing=''):  # pylint: disable=too-many
         runner.write_text(''.join(functions) + text, encoding='utf-8')
         argv = [str(runner) if arg == '/usr/local/bin/run-gh-widgets.sh' else arg
                 for arg in shlex.split(starts[0])]
-        env = {**os.environ, 'GH_TOKEN_FILE': str(token), 'OUT_DIR': directory,
-               'CACHE_FILE': str(root / 'profile-cache.json'),
-               'GH_WIDGETS_DEBUG_TIMING': timing,
-               'GH_WIDGETS_STUB_FAIL': fail,
-               'GH_WIDGETS_STUB_DELAYS': json.dumps(delays or {})}
+        # Both token spellings leave the ambient environment, so the case a
+        # scenario builds is the only source of either name.
+        env = {name: value for name, value in os.environ.items()
+               if name not in ('GH_TOKEN_FILE', 'GH_WIDGETS_GH_TOKEN_FILE')}
+        if token_name == 'prefixed':
+            env['GH_WIDGETS_GH_TOKEN_FILE'] = str(token)
+        elif token_name == 'bare':
+            env['GH_TOKEN_FILE'] = str(token)
+        elif token_name == 'both':
+            env['GH_TOKEN_FILE'] = str(root / 'bare-token-missing')
+            env['GH_WIDGETS_GH_TOKEN_FILE'] = str(token)
+        elif token_name == 'empty-prefixed':
+            env['GH_TOKEN_FILE'] = str(token)
+            env['GH_WIDGETS_GH_TOKEN_FILE'] = ''
+        env.update({'GH_WIDGETS_OUT_DIR': directory,
+                    'GH_WIDGETS_CACHE_FILE': str(root / 'profile-cache.json'),
+                    'GH_WIDGETS_DEBUG_TIMING': timing,
+                    'GH_WIDGETS_STUB_FAIL': fail,
+                    'GH_WIDGETS_STUB_DELAYS': json.dumps(delays or {})})
         # Files avoid communicate() waiting for inherited pipes after a runner
         # that wrongly exits before its children: observe the runner's own exit.
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -158,3 +173,24 @@ class UnitSchedule(unittest.TestCase):
                     result, _, files = run_unit(unit, fail='lookup', timing=timing)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn('profile.start', files)
+
+    def test_token_file_reads_prefixed_first_and_bare_on_fallback(self):
+        # ${GH_WIDGETS_GH_TOKEN_FILE-$GH_TOKEN_FILE} shares the helper's
+        # semantics: unset falls back, present-even-empty wins. Each leg's
+        # verdict flips exactly one leg of the expansion: 'both' dies on a
+        # bare-first reader, 'bare' dies on prefixed-only, and
+        # 'empty-prefixed' dies on ${VAR:-$DEFAULT}, whose empty-value
+        # fallback the helper semantics refuse.
+        scenarios = (('prefixed', True), ('bare', True), ('both', True),
+                     ('empty-prefixed', False))
+        for unit in UNITS:
+            for token_name, served in scenarios:
+                with self.subTest(unit=unit, token=token_name):
+                    result, _, files = run_unit(unit, token_name=token_name)
+                    if served:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn('profile.start', files)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('lookup failed', result.stderr)
+                        self.assertNotIn('profile.start', files)

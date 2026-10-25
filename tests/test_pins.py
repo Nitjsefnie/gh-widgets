@@ -9,10 +9,13 @@ arms of a comparison then see identical trees, so the parts tested here are
 the ones that decide WHICH commit a repo gets — the network fetch around
 them is the renderer's own, already covered by test_impact.py.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +94,61 @@ class TestWriteManifest(unittest.TestCase):
             self.path, {"o/a": {"branch": "main", "head": "aaa"}})
         self.assertEqual(json.loads(self.path.read_text())["o/a"]["head"],
                          "aaa")
+
+
+class TestEnvFallback(unittest.TestCase):
+    # parse_args runs before load_renderer, so the fallback cannot come from
+    # the helper and is carried inline; these pin the inline expression.
+
+    def parse(self, env, *argv):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, 'argv',
+                                  ['resolve-repo-pins.py', *argv]):
+            return resolve_pins.parse_args()
+
+    def test_the_bare_names_are_read_when_the_prefixed_names_are_unset(self):
+        args, _token = self.parse({'GH_USER': 'bare-user',
+                                   'GH_TOKEN_FILE': '/bare/t'},
+                                  '--token', 't')
+        self.assertEqual(args.user, 'bare-user')
+        self.assertEqual(args.token_file, '/bare/t')
+
+    def test_the_prefixed_names_win_when_both_spellings_are_set(self):
+        args, _token = self.parse({'GH_USER': 'bare-user',
+                                   'GH_WIDGETS_GH_USER': 'prefixed-user',
+                                   'GH_TOKEN_FILE': '/bare/t',
+                                   'GH_WIDGETS_GH_TOKEN_FILE': '/prefixed/t'},
+                                  '--token', 't')
+        self.assertEqual(args.user, 'prefixed-user')
+        self.assertEqual(args.token_file, '/prefixed/t')
+
+    def test_an_empty_prefixed_name_wins_over_a_set_bare_name(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                self.parse({'GH_USER': 'bare-user',
+                            'GH_WIDGETS_GH_USER': ''},
+                           '--token', 't')
+        self.assertIn('--user', stderr.getvalue())
+
+    def test_the_bare_token_file_is_read_for_the_token(self):
+        token_path = Path(tempfile.mkdtemp(prefix='ghw-pinenv-')) / 'token'
+        token_path.write_text('from-bare-file\n', encoding='utf-8')
+        self.addCleanup(shutil.rmtree, token_path.parent, ignore_errors=True)
+        _args, token = self.parse({'GH_USER': 'u',
+                                   'GH_TOKEN_FILE': str(token_path)})
+        self.assertEqual(token, 'from-bare-file')
+
+    def test_the_prefixed_token_file_wins_over_a_missing_bare_file(self):
+        token_path = Path(tempfile.mkdtemp(prefix='ghw-pinenv-')) / 'token'
+        token_path.write_text('from-prefixed-file\n', encoding='utf-8')
+        self.addCleanup(shutil.rmtree, token_path.parent, ignore_errors=True)
+        _args, token = self.parse({'GH_USER': 'u',
+                                   'GH_TOKEN_FILE': str(token_path.parent /
+                                                        'missing'),
+                                   'GH_WIDGETS_GH_TOKEN_FILE':
+                                       str(token_path)})
+        self.assertEqual(token, 'from-prefixed-file')
 
 
 if __name__ == "__main__":
