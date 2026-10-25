@@ -1523,6 +1523,7 @@ jobs:
           GH_WIDGETS_HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
           GH_WIDGETS_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           GH_WIDGETS_SECRETS_WAIT_BOUND_S: '240'
+          GH_WIDGETS_SIZE_WAIT_BOUND_S: '240'
           GH_WIDGETS_PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_WIDGETS_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_WIDGETS_EVENT_NAME: ${{ github.event_name }}
