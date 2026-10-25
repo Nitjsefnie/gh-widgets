@@ -112,6 +112,54 @@ def size_document(baseline):
             + "\n}\n").encode("utf-8")
 
 
+def canonical_document(document):
+    """The byte shape every fixture record shares."""
+    return (json.dumps(document, sort_keys=True, indent=2) + "\n").encode()
+
+
+def coverage_merge_case():
+    """Main edits the cell line; the artifact raises the floor.
+
+    The cell line sits between two lines the artifact never touches;
+    measured_at is sandwiched by artifact-edited lines and would conflict
+    in diff3, which is the other branch's drop case.
+    """
+    old_cov, new_cov = records("gate/coverage-floor.json")
+    main_cov = dict(old_cov, cell="fixture-cell")
+    merged_cov = dict(new_cov, cell="fixture-cell")
+    return ("gate/coverage-floor.json", (old_cov, new_cov),
+            canonical_document(main_cov), canonical_document(merged_cov),
+            lambda installed: json.loads(installed)["measured_at"])
+
+
+def speed_merge_case():
+    """Main lowers one entry's maximum; the artifact lowers another's."""
+    population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
+                  "population": "a" * 64,
+                  "entries": {"unit::a": {"min": 5.0, "max": 10.0, "n": 6},
+                              "unit::b": {"min": 4.0, "max": 8.0, "n": 6}},
+                  "slopes": {"unit::a": 2.0, "unit::b": 1.5},
+                  "wall": {}}
+    old_speed = {"schema": 4, "basis": "fixture", "cell": "fixture",
+                 "measured_commit": BASE, "measured_at": "2026-10-24",
+                 "populations": {"unit-suite": population}}
+    new_speed = json.loads(json.dumps(old_speed))
+    new_speed["populations"]["unit-suite"]["entries"]["unit::a"]["max"] = 9.0
+    main_speed = json.loads(json.dumps(old_speed))
+    main_speed["populations"]["unit-suite"]["entries"]["unit::b"]["max"] = 7.5
+    merged_speed = json.loads(json.dumps(main_speed))
+    merged_speed["populations"]["unit-suite"]["entries"]["unit::a"]["max"] \
+        = 9.0
+
+    def b_max(installed):
+        return json.loads(installed)["populations"]["unit-suite"][
+            "entries"]["unit::b"]["max"]
+
+    return ("gate/speed-baseline.json", (old_speed, new_speed),
+            canonical_document(main_speed),
+            canonical_document(merged_speed), b_max)
+
+
 class TestRatchetPushDelivery(unittest.TestCase):
     @staticmethod
     def _prepare(root, record_path, documents, coverage, *, base_bytes=None,
@@ -121,10 +169,9 @@ class TestRatchetPushDelivery(unittest.TestCase):
         target = root / "main" / record_path
         target.parent.mkdir(parents=True)
         # All three merge inputs share one canonical shape, as the real
-        # writers produce; divergent formatting would read as a whole-file
-        # rewrite on both sides. The base copy defaults to the OLD record —
-        # never to a caller's edited main copy, or the merge would see
-        # main's edit as already-landed.
+        # writers produce. The base copy defaults to the OLD record —
+        # never to an edited main copy, or the merge would see main's
+        # edit as already-landed.
         canonical_old = (size_document(old["baseline"])
                          if record_path == ".github/size-baseline.json"
                          else (json.dumps(old, sort_keys=True, indent=2)
@@ -265,9 +312,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_the_merge_preserves_main_edit_and_delivers_both(self):
         """A non-conflicting in-between edit must survive the landing.
 
-        The delivered document carries both sides merged against the base
-        copy; the whole-file copy the old apply used loses main's entry,
-        which is the mutant's tell.
+        The whole-file copy the old apply used loses main's entry — the
+        mutant's tell on the delivered bytes.
         """
         base_bytes = size_document({"a1.py": 300, "one.py": 42})
         main_bytes = size_document({"a0.py": 100, "a1.py": 300,
@@ -295,12 +341,10 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_a_conflicting_records_edit_drops_green(self):
         """Same entry touched on both sides: drop, not lose.
 
-        What kills a deliver-on-conflict mutant is the returncode
-        assertion against the two-layer composite (conflict arm and parse
-        check both disarmed, the validator then refuses and the run goes
-        RED, rc 1 != 0); the single-layer fall-through is equivalent by
-        the parse backstop — both green-drops, so the notice text alone
-        cannot be the discriminator.
+        Deliver-on-conflict mutants die on the returncode assertion via
+        the two-layer composite (conflict arm and parse check both
+        disarmed: the validator refuses, the run goes RED); the
+        single-layer fall-through is equivalent by the parse backstop.
         """
         base_bytes = size_document({"one.py": 42})
         main_bytes = size_document({"one.py": 50})
@@ -315,11 +359,9 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_an_unparseable_merged_record_drops_green(self):
-        """A clean line-merge producing unparseable JSON drops green.
+        """A clean line-merge producing unparseable JSON drops green:
+        main broke a line the artifact never touched."""
 
-        Main appended a broken line where the artifact did not touch, so
-        the merge is clean but the result is not JSON.
-        """
         base_bytes = size_document({"one.py": 42})
         main_bytes = size_document({"one.py": 42}).replace(
             b'{\n', b'{\n  broken\n', 1)
@@ -332,57 +374,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_the_merge_preserves_main_tighten_for_coverage_and_speed(self):
-        """One probe per remaining record: main's edit must survive.
-
-        The delivered record carries both sides; under a revert to the raw
-        artifact the installed bytes lose main's edit and the
-        installed-bytes assertion fails, at whichever site reverts.
-        """
-        cases = []
-
-        old_cov, new_cov = records("gate/coverage-floor.json")
-        # The cell line sits between two lines the artifact never touches;
-        # measured_at is sandwiched by artifact-edited lines and would
-        # conflict in diff3, which is the other branch's drop case.
-        main_cov = dict(old_cov, cell="fixture-cell")
-        merged_cov = dict(new_cov, cell="fixture-cell")
-        canonical = lambda document: (
-            json.dumps(document, sort_keys=True, indent=2) + "\n").encode()
-        cases.append(("gate/coverage-floor.json",
-                      (old_cov, new_cov),
-                      canonical(main_cov), canonical(merged_cov),
-                      lambda installed: json.loads(installed)["measured_at"]))
-
-        population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
-                      "population": "a" * 64,
-                      "entries": {"unit::a": {"min": 5.0, "max": 10.0,
-                                              "n": 6},
-                                  "unit::b": {"min": 4.0, "max": 8.0,
-                                              "n": 6}},
-                      "slopes": {"unit::a": 2.0, "unit::b": 1.5},
-                      "wall": {}}
-        old_speed = {"schema": 4, "basis": "fixture", "cell": "fixture",
-                     "measured_commit": BASE, "measured_at": "2026-10-24",
-                     "populations": {"unit-suite": population}}
-        new_speed = json.loads(json.dumps(old_speed))
-        new_speed["populations"]["unit-suite"]["entries"]["unit::a"]["max"] \
-            = 9.0
-        main_speed = json.loads(json.dumps(old_speed))
-        main_speed["populations"]["unit-suite"]["entries"]["unit::b"]["max"] \
-            = 7.5
-        merged_speed = json.loads(json.dumps(main_speed))
-        merged_speed["populations"]["unit-suite"]["entries"]["unit::a"][
-            "max"] = 9.0
-
-        def b_max(installed):
-            return json.loads(installed)["populations"]["unit-suite"][
-                "entries"]["unit::b"]["max"]
-
-        cases.append(("gate/speed-baseline.json",
-                      (old_speed, new_speed),
-                      canonical(main_speed), canonical(merged_speed), b_max))
-
-        for record_path, documents, main_bytes, merged_bytes, read in cases:
+        for record_path, documents, main_bytes, merged_bytes, read in (
+                coverage_merge_case(), speed_merge_case()):
             with self.subTest(record=record_path):
                 result, calls, written, _summary = self._drive(
                     record_path, self._comparison({record_path}),
@@ -393,11 +386,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_an_unreachable_base_record_drops_green(self):
-        """No base copy of the record: drop green, name the reason.
+        """No base copy of the record: drop green, name the reason."""
 
-        The record landed after the measured base; installing whole
-        would discard whatever main carries now.
-        """
         result, calls, _written, summary = self._drive(
             ".github/size-baseline.json",
             self._comparison({".github/size-baseline.json"}),
