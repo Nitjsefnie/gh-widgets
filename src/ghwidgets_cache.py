@@ -1,4 +1,5 @@
-"""Cache validation, locking, and atomic writes shared by the renderers.
+"""Cache validation, locking, atomic writes, and the REST conditional-GET
+store shared by the renderers.
 
 ``ghwidgets_common`` loads this sibling by path and registers it in
 ``sys.modules`` so path-loaded consumers share the same state as normal
@@ -9,7 +10,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
 from pathlib import Path
 
 # The cache lock uses each platform's own exclusive-lock API: flock(2) on
@@ -253,3 +256,104 @@ def merge_cache(path, version, updates, timeout=CACHE_LOCK_TIMEOUT):
                    "version": version}
         _write_cache(path, payload)
         return payload
+
+
+# ------------------------------------------------------------ conditional GET
+
+REST_CACHE_VERSION = 1
+
+
+class RestCache:
+    """Per-URL conditional-GET store for the renderers' REST reads.
+
+    A stored URL's next request sends its ETag as If-None-Match, and a 304
+    Not Modified is answered from the store instead of the wire — GitHub
+    charges no primary rate limit for a 304. Entries sit at the document's
+    top level, keyed by URL, so merge_cache refreshes one renderer's URLs
+    without discarding another's: the unit runs the profile and popularity
+    renderers concurrently against one file.
+
+    `path` None is an inert store: no persistence, no If-None-Match, and the
+    run's counts go nowhere.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.requests = 0
+        self.not_modified = 0
+        self.updates = {}
+        self.entries = load_cache(path, REST_CACHE_VERSION) if path else {}
+
+    def entry(self, url):
+        """The stored entry for `url`, or None. A missing or malformed entry
+        degrades to a full fetch, like a corrupt store file."""
+        with self.lock:
+            entry = self.updates.get(url) or self.entries.get(url)
+        if not (isinstance(entry, dict) and isinstance(entry.get("etag"), str)
+                and entry["etag"]
+                and isinstance(entry.get("body"), str)
+                and isinstance(entry.get("link"), str)):
+            return None
+        return entry
+
+    def remember(self, url, etag, body, link):
+        """Store a complete response body under its ETag for the next run."""
+        try:
+            text = body.decode("utf-8")
+        except (AttributeError, UnicodeDecodeError):
+            return  # a body that cannot round-trip as text is not stored
+        with self.lock:
+            self.updates[url] = {"etag": etag, "body": text, "link": link}
+
+    def save(self):
+        """The run's one save, under the writers' lock. A failed save
+        degrades with a warning, never failing the render."""
+        if not self.path or not self.updates:
+            return
+        try:
+            merge_cache(self.path, REST_CACHE_VERSION, self.updates)
+        except (OSError, TimeoutError) as exc:
+            print(f"warning: could not save REST cache {self.path}: {exc}",
+                  file=sys.stderr)
+
+
+def conditional_get(url, request, send, store):
+    """One conditional GET of `url` through `send(request)`.
+
+    With a stored ETag the request carries If-None-Match, and a 304 is the
+    success path: the stored body and Link header are returned exactly as a
+    200's would be, and never retried. Only a complete 200 body carrying an
+    ETag is stored; a response without an ETag stores nothing, so it never
+    sends If-None-Match either. A reported non-200 status raises before
+    anything is read or stored. `store` None is a pass-through: no header,
+    no counts, no 304 handling.
+
+    The caller owns retries, the timing track, and body parsing; every wire
+    request and every 304 is counted in `store` for the run's counts line.
+    """
+    entry = store.entry(url) if store is not None else None
+    if entry:
+        request.add_unredirected_header("If-None-Match", entry["etag"])
+    if store is not None:
+        with store.lock:
+            store.requests += 1
+    try:
+        with send(request) as result:
+            status = getattr(result, "status", None)
+            if isinstance(status, int) and status != 200:
+                raise urllib.error.HTTPError(url, status, "expected HTTP 200",
+                                             result.headers, None)
+            body = result.read()
+            link = result.headers.get("Link", "")
+            etag = result.headers.get("ETag")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 304 or entry is None:
+            raise
+        if store is not None:
+            with store.lock:
+                store.not_modified += 1
+        return entry["body"], entry["link"]
+    if store is not None and etag:
+        store.remember(url, etag, body, link)
+    return body, link
