@@ -293,9 +293,11 @@ def _api(transport: cd.Transport, path: str, *,
 def _secrets_runs(transport: cd.Transport, repository: str,
                   head_sha: str, timeout: float) -> list[dict[str, Any]]:
     if REPOSITORY.fullmatch(repository) is None:
-        raise QueryError("missing or invalid REPOSITORY for secrets query")
+        raise QueryError(
+            "missing or invalid GH_WIDGETS_REPOSITORY for secrets query")
     if HEAD_SHA.fullmatch(head_sha) is None:
-        raise QueryError("missing or invalid HEAD_SHA for secrets query")
+        raise QueryError(
+            "missing or invalid GH_WIDGETS_HEAD_SHA for secrets query")
     path = (
         f"repos/{repository}/actions/workflows/{SECRETS_WORKFLOW}/runs"
         f"?head_sha={quote(head_sha, safe='')}&per_page=100")
@@ -306,7 +308,8 @@ def _secrets_runs(transport: cd.Transport, repository: str,
     for run in runs:
         if run.get("head_sha") != head_sha:
             raise QueryError(
-                "secrets workflow query returned a run outside HEAD_SHA")
+                "secrets workflow query returned a run outside "
+                "GH_WIDGETS_HEAD_SHA")
     return runs
 
 
@@ -326,7 +329,8 @@ def _newest_secrets_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _secrets_jobs(transport: cd.Transport, repository: str,
                   run: dict[str, Any], timeout: float) -> list[dict[str, Any]]:
     if REPOSITORY.fullmatch(repository) is None:
-        raise QueryError("missing or invalid REPOSITORY for secrets job query")
+        raise QueryError(
+            "missing or invalid GH_WIDGETS_REPOSITORY for secrets job query")
     run_id = _run_id(run)
     path = f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"
     jobs = _api(transport, path, paginate=True, timeout=timeout)
@@ -486,9 +490,11 @@ def _secret_scan_result(environment: dict[str, str],
 def _prove_superseded(transport: cd.Transport, repository: str, run_id: str,
                       branch: str) -> SupersessionProof | None:
     if REPOSITORY.fullmatch(repository) is None:
-        raise QueryError("missing or invalid REPOSITORY for supersession query")
+        raise QueryError(
+            "missing or invalid GH_WIDGETS_REPOSITORY for supersession query")
     if not RUN_ID.fullmatch(run_id) or int(run_id) < 1:
-        raise QueryError("missing or invalid RUN_ID for supersession query")
+        raise QueryError(
+            "missing or invalid GH_WIDGETS_RUN_ID for supersession query")
     own_path = f"repos/{repository}/actions/runs/{run_id}"
     mine = _api(transport, own_path)
     if not isinstance(mine, dict) or _run_id(mine) != int(run_id):
