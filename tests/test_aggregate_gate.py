@@ -1103,8 +1103,6 @@ class SizeScanTests(unittest.TestCase):
         self.assertEqual(size_queries, [])
 
 
-
-
 class AggregateSummaryTests(unittest.TestCase):
     def test_table_includes_every_gate_and_escapes_details(self):
         result = ag.decide(_all_success(), _applicability())
