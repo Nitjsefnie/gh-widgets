@@ -678,11 +678,11 @@ jobs:
 
       - name: Build renderer fixtures
         env:
-          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+          GH_WIDGETS_GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
         working-directory: head
         run: |
           python3 scripts/bench/fixture_setup.py \
-            --root "$GH_BENCH_FIXTURE_ROOT"
+            --root "$GH_WIDGETS_GH_BENCH_FIXTURE_ROOT"
 
       - name: Measure the unit suite
         # One calibrated measurement of the suite per round; the raw parts
@@ -755,7 +755,7 @@ jobs:
 
       - name: Run renderer workloads
         env:
-          GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
+          GH_WIDGETS_GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
           # Both populations use calibrated ratios; pin the instrument here
           # so renderer measurements agree with their committed baseline.
           GH_COUNTER_METRIC: cpu_time_ratio

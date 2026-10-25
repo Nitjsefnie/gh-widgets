@@ -296,7 +296,7 @@ class TestHarness(unittest.TestCase):
             body = (
                 "import os, sys\n"
                 "from pathlib import Path\n"
-                "out = Path(os.environ['OUT_DIR'])\n"
+                "out = Path(os.environ['GH_WIDGETS_OUT_DIR'])\n"
                 "out.mkdir(parents=True, exist_ok=True)\n"
                 f"for name in {svgs!r}:\n"
                 "    (out / name).write_text('<svg>stable</svg>', "
@@ -307,10 +307,11 @@ class TestHarness(unittest.TestCase):
             if script == "src/render-impact.py" and refresh_impact:
                 body += (
                     "import json\n"
-                    "payloads = Path(os.environ['GH_BENCH_PAYLOADS'])\n"
+                    "payloads = "
+                    "Path(os.environ['GH_WIDGETS_GH_BENCH_PAYLOADS'])\n"
                     "manifest = json.loads((payloads / 'manifest.json')."
                     "read_text(encoding='utf-8'))\n"
-                    "cache_path = Path(os.environ['CACHE_FILE'])\n"
+                    "cache_path = Path(os.environ['GH_WIDGETS_CACHE_FILE'])\n"
                     "cache = json.loads(cache_path.read_text("
                     "encoding='utf-8'))\n"
                     "for repo, head in manifest['repo_heads'].items():\n"
@@ -352,7 +353,7 @@ class TestHarness(unittest.TestCase):
         # file drives the renderer side, which measures raw.
         env.pop("GH_COUNTER_METRIC", None)
         env.pop("GH_WIDGETS_OBSERVE_RENDERER_RATIO", None)
-        env["GH_BENCH_FIXTURE_ROOT"] = str(self.fixture_root)
+        env["GH_WIDGETS_GH_BENCH_FIXTURE_ROOT"] = str(self.fixture_root)
         return subprocess.run(command, env=env, capture_output=True,
                               text=True, check=False)
 
@@ -395,7 +396,7 @@ class TestHarness(unittest.TestCase):
         output = io.StringIO()
         env = {"GH_COUNTER_METRIC": "cpu_time",
                "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
-               "GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
+               "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
         original_calibrated = e2e_bench.counter.measure_calibrated
         original_measure = e2e_bench.counter.measure
 
@@ -405,14 +406,15 @@ class TestHarness(unittest.TestCase):
 
         def calibrated(command, **kwargs):
             child_env = kwargs["env"]
-            seeded = json.loads(Path(child_env["CACHE_FILE"]).read_text(
+            seeded = json.loads(Path(
+                child_env["GH_WIDGETS_CACHE_FILE"]).read_text(
                 encoding="utf-8"))
             if command[-1].endswith("render-impact.py"):
                 pristine = json.loads((self.fixture_root / "caches" /
                                        "impact-cache.json").read_text(
                                            encoding="utf-8"))
                 self.assertEqual(seeded, pristine)
-            self.assertFalse(Path(child_env["OUT_DIR"]).exists())
+            self.assertFalse(Path(child_env["GH_WIDGETS_OUT_DIR"]).exists())
             return original_calibrated(command, **kwargs)._replace(value=4.0)
 
         with mock.patch.dict(os.environ, env), mock.patch.object(
@@ -460,7 +462,7 @@ class TestHarness(unittest.TestCase):
         output = io.StringIO()
         env = {"GH_COUNTER_METRIC": "cpu_time_ratio",
                "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
-               "GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
+               "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
         # Fixed child costs distinguish the ratio from raw CPU and wall.
         with mock.patch.dict(os.environ, env), mock.patch.object(
                 e2e_bench.counter, "_run_child",
@@ -655,7 +657,7 @@ class TestHarness(unittest.TestCase):
 
     def test_list_workloads_needs_no_checkout_or_fixtures(self):
         env = dict(os.environ)
-        env.pop("GH_BENCH_FIXTURE_ROOT", None)
+        env.pop("GH_WIDGETS_GH_BENCH_FIXTURE_ROOT", None)
         result = subprocess.run(
             [sys.executable, str(BENCH_DIR / "e2e_bench.py"),
              "--list-workloads"],

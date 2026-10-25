@@ -86,21 +86,21 @@ def _renderer_environment(fixture_root, bench_dir, cache_file, out_dir):
     payloads = fixture_root / "payloads"
     mirror = fixture_root / "mirror"
     env.update({
-        "GH_USER": "bench-user",
+        "GH_WIDGETS_GH_USER": "bench-user",
         "GH_TOKEN": "bench-token",
-        "GH_EXTRA_EMAILS": "bench-user@users.noreply.github.com",
-        "GH_EXTRA_INSIDERS": "",
-        "CACHE_FILE": str(cache_file),
-        "OUT_DIR": str(out_dir),
-        "CLONE_SOURCE_DIR": str(mirror),
+        "GH_WIDGETS_GH_EXTRA_EMAILS": "bench-user@users.noreply.github.com",
+        "GH_WIDGETS_GH_EXTRA_INSIDERS": "",
+        "GH_WIDGETS_CACHE_FILE": str(cache_file),
+        "GH_WIDGETS_OUT_DIR": str(out_dir),
+        "GH_WIDGETS_CLONE_SOURCE_DIR": str(mirror),
         "PYTHONPATH": str(bench_dir),
-        "GH_BENCH_PAYLOADS": str(payloads),
+        "GH_WIDGETS_GH_BENCH_PAYLOADS": str(payloads),
         "PYTHONDONTWRITEBYTECODE": "1",
         "HTTPS_PROXY": DEAD_PROXY,
         "https_proxy": DEAD_PROXY,
         "NO_PROXY": "",
         "no_proxy": "",
-        "BLAME_METHOD": "targeted",
+        "GH_WIDGETS_BLAME_METHOD": "targeted",
     })
     manifest = json.loads((payloads / "manifest.json").read_text(
         encoding="utf-8"))
@@ -435,9 +435,10 @@ def _write_junit(path, results):
 def _resolve_environment(parser: argparse.ArgumentParser, args):
     """Validate the paths a run needs, and return them resolved."""
     repo_root = args.repo_root.resolve()
-    fixture_value = os.environ.get("GH_BENCH_FIXTURE_ROOT")
+    fixture_value = os.environ.get("GH_WIDGETS_GH_BENCH_FIXTURE_ROOT")
     if not fixture_value:
-        parser.error("GH_BENCH_FIXTURE_ROOT must name a built fixture root")
+        parser.error(
+            "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT must name a built fixture root")
     fixture_root = Path(fixture_value).resolve()
     work_root = args.work_root.resolve()
     if not repo_root.is_dir():

@@ -74,24 +74,29 @@ def merged_external_repos(renderer, token, login, insiders):
 def parse_args():
     p = argparse.ArgumentParser(
         description="Resolve one commit per repo for a pinned impact run.")
-    p.add_argument("--user", default=os.environ.get("GH_USER"),
-                   help="GitHub username (env: GH_USER)")
+    p.add_argument("--user",
+                   default=os.environ.get("GH_WIDGETS_GH_USER",
+                                          os.environ.get("GH_USER")),
+                   help="GitHub username (env: GH_WIDGETS_GH_USER)")
     p.add_argument("--token", default=os.environ.get("GH_TOKEN"),
                    help="GitHub PAT (env: GH_TOKEN)")
-    p.add_argument("--token-file", default=os.environ.get("GH_TOKEN_FILE"),
-                   help="Read token from a file (env: GH_TOKEN_FILE)")
+    p.add_argument("--token-file",
+                   default=os.environ.get("GH_WIDGETS_GH_TOKEN_FILE",
+                                          os.environ.get("GH_TOKEN_FILE")),
+                   help="Read token from a file (env: GH_WIDGETS_GH_TOKEN_FILE)")
     p.add_argument("--out", default="pins.json",
                    help="Manifest path to write (default: pins.json)")
     p.add_argument("--renderer", default=None,
                    help="Path to render-impact.py (default: the sibling repo)")
     args = p.parse_args()
     if not args.user:
-        p.error("--user (or env GH_USER) is required")
+        p.error("--user (or env GH_WIDGETS_GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
-        p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+        p.error("--token, --token-file, GH_TOKEN, or "
+                "GH_WIDGETS_GH_TOKEN_FILE required")
     return args, token
 
 

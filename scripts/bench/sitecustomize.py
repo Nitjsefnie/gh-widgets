@@ -198,7 +198,7 @@ def install():
 
     def offline_urlopen(request, *args, **kwargs):
         if urllib.parse.urlsplit(_request_url(request)).hostname == "api.github.com":
-            payload_dir = os.environ["GH_BENCH_PAYLOADS"]
+            payload_dir = os.environ["GH_WIDGETS_GH_BENCH_PAYLOADS"]
             return FixtureResponse(dispatch(request, payload_dir))
         return original(request, *args, **kwargs)
 

@@ -30,13 +30,13 @@ skipped() {
 lookup() {
     local token orgs orgs_start orgs_us
     if [ -n "${GH_WIDGETS_DEBUG_TIMING:-}" ]; then orgs_start=${EPOCHREALTIME/./}; fi
-    token=$(cat -- "$GH_TOKEN_FILE") || return 1
+    token=$(cat -- "${GH_WIDGETS_GH_TOKEN_FILE-$GH_TOKEN_FILE}") || return 1
     orgs=$(GH_TOKEN="$token" /usr/local/bin/gh api --paginate user/orgs --jq '.[].login' | paste -sd, -) || return 1
     if [ -n "${GH_WIDGETS_DEBUG_TIMING:-}" ]; then
         orgs_us=$((${EPOCHREALTIME/./} - orgs_start))
         printf 'orgs-lookup: %d.%06ds\n' "$((orgs_us / 1000000))" "$((orgs_us % 1000000))"
     fi
-    export GH_EXTRA_ORGS="$orgs"
+    export GH_WIDGETS_GH_EXTRA_ORGS="$orgs"
 }
 
 graphql_chain() {
