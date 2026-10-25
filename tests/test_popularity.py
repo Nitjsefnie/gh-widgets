@@ -202,7 +202,7 @@ class Acquisition(unittest.TestCase):
                         repo('Owner/Cloners', stargazers_count=0, forks_count=0),
                         repo('Owner/Visitors', stargazers_count=0, forks_count=0)]
 
-        def fetch(_token, path):
+        def fetch(_token, path, **_kwargs):
             if path == '/user':
                 return USER, ''
             uniques = 0
@@ -310,7 +310,7 @@ class Acquisition(unittest.TestCase):
 
     def test_unreadable_traffic_fails_loudly_for_both_endpoints(self):
         for endpoint in ('clones', 'views'):
-            def fetch(_token, path, endpoint=endpoint):
+            def fetch(_token, path, endpoint=endpoint, **_kwargs):
                 if path == '/user':
                     return USER, ''
                 if path.endswith('/traffic/' + endpoint):

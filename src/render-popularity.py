@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Render public owned-repository popularity from fresh git history and REST data.
 
-No cache: every run clones each default branch and reads live traffic.
+Every run clones each default branch and reads live traffic. REST reads go
+through a conditional-GET ETag store (GH_WIDGETS_REST_CACHE): an unchanged
+resource comes back 304 Not Modified and reuses the stored body, which
+GitHub does not charge against the primary rate limit. Without the store
+configured the render fetches everything, as before.
 """
 import argparse
 import importlib.util
@@ -41,8 +45,13 @@ AGENT_EMAILS = frozenset({'noreply@anthropic.com', 'noreply@openai.com',
 
 
 @common.share.limited_request
-def rest(token, path, retries=3, timeout=20):
-    """GET JSON and its Link header, retrying transport and server failures."""
+def rest(token, path, retries=3, timeout=20, store=None):
+    """GET JSON and its Link header, retrying transport and server failures.
+
+    With `store`, the conditional-GET helper sends a stored ETag as
+    If-None-Match and answers a 304 from the store; the 304 never reaches
+    this retry loop.
+    """
     url = path if path.startswith(API + '/') else API + path
     req = urllib.request.Request(url, headers={
         'Authorization': f'Bearer {token}',
@@ -51,12 +60,12 @@ def rest(token, path, retries=3, timeout=20):
     })
     for attempt in range(retries + 1):
         try:
-            with common.timing.track('rest', common.endpoint_shape(url)), \
-                    urllib.request.urlopen(req, timeout=timeout) as result:
-                if result.status != 200:
-                    raise urllib.error.HTTPError(url, result.status, 'expected HTTP 200',
-                                                 result.headers, None)
-                return json.loads(result.read()), result.headers.get('Link', '')
+            with common.timing.track('rest', common.endpoint_shape(url)):
+                body, link = common.ghwidgets_cache.conditional_get(
+                    url, req,
+                    lambda request: urllib.request.urlopen(request, timeout=timeout),
+                    store)
+                return json.loads(body), link
         except urllib.error.HTTPError as exc:
             if exc.code < 500 or attempt == retries:
                 raise
@@ -67,7 +76,7 @@ def rest(token, path, retries=3, timeout=20):
     raise RuntimeError('unreachable: REST retry loop exhausted')
 
 
-def rest_pages(token, path):
+def rest_pages(token, path, store=None):
     """Follow every next Link; a repeated URL fails."""
     items, seen = [], set()
     while path:
@@ -75,7 +84,7 @@ def rest_pages(token, path):
         if url in seen:
             raise common.PaginationLimitError(f'REST pagination did not advance: {path}')
         seen.add(url)
-        data, link = rest(token, path)
+        data, link = rest(token, path, store=store)
         items.extend(data)
         next_link = re.search(r'<([^>]+)>;\s*rel="next"', link)
         path = next_link.group(1) if next_link else ''
@@ -138,13 +147,13 @@ def outsider_commits(repository, user, emails):
                    for author, email in parse_authors(log.stdout, name))
 
 
-def score_repository(token, repository, user, emails):
+def score_repository(token, repository, user, emails, store=None):
     """Read one repository's traffic and outsider commits."""
     name = repository['full_name']
     traffic = {}
     for endpoint in ('clones', 'views'):
         try:
-            data, _ = rest(token, f'/repos/{name}/traffic/{endpoint}')
+            data, _ = rest(token, f'/repos/{name}/traffic/{endpoint}', store=store)
             traffic[endpoint] = data['uniques']
         except urllib.error.HTTPError as exc:
             raise RuntimeError(
@@ -156,28 +165,30 @@ def score_repository(token, repository, user, emails):
     return outsiders, traffic['clones'], traffic['views']
 
 
-def acquire_score(token, repository, user, emails, samples):
+def acquire_score(token, repository, user, emails, samples, store=None):
     """Collect one repository's worker intervals around its reads."""
     with common.timing.collect_processes(samples):
-        return score_repository(token, repository, user, emails)
+        return score_repository(token, repository, user, emails, store=store)
 
 
 # Keeps the eligible population and score inputs together.
 # pylint: disable=too-many-locals
-def fetch_scores(token):
+def fetch_scores(token, store=None):
     """Acquire all eligible user/org repositories and their complete scores.
 
     One pool task per repository, collected in enumeration order.
     """
-    user, _ = rest(token, '/user')
+    user, _ = rest(token, '/user', store=store)
     emails = common.our_emails(user['login'], user['id'])
     if user.get('email'):
         emails = emails | {user['email'].lower()}
-    orgs = rest_pages(token, '/user/orgs?per_page=100')
-    repositories = rest_pages(token, '/user/repos?affiliation=owner&per_page=100')
+    orgs = rest_pages(token, '/user/orgs?per_page=100', store=store)
+    repositories = rest_pages(token, '/user/repos?affiliation=owner&per_page=100',
+                              store=store)
     for org in orgs:
         login = urllib.parse.quote(org['login'], safe='')
-        repositories.extend(rest_pages(token, f'/orgs/{login}/repos?per_page=100'))
+        repositories.extend(rest_pages(token, f'/orgs/{login}/repos?per_page=100',
+                                       store=store))
     eligible, seen = [], set()
     for repository in repositories:
         name = repository['full_name']
@@ -193,7 +204,7 @@ def fetch_scores(token):
             samples = []
             tasks.append((repository, samples,
                           pool.submit(acquire_score, token, repository,
-                                      user, emails, samples)))
+                                      user, emails, samples, store)))
         for repository, samples, future in tasks:
             started = time.monotonic()
             try:
@@ -263,8 +274,13 @@ def parse_args():
 @common.timed_run('render-popularity')
 def main():
     args, token = parse_args()
+    store = common.ghwidgets_cache.RestCache(common.env('GH_WIDGETS_REST_CACHE'))
     with common.timing.track('phase', 'fetch_scores'):
-        user, scores = fetch_scores(token)
+        user, scores = fetch_scores(token, store=store)
+    store.save()
+    if store.path:
+        print(f'rest-cache: requests={store.requests} '
+              f'not-modified={store.not_modified}', flush=True)
     with common.timing.track('phase', 'render_svg'):
         svg = render_popularity(THEMES[args.theme], user, scores)
     out = Path(args.out_dir)
