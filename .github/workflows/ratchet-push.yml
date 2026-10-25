@@ -265,9 +265,21 @@ jobs:
             exit 0
           fi
           cp -- "$repo/$record_path" "$merged_record"
-          if ! git merge-file -L main -L base -L artifact \
-              "$merged_record" "$base_record" "$data/$document_name"; then
-            echo "::notice::Dropped $record_path from $base: main's records edit and the artifact touched the same lines; the merge conflicts."
+          merge_rc=0
+          git merge-file -L main -L base -L artifact \
+              "$merged_record" "$base_record" \
+              "$data/$document_name" || merge_rc=$?
+          if [ "$merge_rc" -eq 255 ]; then
+            echo "::notice::Dropped $record_path from $base: git merge-file failed (exit 255)."
+            {
+              echo "### Dropped ratchet artifact: the records merge failed"
+              echo
+              echo "git merge-file errored on $record_path; no automatic retry is assumed. A future source push measures again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$merge_rc" -ne 0 ]; then
+            echo "::notice::Dropped $record_path from $base: main's records edit and the artifact touched the same lines; the merge conflicts on $merge_rc file(s)."
             {
               echo "### Dropped ratchet artifact: the records merge conflicts"
               echo
@@ -316,7 +328,9 @@ jobs:
           if names == {"base.txt", "coverage-floor.json"}:
               name = "coverage-floor.json"
               old = object_at(repo / "gate" / name)
-              new = object_at(data / name)
+              # The merged document, not the raw artifact: the
+              # validator judges what will actually be installed.
+              new = object_at(Path(sys.argv[3]))
               keys = {"schema", "basis", "population", "cell", "measured",
                       "floor", "statements", "missing", "files",
                       "measured_commit", "measured_at"}
@@ -366,7 +380,9 @@ jobs:
           elif names == {"base.txt", "speed-baseline.json"}:
               name = "speed-baseline.json"
               old = object_at(repo / "gate" / name)
-              new = object_at(data / name)
+              # The merged document, not the raw artifact: the
+              # validator judges what will actually be installed.
+              new = object_at(Path(sys.argv[3]))
               top_keys = {"schema", "basis", "cell", "measured_commit",
                           "measured_at", "populations"}
               population_keys = {"metric", "tolerance", "population",
