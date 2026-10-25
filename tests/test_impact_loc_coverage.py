@@ -477,15 +477,17 @@ class TestImpactPathCoverage(unittest.TestCase):
             '{"outside/project":{"head":"abc123","branch":7}}',
             encoding="utf-8")
 
-        with mock.patch.dict(os.environ, {"IMPACT_REPO_PINS": str(path)}):
+        with mock.patch.dict(os.environ,
+                             {"GH_WIDGETS_IMPACT_REPO_PINS": str(path)}):
             with self.assertRaisesRegex(SystemExit, "non-string branch"):
                 impact_loc.load_repo_pins()
 
     def test_clone_repo_raises_when_git_clone_fails(self):
         dest = self.tmp / "missing-clone"
         result = subprocess.CompletedProcess(["git", "clone"], 1)
-        with mock.patch.dict(os.environ,
-                             {"CLONE_SOURCE_DIR": str(self.tmp / "mirrors")}), \
+        with mock.patch.dict(
+                os.environ,
+                {"GH_WIDGETS_CLONE_SOURCE_DIR": str(self.tmp / "mirrors")}), \
                 mock.patch.object(impact_clone, "_run_clone_command",
                                   return_value=result) as run_clone:
             with self.assertRaisesRegex(RuntimeError, "clone_failed"):
@@ -517,7 +519,7 @@ class TestUpdateLocCoverage(unittest.TestCase):
         cached = {repo: {"ours": 2, "total": 5, "head": "old"}}
         totals = {repo: {"branch": "main", "head": None}}
 
-        with mock.patch.dict(os.environ, {"IMPACT_REPO_PINS": ""}), \
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_IMPACT_REPO_PINS": ""}), \
                 mock.patch.object(impact_loc, "blame_moved") as blame:
             result = impact_loc.update_loc({repo}, totals, cached, False,
                                            {"us@example.com"})

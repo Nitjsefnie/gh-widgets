@@ -2,7 +2,7 @@
 """
 gh-widgets — render the self-hosted "External Impact" SVG.
 
-Writes ONE SVG to OUT_DIR:
+Writes ONE SVG to GH_WIDGETS_OUT_DIR:
   impact.svg    three ranked tables (top 5 external repos each) of your
                 contribution to repos outside my own account and orgs:
                 pull requests (my merged / all merged), issues (my
@@ -16,26 +16,26 @@ Writes ONE SVG to OUT_DIR:
                 strongest row in each section reads 10.00.
 
 Configuration (env vars or CLI flags, in that order of precedence):
-  GH_USER     (required) GitHub username
+  GH_WIDGETS_GH_USER  (required) GitHub username
   GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
               is NOT needed: identity comes from login + databaseId + orgs,
               never the email field (which that scope gates).
-              (can also be read from a file via --token-file or GH_TOKEN_FILE)
-  OUT_DIR     where to write the SVG (default: ./widgets)
-  CACHE_FILE  JSON cache of immutable data
+              (or --token-file / GH_WIDGETS_GH_TOKEN_FILE)
+  GH_WIDGETS_OUT_DIR  where to write the SVG (default: ./widgets)
+  GH_WIDGETS_CACHE_FILE  JSON cache of immutable data
               (default: /var/lib/gh-widgets/impact-cache.json)
-  THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
+  GH_WIDGETS_THEME  tokyonight (default) | catppuccin | gruvbox | github-dark
 
-  GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
-  GH_EXTRA_EMAILS    extra commit-author addresses that are ours (comma-sep)
-  BLAME_METHOD       targeted (default) | fame | both   — see CLAUDE.md
-  CLONE_LOOKAHEAD    repos cloned ahead of the blame    (default 3)
-  GH_WIDGETS_DEBUG_TIMING  per-phase timing for the whole run (default off)
-  IMPACT_Z           Wilson lower-bound z score        (default 2.58)
-  IMPACT_PR_GAMMA    volume exponent, PR table         (default 1.0)
-  IMPACT_ISSUE_GAMMA volume exponent, issue table      (default 1.75)
-  IMPACT_LOC_GAMMA   volume exponent, live-code table  (default 0.5)
-  GH_WIDGETS_IMPACT_COUNT_BOT_PRS  include bot PRs in repository totals (default 0)
+  GH_WIDGETS_GH_EXTRA_INSIDERS  extra owner logins that are ours (comma-sep)
+  GH_WIDGETS_GH_EXTRA_EMAILS  extra commit-author addresses that are ours
+  GH_WIDGETS_BLAME_METHOD       targeted (default) | fame | both  — CLAUDE.md
+  GH_WIDGETS_CLONE_LOOKAHEAD    repos cloned ahead of blame  (default 3)
+  GH_WIDGETS_DEBUG_TIMING  per-phase timing (default off)
+  GH_WIDGETS_IMPACT_Z           Wilson lower-bound z   (default 2.58)
+  GH_WIDGETS_IMPACT_PR_GAMMA    volume exponent, PRs   (default 1.0)
+  GH_WIDGETS_IMPACT_ISSUE_GAMMA volume exponent, issues (default 1.75)
+  GH_WIDGETS_IMPACT_LOC_GAMMA   volume exponent, live code (default 0.5)
+  GH_WIDGETS_IMPACT_COUNT_BOT_PRS  include bot PRs in totals (default 0)
 
 Who counts as "us" is DERIVED from the token's own account (login, databaseId,
 orgs) rather than hardcoded, so joining an org needs no code change. The two
@@ -128,10 +128,10 @@ def metric_knobs():
     than silently reverting to the default — see common.env_float.
     """
     return {
-        "z":           common.env_float("IMPACT_Z", 2.58),
-        "pr_gamma":    common.env_float("IMPACT_PR_GAMMA", 1.0),
-        "issue_gamma": common.env_float("IMPACT_ISSUE_GAMMA", 1.75),
-        "loc_gamma":   common.env_float("IMPACT_LOC_GAMMA", 0.5),
+        "z":           common.env_float("GH_WIDGETS_IMPACT_Z", 2.58),
+        "pr_gamma":    common.env_float("GH_WIDGETS_IMPACT_PR_GAMMA", 1.0),
+        "issue_gamma": common.env_float("GH_WIDGETS_IMPACT_ISSUE_GAMMA", 1.75),
+        "loc_gamma":   common.env_float("GH_WIDGETS_IMPACT_LOC_GAMMA", 0.5),
     }
 
 
@@ -581,17 +581,20 @@ def positive_int(raw):
 def parse_args():
     p = argparse.ArgumentParser(
         description="Render the self-hosted External Impact SVG.")
-    p.add_argument("--user", default=os.environ.get("GH_USER"),
-                   help="GitHub username (env: GH_USER)")
+    p.add_argument("--user", default=common.env("GH_WIDGETS_GH_USER"),
+                   help="GitHub username (env: GH_WIDGETS_GH_USER)")
     p.add_argument("--token", default=os.environ.get("GH_TOKEN"),
                    help="GitHub PAT (env: GH_TOKEN)")
-    p.add_argument("--token-file", default=os.environ.get("GH_TOKEN_FILE"),
-                   help="Read token from a file (env: GH_TOKEN_FILE)")
-    p.add_argument("--out-dir", default=os.environ.get("OUT_DIR", "./widgets"),
-                   help="Where to write the SVG (env: OUT_DIR)")
-    p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
+    p.add_argument("--token-file",
+                   default=common.env("GH_WIDGETS_GH_TOKEN_FILE"),
+                   help="Read token from a file (env: GH_WIDGETS_GH_TOKEN_FILE)")
+    p.add_argument("--out-dir",
+                   default=common.env("GH_WIDGETS_OUT_DIR", "./widgets"),
+                   help="Where to write the SVG (env: GH_WIDGETS_OUT_DIR)")
+    p.add_argument("--theme",
+                   default=common.env("GH_WIDGETS_THEME", "tokyonight"),
                    choices=list(THEMES),
-                   help="Color theme (env: THEME)")
+                   help="Color theme (env: GH_WIDGETS_THEME)")
     p.add_argument("-n", "--top", type=positive_int, default=TOP_N,
                    metavar="N",
                    help=f"Rows to render per section (default: {TOP_N}). "
@@ -600,17 +603,17 @@ def parse_args():
     p.add_argument("--resync", action="store_true",
                    help="Discard the cache and refetch/re-blame everything")
     p.add_argument("--cache-file",
-                   default=os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE),
-                   help="JSON cache path (env: CACHE_FILE)")
+                   default=common.env("GH_WIDGETS_CACHE_FILE", DEFAULT_CACHE_FILE),
+                   help="JSON cache path (env: GH_WIDGETS_CACHE_FILE)")
     args = p.parse_args()
 
     if not args.user:
-        p.error("--user (or env GH_USER) is required")
+        p.error("--user (or env GH_WIDGETS_GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
-        p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+        p.error("--token, --token-file, GH_TOKEN, or GH_WIDGETS_GH_TOKEN_FILE required")
     return args, token
 
 

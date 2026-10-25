@@ -241,8 +241,10 @@ class InputsAndCLI(unittest.TestCase):
     def test_config_validation_and_env_token_file(self):
         token_file = self.root / 'token'
         token_file.write_text('from-file\n', encoding='utf-8')
-        with mock.patch.dict(os.environ, {'GH_STAR_REPOS': ' o/r, O/R ,a/b ',
-                                          'GH_TOKEN_FILE': str(token_file)}, clear=True), \
+        with mock.patch.dict(os.environ,
+                             {'GH_WIDGETS_GH_STAR_REPOS': ' o/r, O/R ,a/b ',
+                              'GH_WIDGETS_GH_TOKEN_FILE': str(token_file)},
+                             clear=True), \
                 mock.patch.object(sys, 'argv', ['render-stars.py']):
             args, token = stars.parse_args()
             self.assertEqual(args.repos, ['o/r', 'a/b'])
@@ -267,19 +269,70 @@ class InputsAndCLI(unittest.TestCase):
                 stars.parse_args()
 
     def test_cli_override_and_cache_env_do_not_use_profile_cache(self):
-        with mock.patch.dict(os.environ, {'GH_STAR_REPOS': 'old/repo',
-                                          'GH_TOKEN': 'env-token',
-                                          'CACHE_FILE': 'profile-cache.json'}, clear=True), \
+        with mock.patch.dict(os.environ,
+                             {'GH_WIDGETS_GH_STAR_REPOS': 'old/repo',
+                              'GH_TOKEN': 'env-token',
+                              'CACHE_FILE': 'profile-cache.json',
+                              'GH_WIDGETS_CACHE_FILE':
+                              'profile-cache.json'}, clear=True), \
                 mock.patch.object(sys, 'argv', ['render-stars.py', '--repos', 'new/repo']):
             args, token = stars.parse_args()
         self.assertEqual(args.repos, ['new/repo'])
         self.assertEqual(token, 'env-token')
         self.assertEqual(args.cache_file, stars.DEFAULT_CACHE_FILE)
-        with mock.patch.dict(os.environ, {'GH_STAR_REPOS': 'o/r', 'GH_TOKEN': 't',
-                                          'STARS_CACHE_FILE': 'star-cache.json'}, clear=True), \
+        with mock.patch.dict(os.environ, {'GH_WIDGETS_GH_STAR_REPOS': 'o/r',
+                                          'GH_TOKEN': 't',
+                                          'GH_WIDGETS_STARS_CACHE_FILE':
+                                          'star-cache.json'}, clear=True), \
                 mock.patch.object(sys, 'argv', ['render-stars.py']):
             args, _ = stars.parse_args()
         self.assertEqual(args.cache_file, 'star-cache.json')
+
+    def parse(self, env, *argv):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, 'argv', ['render-stars.py', *argv]):
+            args, _token = stars.parse_args()
+        return args
+
+    def test_repos_default_reads_the_env_name(self):
+        self.assertEqual(self.parse({'GH_STAR_REPOS': 'o/r'},
+                                    '--token', 't').repos, ['o/r'])
+        both = {'GH_STAR_REPOS': 'o/r', 'GH_WIDGETS_GH_STAR_REPOS': 'n/r'}
+        self.assertEqual(self.parse(both, '--token', 't').repos, ['n/r'])
+
+    def test_token_file_default_reads_the_env_name(self):
+        args = self.parse({'GH_TOKEN_FILE': '/bare/t'},
+                          '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.token_file, '/bare/t')
+        both = {'GH_TOKEN_FILE': '/bare/t',
+                'GH_WIDGETS_GH_TOKEN_FILE': '/prefixed/t'}
+        args = self.parse(both, '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.token_file, '/prefixed/t')
+
+    def test_out_dir_default_reads_the_env_name(self):
+        args = self.parse({'OUT_DIR': '/bare/out'},
+                          '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.out_dir, '/bare/out')
+        both = {'OUT_DIR': '/bare/out', 'GH_WIDGETS_OUT_DIR': '/prefixed/out'}
+        args = self.parse(both, '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.out_dir, '/prefixed/out')
+
+    def test_theme_default_reads_the_env_name(self):
+        args = self.parse({'THEME': 'gruvbox'},
+                          '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.theme, 'gruvbox')
+        both = {'THEME': 'gruvbox', 'GH_WIDGETS_THEME': 'github-dark'}
+        args = self.parse(both, '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.theme, 'github-dark')
+
+    def test_cache_file_default_reads_the_env_name(self):
+        args = self.parse({'STARS_CACHE_FILE': '/bare/s.json'},
+                          '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.cache_file, '/bare/s.json')
+        both = {'STARS_CACHE_FILE': '/bare/s.json',
+                'GH_WIDGETS_STARS_CACHE_FILE': '/prefixed/s.json'}
+        args = self.parse(both, '--repos', 'o/r', '--token', 't')
+        self.assertEqual(args.cache_file, '/prefixed/s.json')
 
     def test_failed_uncached_run_preserves_previous_svg(self):
         output = self.root / 'stars-o-r.svg'

@@ -344,8 +344,8 @@ def run_main(api, out_dir, cache_file, extra_orgs=""):
             "--theme", "tokyonight", "--out-dir", str(out_dir)]
     with mock.patch.object(render, "gql", api), \
             mock.patch.object(sys, "argv", argv), \
-            mock.patch.dict(os.environ, {"CACHE_FILE": str(cache_file),
-                                         "GH_EXTRA_ORGS": extra_orgs}):
+            mock.patch.dict(os.environ, {"GH_WIDGETS_CACHE_FILE": str(cache_file),
+                                         "GH_WIDGETS_GH_EXTRA_ORGS": extra_orgs}):
         render.main()
 
 
@@ -390,6 +390,47 @@ class CacheFile(unittest.TestCase):
         self.assertEqual(render.load_cache("/nonexistent/dir/cache.json"), {})
 
 
+class EnvDefaults(unittest.TestCase):
+    """The argparse defaults read the env through common.env: the prefixed
+    name wins, and the bare pre-#217 spelling still feeds the default."""
+
+    def parse(self, env, *argv):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, "argv", ["render.py", *argv]):
+            args, _token = render.parse_args()
+        return args
+
+    def test_user_default_reads_the_env_name(self):
+        self.assertEqual(self.parse({"GH_USER": "bare"},
+                                    "--token", "t").user, "bare")
+        both = {"GH_USER": "bare", "GH_WIDGETS_GH_USER": "prefixed"}
+        self.assertEqual(self.parse(both, "--token", "t").user, "prefixed")
+
+    def test_token_file_default_reads_the_env_name(self):
+        args = self.parse({"GH_TOKEN_FILE": "/bare/token"},
+                          "--user", "u", "--token", "t")
+        self.assertEqual(args.token_file, "/bare/token")
+        both = {"GH_TOKEN_FILE": "/bare/token",
+                "GH_WIDGETS_GH_TOKEN_FILE": "/prefixed/token"}
+        args = self.parse(both, "--user", "u", "--token", "t")
+        self.assertEqual(args.token_file, "/prefixed/token")
+
+    def test_out_dir_default_reads_the_env_name(self):
+        args = self.parse({"OUT_DIR": "/bare/out"}, "--user", "u",
+                          "--token", "t")
+        self.assertEqual(args.out_dir, "/bare/out")
+        both = {"OUT_DIR": "/bare/out", "GH_WIDGETS_OUT_DIR": "/prefixed/out"}
+        args = self.parse(both, "--user", "u", "--token", "t")
+        self.assertEqual(args.out_dir, "/prefixed/out")
+
+    def test_theme_default_reads_the_env_name(self):
+        args = self.parse({"THEME": "gruvbox"}, "--user", "u", "--token", "t")
+        self.assertEqual(args.theme, "gruvbox")
+        both = {"THEME": "gruvbox", "GH_WIDGETS_THEME": "github-dark"}
+        args = self.parse(both, "--user", "u", "--token", "t")
+        self.assertEqual(args.theme, "github-dark")
+
+
 class WindowedCalendar(unittest.TestCase):
     def calendar_vars(self, api):
         return [v for q, v in api.calls if "contributionCalendar" in q]
@@ -404,7 +445,7 @@ class WindowedCalendar(unittest.TestCase):
         api = FakeAPI()
         api.full_calendar = all_days
         with mock.patch.object(render, "gql", api), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             _, cold_days = render.fetch("t", "me")
 
         self.assertEqual(cold_days, all_days)
@@ -427,7 +468,7 @@ class WindowedCalendar(unittest.TestCase):
         api = FakeAPI()
         api.full_calendar = all_days
         with mock.patch.object(render, "gql", api), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             render.fetch("t", "me")
 
         served = api.served  # one sorted date list per calendar call
@@ -457,7 +498,7 @@ class WindowedCalendar(unittest.TestCase):
         api = FakeAPI()
         api.full_calendar = all_days
         with mock.patch.object(render, "gql", api), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             user_cold, cold_days = render.fetch("t", "me")
             api.calls.clear()
             user_warm, warm_days = render.fetch("t", "me", cached)
@@ -633,7 +674,7 @@ class ProfilePagination(unittest.TestCase):
 
     def fetched(self, api, **kwargs):
         with mock.patch.object(render, "gql", api), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             user, _days = render.fetch("t", "me", **kwargs)
         return user
 
@@ -709,7 +750,7 @@ class ProfilePagination(unittest.TestCase):
                                               "endCursor": None},
                                  "nodes": []}}}
         with mock.patch.object(render, "gql", gql_fn), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -755,7 +796,7 @@ class ProfilePagination(unittest.TestCase):
             {"pageInfo": {"hasNextPage": True, "endCursor": "LOOP"},
              "nodes": [repo_node()]}])
         with mock.patch.object(render, "gql", gql_fn), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -769,7 +810,7 @@ class ProfilePagination(unittest.TestCase):
             {"pageInfo": {"hasNextPage": True, "endCursor": None},
              "nodes": [repo_node()]}])
         with mock.patch.object(render, "gql", gql_fn), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             with self.assertRaises(render.common.PaginationLimitError) as raised:
                 render.fetch("t", "me")
         self.assertIn("repositories", str(raised.exception))
@@ -854,7 +895,7 @@ class ForksReceived(unittest.TestCase):
         # is never in `nodes`. The same filters feed stars and public repos.
         api = FakeAPI()
         with mock.patch.object(render, "gql", api), \
-                mock.patch.dict(os.environ, {"GH_EXTRA_ORGS": ""}):
+                mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             render.fetch("t", "me", {})
         core = next(q for q, _ in api.calls if "repositories" in q)
         self.assertIn("forkCount", core)

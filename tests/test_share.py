@@ -114,9 +114,11 @@ class UnitSharing(unittest.TestCase):
         self.impact_cache = self.root / "impact-cache.json"
         self.environment = {
             "GH_WIDGETS_SHARE_DIR": str(self.root / "share"),
-            "CACHE_FILE": str(self.profile_cache), "GH_EXTRA_ORGS": "",
-            "GH_EXTRA_INSIDERS": "Added", "GH_EXTRA_EMAILS": "extra@example.org",
-            "RESP_MIN_PRS": "1", "INVOCATION_ID": "unit-run-one",
+            "GH_WIDGETS_CACHE_FILE": str(self.profile_cache),
+            "GH_WIDGETS_GH_EXTRA_ORGS": "",
+            "GH_WIDGETS_GH_EXTRA_INSIDERS": "Added",
+            "GH_WIDGETS_GH_EXTRA_EMAILS": "extra@example.org",
+            "GH_WIDGETS_RESP_MIN_PRS": "1", "INVOCATION_ID": "unit-run-one",
         }
 
     def run_renderer(self, module, *, resync=False):

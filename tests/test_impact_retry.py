@@ -43,7 +43,7 @@ class TestFailedRepoIsRetried(unittest.TestCase):
 
     def moved_with(self, totals, cached, *, resync=False):
         seen = []
-        with mock.patch.dict(os.environ, {"IMPACT_REPO_PINS": ""}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_IMPACT_REPO_PINS": ""}):
             self.loc.update_loc(set(totals), totals, cached, resync, {"e@x"},
                                 blame_fn=lambda moved, *_a: seen.extend(moved))
         return seen
@@ -86,7 +86,7 @@ class TestFailedRepoIsRetried(unittest.TestCase):
         """End to end through blame_moved: the row comes back to the card."""
         totals = {"o/r": {"branch": "main", "head": "h1"}}
         cached = {"o/r": {"error": "clone_failed", "head": "h1"}}
-        with mock.patch.dict(os.environ, {"IMPACT_REPO_PINS": ""}), \
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_IMPACT_REPO_PINS": ""}), \
                 mock.patch.object(self.loc, "prefetched_clones",
                                   self._clones_ok), \
                 mock.patch.object(self.loc, "counts_for",

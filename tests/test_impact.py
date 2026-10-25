@@ -11,6 +11,7 @@ These tests pin the CAPABILITY, not the timing — a timing assertion would be
 flaky on a shared box, and a slow run is not a wrong run. The invariant that
 matters is that parallelism does not change the numbers.
 """
+# pylint: disable=too-many-lines
 import importlib.util
 import io
 import json
@@ -493,11 +494,11 @@ class TestCloneLookahead(unittest.TestCase):
 
     def test_lookahead_is_at_least_one(self):
         for raw in ("0", "-5"):
-            with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": raw}):
+            with mock.patch.dict(os.environ, {"GH_WIDGETS_CLONE_LOOKAHEAD": raw}):
                 self.assertEqual(render_impact.clone_lookahead(), 1)
 
     def test_lookahead_rejects_garbage(self):
-        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "lots"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_CLONE_LOOKAHEAD": "lots"}):
             with self.assertRaises(SystemExit):
                 render_impact.clone_lookahead()
 
@@ -791,6 +792,39 @@ class TestTopRowsArgument(unittest.TestCase):
                 self.parse("-n", "five")
 
 
+class EnvDefaults(unittest.TestCase):
+    """The argparse defaults read the env through common.env: the prefixed
+    name wins, and the bare pre-#217 spelling still feeds the default."""
+
+    CASES = (
+        ("user", "GH_USER", "bare", "prefixed", ("--token", "t")),
+        ("token_file", "GH_TOKEN_FILE", "/bare/t", "/prefixed/t",
+         ("--user", "u", "--token", "t")),
+        ("out_dir", "OUT_DIR", "/bare/out", "/prefixed/out",
+         ("--user", "u", "--token", "t")),
+        ("theme", "THEME", "gruvbox", "github-dark",
+         ("--user", "u", "--token", "t")),
+        ("cache_file", "CACHE_FILE", "/bare/c.json", "/prefixed/c.json",
+         ("--user", "u", "--token", "t")),
+    )
+
+    def parse(self, env, *argv):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, "argv",
+                                  ["render-impact.py", *argv]):
+            args, _token = render_impact.parse_args()
+        return args
+
+    def test_argparse_defaults_read_the_env_name(self):
+        for attr, bare_name, bare, prefixed, argv in self.CASES:
+            with self.subTest(attr=attr):
+                self.assertEqual(
+                    getattr(self.parse({bare_name: bare}, *argv), attr), bare)
+                both = {bare_name: bare, "GH_WIDGETS_" + bare_name: prefixed}
+                self.assertEqual(
+                    getattr(self.parse(both, *argv), attr), prefixed)
+
+
 class TestRepoPins(unittest.TestCase):
     """`IMPACT_REPO_PINS` fixes the commit each repo is blamed at.
 
@@ -811,8 +845,9 @@ class TestRepoPins(unittest.TestCase):
         return str(path)
 
     def load(self, payload):
-        with mock.patch.dict(os.environ,
-                             {"IMPACT_REPO_PINS": self.manifest(payload)}):
+        with mock.patch.dict(
+                os.environ,
+                {"GH_WIDGETS_IMPACT_REPO_PINS": self.manifest(payload)}):
             return self.loc.load_repo_pins()
 
     def test_no_manifest_means_no_pins(self):
@@ -840,8 +875,9 @@ class TestRepoPins(unittest.TestCase):
             self.load("{not json")
 
     def test_missing_manifest_is_fatal(self):
-        with mock.patch.dict(os.environ,
-                             {"IMPACT_REPO_PINS": "/nonexistent/pins.json"}):
+        with mock.patch.dict(
+                os.environ,
+                {"GH_WIDGETS_IMPACT_REPO_PINS": "/nonexistent/pins.json"}):
             with self.assertRaises(SystemExit):
                 self.loc.load_repo_pins()
 
@@ -853,8 +889,8 @@ class TestPinnedUpdateLoc(unittest.TestCase):
 
     def moved_with(self, pins, totals):
         seen = []
-        env = {"IMPACT_REPO_PINS": ""} if pins is None else {
-            "IMPACT_REPO_PINS": self.write(pins)}
+        env = {"GH_WIDGETS_IMPACT_REPO_PINS": ""} if pins is None else {
+            "GH_WIDGETS_IMPACT_REPO_PINS": self.write(pins)}
         with mock.patch.dict(os.environ, env):
             self.loc.update_loc(list(totals), totals, {}, True, {"e@x"},
                                 blame_fn=lambda moved, *_a: seen.extend(moved))

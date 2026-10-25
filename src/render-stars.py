@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Render cumulative star history for public repositories (stdlib only).
 
-GH_STAR_REPOS / --repos: comma-separated owner/repo names.
-OUT_DIR, THEME, GH_TOKEN and GH_TOKEN_FILE match the other renderers.
-STARS_CACHE_FILE / --cache-file defaults to /var/lib/gh-widgets/stars-cache.json;
-CACHE_FILE is deliberately ignored (the service uses it for the profile).
+GH_WIDGETS_GH_STAR_REPOS / --repos: comma-separated owner/repo names.
+GH_WIDGETS_OUT_DIR, GH_WIDGETS_THEME, GH_TOKEN and GH_WIDGETS_GH_TOKEN_FILE
+match the other renderers.
+GH_WIDGETS_STARS_CACHE_FILE / --cache-file defaults to
+/var/lib/gh-widgets/stars-cache.json;
+GH_WIDGETS_CACHE_FILE is deliberately ignored (the service uses it for the
+profile cache).
 
 GitHub supplies only CURRENT stargazers: users who un-starred are absent.
 The list is capped at 40,000; the graph discloses truncation, while the current
@@ -176,19 +179,24 @@ def load_inputs(path, token, repo):
 
 def parse_args():
     p = argparse.ArgumentParser(description='Render public repository star-history SVGs.')
-    p.add_argument('--repos', default=os.environ.get('GH_STAR_REPOS', ''),
-                   help='Comma-separated owner/repo list (env: GH_STAR_REPOS)')
+    p.add_argument('--repos', default=common.env('GH_WIDGETS_GH_STAR_REPOS', ''),
+                   help='Comma-separated owner/repo list (env: GH_WIDGETS_GH_STAR_REPOS)')
     p.add_argument('--token', default=os.environ.get('GH_TOKEN'), help='GitHub PAT (env: GH_TOKEN)')
-    p.add_argument('--token-file', default=os.environ.get('GH_TOKEN_FILE'), help='Token file (env: GH_TOKEN_FILE)')
-    p.add_argument('--out-dir', default=os.environ.get('OUT_DIR', './widgets'), help='SVG directory (env: OUT_DIR)')
-    p.add_argument('--theme', default=os.environ.get('THEME', 'tokyonight'), choices=list(THEMES), help='Palette (env: THEME)')
-    p.add_argument('--cache-file', default=os.environ.get('STARS_CACHE_FILE', DEFAULT_CACHE_FILE),
-                   help='Separate star cache (env: STARS_CACHE_FILE; ignores CACHE_FILE)')
+    p.add_argument('--token-file', default=common.env('GH_WIDGETS_GH_TOKEN_FILE'),
+                   help='Token file (env: GH_WIDGETS_GH_TOKEN_FILE)')
+    p.add_argument('--out-dir', default=common.env('GH_WIDGETS_OUT_DIR', './widgets'),
+                   help='SVG directory (env: GH_WIDGETS_OUT_DIR)')
+    p.add_argument('--theme', default=common.env('GH_WIDGETS_THEME', 'tokyonight'),
+                   choices=list(THEMES), help='Palette (env: GH_WIDGETS_THEME)')
+    p.add_argument('--cache-file', default=common.env('GH_WIDGETS_STARS_CACHE_FILE',
+                                                      DEFAULT_CACHE_FILE),
+                   help='Separate star cache (env: GH_WIDGETS_STARS_CACHE_FILE; '
+                        'ignores CACHE_FILE and its prefixed spelling)')
     args = p.parse_args()
     repos = [repo.strip() for repo in args.repos.split(',') if repo.strip()]
     if not repos or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+', repo)
                         or repo.split('/')[1] in ('.', '..') for repo in repos):
-        p.error('--repos (or GH_STAR_REPOS) must list owner/repo names')
+        p.error('--repos (or GH_WIDGETS_GH_STAR_REPOS) must list owner/repo names')
     configured_names = {}
     for repo in repos:
         configured_names.setdefault(repo.lower(), repo)
@@ -199,7 +207,7 @@ def parse_args():
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding='utf-8').strip()
     if not token:
-        p.error('--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required')
+        p.error('--token, --token-file, GH_TOKEN, or GH_WIDGETS_GH_TOKEN_FILE required')
     return args, token
 
 

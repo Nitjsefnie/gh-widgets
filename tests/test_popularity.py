@@ -234,7 +234,9 @@ class Acquisition(unittest.TestCase):
                                            b'Old Name\x1fowner@example.org\0'
                                            b'Other Name\x1fwork@example.org\0'
                                            b'Past Name\x1f42+Owner@users.noreply.github.com\0', b'')]
-        with mock.patch.dict(os.environ, {'GH_EXTRA_EMAILS': 'work@example.org'}), \
+        with mock.patch.dict(os.environ,
+                             {'GH_WIDGETS_GH_EXTRA_EMAILS':
+                              'work@example.org'}), \
                 mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=pages), \
                 mock.patch.object(popularity.subprocess, 'run', side_effect=git):
             _, scores = popularity.fetch_scores('t')
@@ -521,7 +523,8 @@ class CardAndCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             token_file = Path(directory) / 'token'
             token_file.write_text('from-file\n', encoding='utf-8')
-            env = {'GH_TOKEN_FILE': str(token_file), 'OUT_DIR': directory, 'THEME': 'gruvbox'}
+            env = {'GH_WIDGETS_GH_TOKEN_FILE': str(token_file),
+                   'GH_WIDGETS_OUT_DIR': directory, 'GH_WIDGETS_THEME': 'gruvbox'}
             with mock.patch.dict(os.environ, env, clear=True), \
                     mock.patch.object(sys, 'argv', ['render-popularity.py']):
                 args, token = popularity.parse_args()
@@ -535,6 +538,31 @@ class CardAndCLI(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 popularity.parse_args()
+
+    def parse(self, env):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, 'argv',
+                                  ['render-popularity.py', '--token', 't']):
+            args, _token = popularity.parse_args()
+        return args
+
+    def test_token_file_default_reads_the_env_name(self):
+        self.assertEqual(self.parse(
+            {'GH_TOKEN_FILE': '/bare/t'}).token_file, '/bare/t')
+        both = {'GH_TOKEN_FILE': '/bare/t',
+                'GH_WIDGETS_GH_TOKEN_FILE': '/prefixed/t'}
+        self.assertEqual(self.parse(both).token_file, '/prefixed/t')
+
+    def test_out_dir_default_reads_the_env_name(self):
+        self.assertEqual(self.parse(
+            {'OUT_DIR': '/bare/out'}).out_dir, '/bare/out')
+        both = {'OUT_DIR': '/bare/out', 'GH_WIDGETS_OUT_DIR': '/prefixed/out'}
+        self.assertEqual(self.parse(both).out_dir, '/prefixed/out')
+
+    def test_theme_default_reads_the_env_name(self):
+        self.assertEqual(self.parse({'THEME': 'gruvbox'}).theme, 'gruvbox')
+        both = {'THEME': 'gruvbox', 'GH_WIDGETS_THEME': 'github-dark'}
+        self.assertEqual(self.parse(both).theme, 'github-dark')
 
     def test_help_from_other_directory(self):
         with tempfile.TemporaryDirectory() as directory:

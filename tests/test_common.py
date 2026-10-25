@@ -59,7 +59,8 @@ class InsiderSet(unittest.TestCase):
         self.assertIn("myorg", s)
 
     def test_reads_env_when_extra_omitted(self):
-        with mock.patch.dict(os.environ, {"GH_EXTRA_INSIDERS": "a, b ,"}):
+        with mock.patch.dict(os.environ,
+                             {"GH_WIDGETS_GH_EXTRA_INSIDERS": "a, b ,"}):
             self.assertEqual(common.insider_set("Me", []), {"me", "a", "b"})
 
     def test_empty_names_are_dropped(self):
@@ -220,7 +221,8 @@ class OurEmails(unittest.TestCase):
         self.assertIn("me@example.com", e)
 
     def test_reads_env_when_extra_omitted(self):
-        with mock.patch.dict(os.environ, {"GH_EXTRA_EMAILS": "x@y.z"}):
+        with mock.patch.dict(os.environ,
+                             {"GH_WIDGETS_GH_EXTRA_EMAILS": "x@y.z"}):
             self.assertIn("x@y.z", common.our_emails("Octocat", 1))
 
     def test_lookalike_address_is_NOT_ours(self):

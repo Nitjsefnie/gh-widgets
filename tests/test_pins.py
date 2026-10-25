@@ -31,6 +31,8 @@ def _load(name, relative):
 
 resolve_pins = _load("resolve_pins", "scripts/resolve-repo-pins.py")
 impact_loc = _load("impact_loc_under_test", "src/impact_loc.py")
+impact_loc.configure(_load("ghwidgets_common_under_test",
+                           "src/ghwidgets_common.py"))
 
 
 class TestPinManifest(unittest.TestCase):
@@ -74,7 +76,9 @@ class TestWriteManifest(unittest.TestCase):
     def test_written_manifest_loads_through_the_renderer(self):
         pins = {"o/a": {"branch": "main", "head": "aaa"}}
         resolve_pins.write_manifest(self.path, pins)
-        with mock.patch.dict(os.environ, {"IMPACT_REPO_PINS": str(self.path)}):
+        with mock.patch.dict(
+                os.environ,
+                {"GH_WIDGETS_IMPACT_REPO_PINS": str(self.path)}):
             self.assertEqual(impact_loc.load_repo_pins(), pins)
 
     def test_an_empty_manifest_is_refused(self):

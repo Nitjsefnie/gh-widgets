@@ -245,7 +245,7 @@ class TestCloneSourceMirror(unittest.TestCase):
             dest.mkdir()
             with mock.patch.dict(os.environ, {}, clear=True):
                 if mirror_state != "unset":
-                    os.environ["CLONE_SOURCE_DIR"] = str(root)
+                    os.environ["GH_WIDGETS_CLONE_SOURCE_DIR"] = str(root)
                 with mock.patch.object(
                         impact_clone, "_run_clone_command",
                         return_value=subprocess.CompletedProcess([], 0)) as run:

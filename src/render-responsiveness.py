@@ -2,7 +2,7 @@
 """
 gh-widgets — render the self-hosted "External Responsiveness" SVG.
 
-Writes ONE SVG to OUT_DIR:
+Writes ONE SVG to GH_WIDGETS_OUT_DIR:
   responsiveness.svg   one ranked table of the external repos where we do
                        high-volume work AND get fast turnaround: per repo,
                        n = PRs authored by the account that are merged or
@@ -37,26 +37,26 @@ Those PRs are counted as skipped and reported on stdout, rather than quietly
 shortening a repo's history.
 
 Configuration (env vars or CLI flags, in that order of precedence):
-  GH_USER     (required) GitHub username
+  GH_WIDGETS_GH_USER  (required) GitHub username
   GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
               is NOT needed: identity comes from login + databaseId + orgs.
-              (can also be read from a file via --token-file or GH_TOKEN_FILE)
-  OUT_DIR     where to write the SVG (default: ./widgets)
-  CACHE_FILE  the PR cache, shared with render-impact.py
+              (or --token-file / GH_WIDGETS_GH_TOKEN_FILE)
+  GH_WIDGETS_OUT_DIR  where to write the SVG (default: ./widgets)
+  GH_WIDGETS_CACHE_FILE  the PR cache, shared with render-impact.py
               (default: /var/lib/gh-widgets/impact-cache.json)
-  THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
+  GH_WIDGETS_THEME  tokyonight (default) | catppuccin | gruvbox | github-dark
 
-  GH_EXTRA_INSIDERS  extra owner logins to treat as ours (comma-separated)
-  RESP_GAMMA         volume exponent                (default 0.5)
-  RESP_HALF_LIFE_H   hours at which speed hits 0.5  (default 24.0)
-  RESP_MIN_PRS       PRs needed to be ranked         (default 3)
+  GH_WIDGETS_GH_EXTRA_INSIDERS  extra owner logins that are ours (comma-sep)
+  GH_WIDGETS_RESP_GAMMA         volume exponent       (default 0.5)
+  GH_WIDGETS_RESP_HALF_LIFE_H   hours at speed 0.5    (default 24.0)
+  GH_WIDGETS_RESP_MIN_PRS       PRs ranked            (default 3)
 
 Who counts as external is DERIVED from the token's own account (login + orgs +
-GH_EXTRA_INSIDERS) via common.fetch_identity, exactly as render-impact.py
-derives it — so a cache carrying no insider set is no longer a hard error, it
-is simply not consulted. Only the degraded path below still reads the cached
-set. GH_EXTRA_INSIDERS must match render-impact.py's, since both write the
-derived set into the same cache key.
+GH_WIDGETS_GH_EXTRA_INSIDERS) via common.fetch_identity, exactly as
+render-impact.py derives it — so a cache carrying no insider set is no longer
+a hard error, it is simply not consulted. Only the degraded path below still
+reads the cached set. GH_WIDGETS_GH_EXTRA_INSIDERS must match
+render-impact.py's, and both write the derived set into the same cache key.
 
 Fails gracefully, same contract as the other two renderers: a failed fetch
 renders from the cache, prints one line naming the acquisition that failed
@@ -129,9 +129,9 @@ def metric_knobs():
     than silently reverting to the default — see common.env_float.
     """
     return {
-        "gamma":     common.env_float("RESP_GAMMA", 0.5),
-        "half_life": common.env_float("RESP_HALF_LIFE_H", 24.0),
-        "min_prs":   int(common.env_float("RESP_MIN_PRS", 3)),
+        "gamma":     common.env_float("GH_WIDGETS_RESP_GAMMA", 0.5),
+        "half_life": common.env_float("GH_WIDGETS_RESP_HALF_LIFE_H", 24.0),
+        "min_prs":   int(common.env_float("GH_WIDGETS_RESP_MIN_PRS", 3)),
     }
 
 
@@ -392,30 +392,35 @@ def render_responsiveness(C, scored):
 def parse_args():
     p = argparse.ArgumentParser(
         description="Render the self-hosted External Responsiveness SVG.")
-    p.add_argument("--user", default=os.environ.get("GH_USER"),
-                   help="GitHub username (env: GH_USER)")
+    p.add_argument("--user", default=common.env("GH_WIDGETS_GH_USER"),
+                   help="GitHub username (env: GH_WIDGETS_GH_USER)")
     p.add_argument("--token", default=os.environ.get("GH_TOKEN"),
                    help="GitHub PAT (env: GH_TOKEN)")
-    p.add_argument("--token-file", default=os.environ.get("GH_TOKEN_FILE"),
-                   help="Read token from a file (env: GH_TOKEN_FILE)")
-    p.add_argument("--out-dir", default=os.environ.get("OUT_DIR", "./widgets"),
-                   help="Where to write the SVG (env: OUT_DIR)")
-    p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
+    p.add_argument("--token-file",
+                   default=common.env("GH_WIDGETS_GH_TOKEN_FILE"),
+                   help="Read token from a file (env: GH_WIDGETS_GH_TOKEN_FILE)")
+    p.add_argument("--out-dir",
+                   default=common.env("GH_WIDGETS_OUT_DIR", "./widgets"),
+                   help="Where to write the SVG (env: GH_WIDGETS_OUT_DIR)")
+    p.add_argument("--theme",
+                   default=common.env("GH_WIDGETS_THEME", "tokyonight"),
                    choices=list(THEMES),
-                   help="Color theme (env: THEME)")
+                   help="Color theme (env: GH_WIDGETS_THEME)")
     p.add_argument("--cache-file",
-                   default=os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE),
+                   default=common.env("GH_WIDGETS_CACHE_FILE",
+                                      DEFAULT_CACHE_FILE),
                    help="JSON cache path, shared with render-impact.py "
-                        "(env: CACHE_FILE)")
+                        "(env: GH_WIDGETS_CACHE_FILE)")
     args = p.parse_args()
 
     if not args.user:
-        p.error("--user (or env GH_USER) is required")
+        p.error("--user (or env GH_WIDGETS_GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
-        p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+        p.error("--token, --token-file, GH_TOKEN, or "
+                "GH_WIDGETS_GH_TOKEN_FILE required")
     return args, token
 
 
