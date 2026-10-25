@@ -9,14 +9,14 @@ who counts as an insider, and which commit-author addresses count as ours.
 
 Identity is DERIVED, not configured. `fetch_identity` asks the API who the
 token's account is and which orgs it belongs to; the environment can only ADD
-to that (GH_EXTRA_INSIDERS, GH_EXTRA_EMAILS), never replace it. An override
-would let a stale value silently reintroduce the drift this module removes.
+to that, never replace it. An override would let a stale value silently
+reintroduce the drift this module removes.
 
 Note on scopes: the query deliberately does NOT request `user.email`. That
 field requires `read:user`, which the production token does not carry, and a
 field-level scope failure rejects the ENTIRE query — so asking for it would
 break identity resolution outright. Addresses that GitHub will not tell us
-about go in GH_EXTRA_EMAILS.
+about go in GH_WIDGETS_GH_EXTRA_EMAILS.
 
 Loading: both scripts load this file by explicit path relative to their own
 __file__ (see `load_common` usage in each), because deployment renames
@@ -489,13 +489,13 @@ query($login: String!, $cursor: String) {
 
 def insider_set(login, orgs, extra=None):
     """Casefolded set of owner logins that are NOT external: the account
-    itself, every org it belongs to, plus anything in GH_EXTRA_INSIDERS.
+    itself, every org it belongs to, plus GH_WIDGETS_GH_EXTRA_INSIDERS.
 
     Additive by construction — there is no way to remove a fetched org, so a
     stale configuration cannot make an owned repo look external.
     """
     if extra is None:
-        extra = env_list("GH_EXTRA_INSIDERS")
+        extra = env_list("GH_WIDGETS_GH_EXTRA_INSIDERS")
     return frozenset(n.casefold() for n in [login, *orgs, *extra] if n)
 
 
@@ -517,7 +517,7 @@ def noreply_addresses(login, database_id):
 def our_emails(login, database_id, extra=None):
     """Lowercased set of commit-author addresses that count as ours."""
     if extra is None:
-        extra = env_list("GH_EXTRA_EMAILS")
+        extra = env_list("GH_WIDGETS_GH_EXTRA_EMAILS")
     return frozenset(noreply_addresses(login, database_id)
                      | {e.strip().lower() for e in extra if e.strip()})
 

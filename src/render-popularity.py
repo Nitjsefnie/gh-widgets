@@ -241,15 +241,18 @@ def render_popularity(C, user, scores):
 def parse_args():
     p = argparse.ArgumentParser(description='Render public repository popularity SVG.')
     p.add_argument('--token', default=os.environ.get('GH_TOKEN'), help='GitHub PAT (env: GH_TOKEN)')
-    p.add_argument('--token-file', default=os.environ.get('GH_TOKEN_FILE'), help='Token file (env: GH_TOKEN_FILE)')
-    p.add_argument('--out-dir', default=os.environ.get('OUT_DIR', './widgets'), help='SVG directory (env: OUT_DIR)')
-    p.add_argument('--theme', default=os.environ.get('THEME', 'tokyonight'), choices=list(THEMES), help='Palette (env: THEME)')
+    p.add_argument('--token-file', default=common.env('GH_WIDGETS_GH_TOKEN_FILE'),
+                   help='Token file (env: GH_WIDGETS_GH_TOKEN_FILE)')
+    p.add_argument('--out-dir', default=common.env('GH_WIDGETS_OUT_DIR', './widgets'),
+                   help='SVG directory (env: GH_WIDGETS_OUT_DIR)')
+    p.add_argument('--theme', default=common.env('GH_WIDGETS_THEME', 'tokyonight'),
+                   choices=list(THEMES), help='Palette (env: GH_WIDGETS_THEME)')
     args = p.parse_args()
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding='utf-8').strip()
     if not token:
-        p.error('--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required')
+        p.error('--token, --token-file, GH_TOKEN, or GH_WIDGETS_GH_TOKEN_FILE required')
     return args, token
 
 

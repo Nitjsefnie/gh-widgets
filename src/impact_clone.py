@@ -152,7 +152,7 @@ def _wait_for_clone_launches():
 
 
 def load_repo_pins():
-    """Read the commit manifest named by ``IMPACT_REPO_PINS``.
+    """Read the commit manifest named by ``GH_WIDGETS_IMPACT_REPO_PINS``.
 
     An empty result means "blame whatever the default branch tips are", which
     is what production does. When a manifest IS named, every failure below is
@@ -160,25 +160,25 @@ def load_repo_pins():
     comparison blaming different trees while still reporting a clean run,
     which is the exact outcome pinning exists to prevent.
     """
-    path = os.environ.get("IMPACT_REPO_PINS", "").strip()
+    path = common.env("GH_WIDGETS_IMPACT_REPO_PINS", "").strip()
     if not path:
         return {}
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise SystemExit(f"error: IMPACT_REPO_PINS={path}: {exc}") from exc
+        raise SystemExit(f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: {exc}") from exc
     if not isinstance(raw, dict):
-        raise SystemExit(f"error: IMPACT_REPO_PINS={path}: not an object")
+        raise SystemExit(f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: not an object")
     pins = {}
     for repo, entry in raw.items():
         head = entry.get("head") if isinstance(entry, dict) else None
         branch = entry.get("branch") or "" if isinstance(entry, dict) else None
         if not isinstance(head, str) or not head:
             raise SystemExit(
-                f"error: IMPACT_REPO_PINS={path}: {repo} has no head commit")
+                f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: {repo} has no head commit")
         if not isinstance(branch, str):
             raise SystemExit(
-                f"error: IMPACT_REPO_PINS={path}: {repo} has a non-string branch")
+                f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: {repo} has a non-string branch")
         pins[repo] = {"branch": branch, "head": head}
     return pins
 
@@ -219,14 +219,15 @@ def clone_repo(repo, branch, dest, head=None):
     # (GIT_OUTPUT_CAP_MB, default 512 MiB), independent of clone size.
     # Peak memory of a --resync is dominated by concurrent clones, not blame,
     # so cap what each clone's index-pack allocates. Its thread count and delta
-    # window buy throughput that CLONE_LOOKAHEAD concurrent clones already
-    # provide, while each thread holds its own delta window.
-    cmd = ["git", "-c", f"pack.threads={common.env_float('CLONE_PACK_THREADS', 1):.0f}",
-           "-c", f"pack.windowMemory={int(common.env_float('CLONE_WINDOW_MB', 32))}m",
+    # window buy throughput that GH_WIDGETS_CLONE_LOOKAHEAD concurrent clones
+    # already provide, while each thread holds its own delta window.
+    cmd = ["git",
+           "-c", f"pack.threads={common.env_float('GH_WIDGETS_CLONE_PACK_THREADS', 1):.0f}",
+           "-c", f"pack.windowMemory={int(common.env_float('GH_WIDGETS_CLONE_WINDOW_MB', 32))}m",
            "clone", "--single-branch"]
-    # CLONE_SOURCE_DIR points at local <owner>__<name> mirrors for offline
-    # benchmark runs; without a matching mirror, the normal GitHub clone stays.
-    source_dir = os.environ.get("CLONE_SOURCE_DIR")
+    # GH_WIDGETS_CLONE_SOURCE_DIR points at local <owner>__<name> mirrors
+    # for offline runs; without a match, the normal GitHub clone stays.
+    source_dir = common.env("GH_WIDGETS_CLONE_SOURCE_DIR")
     local_repo = (Path(source_dir) / repo.replace("/", "__")
                   if source_dir else None)
     if local_repo is not None and local_repo.is_dir():
@@ -249,7 +250,7 @@ def clone_lookahead():
     """Return clone prefetch depth, clamped to the resource policy ceiling."""
     # Keep room above the measured depth-8 workflow while bounding transfers
     # and scratch space when an environment value is accidentally huge.
-    return min(16, max(1, int(common.env_float("CLONE_LOOKAHEAD", 3))))
+    return min(16, max(1, int(common.env_float("GH_WIDGETS_CLONE_LOOKAHEAD", 3))))
 
 
 _SCRATCH_DIRS = set()
@@ -390,7 +391,8 @@ def scavenge_scratch_dirs():
     """Remove abandoned impact clones older than the configured age."""
     # Age is the cheap stale-candidate gate. A cross-process owner lock is
     # required before deletion so a live sibling render remains untouched.
-    max_age = max(0, common.env_float("IMPACT_SCRATCH_MAX_AGE_HOURS", 24))
+    max_age = max(0, common.env_float(
+        "GH_WIDGETS_IMPACT_SCRATCH_MAX_AGE_HOURS", 24))
     cutoff = time.time() - max_age * 60 * 60
     active = set(_SCRATCH_DIRS)
     for scratch in Path(tempfile.gettempdir()).glob("impact-fame-*"):

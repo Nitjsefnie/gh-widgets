@@ -39,6 +39,36 @@ class CloneModuleExports(unittest.TestCase):
                               getattr(impact_clone, name))
 
 
+class BlameMethodEnvRead(unittest.TestCase):
+    """BLAME_METHOD is read at import, before configure(), so the read
+    keeps its prefixed-first order inline instead of through common.env."""
+
+    def fresh_method(self, env):
+        with mock.patch.dict(os.environ, env):
+            probe_spec = importlib.util.spec_from_file_location(
+                "blame_method_env_probe",
+                Path(__file__).resolve().parents[1] / "src" / "impact_loc.py")
+            if probe_spec is None or probe_spec.loader is None:
+                raise SystemExit("error: cannot load impact_loc.py")
+            module = importlib.util.module_from_spec(probe_spec)
+            probe_spec.loader.exec_module(module)
+        return module.BLAME_METHOD
+
+    def test_import_reads_prefixed_first_with_bare_fallback(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            probe_spec = importlib.util.spec_from_file_location(
+                "blame_method_env_probe_default",
+                Path(__file__).resolve().parents[1] / "src" / "impact_loc.py")
+            if probe_spec is None or probe_spec.loader is None:
+                raise SystemExit("error: cannot load impact_loc.py")
+            module = importlib.util.module_from_spec(probe_spec)
+            probe_spec.loader.exec_module(module)
+        self.assertEqual(module.BLAME_METHOD, "targeted")
+        self.assertEqual(self.fresh_method({"BLAME_METHOD": "fame"}), "fame")
+        both = {"BLAME_METHOD": "fame", "GH_WIDGETS_BLAME_METHOD": "both"}
+        self.assertEqual(self.fresh_method(both), "both")
+
+
 def git(*args, cwd):
     """Run a fixture-repository Git command without network access."""
     subprocess.run(["git", "-C", str(cwd), *args], check=True,
@@ -320,7 +350,7 @@ class TestScratchLifecycle(unittest.TestCase):
         env = {
             "PATH": str(paths["bin_dir"]),
             "TMPDIR": str(paths["scratch_root"]),
-            "CLONE_SOURCE_DIR": str(paths["mirror_root"]),
+            "GH_WIDGETS_CLONE_SOURCE_DIR": str(paths["mirror_root"]),
             "SIGNAL_DIR": str(paths["signals"]),
             "SPAWN_BOUNDARY_FILE": str(paths["boundary"]),
             "SPAWN_RELEASE_FILE": str(paths["release"]),
@@ -435,8 +465,9 @@ class TestScratchLifecycle(unittest.TestCase):
         impact_loc.register_scratch_dir(dest)
         sidecar = dest.with_name(dest.name + ".owner.lock")
         try:
-            with mock.patch.dict(os.environ,
-                                 {"CLONE_SOURCE_DIR": str(mirror.parent)}):
+            with mock.patch.dict(
+                    os.environ,
+                    {"GH_WIDGETS_CLONE_SOURCE_DIR": str(mirror.parent)}):
                 impact_loc.clone_repo("offline/repo", "main", dest)
             self.assertTrue((dest / ".git").is_dir())
             self.assertTrue(sidecar.exists())
@@ -631,7 +662,7 @@ class TestScratchLifecycle(unittest.TestCase):
         env = {
             "PATH": str(bin_dir),
             "TMPDIR": str(scratch_root),
-            "CLONE_SOURCE_DIR": str(mirror_root),
+            "GH_WIDGETS_CLONE_SOURCE_DIR": str(mirror_root),
             "CLONE_CHILD_PID_FILE": str(pid_file),
             "CLONE_DEST_FILE": str(dest_file),
             "CLONE_LATE_FILE": str(late_file),
@@ -723,8 +754,9 @@ class TestScratchLifecycle(unittest.TestCase):
                                create=True), \
                 mock.patch.object(impact_clone.tempfile, "gettempdir",
                                   return_value=str(scratch_root)), \
-                mock.patch.dict(os.environ,
-                                {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
+                mock.patch.dict(
+                    os.environ,
+                    {"GH_WIDGETS_IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
             impact_loc.blame_moved([], {}, set(),
                                    prefetch_fn=lambda _moved: iter(()))
 
@@ -782,7 +814,8 @@ class TestScratchLifecycle(unittest.TestCase):
                         mock.patch.object(impact_clone.tempfile, "gettempdir",
                                           return_value=str(scratch_root)), \
                         mock.patch.dict(
-                            os.environ, {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
+                            os.environ,
+                            {"GH_WIDGETS_IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
                     impact_loc.scavenge_scratch_dirs()
 
                 self.assertFalse(abandoned.exists())
@@ -796,7 +829,7 @@ class TestScratchLifecycle(unittest.TestCase):
                                           return_value=str(scratch_root)), \
                         mock.patch.dict(
                             os.environ,
-                            {"IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
+                            {"GH_WIDGETS_IMPACT_SCRATCH_MAX_AGE_HOURS": "1"}):
                     impact_loc.scavenge_scratch_dirs()
                 self.assertFalse(live.exists())
             finally:
@@ -836,7 +869,8 @@ class TestBoundedGitOutput(unittest.TestCase):
         return ["fame", "-e", "-w", "--format", "json"]
 
     def cap_environment(self):
-        return {"PATH": str(self.bin), "GIT_OUTPUT_CAP_MB": "0.001"}
+        return {"PATH": str(self.bin),
+                "GH_WIDGETS_GIT_OUTPUT_CAP_MB": "0.001"}
 
     def assert_child_killed(self, processes, pid_file, marker):
         self.assertTrue(pid_file.is_file(), "fake git did not start")
@@ -934,11 +968,11 @@ class TestBoundedGitOutput(unittest.TestCase):
         self.assertEqual(raised.exception.returncode, 97)
 
     def test_clone_lookahead_is_clamped_above_eight(self):
-        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "100000"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_CLONE_LOOKAHEAD": "100000"}):
             self.assertEqual(impact_loc.clone_lookahead(), 16)
 
     def test_clone_lookahead_keeps_normal_values_and_default(self):
-        with mock.patch.dict(os.environ, {"CLONE_LOOKAHEAD": "8"}):
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_CLONE_LOOKAHEAD": "8"}):
             self.assertEqual(impact_loc.clone_lookahead(), 8)
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(impact_loc.clone_lookahead(), 3)

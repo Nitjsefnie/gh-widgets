@@ -2,7 +2,7 @@
 """
 gh-widgets — render self-hosted GitHub stat SVGs.
 
-Writes four SVGs to OUT_DIR:
+Writes four SVGs to GH_WIDGETS_OUT_DIR:
   stats.svg      followers, repos, stars, forks, last-year contributions
   streak.svg     current contribution streak, longest streak, year total
   languages.svg  top 5 languages by bytes of code
@@ -11,18 +11,19 @@ Writes four SVGs to OUT_DIR:
                  (how many the maintainers accepted, how many repos)
 
 Configuration (env vars or CLI flags, in that order of precedence):
-  GH_USER     (required) GitHub username
+  GH_WIDGETS_GH_USER  (required) GitHub username
   GH_TOKEN    (required) Personal access token with `public_repo`. `read:user`
               is NOT needed: nothing here reads the account's email.
-              (can also be read from a file via --token-file or GH_TOKEN_FILE)
-  GH_EXTRA_ORGS optional, comma-separated organization logins whose public
-               repos add to stats; empty by default
-  OUT_DIR     where to write the SVGs (default: ./widgets)
-  CACHE_FILE  JSON cache of immutable data (default: /var/lib/gh-widgets/cache.json)
-  THEME       tokyonight (default) | catppuccin | gruvbox | github-dark
+              (or --token-file / GH_WIDGETS_GH_TOKEN_FILE)
+  GH_WIDGETS_GH_EXTRA_ORGS  comma-separated org logins whose public
+              repos add to stats; empty by default
+  GH_WIDGETS_OUT_DIR  where to write the SVGs (default: ./widgets)
+  GH_WIDGETS_CACHE_FILE  JSON cache of immutable data
+              (default: /var/lib/gh-widgets/cache.json)
+  GH_WIDGETS_THEME  tokyonight (default) | catppuccin | gruvbox | github-dark
 
   --resync    discard the cache and refetch everything (wired to run weekly,
-              so no correctness claim rests permanently on MERGED being one-way)
+              so no claim rests permanently on MERGED being one-way)
 
 The SVGs are static files — serve them from any web server with
 `Cache-Control: must-revalidate` or similar, and embed by URL.
@@ -366,10 +367,10 @@ def page_organization_repositories(
 
 
 def extra_org_logins():
-    """Read GH_EXTRA_ORGS, preserving first spelling and order on dedupe."""
+    """Read GH_WIDGETS_GH_EXTRA_ORGS, preserving first spelling and order."""
     logins = []
     seen = set()
-    for login in common.env_list("GH_EXTRA_ORGS"):
+    for login in common.env_list("GH_WIDGETS_GH_EXTRA_ORGS"):
         key = login.casefold()
         if key not in seen:
             seen.add(key)
@@ -808,28 +809,31 @@ def render_languages(C, langs):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Render self-hosted GitHub stat SVGs.")
-    p.add_argument("--user", default=os.environ.get("GH_USER"),
-                   help="GitHub username (env: GH_USER)")
+    p.add_argument("--user", default=common.env("GH_WIDGETS_GH_USER"),
+                   help="GitHub username (env: GH_WIDGETS_GH_USER)")
     p.add_argument("--token", default=os.environ.get("GH_TOKEN"),
                    help="GitHub PAT (env: GH_TOKEN)")
-    p.add_argument("--token-file", default=os.environ.get("GH_TOKEN_FILE"),
-                   help="Read token from a file (env: GH_TOKEN_FILE)")
-    p.add_argument("--out-dir", default=os.environ.get("OUT_DIR", "./widgets"),
-                   help="Where to write SVGs (env: OUT_DIR)")
-    p.add_argument("--theme", default=os.environ.get("THEME", "tokyonight"),
+    p.add_argument("--token-file",
+                   default=common.env("GH_WIDGETS_GH_TOKEN_FILE"),
+                   help="Read token from a file (env: GH_WIDGETS_GH_TOKEN_FILE)")
+    p.add_argument("--out-dir",
+                   default=common.env("GH_WIDGETS_OUT_DIR", "./widgets"),
+                   help="Where to write SVGs (env: GH_WIDGETS_OUT_DIR)")
+    p.add_argument("--theme",
+                   default=common.env("GH_WIDGETS_THEME", "tokyonight"),
                    choices=list(THEMES),
-                   help="Color theme (env: THEME)")
+                   help="Color theme (env: GH_WIDGETS_THEME)")
     p.add_argument("--resync", action="store_true",
                    help="Discard the cache and refetch everything")
     args = p.parse_args()
 
     if not args.user:
-        p.error("--user (or env GH_USER) is required")
+        p.error("--user (or env GH_WIDGETS_GH_USER) is required")
     token = args.token
     if not token and args.token_file:
         token = Path(args.token_file).read_text(encoding="utf-8").strip()
     if not token:
-        p.error("--token, --token-file, GH_TOKEN, or GH_TOKEN_FILE required")
+        p.error("--token, --token-file, GH_TOKEN, or GH_WIDGETS_GH_TOKEN_FILE required")
     return args, token
 
 
@@ -978,7 +982,7 @@ def main():
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    cache_file = os.environ.get("CACHE_FILE", DEFAULT_CACHE_FILE)
+    cache_file = common.env("GH_WIDGETS_CACHE_FILE", DEFAULT_CACHE_FILE)
     with common.timing.track('phase', 'load_inputs'):
         user, prs, issues, fallback = load_inputs(args, token, cache_file)
     with common.timing.track('phase', 'write_cards'):

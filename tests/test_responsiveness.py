@@ -576,6 +576,39 @@ class AtomicWrite(unittest.TestCase):
                              "previous card")
 
 
+class EnvDefaults(unittest.TestCase):
+    """The argparse defaults read the env through common.env: the prefixed
+    name wins, and the bare pre-#217 spelling still feeds the default."""
+
+    CASES = (
+        ("user", "GH_USER", "bare", "prefixed", ("--token", "t")),
+        ("token_file", "GH_TOKEN_FILE", "/bare/t", "/prefixed/t",
+         ("--user", "u", "--token", "t")),
+        ("out_dir", "OUT_DIR", "/bare/out", "/prefixed/out",
+         ("--user", "u", "--token", "t")),
+        ("theme", "THEME", "gruvbox", "github-dark",
+         ("--user", "u", "--token", "t")),
+        ("cache_file", "CACHE_FILE", "/bare/c.json", "/prefixed/c.json",
+         ("--user", "u", "--token", "t")),
+    )
+
+    def parse(self, env, *argv):
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, "argv",
+                                  ["render-responsiveness.py", *argv]):
+            args, _token = resp.parse_args()
+        return args
+
+    def test_argparse_defaults_read_the_env_name(self):
+        for attr, bare_name, bare, prefixed, argv in self.CASES:
+            with self.subTest(attr=attr):
+                self.assertEqual(
+                    getattr(self.parse({bare_name: bare}, *argv), attr), bare)
+                both = {bare_name: bare, "GH_WIDGETS_" + bare_name: prefixed}
+                self.assertEqual(
+                    getattr(self.parse(both, *argv), attr), prefixed)
+
+
 class DegradedPath(unittest.TestCase):
     """A failed fetch renders from the cache and does not touch it."""
 

@@ -221,7 +221,7 @@ def _git_output_cap_bytes():
     # 512 MiB is over six times the linear extrapolation of the measured 5.1 MiB
     # incremental blame output on a 107k-loc repo, with headroom for today's
     # largest 1.65M-loc repo while putting a firm ceiling on pathological output.
-    cap_mb = common.env_float("GIT_OUTPUT_CAP_MB", 512)
+    cap_mb = common.env_float("GH_WIDGETS_GIT_OUTPUT_CAP_MB", 512)
     return max(1, int(cap_mb * 1024 * 1024))
 
 
@@ -519,7 +519,9 @@ def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 #   targeted - blame only the files our own commits touched (the default)
 #   fame     - git-fame over every file (the reference)
 #   both     - run BOTH and fail loudly on any disagreement
-BLAME_METHOD = os.environ.get("BLAME_METHOD", "targeted").strip().lower()
+BLAME_METHOD = os.environ.get(
+    "GH_WIDGETS_BLAME_METHOD",
+    os.environ.get("BLAME_METHOD", "targeted")).strip().lower()
 _DISAGREEMENTS = []
 
 
@@ -546,10 +548,10 @@ def counts_for(repo, dest, emails, clone_s=0.0, wait_s=0.0):
 
 
 def print_method_comparison():
-    """Report the fast path's agreement under ``BLAME_METHOD=both``.
+    """Report the fast path's agreement under ``GH_WIDGETS_BLAME_METHOD=both``.
 
-    Returns the number of disagreeing repos so a caller can fail on it; the
-    count is zero under any other method, where nothing was compared.
+    Returns the number of disagreeing repos so a caller can fail on it; zero
+    under any other method, where nothing was compared.
     """
     if BLAME_METHOD != "both":
         return 0
