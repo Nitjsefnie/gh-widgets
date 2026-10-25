@@ -454,8 +454,7 @@ def require_scan(repository: str, head_sha: str, wait_bound: int,
             FAILED, f"{label} wait bound must be a positive integer")
     clock = time.monotonic if clock is None else clock
     sleep = time.sleep if sleep is None else sleep
-    started_at = clock()
-    deadline = started_at + wait_bound
+    deadline = clock() + wait_bound
     latest: dict[str, Any] | None = None
     while True:
         remaining = deadline - clock()
@@ -465,9 +464,9 @@ def require_scan(repository: str, head_sha: str, wait_bound: int,
                 workflow=workflow)
         timeout = min(60.0, remaining - SECRETS_REPORTING_RESERVE_S)
         try:
-            runs = _scan_runs(
-                transport, repository, workflow, head_sha, timeout)
-            latest = _newest_scan_run(runs, workflow)
+            latest = _newest_scan_run(
+                _scan_runs(transport, repository, workflow, head_sha,
+                           timeout), workflow)
         except AggregationError as exc:
             return Result(
                 FAILED, f"could not read {label} status: {exc}")
