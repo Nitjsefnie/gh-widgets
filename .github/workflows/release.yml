@@ -210,11 +210,11 @@ jobs:
         #     no conclusion yet, and reading its empty conclusion as a
         #     failure would turn every ordinary wait into a red release.
         #
-        # A complete successful tip manifest needs no ancestor checks. For
-        # a comment-share-only gap, aggregate, gitleaks and size-baseline
-        # must still succeed at the tip. Only code legs may skip; only
-        # coverage-ratchet may be absent there. Fill the gap from the
-        # nearest code window's manifest, over record-only windows.
+        # A complete successful tip manifest needs no ancestor checks. In a
+        # comment-share-only gap, aggregate, gitleaks and size-baseline must
+        # still succeed at the tip; only code legs may skip and only
+        # coverage-ratchet may be absent; fill the gap from the nearest
+        # code window's manifest.
         # Unknown windows refuse; cancelled checks always refuse. Incidental
         # checks retain the wider success/skipped/neutral acceptance set.
         run: |
@@ -228,7 +228,7 @@ jobs:
             coverage-ratchet  # coverage-ratchet.yml, job `measure` (renames its check run to `coverage-ratchet`)
             aggregate   # tests.yml, job `aggregate`
             gitleaks    # secrets.yml, job `gitleaks`
-            size-baseline  # size-baseline.yml
+            size-baseline  # size-baseline.yml, job `size-baseline`
           )
           # The only way out of the manifest is to say so out loud. A
           # dispatch can waive; a push has no inputs, so a push-triggered
