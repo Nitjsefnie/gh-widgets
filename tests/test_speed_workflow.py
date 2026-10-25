@@ -16,7 +16,6 @@ workspace, so four dispatch runs reported success while a baseline sat
 unread in the tree. Each of those is now a test that EXECUTES the step.
 """
 # Executed-step controls and guard tripwires cohere here; precedent: test_release_workflow.py.
-# pylint: disable=too-many-lines
 import contextlib
 import importlib.util
 import json

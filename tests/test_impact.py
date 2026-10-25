@@ -11,7 +11,6 @@ These tests pin the CAPABILITY, not the timing — a timing assertion would be
 flaky on a shared box, and a slow run is not a wrong run. The invariant that
 matters is that parallelism does not change the numbers.
 """
-# pylint: disable=too-many-lines
 import importlib.util
 import io
 import json

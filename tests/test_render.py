@@ -6,7 +6,6 @@
 No network: every case is a hand-built contribution calendar.
 """
 # Language SVG regressions belong alongside the other profile renderer tests.
-# pylint: disable=too-many-lines
 import datetime
 import importlib.util
 import io

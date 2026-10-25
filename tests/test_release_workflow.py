@@ -21,7 +21,6 @@ Stdlib unittest, matching the rest of this repo's suite.
 # the stub cannot be shared with another module without inventing the
 # cross-module helper convention this file deliberately has none of. Split
 # when the module next grows; do not split to satisfy a counter.
-# pylint: disable=too-many-lines
 import json
 import re
 import os
@@ -72,7 +71,8 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     OTHER_SHA = "1111111111111111111111111111111111111111"
     TAG = "v9.9.9"
     MANIFEST = ["lint", "pyright", "speed", "pip-audit", "analyze",
-                "unittest", "coverage-ratchet", "aggregate", "gitleaks"]
+                "unittest", "coverage-ratchet", "aggregate", "gitleaks",
+                "size-baseline"]
 
     # The whole manifest, matrix legs and all, as the check-runs API
     # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
@@ -96,6 +96,7 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         ("completed", "success", "coverage-ratchet"),
         ("completed", "success", "aggregate"),
         ("completed", "success", "gitleaks"),
+        ("completed", "success", "size-baseline"),
     ]
 
     # A stand-in for `gh` whose whole world is the files beside it in the
@@ -441,7 +442,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         (self.root / f"check-runs-{anchor}").write_text(
             self._check_runs(self.ALL_GREEN), encoding="utf-8")
         runs = [(status, "skipped" if name.split(" ", maxsplit=1)[0] not in
-                 ("aggregate", "gitleaks") else conclusion, name)
+                 ("aggregate", "gitleaks", "size-baseline") else conclusion, name)
                 for status, conclusion, name in self.ALL_GREEN
                 if name != "coverage-ratchet"]
         self._write_runs(runs)
