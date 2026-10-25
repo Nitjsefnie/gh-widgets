@@ -212,8 +212,7 @@ and the SHA it measured. After
 the full workflow succeeds, `ratchet-push.yml` validates the artifact and
 commits the strictly higher floor to `main`. The `coverage-floor-candidate`
 artifact remains available to inspect; `scripts/ci/coverage_ratchet.py raise`
-keeps this hysteresis and fixed gap. The current 84.6/84.6 record needs no hand
-edit: the first qualifying 86.2 measurement yields an 84.7 floor. Raise coverage by
+keeps this hysteresis and fixed gap. Raise coverage by
 writing tests; never edit a floor to fit a result.
 
 Adding or removing a source module moves the measured population. The `files`
