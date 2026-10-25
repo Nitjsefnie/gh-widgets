@@ -120,16 +120,19 @@ class TestRatchetPushDelivery(unittest.TestCase):
         (root / "data").mkdir()
         target = root / "main" / record_path
         target.parent.mkdir(parents=True)
+        # All three merge inputs share one canonical shape, as the real
+        # writers produce; divergent formatting would read as a whole-file
+        # rewrite on both sides. The base copy defaults to the OLD record —
+        # never to a caller's edited main copy, or the merge would see
+        # main's edit as already-landed.
+        canonical_old = (size_document(old["baseline"])
+                         if record_path == ".github/size-baseline.json"
+                         else (json.dumps(old, sort_keys=True, indent=2)
+                               + "\n").encode())
         if main_bytes is None:
-            # All three merge inputs share one canonical shape, as the
-            # real writers produce; divergent formatting would read as a
-            # whole-file rewrite on both sides.
-            main_bytes = (size_document(old["baseline"])
-                          if record_path == ".github/size-baseline.json"
-                          else (json.dumps(old, sort_keys=True, indent=2)
-                                + "\n").encode())
+            main_bytes = canonical_old
         if base_bytes is None:
-            base_bytes = main_bytes
+            base_bytes = canonical_old
         target.write_bytes(main_bytes)
         name = Path(record_path).name
         if record_path == ".github/size-baseline.json":
@@ -292,9 +295,12 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_a_conflicting_records_edit_drops_green(self):
         """Same entry touched on both sides: drop, not lose.
 
-        The conflict notice is asserted by name — a deliver-on-conflict
-        mutant falls through to the parse check and drops with a
-        different notice, which the verdict alone cannot distinguish.
+        What kills a deliver-on-conflict mutant is the returncode
+        assertion against the two-layer composite (conflict arm and parse
+        check both disarmed, the validator then refuses and the run goes
+        RED, rc 1 != 0); the single-layer fall-through is equivalent by
+        the parse backstop — both green-drops, so the notice text alone
+        cannot be the discriminator.
         """
         base_bytes = size_document({"one.py": 42})
         main_bytes = size_document({"one.py": 50})
@@ -323,6 +329,67 @@ class TestRatchetPushDelivery(unittest.TestCase):
             base_bytes=base_bytes, main_bytes=main_bytes)
         self._assert_delivery(result, calls, False)
         self.assertIn("does not parse as JSON", result.stdout)
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_merge_preserves_main_tighten_for_coverage_and_speed(self):
+        """One probe per remaining record: main's edit must survive.
+
+        The delivered record carries both sides; under a revert to the raw
+        artifact the installed bytes lose main's edit and the
+        installed-bytes assertion fails, at whichever site reverts.
+        """
+        cases = []
+
+        old_cov, new_cov = records("gate/coverage-floor.json")
+        # The cell line sits between two lines the artifact never touches;
+        # measured_at is sandwiched by artifact-edited lines and would
+        # conflict in diff3, which is the other branch's drop case.
+        main_cov = dict(old_cov, cell="fixture-cell")
+        merged_cov = dict(new_cov, cell="fixture-cell")
+        canonical = lambda document: (
+            json.dumps(document, sort_keys=True, indent=2) + "\n").encode()
+        cases.append(("gate/coverage-floor.json",
+                      (old_cov, new_cov),
+                      canonical(main_cov), canonical(merged_cov),
+                      lambda installed: json.loads(installed)["measured_at"]))
+
+        population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
+                      "population": "a" * 64,
+                      "entries": {"unit::a": {"min": 5.0, "max": 10.0,
+                                              "n": 6},
+                                  "unit::b": {"min": 4.0, "max": 8.0,
+                                              "n": 6}},
+                      "slopes": {"unit::a": 2.0, "unit::b": 1.5},
+                      "wall": {}}
+        old_speed = {"schema": 4, "basis": "fixture", "cell": "fixture",
+                     "measured_commit": BASE, "measured_at": "2026-10-24",
+                     "populations": {"unit-suite": population}}
+        new_speed = json.loads(json.dumps(old_speed))
+        new_speed["populations"]["unit-suite"]["entries"]["unit::a"]["max"] \
+            = 9.0
+        main_speed = json.loads(json.dumps(old_speed))
+        main_speed["populations"]["unit-suite"]["entries"]["unit::b"]["max"] \
+            = 7.5
+        merged_speed = json.loads(json.dumps(main_speed))
+        merged_speed["populations"]["unit-suite"]["entries"]["unit::a"][
+            "max"] = 9.0
+
+        def b_max(installed):
+            return json.loads(installed)["populations"]["unit-suite"][
+                "entries"]["unit::b"]["max"]
+
+        cases.append(("gate/speed-baseline.json",
+                      (old_speed, new_speed),
+                      canonical(main_speed), canonical(merged_speed), b_max))
+
+        for record_path, documents, main_bytes, merged_bytes, read in cases:
+            with self.subTest(record=record_path):
+                result, calls, written, _summary = self._drive(
+                    record_path, self._comparison({record_path}),
+                    documents=documents, main_bytes=main_bytes)
+                self._assert_delivery(result, calls, True)
+                self.assertEqual(written, merged_bytes)
+                self.assertEqual(read(written), read(merged_bytes))
 
     @REQUIRES_POSIX_SHELL
     def test_an_unreachable_base_record_drops_green(self):
