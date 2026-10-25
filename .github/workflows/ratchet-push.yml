@@ -1,7 +1,8 @@
 name: ratchet push
 
-# The privileged half of the coverage, speed and comment-share ratchets:
-# gate/coverage-floor.json, gate/speed-baseline.json, .github/comment-share.json.
+# The privileged half of the coverage, speed, comment-share and size ratchets:
+# gate/coverage-floor.json, gate/speed-baseline.json, .github/comment-share.json,
+# .github/size-baseline.json.
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
@@ -18,7 +19,7 @@ name: ratchet push
 # the job token. It checks out no repository and runs no repository code.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    workflows: [tests, coverage-ratchet, comment share]
+    workflows: [tests, coverage-ratchet, comment share, size baseline]
     types: [completed]
 
 permissions: {}
@@ -118,12 +119,15 @@ jobs:
           names = {path.name for path in files}
           coverage = {"base.txt", "coverage-floor.json"}
           speed = {"base.txt", "speed-baseline.json"}
+          size = {"base.txt", "size-baseline.json"}
           if names == coverage:
               document = "coverage-floor.json"
           elif names == speed:
               document = "speed-baseline.json"
           elif names == {"base.txt", "comment-share.json"}:
               document = "comment-share.json"
+          elif names == size:
+              document = "size-baseline.json"
           else:
               refuse("expected exactly base.txt and one known ratchet record")
           try:
@@ -139,7 +143,8 @@ jobs:
           )"
           base="$(cat "$data/base.txt")"
           record_path="gate/$document_name"
-          if [ "$document_name" = comment-share.json ]; then
+          if [ "$document_name" = comment-share.json ] \
+              || [ "$document_name" = size-baseline.json ]; then
             record_path=".github/$document_name"
           fi
 
@@ -198,14 +203,17 @@ jobs:
                               raise ValueError("rename has no previous filename")
                           changed.add(previous)
               records = {"gate/coverage-floor.json", "gate/speed-baseline.json",
-                         ".github/comment-share.json"}
+                         ".github/comment-share.json",
+                         ".github/size-baseline.json"}
               record_path = sys.argv[2]
               if record_path not in records:
                   raise ValueError("unknown ratchet record")
-              allowed = records - {record_path}
-              blocked = changed - allowed
+              # Every records file is data: apply-time validation still
+              # judges the candidate against fetched main, so a window that
+              # landed any record — this artifact's own included — can reuse.
+              blocked = changed - records
               if blocked:
-                  print("own record or non-data paths moved: "
+                  print("non-data paths moved: "
                         + ", ".join(repr(path) for path in sorted(blocked)))
               else:
                   print("sibling-data")
@@ -418,8 +426,60 @@ jobs:
                       recorded_comments, recorded_total = old[path]
                       if comments * recorded_total > recorded_comments * total:
                           refuse(f"{path}: comment share rose above fetched main")
-              # New paths and graduated/deleted drops are allowed: like the
-              # coverage counts, they come from our own successful main run.
+          elif names == {"base.txt", "size-baseline.json"}:
+              name = "size-baseline.json"
+              source = data / name
+              old_path = repo / ".github" / name
+              old = object_at(old_path) if old_path.exists() else {}
+              new = object_at(source)
+              if set(new) != {"schema_version", "baseline"}:
+                  refuse("size-baseline.json is not the action's document")
+              if type(new["schema_version"]) is not int \
+                      or new["schema_version"] != 1:
+                  refuse("size-baseline.json has an unsupported schema_version")
+              baseline = new["baseline"]
+              if type(baseline) is not dict:
+                  refuse("size-baseline.json's baseline is not a JSON object")
+              expected = ('{\n  "schema_version": 1,\n  "baseline": '
+                          + json.dumps(baseline, indent=2, sort_keys=True)
+                          .replace("\n", "\n  ")
+                          + "\n}\n")
+              if source.read_bytes() != expected.encode("utf-8"):
+                  refuse("size-baseline.json does not use the action "
+                         "writer's serialization")
+              old_map = old.get("baseline")
+              if old_map is None:
+                  old_map = {}
+              if type(old_map) is not dict:
+                  refuse("size-baseline.json's recorded baseline is not "
+                         "a JSON object")
+              for path, count in old_map.items():
+                  if not path or PurePosixPath(path).is_absolute() \
+                          or ".." in PurePosixPath(path).parts \
+                          or str(PurePosixPath(path)) != path \
+                          or "\\" in path \
+                          or any(ord(char) < 32 or ord(char) == 127
+                                 for char in path):
+                      refuse(f"{path!r}: expected a repository-relative path")
+                  if isinstance(count, bool) or not isinstance(count, int) \
+                          or count < 1:
+                      refuse(f"{path}: expected a positive line count")
+              for path, count in baseline.items():
+                  if not path or PurePosixPath(path).is_absolute() \
+                          or ".." in PurePosixPath(path).parts \
+                          or str(PurePosixPath(path)) != path \
+                          or "\\" in path \
+                          or any(ord(char) < 32 or ord(char) == 127
+                                 for char in path):
+                      refuse(f"{path!r}: expected a repository-relative path")
+                  if isinstance(count, bool) or not isinstance(count, int) \
+                          or count < 1:
+                      refuse(f"{path}: expected a positive line count")
+              for path, count in baseline.items():
+                  if path in old_map and count > old_map[path]:
+                      refuse(f"{path}: line count rose above fetched main")
+              # New paths and dropped paths are allowed: like the coverage
+              # counts, they come from our own successful main run.
           else:
               refuse("the artifact shape changed after its base check")
           print(name)
@@ -436,6 +496,7 @@ jobs:
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           case "$record_path" in
             .github/comment-share.json) subject='chore(ratchet): tighten comment-share records (automated)' ;;
+            .github/size-baseline.json) subject='chore(ratchet): tighten size records (automated)' ;;
             gate/coverage-floor.json) subject='chore(ratchet): raise the coverage floor (automated)' ;;
             gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;
             *) echo "no commit subject for $record_path" >&2; exit 1 ;;

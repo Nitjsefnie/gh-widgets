@@ -15,7 +15,7 @@ from tests import test_speed_ratchet as speed_tests
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
-           ".github/comment-share.json"}
+           ".github/comment-share.json", ".github/size-baseline.json"}
 BASE, TIP = "a" * 40, "b" * 40
 
 
@@ -48,6 +48,7 @@ def boundaries(root):
         " handle.write(json.dumps(args) + '\\n')\n"
         "if args == ['diff', '--cached', '--quiet']: sys.exit(1)\n"
         "subject = {'.github/comment-share.json': 'chore(ratchet): tighten comment-share records (automated)',\n"
+        " '.github/size-baseline.json': 'chore(ratchet): tighten size records (automated)',\n"
         " 'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
         " 'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
@@ -62,6 +63,12 @@ def boundaries(root):
 
 
 def records(record_path):
+    if record_path == ".github/size-baseline.json":
+        # Built from literals, not from the committed seed: the validator
+        # must hold for any shape it accepts, and the seed lands after the
+        # suite that judges the landing.
+        return ({"schema_version": 1, "baseline": {"one.py": 42}},
+                {"schema_version": 1, "baseline": {"one.py": 41}})
     old = json.loads((ROOT / record_path).read_text())
     new = json.loads(json.dumps(old))
     if record_path == "gate/coverage-floor.json":
@@ -84,9 +91,23 @@ def records(record_path):
         envelope["max"] = envelope["min"] + 2
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
+    elif record_path == ".github/size-baseline.json":
+        # A count moves DOWN only: never-raised against fetched main is
+        # what the validator judges, and a lowered candidate must stay
+        # deliverable.
+        old = {"schema_version": 1, "baseline": {"one.py": 42}}
+        new = {"schema_version": 1, "baseline": {"one.py": 41}}
     else:
         old, new = {"one.py": [1, 2]}, {"one.py": [1, 3]}
     return old, new
+
+
+def size_document(baseline):
+    """The action writer's exact bytes for one baseline map."""
+    return ('{\n  "schema_version": 1,\n  "baseline": '
+            + json.dumps(baseline, indent=2, sort_keys=True)
+            .replace("\n", "\n  ")
+            + "\n}\n").encode("utf-8")
 
 
 class TestRatchetPushDelivery(unittest.TestCase):
@@ -98,8 +119,11 @@ class TestRatchetPushDelivery(unittest.TestCase):
         target.parent.mkdir(parents=True)
         target.write_bytes(json.dumps(old).encode())
         name = Path(record_path).name
-        (root / "data" / name).write_bytes(
-            (json.dumps(new, sort_keys=True, indent=2) + "\n").encode())
+        if record_path == ".github/size-baseline.json":
+            (root / "data" / name).write_bytes(size_document(new["baseline"]))
+        else:
+            (root / "data" / name).write_bytes(
+                (json.dumps(new, sort_keys=True, indent=2) + "\n").encode())
         (root / "data/base.txt").write_bytes((BASE + "\n").encode())
         if coverage is not None:
             target.with_name("coverage-floor.json").write_bytes(coverage)
@@ -143,9 +167,9 @@ class TestRatchetPushDelivery(unittest.TestCase):
                                               for path in paths]}]
 
     @REQUIRES_POSIX_SHELL
-    def test_each_record_reuses_siblings_but_drops_own_and_source_changes(self):
+    def test_each_record_reuses_siblings_and_own_record_movement(self):
         for own in RECORDS:
-            for paths, delivered in ((RECORDS - {own}, True), ({own}, False),
+            for paths, delivered in ((RECORDS - {own}, True), ({own}, True),
                                      ({"src/render.py"}, False), (set(), True)):
                 with self.subTest(record=own, changed=paths):
                     result, calls, written, summary = self._drive(own, self._comparison(paths))
@@ -154,7 +178,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
                     self.assertEqual(json.loads(written), new if delivered else old)
                     if not delivered:
                         self.assertIn("Dropped ratchet artifact", summary)
-                        self.assertIn("own record or non-data paths moved", result.stdout)
+                        self.assertIn("non-data paths moved", result.stdout)
 
     @REQUIRES_POSIX_SHELL
     def test_uncertain_comparisons_and_source_renames_drop_green(self):
@@ -175,16 +199,30 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self._assert_delivery(result, calls, False)
 
     @REQUIRES_POSIX_SHELL
-    def test_excluding_the_own_record_is_required_even_if_its_candidate_validates(self):
-        response = self._comparison(["gate/speed-baseline.json"])
-        result, calls, _written, _summary = self._drive("gate/speed-baseline.json", response)
-        self._assert_delivery(result, calls, False)
-        mutant = push_body().replace("allowed = records - {record_path}", "allowed = records")
-        self.assertNotEqual(mutant, push_body())
+    def test_every_record_is_data_but_a_source_change_still_drops(self):
+        """Every records file may move under a reusable artifact.
+
+        The dropped exception the subtraction used to carve (an artifact's
+        own record moving in the window) is gone: apply-time validation
+        still judges the candidate against fetched main, so the own record
+        moving is exactly as reusable as a sibling's. The mutant restores
+        the old subtraction and must drop green again.
+        """
+        response = self._comparison([".github/size-baseline.json"])
         result, calls, _written, _summary = self._drive(
-            "gate/speed-baseline.json", response, body=mutant)
+            ".github/size-baseline.json", response)
+        self._assert_delivery(result, calls, True)
+        # Asserting the old verdict against the correct body fails loudly.
         with self.assertRaisesRegex(AssertionError, "True != False"):
             self._assert_delivery(result, calls, False)
+        mutant = push_body().replace(
+            "blocked = changed - records",
+            "blocked = changed - (records - {record_path})")
+        self.assertNotEqual(mutant, push_body())
+        result, calls, _written, _summary = self._drive(
+            ".github/size-baseline.json", response, body=mutant)
+        # The restored subtraction drops the same movement green.
+        self._assert_delivery(result, calls, False)
 
     @REQUIRES_POSIX_SHELL
     def test_real_writer_output_survives_an_intervening_coverage_raise_and_is_delivered(self):
