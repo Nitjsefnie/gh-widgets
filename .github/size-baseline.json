@@ -2,7 +2,7 @@
   "schema_version": 1,
   "baseline": {
     ".github/workflows/gitfame-resync-memory.yml": 555,
-    ".github/workflows/ratchet-push.yml": 572,
+    ".github/workflows/ratchet-push.yml": 588,
     ".github/workflows/release.yml": 524,
     ".github/workflows/tests.yml": 1530,
     "scripts/bench/e2e_bench.py": 537,
