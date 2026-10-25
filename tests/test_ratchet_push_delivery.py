@@ -168,16 +168,11 @@ class TestRatchetPushDelivery(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_each_record_delivers_and_the_policy_scenarios_hold(self):
-        """Per record, its delivered drive (mapping, validator arm, subject);
-        for one record, each base-movement policy scenario.
+        """Per record, its delivered drive; the policy scenarios once.
 
-        The policy arms are record-independent — `blocked = changed -
-        records` and the drop notice read the same set whatever they land —
-        so sibling/source/empty rows for every record would re-pin the same
-        verdict at four times the subprocess cost. Each record's own
-        delivered drive is what genuinely differs. The own-record movement
-        is pinned module-wide by test_every_record_is_data... together with
-        its subtraction mutant.
+        The policy arms are record-independent; a record's delivered drive
+        is what differs. Own-record movement is pinned module-wide by
+        test_every_record_is_data... with its subtraction mutant.
         """
         for own in RECORDS:
             paths = RECORDS - {own}
