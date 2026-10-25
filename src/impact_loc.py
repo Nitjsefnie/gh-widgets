@@ -585,7 +585,7 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
             pin = pins.get(repo)
             if not pin:
                 raise SystemExit(f"error: {repo} is blamed but absent from "
-                                 f"IMPACT_REPO_PINS")
+                                 f"GH_WIDGETS_IMPACT_REPO_PINS")
             t = {**t, "head": pin["head"],
                  "branch": pin["branch"] or t["branch"]}
         entry = ourloc.get(repo) or {}

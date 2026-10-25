@@ -43,7 +43,7 @@ was. That is fine in both directions.
   belong on the impact side, if anywhere.
 - **Identity is derived, never configured.** Whose repos count as insider,
   and whose lines count as ours, come from the token's own account via
-  `fetch_identity`. `GH_EXTRA_INSIDERS` / `GH_EXTRA_EMAILS` may only *add*
+  `fetch_identity`. `GH_WIDGETS_GH_EXTRA_INSIDERS` / `GH_WIDGETS_GH_EXTRA_EMAILS` may only *add*
   to that set. A patch that lets configuration *replace* the fetched set
   will be declined: it reintroduces the staleness this design removed, just
   in a new location.
@@ -69,12 +69,12 @@ names into a public SVG.
 No install step and no dependencies:
 
 ```sh
-GH_USER=octocat GH_TOKEN=ghp_xxx OUT_DIR=./widgets ./src/render.py
+GH_WIDGETS_GH_USER=octocat GH_TOKEN=ghp_xxx GH_WIDGETS_OUT_DIR=./widgets ./src/render.py
 ```
 
 A classic PAT with the documented `public_repo` scope is enough;
-`read:user` is not required. `THEME=` picks a
-palette; `CACHE_FILE=` points at the cache described in the README (GitHub
+`read:user` is not required. `GH_WIDGETS_THEME=` picks a
+palette; `GH_WIDGETS_CACHE_FILE=` points at the cache described in the README (GitHub
 rejects a full-year contribution query on large accounts, so the cache is
 load-bearing, not an optimisation).
 
@@ -116,7 +116,7 @@ only ever ratchets down. A unit-suite maximum may rise only when the judged
 range contains a commit subject starting `feat:` or `feat(scope):`
 (case-sensitive, read from git's folded subject). On a PR the range is
 the merge checkout's first parent..HEAD; on a main push it is
-`BEFORE_SHA`..HEAD, so a squash merge keeps the raise only when its title
+`GH_WIDGETS_BEFORE_SHA`..HEAD, so a squash merge keeps the raise only when its title
 starts `feat:`. Shallow or unreadable history refuses: the step fails closed.
 Any other unit-suite raise is refused with the remedy: a non-feature change
 trims its own tests until the suite fits its envelope. Renderer ceilings
