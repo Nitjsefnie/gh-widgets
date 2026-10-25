@@ -2,7 +2,7 @@
   "schema_version": 1,
   "baseline": {
     ".github/workflows/gitfame-resync-memory.yml": 555,
-    ".github/workflows/ratchet-push.yml": 520,
+    ".github/workflows/ratchet-push.yml": 572,
     ".github/workflows/release.yml": 524,
     ".github/workflows/tests.yml": 1530,
     "scripts/bench/e2e_bench.py": 537,
@@ -18,7 +18,7 @@
     "tests/test_aggregate_gate.py": 1204,
     "tests/test_baseline.py": 914,
     "tests/test_changes_detect.py": 745,
-    "tests/test_ci_workflows.py": 1764,
+    "tests/test_ci_workflows.py": 1769,
     "tests/test_common.py": 1298,
     "tests/test_compare_counters.py": 567,
     "tests/test_counter.py": 861,
