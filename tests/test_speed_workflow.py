@@ -375,7 +375,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertNotIn("GH_WIDGETS_OBSERVE_RENDERER_RATIO", renderer_env)
 
     def test_the_unit_suite_step_carries_no_retired_flag(self):
-        # The calibrated flag is retired; leaving it would ask measure() for a label it refuses.
+        # The calibrated flag is retired; leaving it would ask measure() for a foreign label.
         _env, _working_dir, block = self.steps.step_run(
             "Measure the unit suite")
         self.assertNotIn("--calibrated", block)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Tighten recorded speed maxima from the values the comparison judged.
 
-This operation lowers existing maxima in ``entries`` and ``wall`` and seeds
-absent counter entries the population's ``seeds`` list declares: the folded
-head value as both bounds, wall never seeds. The CLI is context-free: only the
-staging step's existing default-branch push condition admits this artifact
-to the push path. It reuses ``compare_counters``' readers so the new maxima
+This lowers existing maxima in ``entries`` and ``wall`` and seeds absent
+counter entries the population's ``seeds`` list declares: the folded head
+value as both bounds, wall never seeds. The CLI is context-free: only the
+staging step's default-branch push condition admits this artifact to the
+push path. It reuses ``compare_counters``' readers so the new maxima
 are the same head values the gate compared; other fields are carried
 unchanged, and a candidate is validated before anything is written.
 

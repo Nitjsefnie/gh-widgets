@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Run deterministic renderer workloads and write one JUnit suite.
 
-Each workload is measured on a load-invariant COUNTER — the gated
-statement count, or raw CPU seconds where the job pins that — not on wall
-time: see scripts/ci/counter.py, which is imported by path rather than as a
-package because scripts/ci deliberately holds standalone CI entry points.
-The JUnit `time` attribute written here is therefore the COUNTER, not
-seconds, and the wall seconds travel separately in gh-wall for the gross
-smoke gate alone.
+Each workload is measured on a load-invariant COUNTER (the gated statement
+count, or raw CPU seconds), not on wall time: see scripts/ci/counter.py,
+imported by path because scripts/ci deliberately holds standalone CI entry
+points. The JUnit `time` attribute is the COUNTER, not seconds; wall
+seconds travel separately in gh-wall for the gross smoke gate alone.
 """
 import argparse
 import importlib.util
@@ -142,10 +140,9 @@ def _run_renderer(renderer, repo_root, env, metric=None):
     Both counter paths raise the trio this function already handled for
     a bare subprocess.run — TimeoutExpired, OSError, and CounterError — so a
     renderer that cannot even be measured lands in the same JUnit failure path
-    as one that ran and failed. The `time` key is the counter value; `wall` is
-    the elapsed seconds, kept only so the smoke gate has something gross to
-    look at. The dispatch follows the job's one probe: statement_count
-    measures the deterministic counter, anything else is the raw CPU path.
+    as one that ran and failed. The dispatch follows the job's one probe:
+    statement_count measures the deterministic counter, anything else the
+    raw CPU path. `time` is the counter; `wall` is the smoke gate's input.
     """
     result = {"time": 0.0, "metric": "", "wall": 0.0,
               "failure": None, "stdout": "", "stderr": ""}

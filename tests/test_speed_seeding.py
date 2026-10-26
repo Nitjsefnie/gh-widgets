@@ -34,9 +34,8 @@ class TestSpeedSeeding(unittest.TestCase):
         self.fixture._write_reports(unit_wall=20, renderer_wall=0.085)
         self.fixture.baseline["schema"] = 5
         for name, population in self.fixture.baseline["populations"].items():
-            # The committed shape after the #269 reset: schema 5, the
-            # statement instrument, no entries, and the seed declaration
-            # naming every id the first passing push will seed.
+            # Post-#269 shape: schema 5, no entries, seeds naming every id
+            # the first passing push will seed.
             population["metric"] = "cpu_time"
             population["seeds"] = sorted(population["entries"])
             population["entries"] = {}
@@ -144,11 +143,9 @@ class TestSpeedSeeding(unittest.TestCase):
     def _seed_declared_removals(self, base_doc, new_doc):
         """The STEP's seed-declared removals fragment, over two documents.
 
-        Sliced from the fragment's marker to its `done`, with the base copy
-        at $RUNNER_TEMP and the head copy at $GH_WIDGETS_BASELINE, exactly
-        where the step leaves them; both declaration conditions run against
-        real files, because the loop reads the documents rather than
-        trusting.
+        The base copy sits at $RUNNER_TEMP and the head copy at
+        $GH_WIDGETS_BASELINE, exactly where the step leaves them; the loop
+        reads the documents rather than trusting.
         """
         _declared, _working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
