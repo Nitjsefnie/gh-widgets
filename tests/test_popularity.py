@@ -249,13 +249,13 @@ class Acquisition(unittest.TestCase):
             '/user/orgs?per_page=100': response(
                 [{'login': 'Org'}], '<https://api.github.com/org-page2>; rel="next"'),
             '/org-page2': response([{'login': 'Other'}]),
-            '/user/repos?affiliation=owner&per_page=100': response([
+            '/user/repos?affiliation=owner&visibility=public&per_page=100': response([
                 repo(), repo('Owner/Private', visibility='private'),
                 repo('Owner/Fork', fork=True), repo('Owner/Old', archived=True)],
                 '<https://api.github.com/repo-page2>; rel="next"'),
             '/repo-page2': response([repo('Owner/Second')]),
-            '/orgs/Org/repos?per_page=100': response([repo('Org/Repo')]),
-            '/orgs/Other/repos?per_page=100': response([repo('Org/Repo')]),
+            '/orgs/Org/repos?type=public&per_page=100': response([repo('Org/Repo')]),
+            '/orgs/Other/repos?type=public&per_page=100': response([repo('Org/Repo')]),
         }
 
         def fetch(request, **_kwargs):
@@ -348,7 +348,7 @@ class Overlap(unittest.TestCase):
         fixtures = {
             '/user': response(USER),
             '/user/orgs?per_page=100': response([]),
-            '/user/repos?affiliation=owner&per_page=100': response(
+            '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B')]),
         }
         barrier = threading.Barrier(2, timeout=10)
@@ -377,7 +377,7 @@ class Overlap(unittest.TestCase):
         fixtures = {
             '/user': response(USER),
             '/user/orgs?per_page=100': response([]),
-            '/user/repos?affiliation=owner&per_page=100': response(
+            '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B'), repo('Owner/C')]),
         }
         traffic, clones = [], []
@@ -417,7 +417,7 @@ class Overlap(unittest.TestCase):
         fixtures = {
             '/user': response(USER),
             '/user/orgs?per_page=100': response([]),
-            '/user/repos?affiliation=owner&per_page=100': response(
+            '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B')]),
         }
         denied = urllib.error.HTTPError('url', 403, 'denied', Message(), None)
