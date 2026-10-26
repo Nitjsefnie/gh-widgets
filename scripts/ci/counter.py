@@ -13,15 +13,18 @@ THE INSTRUMENT IS A DETERMINISTIC STATEMENT COUNT. It counts
 the speed job pins 3.13): every executed line of the child's own code fires
 one event, so the same code with the same population executes the same lines
 and returns the same count, on any runner, under any load. Measured on the
-box that shipped this change (2026-10-26, /root/gh-widgets at 447e92f, env
-pinned per `child_environment`), three runs of the full unit suite read:
+box that shipped this change (2026-10-26, this tree at 5c3b9d6, env pinned
+per `child_environment`), three runs of the full unit suite read:
 
-    99,661,405 / 99,667,559 / 99,658,415 events — spread 0.0092%
+    99,222,446 / 99,222,443 / 99,220,993 events — spread 0.0015%
     missed: 0 on every run; the suite exited 0 every run
 
 The count is the gated value; the overhead costs CI minutes, not
-correctness (CPU 102.9-128.9 against 93.4 plain, and wall 173-208 s against
-164 s plain, on that box — box-noisy, indicative figures).
+correctness. The statement callback's own dispatch was measured lighter
+than the retired calibrated instrument's two-child protocol: an earlier
+prototype measured the same suite at 99.66M events (figures in issue #269),
+0.44% above this shipped bootstrap — the bootstrap's own lines are counted
+too, so its exact shape moves the number by that much.
 
 WHAT THE COUNT DOES NOT SEE, STATED RATHER THAN HIDDEN. The monitoring
 callback fires in the measured child itself, so the count covers the direct
