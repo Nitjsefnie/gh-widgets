@@ -75,13 +75,7 @@ def _is_number(value) -> bool:
 
 
 def _check_schema_keys(path: Path, name: str, population, schema: int) -> None:
-    """The keys one schema's population may carry, and the eras it refuses.
-
-    Schema 3 never carried slopes; schema 5 retires them for `seeds`. A
-    document carrying an era's keys it does not declare is refused rather
-    than read loosely — a key this file does not define is the drift the
-    schema bump exists to catch.
-    """
+    """The keys one schema's population may carry, and the eras it refuses."""
     if not isinstance(population, dict):
         return
     if schema == 3 and "slopes" in population:
@@ -158,12 +152,9 @@ def read_population(document: dict, name: str) -> dict:
 def _check_population(path: Path, name: str, population) -> None:
     """One population's metric, tolerance, digest and entry maps.
 
-    Schema 5 (the statement instrument) declares `seeds` instead of
-    `slopes`: the list of entry ids awaiting their seed, which is both the
-    validator's authorization and the ratchet writer's. An empty `entries`
-    map is the declared blind window and is lawful only beside a `seeds`
-    list — the mirror of the schema-3/4 rule that an empty `entries` needs
-    slopes.
+    Schema 5 declares `seeds` (the entry ids awaiting their seed — the
+    validator's authorization and the ratchet writer's alike); an empty
+    `entries` map is lawful only beside a declared route.
     """
     where = f"{path} populations[{name!r}]"
     if not isinstance(population, dict):
@@ -213,7 +204,7 @@ def _check_population(path: Path, name: str, population) -> None:
 
 
 def _check_seeds(where: str, seeds) -> None:
-    """`seeds`: a list of unique, non-empty entry ids, or absent entirely."""
+    """`seeds`: a list of unique, non-empty entry ids, or absent."""
     if seeds is None:
         return
     if not isinstance(seeds, list):
@@ -318,8 +309,8 @@ def _is_seed_addition(old: dict, name: str, key: str, node: str,
     """
     if now is None or key != "entries" or now < 0 or not math.isfinite(now):
         return False
-    declared = node in old.get("populations", {}).get(name, {}).get(
-        "seeds", ())
+    seeds = old.get("populations", {}).get(name, {}).get("seeds", ())
+    declared = node in seeds
     shape = (after[node]["min"] == now
              and isinstance(after[node]["n"], int)
              and after[node]["n"] >= MIN_ENVELOPE_SAMPLES)
