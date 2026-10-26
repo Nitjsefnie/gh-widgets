@@ -532,35 +532,38 @@ def fetch_public_organizations(login, request_fn=None):
     classification but must never enter a public snapshot.
     """
     request_fn = request_fn or urllib.request.urlopen
-    store = ghwidgets_cache.RestCache(env("GH_WIDGETS_REST_CACHE"))
     page = 1
     public_orgs = []
     while True:
-        url = (f"https://api.github.com/users/{urllib.parse.quote(login, safe='')}/orgs"
+        encoded_login = urllib.parse.quote(login, safe="")
+        url = (f"https://api.github.com/users/{encoded_login}/orgs"
                f"?per_page=100&page={page}")
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": (
+                    "gh-widgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)"
+                ),
+            },
+        )
         try:
-            with timing.track('rest', endpoint_shape(url)):
-                body, link = ghwidgets_cache.conditional_get(
-                    url,
-                    urllib.request.Request(url, headers={
-                        "Accept": "application/vnd.github+json",
-                        "User-Agent": "ghwidgets/1.0 (+https://github.com/Nitjsefnie/gh-widgets)",
-                    }),
-                    lambda request: request_fn(request, timeout=20),
-                    store)
-                body = json.loads(body)
+            with timing.track('rest', endpoint_shape(url)), \
+                    request_fn(req, timeout=20) as response:
+                body = json.loads(response.read())
+                link = response.headers.get("Link", "")
         except (urllib.error.URLError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"could not retrieve public organization memberships for {login}") from exc
+            raise RuntimeError(
+                f"could not retrieve public organization memberships for {login}"
+            ) from exc
         if not isinstance(body, list):
             raise RuntimeError(f"invalid public organization response for {login}")
-        public_orgs.extend(org["login"] for org in body
-                           if isinstance(org, dict) and org.get("login"))
+        public_orgs.extend(
+            org["login"] for org in body
+            if isinstance(org, dict) and org.get("login"))
         if 'rel="next"' not in link:
             break
         page += 1
-    store.save()
-    if store.path:
-        print(f'rest-cache: requests={store.requests} not-modified={store.not_modified}', flush=True)
     return public_orgs
 
 
