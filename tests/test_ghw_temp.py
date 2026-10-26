@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Sentinel: every ``ghw-*`` test directory carries a live owner lock.
-# pylint: disable=protected-access
 
 The helper locks each ghw-* directory a test creates, and the tests
 package import scavenges the dead ones at the start of every run. The
@@ -11,6 +10,7 @@ end-to-end test runs the real sequence a killed run leaves behind.
 
     python3 -m unittest tests.test_ghw_temp
 """
+# pylint: disable=protected-access
 import ast
 import os
 import signal
