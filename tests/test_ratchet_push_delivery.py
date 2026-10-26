@@ -83,9 +83,7 @@ def records(record_path):
                    measured_commit=BASE)
     elif record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
-        # The validator reads schema 5 only, so the fixture declares that
-        # shape whichever schema the committed document is on: seeds instead
-        # of slopes, on every population.
+        # Schema 5 only: declare that shape, seeds instead of slopes.
         old["schema"] = 5
         for population in old["populations"].values():
             population.pop("slopes", None)
@@ -411,9 +409,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
         fixture = speed_tests.TestSpeedRatchetTightening()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        # The writer preserves the base document's schema, and the validator
-        # reads schema 5 only, so the fixture base is declared schema 5 with
-        # its recorded entries seed-declared before anything is written.
+        # The writer preserves the base schema and the validator reads
+        # schema 5 only: declare it, entries seed-declared.
         fixture.baseline["schema"] = 5
         for population in fixture.baseline["populations"].values():
             population["seeds"] = sorted(population["entries"])

@@ -575,9 +575,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_count_is_deterministic_for_identical_code(self):
-        # The property the gate rests on: same program, same executed lines,
-        # same count — three runs, one number. Wall and CPU move on this box
-        # by tens of percent; this does not move at all.
+        # Same program, same executed lines, same count: three runs, one number.
         workload = [sys.executable, "-c",
                     "for _ in range(4096):\n    total = sum(range(64))\n"
                     "print(total)"]
@@ -595,9 +593,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_module_dispatch_runs_the_target_module(self):
-        # The unit suite is measured as `python3 -m unittest discover`, so
-        # the -m arm is the production shape and a broken one there would
-        # measure an interpreter that never started the suite.
+        # Production shape for the unit suite: `python3 -m unittest discover`.
         measured = self.run_statement(["-m", "timeit", "-n", "1", "-r", "1",
                                        "pass"])
         self.assertEqual(measured.returncode, 0, measured.stderr)
@@ -606,8 +602,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_script_dispatch_runs_the_target_script(self):
-        # The renderer workloads are measured as a script path, so the
-        # run_path arm is the production shape there.
+        # Production shape for the renderers: a script path.
         with tempfile.TemporaryDirectory(prefix="ghw-statement-") as td:
             script = Path(td) / "subject.py"
             script.write_text("import sys\nprint('script ran', sys.argv[1:])\n",
@@ -618,9 +613,8 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_bootstrap_strips_its_leading_separator(self):
-        # The parent always spells `[python, "-c", BOOTSTRAP, "--",
-        # *target]`, so the bootstrap strips exactly one leading `--` before
-        # dispatching; this drives the real program string directly.
+        # The parent spells `[python, "-c", BOOTSTRAP, "--", *target]`; the
+        # bootstrap strips exactly one leading `--` before dispatching.
         with tempfile.TemporaryDirectory() as td:
             count_path = Path(td) / "count.json"
             env = counter.child_environment()
@@ -643,8 +637,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_missing_count_file_refuses(self):
-        # A child that died hard (os._exit, SIGKILL) never runs atexit, so
-        # the file is never written; that is a refusal, never a zero.
+        # A hard-killed child never runs atexit: a refusal, never a zero.
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "never-written.json"
             with self.assertRaises(counter.CounterError) as raised:
@@ -653,9 +646,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_an_undercount_is_refused_not_recorded(self):
-        # missed > 0 means the monitoring callback could not keep up, so the
-        # count is a lower bound rather than a number; recording it would be
-        # an optimistic lie in a gate that only ever fails high.
+        # missed > 0 is a lower bound, not a number; recording it lies optimistic.
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "undercount.json"
             path.write_text('{"count": 100, "missed": 3}', encoding="utf-8")
@@ -682,10 +673,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_non_interpreter_command_refuses(self):
-        # The count is taken inside the Python child, so a command whose
-        # first element is not an interpreter would be measured by counting
-        # the bootstrap and never the subject — refused rather than
-        # mislabelled.
+        # A non-interpreter head would count the bootstrap, never the subject.
         for head in ("/bin/sh", "/usr/bin/env"):
             with self.subTest(interpreter=head):
                 with self.assertRaises(counter.CounterError) as raised:
@@ -695,9 +683,8 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_BENCH
     @REQUIRES_STATEMENT
     def test_the_statement_label_is_refused_by_the_raw_path(self):
-        # The label/computation contract, extended to the new name: raw CPU
-        # seconds must never carry statement_count, or a CPU number would
-        # pass the comparator's metric check while measuring something else.
+        # Raw CPU seconds must never carry statement_count: mislabel spellings
+        # of the category error the comparator's metric check exists for.
         with self.assertRaises(counter.CounterError) as raised:
             counter.measure([sys.executable, "-c", "pass"],
                             metric=counter.STATEMENT_METRIC)
