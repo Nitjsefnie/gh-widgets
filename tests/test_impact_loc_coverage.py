@@ -243,8 +243,7 @@ class TestCloneLaunchCoverage(unittest.TestCase):
         with mock.patch.object(impact_clone, "_CLONE_STARTING", starting), \
                 mock.patch.object(impact_clone, "_CLONE_SHUTDOWN", True), \
                 mock.patch.object(impact_loc.subprocess, "Popen") as popen:
-            with self.assertRaisesRegex(
-                    RuntimeError, "clone interrupted by renderer shutdown"):
+            with self.assertRaisesRegex(RuntimeError, "clone interrupted by renderer shutdown"):
                 impact_clone._run_clone_command_worker(command, timeout=1)
 
         self.assertEqual(starting, set())
@@ -406,8 +405,7 @@ class TestScratchCoverage(unittest.TestCase):
 
     def test_blame_failure_keeps_an_existing_count(self):
         repo = "outside/project"
-        previous = {repo: {"ours": 2, "total": 3,
-                           "branch": "main", "head": "old"}}
+        previous = {repo: {"ours": 2, "total": 3, "branch": "main", "head": "old"}}
         scratch = Path(tempfile.mkdtemp(prefix="impact-fame-", dir=self.tmp))
         output = io.StringIO()
         entry = (repo, {"branch": "main", "head": "new"}, scratch,
