@@ -12,10 +12,8 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 happens to land on.
 """
 import ast
-import contextlib
 import importlib
 import importlib.util
-import io
 import json
 import os
 import subprocess

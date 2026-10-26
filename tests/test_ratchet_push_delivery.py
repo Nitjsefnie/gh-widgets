@@ -414,7 +414,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
         fixture.baseline["schema"] = 5
         for population in fixture.baseline["populations"].values():
             population["seeds"] = sorted(population["entries"])
-        fixture._write_baseline()
+        fixture._write_baseline()  # pylint: disable=protected-access
         # The actual reports, comparator fold and writer produce the payload at S.
         # pylint: disable=protected-access
         fixture._write_reports()
