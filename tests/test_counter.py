@@ -565,8 +565,7 @@ class TestStatementInstrument(unittest.TestCase):
     not a time at all — it is the number of `sys.monitoring` LINE events the
     measured child executes, so the same code and the same population give
     the same count on any runner. The cases pin the dispatch, determinism
-    and refusals: an undercount is not a measurement, nor a number the
-    child never wrote.
+    and refusals: an undercount is not a measurement, nor a number the child never wrote.
     """
 
     @staticmethod
