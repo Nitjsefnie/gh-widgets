@@ -58,7 +58,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "gate/speed-baseline.json"
-SUPPORTED_SCHEMA = (3, 4)
+SUPPORTED_SCHEMA = (3, 4, 5)
 
 # The smoke gate's factor, deliberately loose. It is a net for "something is
 # catastrophically wrong now" — an hour where the baseline says a minute — and
@@ -69,18 +69,20 @@ SMOKE_FACTOR = 3.0
 
 # The instrument names, and what may be said about each one in a report.
 METRIC_NOTES = {
+    "statement_count": (
+        "a deterministic count of sys.monitoring LINE events in the "
+        "measured Python child; runner-invariant by construction (the same "
+        "code executes the same lines), and not a wall or CPU quantity, so "
+        "neither load nor the machine factor reaches it. Blind to "
+        "non-Python subprocess work — the renderers' git calls are not "
+        "counted; that side is the wall smoke bound's"),
     "cpu_time": (
         "CPU seconds, so steal time is excluded — but NOT deterministic, "
         "which is why its tolerance is the loose one and why this is a "
         "gross-regression net rather than a sensitive gate"),
     "cpu_time_ratio": (
-        "the child's CPU seconds divided by a fixed calibration workload's, "
-        "measured adjacently in the same job — the runner pool's machine "
-        "factor multiplies both and cancels; still not deterministic, so "
-        "the envelope discipline applies unchanged. "
-        "The gate judges the NET value (raw − slope·calibration, "
-        "per-entry slopes in the baseline) when the population declares "
-        "slopes; the ratio remains what the JUnit records."),
+        "retired by #269; recorded here so schema 3/4 documents keep "
+        "rendering"),
 }
 
 # A testcase carrying any of these children did not pass, and its value is not
@@ -537,7 +539,7 @@ def render(result: dict, threshold: float, base_label: str) -> str:
         lines.append(
             f"- {len(result['head_only'])} entry/entries in this report the "
             "baseline does not record, excluded from the comparison; "
-            "main's ratchet will seed them on merge")
+            "main's ratchet will seed the seed-declared entries on merge")
     if result.get("base_only"):
         lines.append(
             f"- {len(result['base_only'])} baseline entry/entries not in "

@@ -113,9 +113,15 @@ class TestComparator(unittest.TestCase):
                 (((36, 10), (3, 1)), 2, 1, 0)):
             for path, (raw, calibration) in zip((a, b), parts):
                 cd.counter.write_junit(path, self.UNIT_NODE,
-                                       cd.counter.CalibratedMeasurement(
-                                           raw / calibration, "cpu_time_ratio",
-                                           4, "", "", 0, raw, calibration))
+                                       cd.counter.Measurement(
+                                           raw / calibration,
+                                           "cpu_time_ratio", 4, "", "", 0))
+                tree = ET.parse(path)
+                case = tree.getroot().find("testcase")
+                assert case is not None
+                case.set("gh-raw-cpu", str(raw))
+                case.set("gh-calibration-cpu", str(calibration))
+                tree.write(path)
             population["entries"] = {
                 self.UNIT_NODE: {"min": 1, "max": maximum, "n": 2}}
             for slopes, head in (
@@ -158,7 +164,36 @@ class TestComparator(unittest.TestCase):
             self.assertEqual(cd.main([
                 "--baseline", str(self.baseline_path), "--population", "unit-suite",
                 "--head", str(a), str(b)]), 2)
-        self.assertIn("reads schema 3 and 4", output.getvalue())
+        self.assertIn("reads schema 3, 4 and 5", output.getvalue())
+
+    def test_a_schema_five_blind_window_passes_with_the_seed_note(self):
+        # The committed shape after the #269 reset: `entries` is empty and
+        # the population's seeds declare what awaits its first measurement.
+        # The compare passes and reports the seed note, and the metric note
+        # names the statement instrument and its blind spot.
+        a = write_junit(self.tmp_path / "a.xml", {self.UNIT_NODE: 99_000_000})
+        payload = document()
+        payload["schema"] = 5
+        population = payload["populations"]["unit-suite"]
+        population["metric"] = "statement_count"
+        population["entries"] = {}
+        population["seeds"] = [self.UNIT_NODE]
+        self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cd.main([
+                "--baseline", str(self.baseline_path), "--population",
+                "unit-suite", "--head", str(a),
+                "--summary-file", str(self.summary_path)]), 0)
+        report = output.getvalue()
+        self.assertIn("within budget", report)
+        self.assertIn("main's ratchet will seed the seed-declared entries",
+                      report)
+        self.assertIn("runner-invariant by construction", report)
+        self.assertIn("non-Python subprocess work", report)
+        self.assertTrue(self.summary_path.read_text(encoding="utf-8")
+                        .endswith(report.rstrip() + "\n"))
 
     def test_a_test_missing_from_one_round_is_dropped(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
@@ -353,9 +388,17 @@ class TestComparator(unittest.TestCase):
                 with self.subTest(attribute=attribute, report=path.name):
                     for report in (base, other):
                         cd.counter.write_junit(report, self.UNIT_NODE,
-                                               cd.counter.CalibratedMeasurement(
-                                                   4, "cpu_time", 1, "", "", 0,
-                                                   8, 2))
+                                               cd.counter.Measurement(
+                                                   4, "cpu_time", 1, "", "", 0))
+                        tree = ET.parse(report)
+                        case = tree.getroot().find("testcase")
+                        assert case is not None
+                        # The net-folding read path is kept for schema 3/4
+                        # documents, so its raw parts are set on the case
+                        # directly, exactly as the #240 producers wrote them.
+                        case.set("gh-raw-cpu", "8")
+                        case.set("gh-calibration-cpu", "2")
+                        tree.write(report)
                     tree = ET.parse(path)
                     case = tree.getroot().find("testcase")
                     assert case is not None

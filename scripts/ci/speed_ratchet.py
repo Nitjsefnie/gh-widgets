@@ -2,8 +2,8 @@
 """Tighten recorded speed maxima from the values the comparison judged.
 
 This operation lowers existing maxima in ``entries`` and ``wall`` and seeds
-absent counter entries the population's slopes declare: the folded head
-value as both bounds, wall never seeds. The CLI is context-free: only the
+absent counter entries the population's ``seeds`` list declares: the folded
+head value as both bounds, wall never seeds. The CLI is context-free: only the
 staging step's existing default-branch push condition admits this artifact
 to the push path. It reuses ``compare_counters``' readers so the new maxima
 are the same head values the gate compared; other fields are carried
@@ -107,9 +107,9 @@ def _read_head(reports: list[Path], population: dict, name: str) -> tuple:
     return head, wall, len(reports)
 
 
-def _check_recorded_entries(head: dict, recorded: dict, name: str, slopes=()) -> None:
-    """Only a slope-declared absent entry can seed a counter threshold."""
-    unknown = sorted(set(head) - set(recorded) - set(slopes))
+def _check_recorded_entries(head: dict, recorded: dict, name: str, seeds=()) -> None:
+    """Only a seed-declared absent entry can seed a counter threshold."""
+    unknown = sorted(set(head) - set(recorded) - set(seeds))
     if unknown:
         raise RatchetError(
             f"{name} reports entry/entries not recorded in the baseline: "
@@ -117,9 +117,9 @@ def _check_recorded_entries(head: dict, recorded: dict, name: str, slopes=()) ->
 
 
 def _tighten_map(recorded: dict, candidate: dict, head: dict,
-                 population: str, map_name: str, slopes=(), samples=0) -> list[str]:
+                 population: str, map_name: str, seeds=(), samples=0) -> list[str]:
     """Lower one map's maxima to passing head values, preserving its other fields."""
-    _check_recorded_entries(head, recorded, population, slopes)
+    _check_recorded_entries(head, recorded, population, seeds)
     changes = []
     for node, head_value in head.items():
         envelope = recorded.get(node)
@@ -144,7 +144,7 @@ def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
 
     ``measurements`` maps populations to ``(head entries, head wall, report count)``.
     Missing entries remain unchanged, exactly as the comparator's shared-set
-    comparison does. Report-only counters require a declared slope to seed;
+    comparison does. Report-only counters require a declared seed to land;
     report-only wall entries remain refused.
     """
     candidate = json.loads(json.dumps(document))
@@ -155,7 +155,8 @@ def tighten(document: dict, measurements: dict) -> tuple[dict, list[str]]:
         entries, wall, samples = head_values
         changes.extend(_tighten_map(
             recorded_population["entries"], candidate_population["entries"],
-            entries, name, "entries", recorded_population.get("slopes", ()), samples))
+            entries, name, "entries", recorded_population.get("seeds", ()),
+            samples))
         changes.extend(_tighten_map(
             recorded_population["wall"], candidate_population["wall"],
             wall, name, "wall"))

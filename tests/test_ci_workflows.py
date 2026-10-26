@@ -1391,25 +1391,25 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                         self.assertEqual(result.stdout.strip(), "coverage-floor.json")
 
     @staticmethod
-    def _speed_documents(acked):
+    def _speed_documents():
         """A recorded speed document and one candidate, over one entry.
 
         Built here rather than read from the committed baseline: the gate
         must keep its verdict for ANY population shape it accepts, and the
-        committed record now legitimately carries empty `entries` while its
-        slopes await the seeds (issue #240), so a fixture reading
-        `entries[...]` out of it breaks on the reset commit instead of
-        testing the validator.
+        committed record legitimately carries empty `entries` while its
+        seeds await the first post-merge measurement (issue #269), so a
+        fixture reading `entries[...]` out of it breaks on the reset commit
+        instead of testing the validator. Schema 5 only: the validator has
+        no route for an earlier schema.
         """
         population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
                       "population": "a" * 64,
                       "entries": {"counter::unit-suite": {"min": 5.0,
                                                           "max": 10.0,
                                                           "n": 6}},
+                      "seeds": ["counter::unit-suite"],
                       "wall": {}}
-        if acked:
-            population["slopes"] = {"counter::unit-suite": 2.0}
-        recorded = {"schema": 4, "basis": "fixture", "cell": "fixture",
+        recorded = {"schema": 5, "basis": "fixture", "cell": "fixture",
                     "measured_commit": "a" * 40, "measured_at": "2026-10-24",
                     "populations": {"unit-suite": population}}
         candidate = json.loads(json.dumps(recorded))
@@ -1447,37 +1447,35 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_inline_speed_validator_accepts_tightening_and_refuses_looseners(self):
         script = self._validator()
-        for acked in (False, True):
-            with self.subTest(slopes=acked):
-                data, repo = self._speed_validator_tree(
-                    "ghw-speed-validator-")
-                self.addCleanup(shutil.rmtree, data.parent, True)
-                recorded, candidate = self._speed_documents(acked)
-                self._speed_validator_case(
-                    script, data, repo, recorded, candidate, 0, "")
-                recorded_max = recorded["populations"]["unit-suite"][
-                    "entries"]["counter::unit-suite"]["max"]
-                candidate["populations"]["unit-suite"]["entries"][
-                    "counter::unit-suite"]["max"] = recorded_max + 0.001
-                refused = self._speed_validator_case(
-                    script, data, repo, recorded, candidate, 1, "loosened")
-                self.assertEqual(refused.stdout.strip(), "")
+        data, repo = self._speed_validator_tree("ghw-speed-validator-")
+        self.addCleanup(shutil.rmtree, data.parent, True)
+        recorded, candidate = self._speed_documents()
+        self._speed_validator_case(script, data, repo, recorded, candidate, 0, "")
+        recorded_max = recorded["populations"]["unit-suite"][
+            "entries"]["counter::unit-suite"]["max"]
+        candidate["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"]["max"] = recorded_max + 0.001
+        refused = self._speed_validator_case(
+            script, data, repo, recorded, candidate, 1, "loosened")
+        self.assertEqual(refused.stdout.strip(), "")
 
     @staticmethod
     def _seed_loophole_cases(recorded, seeded):
         """(recorded, candidate, fragment): each route around the seed shape.
 
         Every case must refuse, naming why. The first one rewrites the
-        recorded side too — with no slope table anywhere, the same addition
+        recorded side too — with no seeds list anywhere, the same addition
         is refused exactly as before seeds existed, which is the property
         that keeps the allowance closed for everything it does not name.
         """
-        no_slopes = json.loads(json.dumps(recorded))
-        no_slopes["populations"]["unit-suite"].pop("slopes")
-        no_slopes_seeded = json.loads(json.dumps(no_slopes))
-        no_slopes_seeded["populations"]["unit-suite"]["entries"][
+        no_seeds = json.loads(json.dumps(recorded))
+        no_seeds["populations"]["unit-suite"].pop("seeds")
+        no_seeds_seeded = json.loads(json.dumps(no_seeds))
+        no_seeds_seeded["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = {"min": 9.0, "max": 9.0, "n": 2}
-        yield no_slopes, no_slopes_seeded, "changed its entries"
+        # Without a seeds list the population is not the schema-5 shape at
+        # all, so the shape rule refuses before the entry check could.
+        yield no_seeds, no_seeds_seeded, "unexpected shape"
 
         def mutated(fragment, case):
             mutant = json.loads(json.dumps(seeded))
@@ -1499,34 +1497,34 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                                    "n": 2}
         yield mutated("changed its entries", on_wall)
 
-        def changed_slope(unit):
-            unit["slopes"]["counter::unit-suite"] = 3.0
-        yield mutated("changed slopes", changed_slope)
+        def changed_seeds(unit):
+            unit["seeds"] = ["counter::other"]
+        yield mutated("changed seeds", changed_seeds)
 
-        def invalid_slope(unit):
-            unit["slopes"] = {"counter::unit-suite": -1}
-        yield mutated("invalid slopes", invalid_slope)
+        def duplicate_seeds(unit):
+            unit["seeds"] = ["counter::unit-suite", "counter::unit-suite"]
+        yield mutated("invalid seeds", duplicate_seeds)
 
-        def missing_slope(unit):
-            unit["slopes"] = {"e2e::bench.render": 1.0}
-        yield mutated("entries without slopes", missing_slope)
+        def non_string_seed(unit):
+            unit["seeds"] = [4]
+        yield mutated("invalid seeds", non_string_seed)
 
         def no_change(unit):
             unit["entries"] = {}
         yield mutated("no strict maximum reduction", no_change)
 
     def test_inline_speed_validator_judges_seeds_and_their_loopholes(self):
-        """A seed lands only slope-declared, seed-shaped, entries-only.
+        """A seed lands only seed-declared, seed-shaped, entries-only.
 
-        Issue #240's post-merge state: main records no entries and the
+        Issue #269's post-merge state: main records no entries and the
         first measurement seeds them. The validator must accept exactly the
         seeded artifact and refuse every route around the shape — an
         undeclared addition, a non-degenerate range, a wall addition, a
-        changed slope, an invalid slope table, and an artifact with neither
-        a lowering nor a seed.
+        changed or malformed seeds list, and an artifact with neither a
+        lowering nor a seed.
         """
         script = self._validator()
-        recorded, seeded = self._speed_documents(acked=True)
+        recorded, seeded = self._speed_documents()
         # The seed case is the post-merge state: fetched main records no
         # entries yet, so the candidate's entry is an addition, not a move.
         recorded["populations"]["unit-suite"]["entries"] = {}
@@ -1543,22 +1541,24 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             self._speed_validator_case(script, data, repo, recorded_case,
                                        candidate_case, 1, fragment)
 
-    def test_inline_speed_validator_refuses_entries_without_slopes_in_old(self):
-        """The shape rule holds for the recorded side too.
+    def test_inline_speed_validator_reads_schema_five_only(self):
+        """The slopes branch is gone, and so is every earlier schema.
 
-        A population carrying slopes must cover every entry it still
-        records — that is what makes a later seed of the same node
-        lawful — so an old document recording an entry its slopes omit is
-        refused before anything is compared.
+        Post-merge main only ever sees the statement instrument's document,
+        so a schema-4 artifact has no route: refused before anything is
+        compared, and the slopes key a schema-4 population carried is part
+        of the unexpected shape it is refused for.
         """
         script = self._validator()
-        recorded, candidate = self._speed_documents(acked=True)
+        recorded, candidate = self._speed_documents()
+        recorded["schema"] = 4
+        candidate["schema"] = 4
         recorded["populations"]["unit-suite"]["slopes"] = {
-            "e2e::bench.render": 0.5}
-        data, repo = self._speed_validator_tree("ghw-speed-shape-validator-")
+            "counter::unit-suite": 2.0}
+        data, repo = self._speed_validator_tree("ghw-speed-schema-validator-")
         self.addCleanup(shutil.rmtree, data.parent, True)
         self._speed_validator_case(script, data, repo, recorded, candidate,
-                                   1, "entries without slopes")
+                                   1, "must declare schema 5")
 
     def test_comment_share_validator_uses_exact_bytes_and_integer_shares(self):
         script = self._validator()

@@ -61,17 +61,17 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertIn("working-directory: head", step)
         self.assertIn("id: probe", text)
 
-    def test_the_ratchet_step_declares_slope_redefined_removals(self):
+    def test_the_ratchet_step_declares_seed_redefined_removals(self):
         """The instrument reset's removals must stay declared by the step.
 
-        Issue #240 removes the four redefined ratio envelopes while the
-        same document declares each node's slope; without the derivation
-        the ratchet refuses the reset commit, and once main records the
-        seeds the loop stays silent again. Both conditions live in the
-        step text alone.
+        Issue #269 removes the four retired-instrument envelopes while the
+        same document declares each node's id in `seeds`; without the
+        derivation the ratchet refuses the reset commit, and once main
+        records the seeded entries the loop stays silent again. Both
+        conditions live in the step text alone.
         """
         block = self._run_block("The committed baseline only ratchets down")
-        self.assertIn("# SLOPE-DECLARED REMOVALS", block)
+        self.assertIn("# SEED-DECLARED REMOVALS", block)
         self.assertIn(
             '"$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE"',
             block)
@@ -82,9 +82,9 @@ class TestTheWorkflowText(unittest.TestCase):
         # only name entries the head document no longer records.
         self.assertIn('if node in new["populations"][name]["entries"]:', block)
         listing_start = block.index("listing=")
-        slope_start = block.index("# SLOPE-DECLARED REMOVALS")
-        self.assertGreater(slope_start, listing_start,
-                           "the slope loop reads the base copy the listing "
+        seeds_start = block.index("# SEED-DECLARED REMOVALS")
+        self.assertGreater(seeds_start, listing_start,
+                           "the seeds loop reads the base copy the listing "
                            "loop's window wrote; it must run after it")
 
     def test_no_workflow_still_looks_up_a_release_for_the_speed_gate(self):
@@ -98,11 +98,20 @@ class TestTheWorkflowText(unittest.TestCase):
         result = cd.compare({"m::a": 10}, {"m::a": 12})
         result.update(metric="cpu_time_ratio", slopes={"m::a": 2})
         report = cd.render(result, 0.30, "baseline")
-        self.assertIn(
-            "The gate judges the NET value (raw − slope·calibration, "
-            "per-entry slopes in the baseline) when the population declares "
-            "slopes; the ratio remains what the JUnit records.", report)
+        # The retired ratio's note is a legacy one-liner now; the net line
+        # survives because schema 3/4 documents still fold that way.
+        self.assertIn("retired by #269; recorded here so schema 3/4 "
+                      "documents keep rendering", report)
         self.assertIn("Compared value: **net of the calibration slope**", report)
+
+    def test_the_statement_metric_note_names_the_instrument(self):
+        result = cd.compare({"m::a": 10}, {"m::a": 12})
+        result.update(metric="statement_count")
+        report = cd.render(result, 0.30, "baseline")
+        self.assertIn("deterministic count of sys.monitoring LINE events",
+                      report)
+        self.assertIn("runner-invariant by construction", report)
+        self.assertIn("non-Python subprocess work", report)
 
 
 if __name__ == "__main__":

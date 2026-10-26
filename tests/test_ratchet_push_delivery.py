@@ -83,15 +83,25 @@ def records(record_path):
                    measured_commit=BASE)
     elif record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
-        # The #240 reset leaves `entries` empty, so the recorded side
-        # gains the entry here: the validator judges a lowering of a
-        # recorded maximum, whatever the document currently records.
-        envelope = old["populations"]["unit-suite"]["entries"].get(entry)
+        # The validator reads schema 5 only, so the fixture declares that
+        # shape whichever schema the committed document is on: seeds instead
+        # of slopes, on every population.
+        old["schema"] = 5
+        for population in old["populations"].values():
+            population.pop("slopes", None)
+            population["seeds"] = population.get("seeds",
+                                                 sorted(population["entries"]))
+        # The #269 reset leaves `entries` empty and the seeds declare the
+        # node, so the recorded side gains the entry here: the validator
+        # judges a lowering of a recorded maximum, whatever the document
+        # currently records.
+        population = old["populations"]["unit-suite"]
+        envelope = population["entries"].get(entry)
         if envelope is None:
             envelope = {"min": 9.0, "max": 10.0, "n": 2}
-            old["populations"]["unit-suite"].setdefault("slopes", {})[entry] \
-                = 2.0
-            old["populations"]["unit-suite"]["entries"][entry] = envelope
+            if entry not in population["seeds"]:
+                population["seeds"].append(entry)
+            population["entries"][entry] = envelope
         envelope["max"] = envelope["min"] + 2
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
@@ -138,9 +148,9 @@ def speed_merge_case():
                   "population": "a" * 64,
                   "entries": {"unit::a": {"min": 5.0, "max": 10.0, "n": 6},
                               "unit::b": {"min": 4.0, "max": 8.0, "n": 6}},
-                  "slopes": {"unit::a": 2.0, "unit::b": 1.5},
+                  "seeds": ["unit::a", "unit::b"],
                   "wall": {}}
-    old_speed = {"schema": 4, "basis": "fixture", "cell": "fixture",
+    old_speed = {"schema": 5, "basis": "fixture", "cell": "fixture",
                  "measured_commit": BASE, "measured_at": "2026-10-24",
                  "populations": {"unit-suite": population}}
     new_speed = json.loads(json.dumps(old_speed))
@@ -401,6 +411,13 @@ class TestRatchetPushDelivery(unittest.TestCase):
         fixture = speed_tests.TestSpeedRatchetTightening()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        # The writer preserves the base document's schema, and the validator
+        # reads schema 5 only, so the fixture base is declared schema 5 with
+        # its recorded entries seed-declared before anything is written.
+        fixture.baseline["schema"] = 5
+        for population in fixture.baseline["populations"].values():
+            population["seeds"] = sorted(population["entries"])
+        fixture._write_baseline()
         # The actual reports, comparator fold and writer produce the payload at S.
         # pylint: disable=protected-access
         fixture._write_reports()

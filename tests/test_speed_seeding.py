@@ -1,4 +1,4 @@
-"""Seed the net instrument through its real readers, writer and workflow steps."""
+"""Seed the statement instrument through its real readers, writer and steps."""
 import contextlib
 import io
 import json
@@ -32,19 +32,20 @@ class TestSpeedSeeding(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.fixture._write_reports(unit_wall=20, renderer_wall=0.085)
+        self.fixture.baseline["schema"] = 5
         for name, population in self.fixture.baseline["populations"].items():
-            population["metric"] = "cpu_time_ratio"
-            population["slopes"] = dict.fromkeys(population["entries"], 2)
+            # The committed shape after the #269 reset: schema 5, the
+            # statement instrument, no entries, and the seed declaration
+            # naming every id the first passing push will seed.
+            population["metric"] = "cpu_time"
+            population["seeds"] = sorted(population["entries"])
             population["entries"] = {}
             paths = (self.fixture.unit_reports if name == "unit-suite"
                      else self.fixture.renderer_reports)
             for index, path in enumerate(paths):
                 tree = ET.parse(path)
-                tree.getroot().set("gh-metric", "cpu_time_ratio")
                 for case in tree.iter("testcase"):
-                    case.set("time", str((25 + index) / 10))
-                    case.set("gh-raw-cpu", str(25 + index))
-                    case.set("gh-calibration-cpu", "10")
+                    case.set("time", str(5 + index / 10))
                 tree.write(path)
         self.fixture._write_baseline()
 
@@ -54,8 +55,9 @@ class TestSpeedSeeding(unittest.TestCase):
         seeded = json.loads(self.fixture.output_path.read_text())
         for name, population in seeded["populations"].items():
             with self.subTest(population=name):
-                self.assertEqual(set(population["entries"]), set(population["slopes"]))
-                self.assertTrue(all(value == {"min": 5, "max": 5, "n": 2}
+                self.assertEqual(sorted(population["entries"]),
+                                 sorted(population["seeds"]))
+                self.assertTrue(all(value == {"min": 5.0, "max": 5.0, "n": 2}
                                     for value in population["entries"].values()))
                 self.assertEqual(population["wall"],
                                  self.fixture.baseline["populations"][name]["wall"])
@@ -74,9 +76,9 @@ class TestSpeedSeeding(unittest.TestCase):
         self.assertEqual(seeded["populations"]["renderer-workloads"]["entries"]
                          [fixtures.WORKLOAD_NODES[0]]["n"], 2)
 
-    def test_an_absent_entry_without_a_slope_still_refuses(self):
-        self.fixture.baseline["populations"]["unit-suite"]["slopes"] = {
-            "counter::different": 2}
+    def test_an_absent_entry_without_a_seed_declaration_still_refuses(self):
+        self.fixture.baseline["populations"]["unit-suite"]["seeds"] = [
+            "counter::different"]
         self.fixture._write_baseline()
         result = self.fixture._run()
         self.assertEqual(result.returncode, 2)
@@ -84,7 +86,7 @@ class TestSpeedSeeding(unittest.TestCase):
                       "counter::unit-suite", result.stderr)
         self.assertFalse(self.fixture.output_path.exists())
 
-    def test_wall_never_seeds_even_for_a_slope_declared_node(self):
+    def test_wall_never_seeds_even_for_a_seed_declared_node(self):
         for path in self.fixture.renderer_reports:
             tree = ET.parse(path)
             tree.getroot().findall("testcase")[1].set("gh-wall", "1")
@@ -112,11 +114,13 @@ class TestSpeedSeeding(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             self.assertEqual(compare.main(args), 0)
         self.assertIn("within budget", output.getvalue())
-        self.assertIn("main's ratchet will seed", output.getvalue())
+        self.assertIn("main's ratchet will seed the seed-declared entries",
+                      output.getvalue())
         self.assertIn("on merge", output.getvalue())
         population = self.fixture.baseline["populations"]["unit-suite"]
         population["entries"] = {"counter::renamed": {"min": 1, "max": 4, "n": 2}}
-        population["slopes"]["counter::renamed"] = 2
+        population["seeds"] = sorted(
+            set(population["seeds"]) | {"counter::renamed"})
         self.fixture._write_baseline()
         errors = io.StringIO()
         with contextlib.redirect_stderr(errors):
@@ -137,25 +141,25 @@ class TestSpeedSeeding(unittest.TestCase):
         self.assertIn(["push", "origin", "HEAD:refs/heads/main"], calls)
         self.assertEqual(json.loads(installed), seeded)
 
-    def _slope_declared_removals(self, base_doc, new_doc):
-        """The STEP's slope-declared removal fragment, run over two documents.
+    def _seed_declared_removals(self, base_doc, new_doc):
+        """The STEP's seed-declared removals fragment, over two documents.
 
         Sliced from the fragment's marker to its `done`, with the base copy
         at $RUNNER_TEMP and the head copy at $GH_WIDGETS_BASELINE, exactly
-        where the
-        step leaves them; both declaration conditions run against real
-        files, because the loop reads the documents rather than trusting.
+        where the step leaves them; both declaration conditions run against
+        real files, because the loop reads the documents rather than
+        trusting.
         """
         _declared, _working_dir, block = self.steps.step_run(
             "The committed baseline only ratchets down")
         lines = block.splitlines(True)
         start = next(index for index, line in enumerate(lines)
-                     if line.lstrip().startswith("# SLOPE-DECLARED REMOVALS"))
+                     if line.lstrip().startswith("# SEED-DECLARED REMOVALS"))
         end = next(index for index, line in enumerate(lines)
-                   if line.lstrip().startswith('done <<< "$slope_removals"'))
+                   if line.lstrip().startswith('done <<< "$seed_removals"'))
         fragment = "".join(lines[start:end + 1])
 
-        root = Path(tempfile.mkdtemp(prefix="ghw-slope-"))
+        root = Path(tempfile.mkdtemp(prefix="ghw-seed-"))
         self.addCleanup(shutil.rmtree, root, True)
         (root / "head" / "gate").mkdir(parents=True)
         (root / "base-baseline.json").write_text(
@@ -173,28 +177,30 @@ class TestSpeedSeeding(unittest.TestCase):
         return done.stdout.split(), root
 
     @staticmethod
-    def _sloped(document):
-        """`document` with every population's entries slope-declared."""
+    def _seeded(document, keep_entries=False):
+        """`document` as schema 5: every population's entries seed-declared."""
+        document["schema"] = 5
         for population in document["populations"].values():
-            population["slopes"] = {node: 2 for node in population["entries"]}
+            population.pop("slopes", None)
+            population["seeds"] = sorted(population["entries"])
+            if not keep_entries:
+                population["entries"] = {}
         return document
 
     @REQUIRES_POSIX_SHELL
-    def test_the_step_declares_slope_redefined_removals(self):
+    def test_the_step_declares_seed_redefined_removals(self):
         """The instrument reset's removals are declared from the documents.
 
-        The reset removes the four redefined ratio envelopes and declares
-        each node's slope in the same document; the down-only ratchet
-        refuses an undeclared deletion, so the step derives the declaration:
-        recorded in the base, slope-declared in the head, no longer
-        recorded. The derived arguments must make the real comparator
-        accept the removal.
+        The reset removes the four retired-instrument envelopes while the
+        same document declares each node's id in `seeds`; the down-only
+        ratchet refuses an undeclared deletion, so the step derives the
+        declaration: recorded in the base, seed-declared in the head, no
+        longer recorded. The derived arguments must make the real
+        comparator accept the removal.
         """
-        new_doc = self._sloped(fixtures.document())
-        for population in new_doc["populations"].values():
-            population["entries"] = {}
+        new_doc = self._seeded(fixtures.document())
 
-        derived, root = self._slope_declared_removals(
+        derived, root = self._seed_declared_removals(
             fixtures.document(), new_doc)
 
         self.assertEqual(sorted(derived), sorted([
@@ -221,17 +227,18 @@ class TestSpeedSeeding(unittest.TestCase):
         self.assertIn("no entry raised", result.stdout)
 
     @REQUIRES_POSIX_SHELL
-    def test_slope_declarations_are_not_derived_for_recorded_entries(self):
-        """A slope-declared entry the head still records is no removal.
+    def test_seed_declarations_are_not_derived_for_recorded_entries(self):
+        """A seed-declared entry the head still records is no removal.
 
-        Main carries every seeded entry beside the slopes that produced it.
+        Main carries every seeded entry beside the seeds that produced it.
         Deriving a removal declaration for a recorded entry would refuse
         the ratchet step on every later push — "declared removed but is
         still recorded" — so the loop's second condition is load-bearing,
         not a convenience, and is pinned here against exactly that state.
         """
-        derived, _root = self._slope_declared_removals(
-            fixtures.document(), self._sloped(fixtures.document()))
+        derived, _root = self._seed_declared_removals(
+            fixtures.document(), self._seeded(fixtures.document(),
+                                              keep_entries=True))
         self.assertEqual(derived, [])
 
 

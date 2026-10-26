@@ -8,8 +8,9 @@ name: tests
 #   environment (issue #6).
 # - no services and no network (gql_fn is injected): the suite is stdlib
 #   unittest. pytest is neither a suite dependency nor a CI tool any more:
-#   it was the speed job's timing harness, and that job counts CPU seconds
-#   now. The pinned requirement remains available to local pytest runs.
+#   it was the speed job's timing harness, and that job counts deterministic
+#   statement counts now. The pinned requirement remains available to local
+#   pytest runs.
 #
 # The changes job owns path applicability, so workflow triggers stay
 # unfiltered by paths. Push runs only on main; working branches receive CI
@@ -397,53 +398,48 @@ jobs:
     # load-invariant COUNTER for the unit suite and for each renderer workload,
     # and this job compares them against gate/speed-baseline.json.
     #
-    # ONE FAMILY OF INSTRUMENTS, CPU SECONDS, from
-    # `resource.getrusage(RUSAGE_CHILDREN)` around each measured child. On-CPU
-    # time, so steal time is excluded. The RENDERER population is judged on
-    # raw CPU seconds; the UNIT-SUITE population on the CALIBRATED ratio —
-    # counter.py's docstring and the baseline's `basis` carry the account:
-    # raw seconds carried a 1.96x machine factor on identical code.
+    # THE INSTRUMENT IS A DETERMINISTIC STATEMENT COUNT (issue #269). The
+    # measured child counts its own `sys.monitoring` LINE events (Python 3.12+;
+    # this job pins 3.13): the same code with the same collected population
+    # executes the same lines and returns the same count, on any runner, under
+    # any load — which is exactly the property five earlier instruments lost to
+    # (#190, #216, #221, #240 and #269 each red main on unchanged code, the
+    # last at +43.4% over budget). Measured on the box that shipped the change
+    # (2026-10-26, at 447e92f, env pinned per counter.child_environment), three
+    # runs of the full unit suite read 99,661,405 / 99,667,559 / 99,658,415
+    # events — spread 0.0092% — with `missed: 0` every run and the suite
+    # exiting 0 every run. The overhead costs CI minutes, not correctness.
+    # Not a wall or CPU quantity, so neither load nor the machine factor
+    # reaches it. BLIND SPOTS, stated rather than hidden: the count covers
+    # the direct child's own executed lines, so nested Python children and
+    # non-Python subprocesses — the renderers' git calls — are not counted.
+    # A commit that moved all of a renderer's work into git would show that
+    # entry flat; the gross wall smoke bound is the net for that. The gate
+    # remains a STEP-CHANGE DETECTOR: it catches a gross step change and the
+    # smoke bound, not a 20% regression.
     #
-    # READ THIS BEFORE THE NUMBERS BELOW, BECAUSE IT CHANGES WHAT THEY ARE WORTH:
-    # THIS GATE RUNS ON CPU SECONDS, NOT ON A DETERMINISTIC COUNTER. Instruction
-    # counts and syscall counts are both deterministic and both would have been
-    # strictly better instruments; neither survived measurement on the cell that
-    # will read this baseline. What ships is a STEP-CHANGE DETECTOR and not a
-    # very sensitive one: it catches a gross step change and the gross wall
-    # smoke bound. It will not catch a 20% regression anywhere, and it does not
-    # catch a doubling either. That is a real cost, and it is named as one here,
-    # in counter.py's docstring, in the comparator's METRIC_NOTES and in the
-    # envelope section below, and in every report this job writes.
-    #
-    # THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured on
-    # this cell — ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure — not
-    # assumed, so the next reader can re-run them rather than take this file's
-    # word for it:
+    # LEGACY INSTRUMENTS. Before #269 the gate judged CPU seconds
+    # (`resource.getrusage(RUSAGE_CHILDREN)`, steal excluded) and then a
+    # calibrated ratio; both followed the runner pool's machine variety, which
+    # is why the statement count replaced them. The CPU-side alternatives were
+    # measured on this cell — ubuntu24 image 20260927.320.1, kernel
+    # 6.17.0-1022-azure — not assumed, and the record stays true:
     #
     #   36811152307  Instruction counts: perf_event_paranoid is 4, `perf` IS
     #                installed, and `perf stat -e instructions` still exits 255
     #                with "Access to performance monitoring and observability
     #                operations is limited." Unavailable.
-    #   36812466498  Syscall counts: `strace -f -c` works here (ptrace_scope is 1,
-    #                which restricts tracing to your own descendants — and
-    #                strace IS the parent of what it traces, so it is inside the
-    #                restriction). It is exactly deterministic: three runs of one
-    #                workload gave the same total every time (870 calls, 89
-    #                errors) while that report's own `% time` column swung
-    #                between 17.34% and 48.84%. DETERMINISTIC, AND NOT
-    #                AFFORDABLE: 0.24-0.25s against 0.19s untraced on that small
-    #                workload, and over the real renderer workloads 64830 /
-    #                68057 / 75870 ms per bench round against 5053 / 5684 /
-    #                6215 ms untraced — 12.8x, landing almost entirely on
-    #                render-impact.py, which shells out to git (237727-238180
-    #                syscalls at 63.7-74.6 wall seconds traced, while render.py at
-    #                2007 syscalls and render-responsiveness.py at 1927 are
-    #                seconds each). Over the renderer workloads that is 12.8x per
-    #                bench round, on a workload set the gate exists to measure.
+    #   36812466498  Syscall counts: `strace -f -c` works here and is exactly
+    #                deterministic (870 calls, 89 errors on three runs of one
+    #                workload), but it costs 12.8x the work it measures over
+    #                the renderer workloads (64830-75870 ms per bench round
+    #                against 5053-6215 ms untraced), landing almost entirely
+    #                on render-impact.py, which shells out to git.
     #
     # The standing rule that leaves: an instrument the cell cannot use does not
     # belong in the gate, and neither does one that costs more than the thing it
-    # measures. Both were tried. Both lost on numbers.
+    # measures. The statement count needs neither kernel facility — the
+    # callback runs inside the child it counts.
     #
     # WHY WALL TIME IS NOT A MAGNITUDE. A GitHub-hosted runner is a multi-tenant
     # VM. Steal time, a neighbouring container, a different core and a different
@@ -455,10 +451,9 @@ jobs:
     # never the thing that made the number mean anything.
     #
     # The probe step below still runs, and still prints the two kernel settings
-    # that decide whether a deterministic counter is possible at all —
-    # perf_event_paranoid and yama ptrace_scope. A reader who sees CPU seconds in
-    # use can then see that the alternatives were measured and unavailable or too
-    # expensive, rather than assuming nobody thought of them.
+    # that decided whether the CPU-side deterministic counters were possible —
+    # perf_event_paranoid and yama ptrace_scope — beside the instrument in
+    # use, so the record of why stays on the runner where it was taken.
     #
     # THE BASELINE IS AN OBSERVED ENVELOPE, NOT A NUMBER. Each entry in
     # gate/speed-baseline.json records the RANGE it was actually seen over — a min, a
@@ -688,19 +683,19 @@ jobs:
             --root "$GH_WIDGETS_GH_BENCH_FIXTURE_ROOT"
 
       - name: Measure the unit suite
-        # One calibrated measurement of the suite per round; the raw parts
-        # print beside the ratio.
+        # One statement-count measurement of the suite per round; the count
+        # is deterministic for this collected population.
         #
         # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
         # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
-        # exits 5, and the counter faithfully measures 0.05 CPU seconds of
-        # interpreter startup. That is exactly what three CI runs did: the
-        # step before this one had collected 724 node ids from the checkout,
-        # so the job collected a 724-test population and measured none of it,
-        # and a baseline derived from that would have been derived from a
-        # population it never actually ran. The reports are written to
-        # $GITHUB_WORKSPACE too, so that naming the cwd can never also move
-        # where this step's own output lands.
+        # exits 5, and the counter faithfully measures a near-zero count of
+        # interpreter startup. That is exactly what three CI runs did with
+        # the old instrument: the step before this one had collected 724 node
+        # ids from the checkout, so the job collected a 724-test population
+        # and measured none of it, and a baseline derived from that would
+        # have been derived from a population it never actually ran. The
+        # reports are written to $GITHUB_WORKSPACE too, so that naming the
+        # cwd can never also move where this step's own output lands.
         #
         # The suite's exit code is deliberately NOT this job's verdict:
         # tests.yml owns pass/fail. But a counter measured over a suite that
@@ -708,15 +703,15 @@ jobs:
         # why a non-zero code is reported here rather than swallowed.
         working-directory: head
         env:
-          # The calibrated ratio; the baseline records it for the unit suite.
-          GH_WIDGETS_GH_COUNTER_METRIC: cpu_time_ratio
+          # The gated instrument; the baseline records it for both
+          # populations.
+          GH_WIDGETS_GH_COUNTER_METRIC: statement_count
         run: |
           mkdir -p "$GH_WIDGETS_REPORTS"
           for round in $(seq 1 "$GH_WIDGETS_ROUNDS"); do
             echo "::group::unit suite round $round"
             status=0
             python3 scripts/ci/counter.py \
-              --calibrated \
               --junit-file "$GH_WIDGETS_REPORTS/unit-$round.xml" \
               --name 'counter::unit-suite' \
               --cwd "$GH_WIDGETS_REPO" \
@@ -759,9 +754,10 @@ jobs:
       - name: Run renderer workloads
         env:
           GH_WIDGETS_GH_BENCH_FIXTURE_ROOT: ${{ runner.temp }}/gh7-fixture
-          # Both populations use calibrated ratios; pin the instrument here
-          # so renderer measurements agree with their committed baseline.
-          GH_WIDGETS_GH_COUNTER_METRIC: cpu_time_ratio
+          # Both populations use the statement count; pin the instrument
+          # here so renderer measurements agree with their committed
+          # baseline.
+          GH_WIDGETS_GH_COUNTER_METRIC: statement_count
         working-directory: head
         run: |
           mkdir -p "$GH_WIDGETS_REPORTS"
@@ -1139,21 +1135,22 @@ jobs:
             echo "Declared workload removals: ${removals[*]}"
           fi
 
-          # SLOPE-DECLARED REMOVALS, DERIVED FROM THE DOCUMENTS. The
-          # instrument reset (issue #240) removes the four redefined ratio
-          # envelopes while the same commit declares each node's calibration
-          # slope, and the down-only ratchet refuses an undeclared deletion,
-          # so the declaration is derived here instead of hand-written: an
-          # entry the base records, the head slope-declares for the SAME
-          # population, and no longer records is the removal the documents
-          # describe. All three conditions are read from the two documents,
-          # never trusted; the comparator still refuses a declared removal
-          # that is still recorded, which keeps the derivation honest. Only
-          # entries are eligible: wall never seeds, so no slope ever
-          # redefines a wall record. After the seeds land the loop is silent
-          # again — an entry main still records is no removal — so main's
-          # own pushes keep passing this step unchanged.
-          slope_removals="$(python3 - "$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE" <<'PY'
+          # SEED-DECLARED REMOVALS, DERIVED FROM THE DOCUMENTS. The
+          # instrument reset (issue #269) removes the four retired-instrument
+          # envelopes while the same commit declares each node's id in the
+          # population's `seeds` list, and the down-only ratchet refuses an
+          # undeclared deletion, so the declaration is derived here instead
+          # of hand-written: an entry the base records, the head
+          # seed-declares for the SAME population, and no longer records is
+          # the removal the documents describe. All three conditions are
+          # read from the two documents, never trusted; the comparator
+          # still refuses a declared removal that is still recorded, which
+          # keeps the derivation honest. Only entries are eligible: wall
+          # never seeds, so no seed declaration covers a wall record. After
+          # the seeds land the loop is silent again — an entry main still
+          # records is no removal — so main's own pushes keep passing this
+          # step unchanged.
+          seed_removals="$(python3 - "$RUNNER_TEMP/base-baseline.json" "$GH_WIDGETS_BASELINE" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -1161,10 +1158,10 @@ jobs:
           base = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           new = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
           for name, population in sorted(base.get("populations", {}).items()):
-              slopes = (new.get("populations", {}).get(name, {})
-                        .get("slopes", {}))
+              seeds = (new.get("populations", {}).get(name, {})
+                       .get("seeds", []))
               for node in population.get("entries", {}):
-                  if node not in slopes:
+                  if node not in seeds:
                       continue
                   if node in new["populations"][name]["entries"]:
                       continue
@@ -1175,10 +1172,10 @@ jobs:
             if [ -n "$population" ]; then
               removals+=(--ratchet-allow-removal "$population:entries:$node")
             fi
-          done <<< "$slope_removals"
-          if [ -n "$slope_removals" ]; then
-            echo "Declared slope redefinition removals:"
-            printf '%s\n' "$slope_removals" \
+          done <<< "$seed_removals"
+          if [ -n "$seed_removals" ]; then
+            echo "Declared seed redefinition removals:"
+            printf '%s\n' "$seed_removals" \
               | sed 's/^/  /;s/\t/:entries:/'
           fi
 

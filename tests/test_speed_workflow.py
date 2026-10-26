@@ -350,15 +350,15 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     @REQUIRES_BENCH
     def test_probe_records_the_instrument_and_the_kernel_settings(self):
         # There is one instrument, so the step chooses nothing. What it
-        # exists for is the RECORD of why, and a reader who sees CPU seconds
-        # has to be able to see that the deterministic alternatives were
-        # measured rather than assumed away.
+        # exists for is the RECORD of why, and a reader has to be able to
+        # see which instrument the gate counts and that the CPU-side
+        # deterministic alternatives were measured rather than assumed away.
         root = self._run_with_tree("ghw-speed-probe-")
         completed, output = self._execute_probe(root)
 
         self.assertEqual(completed.returncode, 0,
                          completed.stdout + completed.stderr)
-        self.assertIn("metric=cpu_time", output)
+        self.assertIn("metric=statement_count", output)
         self.assertIn("metric_reason=", output)
         self.assertIn("perf_event_paranoid=", output)
         self.assertIn("ptrace_scope=", output)
@@ -368,18 +368,19 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         # by should be visible in the workflow for both populations.
         self.assertEqual(
             self.steps.step_run("Measure the unit suite")[0]
-            ["GH_WIDGETS_GH_COUNTER_METRIC"], "cpu_time_ratio")
+            ["GH_WIDGETS_GH_COUNTER_METRIC"], "statement_count")
         renderer_env = self.steps.step_run("Run renderer workloads")[0]
         self.assertEqual(renderer_env["GH_WIDGETS_GH_COUNTER_METRIC"],
-                         "cpu_time_ratio")
+                         "statement_count")
         self.assertNotIn("GH_WIDGETS_OBSERVE_RENDERER_RATIO", renderer_env)
 
-    def test_the_unit_suite_step_measures_calibrated(self):
-        # Losing the flag compares ratios against a raw envelope, or the
-        # reverse.
+    def test_the_unit_suite_step_carries_no_retired_flag(self):
+        # The calibrated flag is retired with the instrument it drove;
+        # leaving it would ask measure() for a label it refuses.
         _env, _working_dir, block = self.steps.step_run(
             "Measure the unit suite")
-        self.assertIn("--calibrated", block)
+        self.assertNotIn("--calibrated", block)
+        self.assertIn("-- python3 -m unittest discover", block)
 
     def _edit_harness(self, root, old, new):
         harness = root / "head" / "scripts" / "bench" / "e2e_bench.py"
@@ -824,7 +825,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
                     "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         completed = self.steps.bash(block, root, working_dir, env)
@@ -855,7 +856,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
                     "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         reports = Path(env["GH_WIDGETS_REPORTS"])
@@ -882,7 +883,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
                     "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         broken = self.steps.bash(block, root, None, env)
@@ -1498,9 +1499,9 @@ class TestFeatureRaiseCLI(unittest.TestCase):
 
     def test_a_seed_shaped_addition_passes_without_a_feature(self):
         old = json.loads(json.dumps(self.fixture.old))
+        old["schema"] = 5
         old["populations"]["unit-suite"]["entries"] = {}
-        old["populations"]["unit-suite"]["slopes"] = {
-            "counter::unit-suite": 2.0}
+        old["populations"]["unit-suite"]["seeds"] = ["counter::unit-suite"]
         fixture = self.fixture_with("seed", old)
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"] = {
