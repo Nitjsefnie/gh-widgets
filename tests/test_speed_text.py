@@ -9,9 +9,17 @@ reason other than the thing it names. The controls that execute a step live
 in `test_speed_workflow.py`; `test_speed_ratchet.py` holds the ones that
 drive the ratchet.
 """
+import contextlib
+import io
+import json
+import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
 from scripts.ci.speed_workflow_steps import StepRunner
-from tests.test_compare_counters import cd
+from tests.test_baseline import document
+from tests.test_compare_counters import cd, write_junit
 
 
 class TestTheWorkflowText(unittest.TestCase):
@@ -114,8 +122,52 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertIn("non-Python subprocess work", report)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestTheComparatorBlindWindow(unittest.TestCase):
+    """Schema-5 read through the comparator with a seeds-declared window.
+
+    Hosted here because tests/test_compare_counters.py sits at its recorded
+    size ceiling; the control drives the same comparator entry point and
+    reuses its fixtures.
+    """
+
+    UNIT_NODE = "counter::unit-suite"
+
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.baseline_path = self.tmp_path / "baseline.json"
+        self.summary_path = self.tmp_path / "summary.md"
+
+    def test_a_schema_five_blind_window_passes_with_the_seed_note(self):
+        # The committed shape after the #269 reset: `entries` is empty and
+        # the population's seeds declare what awaits its first measurement.
+        # The compare passes and reports the seed note, and the metric note
+        # names the statement instrument and its blind spot.
+        report_path = write_junit(self.tmp_path / "a.xml",
+                                  {self.UNIT_NODE: 99_000_000})
+        payload = document()
+        payload["schema"] = 5
+        population = payload["populations"]["unit-suite"]
+        population["metric"] = "statement_count"
+        population["entries"] = {}
+        population["seeds"] = [self.UNIT_NODE]
+        self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cd.main([
+                "--baseline", str(self.baseline_path), "--population",
+                "unit-suite", "--head", str(report_path),
+                "--summary-file", str(self.summary_path)]), 0)
+        report = output.getvalue()
+        self.assertIn("within budget", report)
+        self.assertIn("main's ratchet will seed the seed-declared entries",
+                      report)
+        self.assertIn("runner-invariant by construction", report)
+        self.assertIn("non-Python subprocess work", report)
+        self.assertTrue(self.summary_path.read_text(encoding="utf-8")
+                        .endswith(report.rstrip() + "\n"))
 
 
 if __name__ == "__main__":
