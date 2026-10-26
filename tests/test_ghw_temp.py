@@ -235,6 +235,57 @@ def _has_impact_fame_prefix(call):
     return False
 
 
+def _guard_candidates(tree):
+    """One walk: the module's tempfile bindings and every candidate node."""
+    module_names = {_TEMPFILE}
+    bound = {}
+    attrs = []
+    names = []
+    calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _TEMPFILE and alias.asname:
+                    module_names.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom) \
+                and node.module == _TEMPFILE and node.level == 0:
+            for alias in node.names:
+                if alias.name in _BANNED_ATTRS:
+                    bound[alias.asname or alias.name] = \
+                        f"{_TEMPFILE}.{alias.name}"
+        elif isinstance(node, ast.Call) \
+                and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in _BANNED_ATTRS:
+            calls.append(node)
+        elif isinstance(node, ast.Attribute) \
+                and isinstance(node.value, ast.Name) \
+                and node.attr in _BANNED_ATTRS:
+            attrs.append(node)
+        elif isinstance(node, ast.Name):
+            names.append(node)
+    return module_names, bound, attrs, names, calls
+
+
+def _guard_violations(path, source):
+    """One parse, one shared walk, classification after bindings complete."""
+    tree = ast.parse(source, filename=str(path))
+    module_names, bound, attrs, names, calls = _guard_candidates(tree)
+    exempt = {call.func for call in calls
+              if _dotted_tempfile_name(
+                  call.func, module_names, bound) is not None
+              and _has_impact_fame_prefix(call)}
+    hits = []
+    for node in attrs:
+        dotted = _dotted_tempfile_name(node, module_names, bound)
+        if dotted is not None and node not in exempt:
+            hits.append(f"{Path(path).name}: {dotted}")
+    for node in names:
+        dotted = bound.get(node.id)
+        if dotted is not None:
+            hits.append(f"{Path(path).name}: {dotted}")
+    return hits
+
+
 class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
     def test_no_test_module_creates_temp_dirs_behind_the_helper(self):
         violations = []
@@ -248,45 +299,7 @@ class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
             # file that never says the name cannot carry a banned spelling.
             if _TEMPFILE not in source:
                 continue
-            tree = ast.parse(source, filename=str(path))
-            module_names = {_TEMPFILE}
-            bound = {}
-            attrs = []
-            names = []
-            calls = []
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name == _TEMPFILE and alias.asname:
-                            module_names.add(alias.asname)
-                elif isinstance(node, ast.ImportFrom) \
-                        and node.module == _TEMPFILE and node.level == 0:
-                    for alias in node.names:
-                        if alias.name in _BANNED_ATTRS:
-                            bound[alias.asname or alias.name] = \
-                                f"{_TEMPFILE}.{alias.name}"
-                elif isinstance(node, ast.Call) \
-                        and isinstance(node.func, ast.Attribute) \
-                        and node.func.attr in _BANNED_ATTRS:
-                    calls.append(node)
-                elif isinstance(node, ast.Attribute) \
-                        and isinstance(node.value, ast.Name) \
-                        and node.attr in _BANNED_ATTRS:
-                    attrs.append(node)
-                elif isinstance(node, ast.Name):
-                    names.append(node)
-            exempt = {call.func for call in calls
-                      if _dotted_tempfile_name(
-                          call.func, module_names, bound) is not None
-                      and _has_impact_fame_prefix(call)}
-            for node in attrs:
-                dotted = _dotted_tempfile_name(node, module_names, bound)
-                if dotted is not None and node not in exempt:
-                    violations.append(f"{path.name}: {dotted}")
-            for node in names:
-                dotted = bound.get(node.id)
-                if dotted is not None:
-                    violations.append(f"{path.name}: {dotted}")
+            violations.extend(_guard_violations(path, source))
         self.assertEqual(
             violations, [],
             "convert these sites to tests/_ghw_temp.py; an impact-fame- "
