@@ -1,13 +1,10 @@
 """Tests for the committed baseline's shape and its refusals.
 
-`scripts/ci/baseline.py` exists to answer one question — is this document one
-we are willing to judge against? — and every line of it is a way of saying
-no. So these tests are mostly about the ways it could say yes wrongly, which
-is the failure a gate cannot have: a baseline that validates when it should
-not is a gate comparing against a number nobody can account for.
-
-`scripts/ci` is not a package and deliberately has no `__init__.py`, so the
-module is loaded by path, the way the renderers load `ghwidgets_common.py`.
+`scripts/ci/baseline.py` answers one question — is this document one we are
+willing to judge against? — and every line of it is a way of saying no; a
+baseline that validates when it should not is a gate comparing against a
+number nobody can account for. `scripts/ci` is not a package and deliberately
+has no `__init__.py`, so the module is loaded by path.
 """
 import contextlib
 import copy
@@ -25,6 +22,7 @@ BASELINE_FILE = REPO_ROOT / "gate/speed-baseline.json"
 
 
 def load_baseline():
+    """baseline.py by path — scripts/ci is not a package."""
     path = REPO_ROOT / "scripts" / "ci" / "baseline.py"
     spec = importlib.util.spec_from_file_location("ghw_baseline_test", path)
     if spec is None or spec.loader is None:
@@ -141,8 +139,7 @@ class TestValidation(unittest.TestCase):
                         self.assertIn(fragment, str(caught.exception))
 
     def test_a_missing_file_is_the_first_push_not_an_error(self):
-        # Exit 0 and a report, never a traceback: two stack traces ahead of
-        # every green first run train readers to scroll past the red ones.
+        # Exit 0 and a report, never a traceback ahead of a green first run.
         with self.assertRaises(baseline.MissingBaseline) as caught:
             baseline.read_baseline(self.root / "absent.json")
         self.assertIn("first push", str(caught.exception))
@@ -186,8 +183,7 @@ class TestValidation(unittest.TestCase):
         self.refusal(payload, "sha256 digest")
 
     def test_a_named_population_that_does_not_exist_is_refused(self):
-        # No default. Picking one by inference is the quiet accommodation
-        # this gate refuses to make.
+        # No default: picking one by inference is the accommodation this gate refuses.
         loaded = baseline.read_baseline(self.write(document()))
         with self.assertRaises(baseline.ComparisonError) as caught:
             baseline.read_population(loaded, "renderer-workloads")
@@ -195,12 +191,7 @@ class TestValidation(unittest.TestCase):
 
 
 class TestSchemaFive(TestValidation):
-    """Schema 5: the statement instrument, seeding on the documents.
-
-    The calibrated instrument's records are gone (issue #269); schema 5
-    replaces its slopes with `seeds` — the entry ids awaiting their first
-    measurement — and refuses slopes outright.
-    """
+    """Schema 5: slopes refused, `seeds` the entry ids awaiting measurement."""
 
     @staticmethod
     def seeded(entries=None, seeds=None):
@@ -228,8 +219,7 @@ class TestSchemaFive(TestValidation):
         self.refusal(payload, "slopes is retired by schema 5")
 
     def test_seeds_are_refused_before_schema_five(self):
-        # Schema 5 declares the seed route; no earlier schema carries it,
-        # mirroring how schema 3 refuses the slopes it never carried.
+        # No earlier schema carries the seed route.
         for schema in (3, 4):
             with self.subTest(schema=schema):
                 payload = document()
@@ -251,16 +241,76 @@ class TestSchemaFive(TestValidation):
         self.refusal(self.seeded(entries={}), "no entries")
 
 
-class TestRatchetSeeds(unittest.TestCase):
-    """The seed authorization is the OLD document's `seeds` list.
+class TestEnvelopes(unittest.TestCase):
+    """The shape this schema was changed to, and the ways it is not one."""
 
-    `_is_seed_addition` decides whether an entry the base never recorded is
-    the automated ratchet's seeding commit or a hand raise: membership in
-    the base population's `seeds` list, on `entries` (wall never seeds),
-    seed-shaped.
-    """
+    def setUp(self):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        self.path = (Path(stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="ghw-envelope-")))
+            / "speed-baseline.json")
 
-    def population(self):
+    def refusal(self, envelope, fragment):
+        payload = document()
+        payload["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"] = envelope
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(baseline.ComparisonError) as caught:
+            baseline.read_baseline(self.path)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_a_single_value_where_an_envelope_belongs_is_refused(self):
+        # This is what schema 2 looked like, and the message has to say so.
+        self.refusal(16.0, "records the observed RANGE")
+
+    def test_an_envelope_from_one_observation_is_refused(self):
+        # A single sample's maximum is a measurement, not a worst case.
+        self.refusal({"min": 10.0, "max": 16.0, "n": 1}, "at least 2")
+
+    def test_an_envelope_missing_its_count_is_refused(self):
+        self.refusal({"min": 10.0, "max": 16.0}, "n")
+
+    def test_an_envelope_with_min_above_max_is_refused(self):
+        self.refusal({"min": 20.0, "max": 16.0, "n": 6}, "not a range")
+
+    def test_a_negative_bound_is_refused(self):
+        self.refusal({"min": -1.0, "max": 16.0, "n": 6}, "non-negative")
+
+    def test_a_fractional_count_is_refused(self):
+        self.refusal({"min": 10.0, "max": 16.0, "n": 2.5}, "not an integer")
+
+    def test_an_empty_entries_map_is_refused(self):
+        payload = document()
+        payload["populations"]["unit-suite"]["entries"] = {}
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(baseline.ComparisonError) as caught:
+            baseline.read_baseline(self.path)
+        self.assertIn("no entries", str(caught.exception))
+
+    def test_maxima_are_the_numbers_the_head_is_judged_against(self):
+        entries = {"a": {"min": 1.0, "max": 9.0, "n": 6},
+                   "b": {"min": 2.0, "max": 3.0, "n": 6}}
+        self.assertEqual(baseline.envelope_maxima(entries),
+                         {"a": 9.0, "b": 3.0})
+
+
+class TestRatchet(unittest.TestCase):
+    """A ceiling may go down; nothing goes up, except a seed-declared seeding."""
+
+    def population(self, render_max):
+        payload = document()
+        payload["populations"]["renderer-workloads"] = copy.deepcopy(
+            payload["populations"]["unit-suite"])
+        payload["populations"]["renderer-workloads"]["entries"] = {
+            "e2e::bench.render": {"min": 0.05, "max": render_max, "n": 6}}
+        payload["populations"]["unit-suite"] = {
+            "metric": "cpu_time", "tolerance": 0.25, "population": DIGEST,
+            "entries": {"counter::unit-suite":
+                        {"min": 1.0, "max": 1.0, "n": 6}}, "wall": {}}
+        return payload
+
+    def seeds_population(self):
         payload = document()
         payload["schema"] = 5
         for name in payload["populations"]:
@@ -277,20 +327,71 @@ class TestRatchetSeeds(unittest.TestCase):
             envelope or {"min": 14.0, "max": 14.0, "n": 2})
         return new
 
-    def test_a_seed_declared_addition_is_not_a_raise(self):
+    def test_a_raised_maximum_is_a_raise(self):
+        moved = baseline.raised_entries(self.population(0.09),
+                                        self.population(0.12))
+        self.assertEqual(list(moved),
+                         ["renderer-workloads:entries:e2e::bench.render"])
+        self.assertEqual(moved["renderer-workloads:entries:e2e::bench.render"],
+                         (0.09, 0.12))
+
+    def test_a_lowered_maximum_is_not(self):
+        self.assertEqual(baseline.raised_entries(self.population(0.12),
+                                                 self.population(0.09)), {})
+
+    def test_a_minimum_moving_up_alone_is_not_a_raise(self):
+        # The ceiling is the recorded maximum; a faster minimum is an improvement.
+        old = self.population(0.09)
+        new = self.population(0.09)
+        renderer = new["populations"]["renderer-workloads"]["entries"]
+        renderer["e2e::bench.render"]["min"] = 0.07
+        self.assertEqual(baseline.raised_entries(old, new), {})
+
+    def test_a_population_the_base_never_had_is_a_raise_by_definition(self):
+        old = self.population(0.09)
+        del old["populations"]["renderer-workloads"]
+        moved = baseline.raised_entries(old, self.population(0.09))
+        self.assertEqual(list(moved),
+                         ["renderer-workloads:entries:e2e::bench.render"])
+
+    def test_a_DELETED_entry_is_a_raise(self):
+        # Iterating only the new document never visits a removed entry.
+        old = self.population(0.09)
+        new = self.population(0.09)
+        for side in (old, new):
+            side["populations"]["renderer-workloads"]["entries"][
+                "e2e::bench.render-responsiveness"] = {
+                    "min": 0.05, "max": 0.08, "n": 6}
+        del new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render-responsiveness"]
+        moved = baseline.raised_entries(old, new)
         self.assertEqual(
-            baseline.raised_entries(self.population(),
-                                    self.seed(self.population())), {})
+            moved,
+            {"renderer-workloads:entries:e2e::bench.render-responsiveness":
+             (0.08, None)})
+
+    def test_a_deleted_whole_population_is_a_raise(self):
+        old = self.population(0.09)
+        new = self.population(0.09)
+        del new["populations"]["renderer-workloads"]
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(len(moved), 1)
+
+    def test_a_seed_declared_addition_is_not_a_raise(self):
+        # The base declares the node in `seeds`, the map is `entries`, and
+        # the candidate is seed-shaped; all read from the documents.
+        old = self.seeds_population()
+        self.assertEqual(baseline.raised_entries(old, self.seed(old)), {})
 
     def test_an_addition_without_a_seed_declaration_stays_a_raise(self):
-        old = self.population()
+        old = self.seeds_population()
         old["populations"]["unit-suite"]["seeds"] = ["counter::other"]
         self.assertEqual(
             baseline.raised_entries(old, self.seed(old)),
             {"unit-suite:entries:counter::unit-suite": (None, 14.0)})
 
     def test_a_non_seed_shaped_addition_stays_a_raise(self):
-        old = self.population()
+        old = self.seeds_population()
         self.assertEqual(
             baseline.raised_entries(
                 old, self.seed(old, envelope={"min": 10.0, "max": 14.0,
@@ -298,7 +399,8 @@ class TestRatchetSeeds(unittest.TestCase):
             {"unit-suite:entries:counter::unit-suite": (None, 14.0)})
 
     def test_a_seed_shaped_wall_addition_stays_a_raise(self):
-        old = self.population()
+        # Wall never seeds: the authorization is `entries`-only.
+        old = self.seeds_population()
         new = self.seed(old)
         new["populations"]["unit-suite"]["wall"]["counter::unit-suite"] = {
             "min": 65.0, "max": 65.0, "n": 2}
@@ -306,18 +408,30 @@ class TestRatchetSeeds(unittest.TestCase):
             baseline.raised_entries(old, new),
             {"unit-suite:wall:counter::unit-suite": (None, 65.0)})
 
+    def test_the_old_slope_seeding_is_no_authorization_under_schema_five(self):
+        """A schema-4 base's slopes do NOT authorize a schema-5 seeding."""
+        old = self.population(0.09)
+        old["populations"]["renderer-workloads"]["slopes"] = {
+            "e2e::bench.render": 0.5}
+        del old["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"]
+        new = self.population(0.09)
+        new["populations"]["renderer-workloads"]["seeds"] = [
+            "e2e::bench.render"]
+        new["populations"]["renderer-workloads"]["entries"][
+            "e2e::bench.render"] = {"min": 0.12, "max": 0.12, "n": 2}
+        moved = baseline.raised_entries(old, new)
+        self.assertEqual(
+            moved,
+            {"renderer-workloads:entries:e2e::bench.render": (None, 0.12)})
+
 
 class TestDeclaredRaises(unittest.TestCase):
     """A raise is allowed only when declared, and the declaration is checked.
 
-    The strict down-only rule left the documented re-derivation route
-    (issue #133) without a green path: once the suite grew past its recorded
-    envelope, EVERY observation landed above the old maximum, and the
-    ratchet refused the very change the re-derivation procedure prescribes.
-    Declarations close that gap without opening the gate: a declared raise
-    must name a slot that actually went up, a slot declared both removed
-    and raised is a contradiction, and every undeclared raise stays a
-    failure.
+    A declared raise must name a slot that actually went up, a slot declared
+    both removed and raised is a contradiction, and every undeclared raise
+    stays a failure.
     """
 
     def population(self, unit_max, wall_max=5.0):
@@ -553,18 +667,11 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
 
 
 class ReadsTheCommittedBaseline(unittest.TestCase):
-    """Shared access to `speed-baseline.json`, skipping when it is absent.
+    """Shared access to the committed `speed-baseline.json`, skipping when absent.
 
-    There IS a committed baseline. It was absent for one commit — its
-    envelopes had been measured at d051020, against a `ghwidgets_common.py`
-    the module split removed, and re-derive-never-carry sometimes means
-    deleting a document that describes a program this tree is not.
-
-    The cases below still skip while it is absent and come back the moment it
-    returns, because that is the property worth keeping: a control that cannot
-    run because the thing it describes is missing has not failed, it is
-    waiting, and the first commit that re-adds the file gets it checked
-    against this tree on the box, in under a second.
+    A control that cannot run because the thing it describes is missing has
+    not failed, it is waiting; the commit that re-adds the file gets it
+    checked against this tree on the box, in under a second.
     """
 
     def _load(self):
@@ -578,10 +685,8 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
     """`wall` is an envelope, and it is armed for the renderer workloads."""
 
     def test_a_wall_value_that_is_not_an_envelope_is_refused(self):
-        # The same refusal as `entries`: with wall spreading 52-63% on this
-        # cell, a single stored figure would be an arbitrary pick among min,
-        # median and max, and the wrong pick either trips the gate on noise
-        # or leaves it deaf.
+        # Same refusal as `entries`: a single stored wall figure trips the
+        # gate on noise or leaves it deaf.
         payload = document()
         payload["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": 5.0}
@@ -594,7 +699,7 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
         self.assertIn("observed RANGE", str(caught.exception))
 
     def test_the_committed_gate_is_armed_for_the_renderer_workloads(self):
-        loaded = self._load()
+        loaded = self._load()  # three workloads, every envelope n >= 2
         wall = loaded["populations"]["renderer-workloads"]["wall"]
         self.assertEqual(
             sorted(wall),
@@ -606,17 +711,9 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
                                         baseline.MIN_ENVELOPE_SAMPLES)
 
     def test_the_unit_suite_smoke_bound_is_armed_too(self):
-        # It was unarmed for two rounds because no wall observation had been
-        # supplied for counter::unit-suite — not because the suite should be
-        # exempt. Both populations are now armed, and their ceilings differ by
-        # two orders of magnitude for the reason the basis records: the same
-        # machine effect measured at two scales.
-        #
-        # Deliberately NOT pinning the figures. A test that hard-codes a
-        # baseline's numbers fails every time the baseline is re-derived from
-        # a new measurement, and the numbers belong in the file, where the
-        # dispatch that produced them is cited. What is worth pinning is that
-        # the map is populated and shaped correctly.
+        # Deliberately NOT pinning the figures: a test that hard-codes a
+        # baseline's numbers fails every re-derivation. Pin that the map is
+        # populated and shaped correctly.
         loaded = self._load()
         wall = loaded["populations"]["unit-suite"]["wall"]
         self.assertEqual(list(wall), ["counter::unit-suite"])
@@ -626,12 +723,8 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
         self.assertGreater(envelope["max"], 0.0)
 
     def test_every_recorded_ceiling_is_above_every_observed_value(self):
-        """The gate must be able to pass on an ordinary run.
-
-        `max x (1 + tolerance)` has to clear the maximum the dispatches
-        recorded, or the baseline refuses on the very program it measured. A
-        tolerance of zero would do that; this asserts the margin is real.
-        """
+        """`max x (1 + tolerance)` must clear the recorded maximum, or the
+        baseline refuses on the very program it measured."""
         loaded = self._load()
         for name, population in loaded["populations"].items():
             ceiling = {node: envelope["max"] * (1 + population["tolerance"])
@@ -659,8 +752,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
 
     def test_the_committed_baseline_validates(self):
         loaded = self._load()
-        self.assertEqual(
-            sorted(loaded["populations"]), ["renderer-workloads", "unit-suite"])
+        self.assertEqual(sorted(loaded["populations"]),
+                         ["renderer-workloads", "unit-suite"])
 
     def test_every_entry_records_more_than_one_observation(self):
         loaded = self._load()
@@ -671,29 +764,18 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                                             baseline.MIN_ENVELOPE_SAMPLES)
 
     def test_the_tolerances_are_small_enough_to_fire(self):
-        # The whole reason the baseline is an envelope rather than a number.
-        # A tolerance at or above 1.0 on any entry would be a gate that
-        # cannot fail, which is the shape this repository keeps rejecting.
+        # A tolerance at or above 1.0 on any entry is a gate that cannot fail.
         loaded = self._load()
         for name, population in loaded["populations"].items():
             with self.subTest(population=name):
                 self.assertLess(population["tolerance"], 1.0)
 
     def test_the_committed_digest_matches_this_tree(self):
-        """The control that would have caught the stale digest.
+        """The control that catches a stale digest.
 
-        Nine commits after the dispatches were taken added
-        `test_baseline.py` and more cases to `test_ci_workflows.py`, so the
-        committed digest described a population this tree no longer has and
-        the unit-suite comparison refused on the branch's own head. That was
-        the guard working correctly on a stale document — which is exactly
-        why the staleness has to be caught HERE, on the box, in under a
-        second, rather than on a runner minutes later.
-
-        This assertion is deliberately the last thing that changes when a
-        test is added, because adding a test is what invalidates it. That
-        ordering is the design: the drift is loud immediately and local,
-        not deferred to a dispatch.
+        Adding a test invalidates the committed digest, so this assertion is
+        deliberately the last thing that changes when a test is added: the
+        drift fails HERE on the box, in under a second, not on a runner.
         """
         loaded = self._load()
         collected = baseline.counter.collect_node_ids(REPO_ROOT / "tests")
@@ -729,7 +811,7 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 for name, population in loaded["populations"].items()}
 
     def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
-        """Derive doubling detection from the current automatically tightened record."""
+        """Derive doubling detection from the current tightened record."""
         loaded = self._load()
         for name, population in loaded["populations"].items():
             entries = population["entries"]
@@ -748,19 +830,12 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                     self.assertEqual(values, (maxima[node], doubled[node]))
 
     def test_the_smoke_ceilings_are_computed_not_transcribed(self):
-        """The four wall ceilings, against the constant the gate really uses.
+        """The wall ceilings, against the constant the gate really uses.
 
-        The point of this control is that it FAILS when the smoke factor
-        changes. An earlier version of it carried its own local literal `3.0`
-        and asserted `3.0 * max > max` — which is true for every positive
-        factor, so changing `SMOKE_FACTOR` to 1.0 left it green. It
-        therefore imported a constant it did not depend on and claimed a
-        protection it did not have, which is the same defect three times in
-        this branch.
-
-        So the factor comes from `compare_counters.SMOKE_FACTOR` — the same
-        object `smoke_failures` defaults to — and the assertion is that every
-        ceiling leaves headroom over the worst wall the cell recorded.
+        An earlier version carried its own literal `3.0` and stayed green when
+        `SMOKE_FACTOR` changed to 1.0 — it claimed a protection it did not
+        have. So the factor comes from `compare_counters.SMOKE_FACTOR`, and
+        every ceiling must leave headroom over the worst wall recorded.
         """
         loaded = self._load()
         factor = cd.SMOKE_FACTOR
@@ -776,13 +851,9 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                         f"over the worst wall this cell recorded")
 
     def test_no_tolerance_is_tighter_than_the_cell_has_shown(self):
-        """The rule, as a control.
-
-        An envelope and its tolerance must span what the cell has actually
-        shown, INCLUDING its fastest and slowest machine. A tolerance
-        narrowed because the latest four runs were quiet is the failure the
-        file's `basis` is written against, and here it is arithmetic rather
-        than a sentence somebody can re-read and agree with.
+        """An envelope's tolerance must span what the cell has actually shown,
+        INCLUDING its fastest and slowest machine — here as arithmetic, not a
+        sentence somebody can re-read and agree with.
         """
         loaded = self._load()
         for name, population in loaded["populations"].items():
@@ -796,12 +867,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                         f"tighter than the {span:.1%} this cell has shown")
 
     def test_no_tolerance_is_so_loose_that_the_gate_cannot_fire(self):
-        """The other side of the same rule.
-
-        Spanning everything is right until the allowance passes 1.0, at which
-        point a doubled workload clears the ceiling and the gate is
-        decorative — the shape this whole change exists to remove. A
-        tolerance at or above 1.0 would be that.
+        """The other side: past 1.0 a doubled workload clears the ceiling and
+        the gate is decorative — the shape this whole change exists to remove.
         """
         loaded = self._load()
         for name, population in loaded["populations"].items():
@@ -809,16 +876,11 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 self.assertLess(population["tolerance"], 1.0)
 
     def test_the_stated_ceilings_are_not_transcribed_anywhere(self):
-        """No hard-coded ceiling figures in the prose.
-
-        The wrong ones lived in the baseline's `basis` and in the workflow
-        header. This cannot police prose it does not parse; what it CAN do is
-        make the next reader's first move a computation rather than a
-        reading, and pin the one number that must agree. The suite's own
-        entry is named only while the population records entries at all:
-        the #240 reset empties `entries` for the declared blind window, the
-        automated ratchet re-seeds the node after the merge, and the pin
-        re-arms then — the same waiting shape as an absent baseline.
+        """No hard-coded ceiling figures in the prose (the wrong ones lived in
+        the baseline's `basis` and in the workflow header). The suite's own
+        entry is named only while the population records entries at all: the
+        #269 reset empties `entries` for the declared blind window and the
+        automated ratchet re-seeds the node after the merge.
         """
         loaded = self._load()
         ceilings = self.ceilings(loaded)
