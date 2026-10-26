@@ -269,11 +269,8 @@ class RestCache:
     A stored URL's next request sends its ETag as If-None-Match, and a 304
     Not Modified is answered from the store instead of the wire — GitHub
     charges no primary rate limit for a 304. Entries sit at the document's
-    top level, keyed by URL; each save replaces the file with exactly the
-    URLs that run used (304-reused ones included), so a URL that stops
-    being visited drops out instead of accumulating. Two renderers sharing
-    one file prune each other's idle URLs by that same rule and refetch
-    them once.
+    top level, keyed by URL; each save replaces the file with the URLs
+    that run used, so a URL that stops being visited drops out.
 
     `path` None is an inert store: no persistence, no If-None-Match, and the
     run's counts go nowhere.
@@ -289,10 +286,9 @@ class RestCache:
         self.entries = load_cache(path, REST_CACHE_VERSION) if path else {}
 
     def entry(self, url):
-        """The stored entry for `url`, or None. A missing or malformed entry,
-        or one whose body no longer parses as JSON, degrades to a full
-        fetch, like a corrupt store file. A served entry counts as used, so
-        the run's save keeps it."""
+        """The stored entry for `url`, or None. A missing, malformed, or
+        unparseable entry degrades to a full fetch; a served entry counts
+        as used, so the run's save keeps it."""
         with self.lock:
             entry = self.updates.get(url) or self.entries.get(url)
             if not (isinstance(entry, dict)
@@ -319,9 +315,8 @@ class RestCache:
 
     def save(self):
         """The run's one save, under the writers' lock: the file is replaced
-        with exactly the URLs this run used (304-reused ones included), so
-        nothing idle survives on disk. A failed save degrades with a
-        warning, never failing the render."""
+        with the URLs this run used. A failed save warns, never failing the
+        render."""
         if not self.path:
             return
         with self.lock:
@@ -341,10 +336,9 @@ def conditional_get(url, request, send, store):
     With a stored ETag the request carries If-None-Match, and a 304 is the
     success path: the stored body and Link header are returned exactly as a
     200's would be, and never retried. Only a complete 200 body carrying an
-    ETag is stored; a response without an ETag stores nothing, so it never
-    sends If-None-Match either. A reported non-200 status raises before
-    anything is read or stored. `store` None is a pass-through: no header,
-    no counts, no 304 handling.
+    ETag is stored, so a response without one never goes conditional. A
+    reported non-200 status raises before anything is read or stored.
+    `store` None is a pass-through: no header, no counts, no 304 handling.
 
     The caller owns retries, the timing track, and body parsing; every wire
     request and every 304 is counted in `store` for the run's counts line.
