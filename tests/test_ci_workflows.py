@@ -1397,9 +1397,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         Built here rather than read from the committed baseline: the gate
         must keep its verdict for ANY population shape it accepts, and the
         committed record legitimately carries empty `entries` while its
-        seeds await the first post-merge measurement (issue #269), so a
-        fixture reading `entries[...]` out of it breaks on the reset commit
-        instead of testing the validator. Schema 5 only.
+        seeds await the first post-merge measurement (issue #269).
         """
         population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
                       "population": "a" * 64,
@@ -1548,11 +1546,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                        candidate_case, 1, fragment)
 
     def test_inline_speed_validator_reads_schema_five_only(self):
-        """The slopes branch is gone, and so is every earlier schema.
-
-        Post-merge main only ever sees the statement instrument's document,
-        so a schema-4 artifact has no route: refused before anything is compared.
-        """
+        """Post-merge main only sees schema 5; a schema-4 artifact has no route."""
         script = self._validator()
         recorded, candidate = self._speed_documents()
         recorded["schema"] = 4
