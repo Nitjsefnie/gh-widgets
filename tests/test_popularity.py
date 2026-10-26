@@ -43,8 +43,7 @@ def response(data, link='', status=200):
 
 def git_repository(path, author=None):
     """Construct a real bare history without changing configured git identity."""
-    subprocess.run(['git', 'init', '--bare', '--initial-branch=trunk', str(path)],
-                   check=True, capture_output=True)
+    subprocess.run(['git', 'init', '--bare', '--initial-branch=trunk', str(path)], check=True, capture_output=True)
     for key in ('gc.autoDetach', 'maintenance.autoDetach'):
         subprocess.run(['git', '-C', str(path), 'config', key, 'false'],
                        check=True, capture_output=True)

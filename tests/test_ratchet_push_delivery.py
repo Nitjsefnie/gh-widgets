@@ -101,7 +101,7 @@ def records(record_path):
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
     elif record_path == ".github/size-baseline.json":
-        # A count moves DOWN only: never-raised is what is judged.
+        # A count moves DOWN only; never-raised is judged.
         old = {"schema_version": 1, "baseline": {"one.py": 42}}
         new = {"schema_version": 1, "baseline": {"one.py": 41}}
     else:

@@ -1,4 +1,3 @@
-"""Expose the runtime siblings for stdlib unittest discovery from the root."""
 import sys
 from pathlib import Path
 
