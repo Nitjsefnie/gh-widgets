@@ -84,17 +84,16 @@ class TestPlatformLimits(unittest.TestCase):
         # `resource`, because the refusal for a missing facility happens at
         # measurement time, not at import time. The statement instrument
         # (issue #269) is the gated one; the calibrated ratio is retired
-        # (declared so schema 3/4 documents keep validating) and the raw
-        # CPU path is the fallback the harness dispatches to explicitly.
+        # (declared so schema 3/4 documents keep validating) and raw CPU is
+        # the fallback the harness dispatches to explicitly.
         self.assertEqual(module.METRICS,
                          (module.CPU_METRIC, module.CALIBRATED_METRIC,
                           module.STATEMENT_METRIC))
 
     @REQUIRES_BENCH
     def test_measuring_without_resource_refuses_rather_than_guessing(self):
-        # A silent fallback would return a number that measures something
-        # else. This asserts the refusal names both the platform and the
-        # reason, because a bare "unavailable" is not actionable.
+        # A silent fallback would return a number measuring something else;
+        # the refusal names the platform and the reason, not a bare flag.
         with mock.patch.object(counter, "resource", None),                 mock.patch.object(counter.sys, "platform", "win32"):
             with self.assertRaises(counter.CounterError) as caught:
                 counter.measure([sys.executable, "-c", "pass"],
@@ -702,7 +701,8 @@ class TestStatementInstrument(unittest.TestCase):
         # fixture separates the instruments: measure() refuses, the statement measures.
         with mock.patch.object(counter, "resource", None):
             with self.assertRaises(counter.CounterError) as refused:
-                counter.measure([sys.executable, "-c", "pass"])
+                counter.measure([sys.executable, "-c", "pass"],
+                                metric=counter.CPU_METRIC)
             measured = counter.measure_statement(
                 [sys.executable, "-c", "print('still counted')"])
         self.assertIn("RUSAGE_CHILDREN", str(refused.exception))
