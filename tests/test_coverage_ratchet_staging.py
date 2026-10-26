@@ -4,7 +4,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from tests.test_coverage_ratchet import _report
+from tests import _ghw_temp
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "coverage-ratchet.yml"
@@ -35,7 +35,7 @@ class TestCoverageRatchetStaging(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     @unittest.skipUnless(shutil.which("jq"), "the staging step uses jq")
     def test_climb_stages_the_candidate_floor_and_measured_sha(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-coverage-stage-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-coverage-stage-") as tmp:
             root = Path(tmp)
             scripts = root / "scripts/ci"
             scripts.mkdir(parents=True)
@@ -78,7 +78,7 @@ class TestCoverageRatchetStaging(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     @unittest.skipUnless(shutil.which("jq"), "the staging step uses jq")
     def test_equal_floor_stages_nothing(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-coverage-no-stage-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-coverage-no-stage-") as tmp:
             root = Path(tmp)
             scripts = root / "scripts/ci"
             scripts.mkdir(parents=True)
@@ -109,7 +109,7 @@ class TestCoverageRatchetStaging(unittest.TestCase):
             self.assertFalse((runner_temp / "ratchet-data").exists())
 
     def _compute_and_stage(self, percent):
-        with tempfile.TemporaryDirectory(prefix="ghw-coverage-pipeline-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-coverage-pipeline-") as tmp:
             root = Path(tmp)
             scripts = root / "scripts/ci"
             scripts.mkdir(parents=True)

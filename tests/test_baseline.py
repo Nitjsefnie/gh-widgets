@@ -12,9 +12,9 @@ import importlib.util
 import json
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +79,7 @@ class TestValidation(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-baseline-")))
+            _ghw_temp.tempdir(prefix="ghw-baseline-")))
 
     def write(self, payload):
         path = self.root / "speed-baseline.json"
@@ -249,7 +249,7 @@ class TestEnvelopes(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.path = (Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-envelope-")))
+            _ghw_temp.tempdir(prefix="ghw-envelope-")))
             / "speed-baseline.json")
 
     def refusal(self, envelope, fragment):
@@ -689,7 +689,7 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
         payload = document()
         payload["populations"]["unit-suite"]["wall"] = {
             "counter::unit-suite": 5.0}
-        with tempfile.TemporaryDirectory(prefix="ghw-wall-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-wall-") as td:
             path = Path(td) / "b.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(baseline.ComparisonError) as caught:

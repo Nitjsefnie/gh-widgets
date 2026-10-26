@@ -19,9 +19,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests import _ghw_temp
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "secrecy-check.sh"
 
@@ -82,7 +82,7 @@ def make_fixture(prefix, with_script=True):
     leak committed and then removed, the linked worktree) stay visible there
     instead of disappearing into a parameterised helper.
     """
-    tmp = Path(tempfile.mkdtemp(prefix=prefix))
+    tmp = Path(_ghw_temp.mkdtemp(prefix=prefix))
     main = tmp / "main"
     main.mkdir()
     git("init", "-q", "-b", "main", cwd=main)

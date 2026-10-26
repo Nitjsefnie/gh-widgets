@@ -10,12 +10,12 @@ import json
 import os
 import stat
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import ghwidgets_cache
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", (Path(__file__).resolve().parents[1] / "src" / "ghwidgets_common.py"))
@@ -31,7 +31,7 @@ class CacheWriting(unittest.TestCase):
 
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.td = tempfile.TemporaryDirectory()
+        self.td = _ghw_temp.tempdir()
         self.addCleanup(self.td.cleanup)
         self.path = Path(self.td.name) / "impact-cache.json"
 

@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -17,6 +16,7 @@ from unittest import mock
 from scripts.bench.bench_platform import REQUIRES_BENCH
 
 import impact_clone
+from tests import _ghw_temp
 
 REQUIRES_STATEMENT = unittest.skipUnless(
     sys.version_info >= (3, 12),
@@ -67,13 +67,13 @@ def _number(element, attribute):
 def class_temp_path(test_case, prefix):
     stack = contextlib.ExitStack()
     test_case.addClassCleanup(stack.close)
-    return Path(stack.enter_context(tempfile.TemporaryDirectory(
+    return Path(stack.enter_context(_ghw_temp.tempdir(
         prefix=prefix)))
 
 
 class TestFixtureSetup(unittest.TestCase):
     def test_two_builds_have_identical_heads_payloads_and_caches(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-bench-determinism-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-bench-determinism-") as td:
             root = Path(td)
             first = root / "first"
             second = root / "second"
@@ -87,7 +87,7 @@ class TestFixtureSetup(unittest.TestCase):
                              file_bytes(second, "caches"))
 
     def test_seeded_ourloc_count_differs_from_live_fixture_count(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-bench-stale-count-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-bench-stale-count-") as td:
             root = Path(td) / "fixture"
             fixture_setup.build(root)
             cache = json.loads((root / "caches" /
@@ -242,7 +242,7 @@ class TestCloneSourceMirror(unittest.TestCase):
     loc = getattr(render_impact, "_LOC_MODULE")
 
     def clone_command(self, mirror_state):
-        with tempfile.TemporaryDirectory(prefix="ghw-local-mirror-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-local-mirror-") as td:
             root = Path(td)
             mirror = root / "outside__project"
             if mirror_state == "present":

@@ -7,13 +7,13 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import ghwidgets_cache
 import ghwidgets_data as data
+from tests import _ghw_temp
 
 # These tests intentionally exercise the private snapshot boundary helpers.
 # pylint: disable=protected-access
@@ -508,14 +508,14 @@ class AuthoredSnapshot(unittest.TestCase):
 
 class SnapshotValidation(unittest.TestCase):
     def test_snapshot_rejects_unknown_schema(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             path.write_text('{"schema_version":999}', encoding="utf-8")
             with self.assertRaises(data.SnapshotVersionError):
                 data.load_snapshot(path)
 
     def test_snapshot_requires_all_top_level_fields(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
             with self.assertRaises(data.SnapshotValidationError):
@@ -649,14 +649,14 @@ class SnapshotValidation(unittest.TestCase):
                 issues=[issue_record(repository_id="R_missing")]))
 
     def test_canonical_fixture_round_trips_exactly(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             value = snapshot()
             data.write_snapshot(path, value)
             self.assertEqual(data.load_snapshot(path), value)
 
     def test_snapshot_rejects_invalid_json(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             path.write_text("not json", encoding="utf-8")
             with self.assertRaises(data.SnapshotValidationError):
@@ -765,7 +765,7 @@ class DocumentedPullRequestMergeMatrix(unittest.TestCase):
 
 class SnapshotWriting(unittest.TestCase):
     def test_write_snapshot_round_trips_atomically(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "nested" / "snapshot.json"
             value = snapshot()
             data.write_snapshot(path, value)
@@ -773,7 +773,7 @@ class SnapshotWriting(unittest.TestCase):
 
     @unittest.skipIf(sys.platform == "win32", "requires POSIX file modes")
     def test_write_snapshot_creates_a_private_file_under_default_umask(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             original_umask = os.umask(0o022)
             try:
@@ -783,7 +783,7 @@ class SnapshotWriting(unittest.TestCase):
                 os.umask(original_umask)
 
     def test_write_snapshot_validates_before_replacing_existing_file(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             value = snapshot()
             data.write_snapshot(path, value)
@@ -794,7 +794,7 @@ class SnapshotWriting(unittest.TestCase):
             self.assertEqual(data.load_snapshot(path), value)
 
     def test_load_snapshot_rejects_nested_credentials(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             invalid = snapshot()
             invalid["account"]["password"] = "secret"
@@ -803,7 +803,7 @@ class SnapshotWriting(unittest.TestCase):
                 data.load_snapshot(path)
 
     def test_load_and_write_reject_membership_input(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             invalid = snapshot(insiders=["me"])
             path.write_text(json.dumps(invalid), encoding="utf-8")
@@ -816,7 +816,7 @@ class SnapshotWriting(unittest.TestCase):
             self.assertEqual(data.load_snapshot(path), snapshot())
 
     def test_write_rejects_hostile_containers_before_replacing_file(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             value = snapshot()
             data.write_snapshot(path, value)
@@ -827,7 +827,7 @@ class SnapshotWriting(unittest.TestCase):
             self.assertEqual(data.load_snapshot(path), value)
 
     def test_write_rejects_unhashable_state_before_replacing_file(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             value = snapshot()
             data.write_snapshot(path, value)
@@ -837,7 +837,7 @@ class SnapshotWriting(unittest.TestCase):
             self.assertEqual(data.load_snapshot(path), value)
 
     def test_load_rejects_hostile_containers_and_unhashable_state(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             path.write_text("{}", encoding="utf-8")
             cases = [
@@ -853,7 +853,7 @@ class SnapshotWriting(unittest.TestCase):
                             data.load_snapshot(path)
 
     def test_write_snapshot_raises_when_atomic_write_fails(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "snapshot.json"
             with mock.patch.object(
                     ghwidgets_cache, "_write_cache",
@@ -869,7 +869,7 @@ class ImportLayoutTests(unittest.TestCase):
     def test_public_module_imports_without_the_test_bootstrap(self):
         root = Path(__file__).resolve().parents[1]
         for layout in ("source", "flat"):
-            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(layout=layout), _ghw_temp.tempdir() as tmp:
                 directory = Path(tmp)
                 shutil.copy2(root / "ghwidgets_data.py", directory)
                 siblings = directory / "src" if layout == "source" else directory

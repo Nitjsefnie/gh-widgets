@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,6 +15,7 @@ import yaml
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci import changes_detect as cd
 from tests.test_changes_detect import FakeTransport
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
@@ -208,7 +208,7 @@ class TestStagingCallers(unittest.TestCase):
             self.assertEqual(step["env"]["GH_TOKEN"], "${{ github.token }}")
             for data_only, unchanged in ((False, False), (False, True), (True, False)):
                 with self.subTest(workflow=filename, data_only=data_only, unchanged=unchanged):
-                    with tempfile.TemporaryDirectory() as tmp:
+                    with _ghw_temp.tempdir() as tmp:
                         result, output = self._run(Path(tmp), step,
                                                    data_only=data_only, unchanged=unchanged)
                         self.assertEqual(result.returncode, 0, result.stderr)
@@ -220,7 +220,7 @@ class TestStagingCallers(unittest.TestCase):
                                              "b" * 40 + "\n")
                         if data_only:
                             self._assert_skipped(Path(tmp), result, output)
-            with self.subTest(mutant=filename), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(mutant=filename), _ghw_temp.tempdir() as tmp:
                 result, output = self._run(Path(tmp), step, data_only=True, delete_skip=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("changed=true", output)

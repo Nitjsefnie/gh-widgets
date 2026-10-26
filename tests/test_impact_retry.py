@@ -12,10 +12,10 @@ break while doing so.
 """
 import importlib.util
 import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 
 def _load(name, relative):
@@ -105,5 +105,5 @@ class TestFailedRepoIsRetried(unittest.TestCase):
     @staticmethod
     def _clones_ok(moved):
         for repo, t in moved:
-            tmp = tempfile.mkdtemp(prefix="ghw-retry-")
+            tmp = _ghw_temp.mkdtemp(prefix="ghw-retry-")
             yield repo, t, Path(tmp), 0.1, 0.2, None

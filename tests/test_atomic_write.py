@@ -8,10 +8,10 @@ No network; no filesystem outside a TemporaryDirectory.
 import importlib.util
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", (Path(__file__).resolve().parents[1] / "src" / "ghwidgets_common.py"))
@@ -23,7 +23,7 @@ spec.loader.exec_module(common)
 
 class AtomicTextWriting(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        self.temp_dir = _ghw_temp.tempdir()  # pylint: disable=consider-using-with
         self.addCleanup(self.temp_dir.cleanup)
         self.path = Path(self.temp_dir.name) / "public.svg"
 

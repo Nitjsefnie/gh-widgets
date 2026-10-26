@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -29,6 +28,7 @@ from unittest import mock
 # rather than reloading the module in this file, is what makes every guard
 # in the suite read the SAME module object.
 from scripts.bench.bench_platform import REQUIRES_BENCH, counter
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -172,7 +172,7 @@ class TestCwdIsHonoured(unittest.TestCase):
     @REQUIRES_BENCH
     def test_the_flag_changes_where_the_command_runs(self):
         listing = "import os; print(sorted(os.listdir('.')))"
-        with tempfile.TemporaryDirectory(prefix="ghw-cwd-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-cwd-") as td:
             root = Path(td)
             (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
             inside = counter.measure([sys.executable, "-c", listing], cwd=root,
@@ -191,7 +191,7 @@ class TestCwdIsHonoured(unittest.TestCase):
         # `main()` turns the refusal into exit 2 and writes no JUnit. Which
         # is why it is guarded on the INSTRUMENT's facility rather than on
         # its own: the limit it hits is `measure()`'s, not a shell question.
-        with tempfile.TemporaryDirectory(prefix="ghw-cwd-cli-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-cwd-cli-") as td:
             root = Path(td)
             (root / "marker-only-here.txt").write_text("x", encoding="utf-8")
             report = Path(td) / "r.xml"
@@ -598,7 +598,7 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_STATEMENT
     def test_the_script_dispatch_runs_the_target_script(self):
         # Production shape for the renderers.
-        with tempfile.TemporaryDirectory(prefix="ghw-statement-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-statement-") as td:
             script = Path(td) / "subject.py"
             script.write_text("import sys\nprint('script ran', sys.argv[1:])\n",
                               encoding="utf-8")
@@ -609,7 +609,7 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_STATEMENT
     def test_the_bootstrap_strips_its_leading_separator(self):
         # One leading `--` (the parent's own separator) is stripped.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             count_path = Path(td) / "count.json"
             env = counter.child_environment()
             env["GH_WIDGETS_STATEMENT_COUNT_FILE"] = str(count_path)
@@ -632,7 +632,7 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_STATEMENT
     def test_a_missing_count_file_refuses(self):
         # A hard-killed child never runs atexit: a refusal, never a zero.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "never-written.json"
             with self.assertRaises(counter.CounterError) as raised:
                 counter._read_statement_file(path)  # pylint: disable=protected-access
@@ -641,7 +641,7 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_STATEMENT
     def test_an_undercount_is_refused_not_recorded(self):
         # missed > 0 is a lower bound, not a number; recording it lies optimistic.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "undercount.json"
             path.write_text('{"count": 100, "missed": 3}', encoding="utf-8")
             with self.assertRaises(counter.CounterError) as raised:
@@ -658,7 +658,7 @@ class TestStatementInstrument(unittest.TestCase):
                         '{"missed": 0}',
                         'not json at all'):
             with self.subTest(payload=payload):
-                with tempfile.TemporaryDirectory() as td:
+                with _ghw_temp.tempdir() as td:
                     path = Path(td) / "broken.json"
                     path.write_text(payload, encoding="utf-8")
                     with self.assertRaises(counter.CounterError) as raised:
@@ -741,7 +741,7 @@ class TestWriteJunit(unittest.TestCase):
                                    "out", "err", returncode)
 
     def test_the_time_attribute_is_the_counter_not_seconds(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-counter-junit-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-counter-junit-") as td:
             path = Path(td) / "r.xml"
             counter.write_junit(path, "counter::unit-suite", self.measure(),
                                 ["render"])
@@ -762,7 +762,7 @@ class TestWriteJunit(unittest.TestCase):
     def test_a_failing_command_is_a_junit_failure(self):
         # Which is what drops it out of the comparator's intersection: a
         # counter measured over a run that failed is not comparable.
-        with tempfile.TemporaryDirectory(prefix="ghw-counter-junit-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-counter-junit-") as td:
             path = Path(td) / "r.xml"
             counter.write_junit(path, "counter::unit-suite",
                                 self.measure(returncode=2), ["render"])
@@ -808,7 +808,7 @@ class TestCli(unittest.TestCase):
 
     @REQUIRES_BENCH
     def test_a_measured_command_exits_with_the_childs_code(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-counter-cli-") as td:
+        with _ghw_temp.tempdir(prefix="ghw-counter-cli-") as td:
             report = Path(td) / "r.xml"
             # Ambient-proof: under the workflow's unit step the ambient pin
             # is cpu_time_ratio, which the raw CLI refuses (a raw number

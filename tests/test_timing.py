@@ -4,7 +4,6 @@ import io
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import unittest
 import urllib.error
@@ -16,6 +15,7 @@ from unittest import mock
 from tests import test_render, test_stars, test_popularity
 from tests import test_impact_fallback, test_responsiveness, test_impact_loc
 from tests.test_common import common
+from tests import _ghw_temp
 
 
 class DeferredClone(futures.Future):
@@ -306,7 +306,7 @@ class RendererTiming(unittest.TestCase):
         """Run the real profile publisher against the existing fake API."""
         render = test_render.render
         self.assertTrue(hasattr(render.main, '__wrapped__'), 'main timing missing')
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             root = Path(directory)
             cache = root / 'cache.json'
             baseline = None
@@ -416,7 +416,7 @@ class RendererTiming(unittest.TestCase):
                     command, 0, b'Real\x1freal@example.org\0', b'')
             return subprocess.CompletedProcess(command, 0, b'refs', b'')
 
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             argv = ['render-popularity.py', '--token', 't', '--out-dir', directory]
             pool = DeferredClones()
             with mock.patch.object(module.common, 'DEBUG_TIMING', True), \

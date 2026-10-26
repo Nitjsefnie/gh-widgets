@@ -6,7 +6,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -14,6 +13,7 @@ from unittest import mock
 
 import ghwidgets_share as share
 from tests import test_render, test_impact_fallback, test_responsiveness
+from tests import _ghw_temp
 
 profile = test_render.render
 impact = test_impact_fallback.render_impact
@@ -107,7 +107,7 @@ class UnitSharing(unittest.TestCase):
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        self.root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.root = Path(stack.enter_context(_ghw_temp.tempdir()))
         self.api = CountingAPI()
         self.output = io.StringIO()
         self.profile_cache = self.root / "cache.json"
@@ -320,7 +320,7 @@ class ShareValidation(unittest.TestCase):
             share.validate(self.payload)
 
     def test_account_and_unit_mismatches_fetch_live(self):
-        with tempfile.TemporaryDirectory() as directory, \
+        with _ghw_temp.tempdir() as directory, \
                 mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": directory,
                                              "INVOCATION_ID": "run"}), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
@@ -340,7 +340,7 @@ class ShareValidation(unittest.TestCase):
 
     def test_locked_atomic_write_and_invalid_input_preserve_previous_artifact(self):
         identity = profile.common.Identity("me", 42, ["org"], {"me", "org"}, {"email"})
-        with tempfile.TemporaryDirectory() as directory, \
+        with _ghw_temp.tempdir() as directory, \
                 mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": directory,
                                              "INVOCATION_ID": "run"}):
             path = share.begin()

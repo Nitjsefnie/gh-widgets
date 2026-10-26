@@ -5,7 +5,6 @@ import json
 import os
 import re
 import statistics
-import tempfile
 import threading
 import time
 import unittest
@@ -16,6 +15,7 @@ from unittest import mock
 
 from tests.test_share import CountingAPI, profile, impact, item
 from tests import test_render
+from tests import _ghw_temp
 
 
 class DelayedAPI(CountingAPI):
@@ -45,7 +45,7 @@ class AcquisitionOverlap(unittest.TestCase):
     def test_profile_independent_walks_overlap_without_adding_requests(self):
         # Org/repo/extra-org walks, calendar and authored PR/issues are independent.
         api = DelayedAPI()
-        with tempfile.TemporaryDirectory() as td, \
+        with _ghw_temp.tempdir() as td, \
                 mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": "", "GH_EXTRA_ORGS": ""}), \
                 mock.patch("urllib.request.urlopen", api), \
                 mock.patch.object(profile.common, "DEBUG_TIMING", True):
@@ -133,7 +133,7 @@ class AcquisitionOverlap(unittest.TestCase):
 
     def test_overlapped_failure_names_the_actual_profile_acquisition(self):
         for phase in ("fetch", "fetch_pull_requests", "fetch_issues"):
-            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as td, \
+            with self.subTest(phase=phase), _ghw_temp.tempdir() as td, \
                     mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": ""}), \
                     mock.patch.object(profile, "gql", test_render.FakeAPI()), \
                     mock.patch.object(profile, phase, side_effect=RuntimeError("forced")):

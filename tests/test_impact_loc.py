@@ -6,8 +6,8 @@ import os
 import signal
 import shutil
 import subprocess
-import sys
 import tempfile
+import sys
 import threading
 import time
 import unittest
@@ -16,6 +16,7 @@ from unittest import mock
 from pathlib import Path
 
 import impact_clone
+from tests import _ghw_temp
 
 
 spec = importlib.util.spec_from_file_location(
@@ -99,7 +100,7 @@ class TestCQuotedPaths(unittest.TestCase):
     """Git's default C quoting must not lose attributed lines."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-quoted-path-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-quoted-path-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         git("init", "-q", "-b", "main", ".", cwd=self.tmp)
         git("config", "user.name", "Us", cwd=self.tmp)
@@ -160,7 +161,7 @@ class TestGitFameFailures(unittest.TestCase):
     """A failed or empty git-fame result is a failed count, not zero."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-fame-failures-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-fame-failures-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
@@ -240,7 +241,7 @@ class TestScratchLifecycle(unittest.TestCase):
     """Clone scratch is tracked, cleaned on signals, and aged out safely."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-scratch-lifecycle-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-scratch-lifecycle-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     @staticmethod
@@ -842,7 +843,7 @@ class TestBoundedGitOutput(unittest.TestCase):
     """Git stdout capture and clone fan-out have explicit ceilings."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-bounded-git-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-bounded-git-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.bin = self.tmp / "bin"
         self.bin.mkdir()

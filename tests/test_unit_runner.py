@@ -9,6 +9,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests import _ghw_temp
+
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ('gh-widgets.service', 'gh-widgets-resync.service')
 STEPS = ('lookup', 'profile', 'impact', 'responsiveness', 'stars', 'popularity')
@@ -41,7 +43,7 @@ def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed'):
               if line.startswith('ExecStart=')]
     if len(starts) != 1:
         raise AssertionError('the unit must invoke one complete schedule')
-    with tempfile.TemporaryDirectory(prefix='ghwidgets-unit-') as directory:
+    with _ghw_temp.tempdir(prefix='ghwidgets-unit-') as directory:
         root = Path(directory)
         token = root / 'token'
         token.write_text('offline', encoding='utf-8')

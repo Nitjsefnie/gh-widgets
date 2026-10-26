@@ -10,8 +10,8 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import textwrap
+import tempfile
 import threading
 import time
 import unittest
@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 import impact_clone
+from tests import _ghw_temp
 
 
 spec = importlib.util.spec_from_file_location(
@@ -91,7 +92,7 @@ class SiblingLoaderLifecycle(unittest.TestCase):
             with self.subTest(sibling=sibling, fallback=fallback):
                 env = dict(os.environ)
                 env.pop('PYTHONPATH', None)
-                with tempfile.TemporaryDirectory() as unrelated:
+                with _ghw_temp.tempdir() as unrelated:
                     result = subprocess.run(
                         [sys.executable, '-I', '-B', '-c',
                          textwrap.dedent(preamble) + textwrap.dedent(body),
@@ -234,7 +235,7 @@ class TestCloneLaunchCoverage(unittest.TestCase):
     """Spawn gates and failure paths retain their lifecycle guarantees."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-clone-coverage-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-clone-coverage-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def test_shutdown_gate_rejects_and_unpublishes_a_launch(self):
@@ -362,7 +363,7 @@ class TestScratchCoverage(unittest.TestCase):
     """Scratch registration and removal errors preserve observable state."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-scratch-coverage-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-scratch-coverage-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def test_registration_rolls_back_when_owner_lock_cannot_be_created(self):
@@ -380,7 +381,7 @@ class TestScratchCoverage(unittest.TestCase):
 
     def test_prefetch_removes_scratch_if_owner_lock_registration_fails(self):
         created = []
-        real_mkdtemp = tempfile.mkdtemp
+        real_mkdtemp = _ghw_temp.tempfile.mkdtemp
 
         def make_scratch(prefix):
             path = Path(real_mkdtemp(prefix=prefix, dir=self.tmp))
@@ -468,7 +469,7 @@ class TestImpactPathCoverage(unittest.TestCase):
     """Malformed inputs and failed clones keep their explicit errors."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-impact-path-coverage-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-impact-path-coverage-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def test_load_repo_pins_rejects_a_non_string_branch(self):

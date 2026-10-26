@@ -12,13 +12,13 @@ drive the ratchet.
 import contextlib
 import io
 import json
-import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.ci.speed_workflow_steps import StepRunner
 from tests.test_baseline import document
 from tests.test_compare_counters import cd, write_junit
+from tests import _ghw_temp
 
 
 class TestTheWorkflowText(unittest.TestCase):
@@ -134,7 +134,7 @@ class TestTheComparatorBlindWindow(unittest.TestCase):
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.tmp_path = Path(stack.enter_context(_ghw_temp.tempdir()))
         self.baseline_path = self.tmp_path / "baseline.json"
         self.summary_path = self.tmp_path / "summary.md"
 

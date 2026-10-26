@@ -9,9 +9,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.sh"
@@ -108,7 +108,7 @@ class TestRendererInstall(unittest.TestCase):
 
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.temp_dir = tempfile.TemporaryDirectory(
+        self.temp_dir = _ghw_temp.tempdir(
             prefix="ghwidgets-install-")
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name)
@@ -331,7 +331,7 @@ class TestUnitInstallRollback(unittest.TestCase):
 
     def assert_timer_snapshot_fails_closed(self, response):
         """Check an invalid is-enabled result aborts before unit deployment."""
-        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-query-error-") as temp:
+        with _ghw_temp.tempdir(prefix="ghwidgets-units-query-error-") as temp:
             fixture = self.make_fixture(
                 Path(temp),
                 {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": response},
@@ -365,7 +365,7 @@ class TestUnitInstallRollback(unittest.TestCase):
             assert_no_transaction_files(self, fixture["renderer_dir"])
 
     def test_failed_unit_verification_keeps_previously_enabled_timers_enabled(self):
-        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-enabled-") as temp:
+        with _ghw_temp.tempdir(prefix="ghwidgets-units-enabled-") as temp:
             fixture = self.make_fixture(
                 Path(temp),
                 {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": "enabled"},
@@ -390,7 +390,7 @@ class TestUnitInstallRollback(unittest.TestCase):
             assert_no_transaction_files(self, fixture["renderer_dir"])
 
     def test_failed_unit_verification_restores_mixed_timer_states(self):
-        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-mixed-") as temp:
+        with _ghw_temp.tempdir(prefix="ghwidgets-units-mixed-") as temp:
             fixture = self.make_fixture(
                 Path(temp),
                 {"gh-widgets.timer": "disabled", "gh-widgets-resync.timer": "enabled"},
@@ -425,7 +425,7 @@ class TestUnitInstallRollback(unittest.TestCase):
         self.assert_timer_snapshot_fails_closed("unknown-response")
 
     def test_fresh_unit_install_accepts_confirmed_missing_timers(self):
-        with tempfile.TemporaryDirectory(prefix="ghwidgets-units-fresh-") as temp:
+        with _ghw_temp.tempdir(prefix="ghwidgets-units-fresh-") as temp:
             fixture = self.make_fixture(
                 Path(temp),
                 {},

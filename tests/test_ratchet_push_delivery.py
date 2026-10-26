@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,6 +13,7 @@ import yaml
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from tests import test_coverage_ratchet as coverage_tests
 from tests import test_speed_ratchet as speed_tests
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
@@ -204,7 +204,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
                main_bytes=None, show_fail=False):
         real_git = shutil.which("git")
         assert real_git is not None
-        with tempfile.TemporaryDirectory(prefix="ratchet delivery ") as tmp:
+        with _ghw_temp.tempdir(prefix="ratchet delivery ") as tmp:
             root = Path(tmp)
             target = self._prepare(root, record_path, documents, coverage,
                                    base_bytes=base_bytes,
@@ -417,7 +417,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
         written = fixture._run()
         self.assertEqual(written.returncode, 0, written.stdout + written.stderr)
         candidate = json.loads(fixture.output_path.read_bytes())
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             coverage = Path(tmp) / "coverage-floor.json"
             document = json.loads((ROOT / "gate/coverage-floor.json").read_bytes())
             document.update(measured=84.6, floor=84.6)

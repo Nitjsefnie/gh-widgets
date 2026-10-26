@@ -27,9 +27,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests import _ghw_temp
 
 
 # Deliberately duplicated from test_ci_workflows.py rather than imported.
@@ -246,7 +246,7 @@ exit 1
         # Not a `with`: subTest cases re-enter setUp to get a clean stub
         # world, and a cleanup stack is the only thing that survives that.
         # pylint: disable=consider-using-with
-        self.tmp = tempfile.TemporaryDirectory(prefix="ghw-release-")
+        self.tmp = _ghw_temp.tempdir(prefix="ghw-release-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.bin = self.root / "bin"

@@ -4,12 +4,12 @@ import io
 import json
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from tests.test_share import CountingAPI, impact, item
+from tests import _ghw_temp
 
 VARIABLE = "GH_WIDGETS_IMPACT_COUNT_BOT_PRS"
 WATERLINE = '2026-10-22T00:00:00Z'
@@ -206,7 +206,7 @@ class ImpactBots(unittest.TestCase):
             self.assertEqual(totals, {'other/repo': {'merged_prs': 10}})
 
     def test_waterline_validation_and_old_cache_loading(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / 'cache.json'
             for waterline in (None, WATERLINE, '', 1, False):
                 entry: dict[str, object] = {
@@ -249,7 +249,7 @@ class ImpactBots(unittest.TestCase):
 
     def test_live_and_cached_fallback_use_the_same_switch(self):
         api = BotAPI()
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             root = Path(td)
             cache = root / 'impact-cache.json'
             argv = ['render-impact.py', '--user', 'me', '--token', 't',

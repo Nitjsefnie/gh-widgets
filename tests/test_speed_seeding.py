@@ -5,7 +5,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,6 +13,7 @@ from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
 from tests import test_speed_ratchet as fixtures
 from tests import test_ratchet_push_delivery as delivery
+from tests import _ghw_temp
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # The comparator and its two path-loaded modules, for the boundary check.
@@ -156,7 +156,7 @@ class TestSpeedSeeding(unittest.TestCase):
                    if line.lstrip().startswith('done <<< "$seed_removals"'))
         fragment = "".join(lines[start:end + 1])
 
-        root = Path(tempfile.mkdtemp(prefix="ghw-seed-"))
+        root = Path(_ghw_temp.mkdtemp(prefix="ghw-seed-"))
         self.addCleanup(shutil.rmtree, root, True)
         (root / "head" / "gate").mkdir(parents=True)
         (root / "base-baseline.json").write_text(

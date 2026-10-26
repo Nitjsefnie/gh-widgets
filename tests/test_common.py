@@ -14,7 +14,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import textwrap
 import unittest
 import urllib.error
@@ -25,6 +24,7 @@ from unittest import mock
 
 import ghwidgets_cache
 import ghwidgets_journal
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "ghwidgets_common", (Path(__file__).resolve().parents[1] / "src" / "ghwidgets_common.py"))
@@ -135,7 +135,7 @@ class CommonModuleExports(unittest.TestCase):
         ''')
         env = dict(os.environ)
         env.pop('PYTHONPATH', None)
-        with tempfile.TemporaryDirectory(prefix="ghw-path-load-") as unrelated:
+        with _ghw_temp.tempdir(prefix="ghw-path-load-") as unrelated:
             result = subprocess.run(
                 [sys.executable, "-I", "-B", "-c", script,
                  str(Path(__file__).resolve().parents[1] / "src")],
@@ -885,7 +885,7 @@ class CacheShape(unittest.TestCase):
 
     @staticmethod
     def load(payload):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "impact-cache.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             loaded = common.load_cache(path, 1)

@@ -4,7 +4,6 @@ import contextlib
 import io
 import json
 import subprocess
-import tempfile
 import unittest
 from collections import deque
 from pathlib import Path
@@ -12,6 +11,7 @@ from unittest import mock
 
 from scripts.ci import aggregate_gate as ag
 from scripts.ci import changes_detect as cd
+from tests import _ghw_temp
 
 
 def _needs(**results):
@@ -1144,7 +1144,7 @@ class AggregateSummaryTests(unittest.TestCase):
         self.assertIn("another aggregate gate already failed", size_row)
 
     def test_dispatch_main_writes_the_table_to_stdout_and_step_summary(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-aggregate-summary-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-aggregate-summary-") as temp:
             summary = Path(temp) / "summary.md"
             environment = {
                 "GH_WIDGETS_NEEDS_JSON": json.dumps(_all_success()),
@@ -1178,7 +1178,7 @@ class AggregateSummaryTests(unittest.TestCase):
                              stdout.getvalue())
 
     def test_any_exception_renders_all_rows_failed(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-aggregate-error-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-aggregate-error-") as temp:
             summary = Path(temp) / "summary.md"
             environment = {
                 "GH_WIDGETS_NEEDS_JSON": "{",

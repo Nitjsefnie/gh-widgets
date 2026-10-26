@@ -12,12 +12,12 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from tests.test_gate_base_freshness import _git, _config, _commit
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,7 +68,7 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
 
     def setUp(self):
         # addCleanup owns the fixture until this test finishes.
-        temporary = tempfile.TemporaryDirectory(  # pylint: disable=consider-using-with
+        temporary = _ghw_temp.tempdir(  # pylint: disable=consider-using-with
             prefix='ghw-commit_scopes-')
         self.addCleanup(temporary.cleanup)
         self.tmp = Path(temporary.name)
@@ -394,7 +394,7 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
             # Windows rejects tab/newline filenames; Unicode still runs there.
             if sys.platform == 'win32' and ('\t' in stem or '\n' in stem):
                 continue
-            with self.subTest(stem=stem), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(stem=stem), _ghw_temp.tempdir() as tmp:
                 repo, _ = _fixture(
                     Path(tmp), head_subject='fix(unusual): must fail',
                     base_files={f'.github/workflows/{stem}.yml':
