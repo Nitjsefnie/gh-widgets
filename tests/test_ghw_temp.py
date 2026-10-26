@@ -158,7 +158,7 @@ class TestAtexitExitPath(unittest.TestCase):
         markers = Path(tempfile.mkdtemp(  # pylint: disable=consider-using-with
             prefix="ghw-atexit-hang-"))
         marker = markers / "dir.txt"
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # pylint: disable=consider-using-with
             [sys.executable, "-c",
              "import os, pathlib\n"
              "from tests import _ghw_temp\n"
