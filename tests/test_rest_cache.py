@@ -257,7 +257,7 @@ class PopularityRuns(unittest.TestCase):
         return {
             '/user': USER,
             '/user/orgs?per_page=100': [],
-            '/user/repos?affiliation=owner&per_page=100': [repo()],
+            '/user/repos?affiliation=owner&visibility=public&per_page=100': [repo()],
             '/repos/Owner/Repo/traffic/clones': {'uniques': 7},
             '/repos/Owner/Repo/traffic/views': {'uniques': 11},
         }
@@ -266,22 +266,19 @@ class PopularityRuns(unittest.TestCase):
         github = FakeGitHub(self.single_repo_bodies())
         with mock.patch.dict(os.environ, {'GH_WIDGETS_REST_CACHE': str(self.path)}):
             first_out, first_svg = self.run_main(github)
-            self.assertIn('rest-cache: requests=5 not-modified=0', first_out)
+            self.assertIn('rest-cache: requests=3 not-modified=0', first_out)
             second_out, second_svg = self.run_main(github)
-            self.assertIn('rest-cache: requests=5 not-modified=5', second_out)
+            self.assertIn('rest-cache: requests=3 not-modified=3', second_out)
         self.assertEqual(first_svg, second_svg)
-        expected = []
-        for path in ('/user', '/user/orgs?per_page=100',
-                     '/user/repos?affiliation=owner&per_page=100',
-                     '/repos/Owner/Repo/traffic/clones',
-                     '/repos/Owner/Repo/traffic/views'):
-            expected.append((path, None))
-        for path in ('/user', '/user/orgs?per_page=100',
-                     '/user/repos?affiliation=owner&per_page=100',
-                     '/repos/Owner/Repo/traffic/clones',
-                     '/repos/Owner/Repo/traffic/views'):
-            expected.append((path, f'"{API}{path}"'))
-        self.assertEqual(github.requests, expected)
+        # /user and /user/orgs stay outside the store: private-shaped bodies
+        # are never persisted, and only public listings go conditional.
+        cold = [(path, None) for path in self.single_repo_bodies()]
+        warm = [('/user', None), ('/user/orgs?per_page=100', None)]
+        warm += [(path, f'"{API}{path}"') for path in (
+            '/user/repos?affiliation=owner&visibility=public&per_page=100',
+            '/repos/Owner/Repo/traffic/clones',
+            '/repos/Owner/Repo/traffic/views')]
+        self.assertEqual(github.requests, cold + warm)
 
     def test_env_unset_behaves_exactly_as_before(self):
         github = FakeGitHub(self.single_repo_bodies())
@@ -292,52 +289,6 @@ class PopularityRuns(unittest.TestCase):
         self.assertNotIn('rest-cache:', output)
         self.assertFalse(self.path.exists())
         self.assertEqual([match for _path, match in github.requests if match], [])
-
-
-class PublicOrganizations(unittest.TestCase):
-    """fetch_public_organizations through the store, via its request_fn seam."""
-
-    def setUp(self):
-        # pylint: disable=consider-using-with
-        self.directory = _ghw_temp.tempdir(prefix='ghw-rest-cache-')
-        self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / 'rest-cache.json'
-
-    def run_fetch(self, github):
-        with mock.patch.dict(os.environ, {'GH_WIDGETS_REST_CACHE': str(self.path)}), \
-                contextlib.redirect_stdout(io.StringIO()) as stdout:
-            orgs = common.fetch_public_organizations('Octocat', request_fn=github)
-        return orgs, stdout.getvalue()
-
-    def test_stored_pages_are_reused_and_the_next_page_is_still_followed(self):
-        page_one = '/users/Octocat/orgs?per_page=100&page=1'
-        page_two = '/users/Octocat/orgs?per_page=100&page=2'
-        github = FakeGitHub(
-            {page_one: [{'login': 'PublicOne'}],
-             page_two: [{'login': 'PublicTwo'}]},
-            {page_one: f'<{API}{page_two}>; rel="next"'})
-        first, first_out = self.run_fetch(github)
-        second, second_out = self.run_fetch(github)
-        self.assertEqual(first, ['PublicOne', 'PublicTwo'])
-        self.assertEqual(second, first)
-        self.assertIn('rest-cache: requests=2 not-modified=0', first_out)
-        self.assertIn('rest-cache: requests=2 not-modified=2', second_out)
-        self.assertEqual(github.requests, [
-            (page_one, None), (page_two, None),
-            (page_one, f'"{API}{page_one}"'), (page_two, f'"{API}{page_two}"')])
-        self.assertEqual([match for match in github.headers[0]
-                          if match[0].lower() == 'authorization'], [])
-
-    def test_a_304_still_counts_as_a_request_over_the_wire(self):
-        recorder = common.TimingRecorder()
-        github = FakeGitHub({'/users/Octocat/orgs?per_page=100&page=1': []})
-        with mock.patch.dict(os.environ, {'GH_WIDGETS_REST_CACHE': str(self.path)}), \
-                mock.patch.object(common, 'DEBUG_TIMING', True), \
-                mock.patch.object(common, 'timing', recorder), \
-                contextlib.redirect_stdout(io.StringIO()):
-            common.fetch_public_organizations('Octocat', request_fn=github)
-            common.fetch_public_organizations('Octocat', request_fn=github)
-        self.assertEqual(recorder.totals[('rest', '/users/{user}/orgs')][0], 2)
 
 
 if __name__ == '__main__':

@@ -178,17 +178,19 @@ def fetch_scores(token, store=None):
 
     One pool task per repository, collected in enumeration order.
     """
-    user, _ = rest(token, '/user', store=store)
+    user, _ = rest(token, '/user')
     emails = common.our_emails(user['login'], user['id'])
     if user.get('email'):
         emails = emails | {user['email'].lower()}
-    orgs = rest_pages(token, '/user/orgs?per_page=100', store=store)
-    repositories = rest_pages(token, '/user/repos?affiliation=owner&per_page=100',
-                              store=store)
+    orgs = rest_pages(token, '/user/orgs?per_page=100')
+    repositories = rest_pages(
+        token, '/user/repos?affiliation=owner&visibility=public&per_page=100',
+        store=store)
     for org in orgs:
         login = urllib.parse.quote(org['login'], safe='')
-        repositories.extend(rest_pages(token, f'/orgs/{login}/repos?per_page=100',
-                                       store=store))
+        repositories.extend(
+            rest_pages(token, f'/orgs/{login}/repos?type=public&per_page=100',
+                       store=store))
     eligible, seen = [], set()
     for repository in repositories:
         name = repository['full_name']
