@@ -1399,8 +1399,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         committed record legitimately carries empty `entries` while its
         seeds await the first post-merge measurement (issue #269), so a
         fixture reading `entries[...]` out of it breaks on the reset commit
-        instead of testing the validator. Schema 5 only: the validator has
-        no route for an earlier schema.
+        instead of testing the validator. Schema 5 only.
         """
         population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
                       "population": "a" * 64,
@@ -1451,8 +1450,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.addCleanup(shutil.rmtree, data.parent, True)
         recorded, candidate = self._speed_documents()
         self._speed_validator_case(script, data, repo, recorded, candidate, 0, "")
-        recorded_max = recorded["populations"]["unit-suite"][
-            "entries"]["counter::unit-suite"]["max"]
+        recorded_max = recorded["populations"]["unit-suite"]["entries"][
+            "counter::unit-suite"]["max"]
         candidate["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"]["max"] = recorded_max + 0.001
         refused = self._speed_validator_case(
@@ -1473,8 +1472,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         no_seeds_seeded = json.loads(json.dumps(no_seeds))
         no_seeds_seeded["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = {"min": 9.0, "max": 9.0, "n": 2}
-        # Without a seeds list the population is not the schema-5 shape at
-        # all, so the shape rule refuses before the entry check could.
+        # No seeds list at all is not the schema-5 shape; the shape rule refuses first.
         yield no_seeds, no_seeds_seeded, "unexpected shape"
 
         def mutated(fragment, case):
@@ -1497,6 +1495,11 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                                    "n": 2}
         yield mutated("changed its entries", on_wall)
 
+        def undeclared_node(unit):
+            unit["entries"]["counter::undeclared"] = {"min": 9.0, "max": 9.0,
+                                                      "n": 2}
+        yield mutated("changed its entries", undeclared_node)
+
         def changed_seeds(unit):
             unit["seeds"] = ["counter::other"]
         yield mutated("changed seeds", changed_seeds)
@@ -1516,17 +1519,16 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     def test_inline_speed_validator_judges_seeds_and_their_loopholes(self):
         """A seed lands only seed-declared, seed-shaped, entries-only.
 
-        Issue #269's post-merge state: main records no entries and the
-        first measurement seeds them. The validator must accept exactly the
-        seeded artifact and refuse every route around the shape — an
-        undeclared addition, a non-degenerate range, a wall addition, a
-        changed or malformed seeds list, and an artifact with neither a
-        lowering nor a seed.
+        Issue #269's post-merge state: main records no entries and the first
+        measurement seeds them. The validator must accept exactly the seeded
+        artifact and refuse every route around the shape — an undeclared
+        addition, a non-degenerate range, a wall addition, a changed or
+        malformed seeds list, and an artifact with neither a lowering nor a
+        seed.
         """
         script = self._validator()
         recorded, seeded = self._speed_documents()
-        # The seed case is the post-merge state: fetched main records no
-        # entries yet, so the candidate's entry is an addition, not a move.
+        # Post-merge state: fetched main records no entries yet, so the candidate's entry is an addition.
         recorded["populations"]["unit-suite"]["entries"] = {}
         seeded["populations"]["unit-suite"]["entries"] = {}
         seeded["populations"]["unit-suite"]["entries"][
@@ -1545,9 +1547,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         """The slopes branch is gone, and so is every earlier schema.
 
         Post-merge main only ever sees the statement instrument's document,
-        so a schema-4 artifact has no route: refused before anything is
-        compared, and the slopes key a schema-4 population carried is part
-        of the unexpected shape it is refused for.
+        so a schema-4 artifact has no route: refused before anything is compared.
         """
         script = self._validator()
         recorded, candidate = self._speed_documents()
