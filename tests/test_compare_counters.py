@@ -41,7 +41,6 @@ def _set_raw_parts(report: Path, raw="8", calibration="2") -> None:
     tree.write(report)
 
 
-
 def _load():
     """Import scripts/ci/compare_counters.py by path.
 
