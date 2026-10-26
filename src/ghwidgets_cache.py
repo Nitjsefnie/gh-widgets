@@ -269,9 +269,11 @@ class RestCache:
     A stored URL's next request sends its ETag as If-None-Match, and a 304
     Not Modified is answered from the store instead of the wire — GitHub
     charges no primary rate limit for a 304. Entries sit at the document's
-    top level, keyed by URL, so merge_cache refreshes one renderer's URLs
-    without discarding another's: the unit runs the profile and popularity
-    renderers concurrently against one file.
+    top level, keyed by URL; each save replaces the file with exactly the
+    URLs that run used (304-reused ones included), so a URL that stops
+    being visited drops out instead of accumulating. Two renderers sharing
+    one file prune each other's idle URLs by that same rule and refetch
+    them once.
 
     `path` None is an inert store: no persistence, no If-None-Match, and the
     run's counts go nowhere.
@@ -283,19 +285,28 @@ class RestCache:
         self.requests = 0
         self.not_modified = 0
         self.updates = {}
+        self.used = {}
         self.entries = load_cache(path, REST_CACHE_VERSION) if path else {}
 
     def entry(self, url):
-        """The stored entry for `url`, or None. A missing or malformed entry
-        degrades to a full fetch, like a corrupt store file."""
+        """The stored entry for `url`, or None. A missing or malformed entry,
+        or one whose body no longer parses as JSON, degrades to a full
+        fetch, like a corrupt store file. A served entry counts as used, so
+        the run's save keeps it."""
         with self.lock:
             entry = self.updates.get(url) or self.entries.get(url)
-        if not (isinstance(entry, dict) and isinstance(entry.get("etag"), str)
-                and entry["etag"]
-                and isinstance(entry.get("body"), str)
-                and isinstance(entry.get("link"), str)):
-            return None
-        return entry
+            if not (isinstance(entry, dict)
+                    and isinstance(entry.get("etag"), str)
+                    and entry["etag"]
+                    and isinstance(entry.get("body"), str)
+                    and isinstance(entry.get("link"), str)):
+                return None
+            try:
+                json.loads(entry["body"])
+            except ValueError:
+                return None
+            self.used.setdefault(url, entry)
+            return entry
 
     def remember(self, url, etag, body, link):
         """Store a complete response body under its ETag for the next run."""
@@ -307,12 +318,18 @@ class RestCache:
             self.updates[url] = {"etag": etag, "body": text, "link": link}
 
     def save(self):
-        """The run's one save, under the writers' lock. A failed save
-        degrades with a warning, never failing the render."""
-        if not self.path or not self.updates:
+        """The run's one save, under the writers' lock: the file is replaced
+        with exactly the URLs this run used (304-reused ones included), so
+        nothing idle survives on disk. A failed save degrades with a
+        warning, never failing the render."""
+        if not self.path:
+            return
+        with self.lock:
+            payload = {**self.used, **self.updates}
+        if not payload:
             return
         try:
-            merge_cache(self.path, REST_CACHE_VERSION, self.updates)
+            save_cache(self.path, {**payload, "version": REST_CACHE_VERSION})
         except (OSError, TimeoutError) as exc:
             print(f"warning: could not save REST cache {self.path}: {exc}",
                   file=sys.stderr)
