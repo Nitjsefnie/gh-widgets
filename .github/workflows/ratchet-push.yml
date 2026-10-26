@@ -395,8 +395,7 @@ jobs:
                   if not same(new[key], old[key]):
                       refuse(f"speed-baseline.json changed authored key {key}")
               # Schema 5 only: post-merge main only ever sees the statement
-              # instrument's document, and the seeding authorization is its
-              # `seeds` lists. A schema 3/4 artifact has no route here.
+              # instrument's document, whose `seeds` authorize seeding.
               if old["schema"] != 5 or new["schema"] != 5:
                   refuse("speed-baseline.json must declare schema 5")
               old_pops, new_pops = old["populations"], new["populations"]

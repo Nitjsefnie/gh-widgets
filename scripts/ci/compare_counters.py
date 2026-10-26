@@ -71,11 +71,10 @@ SMOKE_FACTOR = 3.0
 METRIC_NOTES = {
     "statement_count": (
         "a deterministic count of sys.monitoring LINE events in the "
-        "measured Python child; runner-invariant by construction (the same "
-        "code executes the same lines), and not a wall or CPU quantity, so "
-        "neither load nor the machine factor reaches it. Blind to "
-        "non-Python subprocess work — the renderers' git calls are not "
-        "counted; that side is the wall smoke bound's"),
+        "measured Python child; runner-invariant by construction — the same "
+        "code executes the same lines, and neither load nor the machine "
+        "factor reaches a non-time quantity. Blind to non-Python "
+        "subprocess work: git is not counted, the wall smoke bound is"),
     "cpu_time": (
         "CPU seconds, so steal time is excluded — but NOT deterministic, "
         "which is why its tolerance is the loose one and why this is a "

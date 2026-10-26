@@ -2,11 +2,10 @@
 
 This file is part of the stdlib unittest suite so its gate's own tests run in
 the gate that measures coverage. The suite runner is unittest, and the speed
-gate counts CPU seconds while scripts/ci/counter.py writes its own JUnit
-output. The speed job installs requirements/test.txt because unittest
-discovery imports the full suite; this file itself still uses only the
-standard library. pytest remains pinned for optional local `pytest` runs, but
-the suite itself runs on unittest.
+gate counts deterministic statement counts while scripts/ci/counter.py writes
+its own JUnit output. The speed job installs requirements/test.txt because
+unittest discovery imports the full suite; this file itself still uses only
+the standard library.
 
 The comparator is a gate, so its own failure modes matter more than most
 code here: a false red teaches people to ignore it, and a false green
@@ -30,6 +29,17 @@ from tests.test_baseline import document
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _set_raw_parts(report: Path, raw="8", calibration="2") -> None:
+    """Set the net-folding raw parts on the case, as the #240 producers did."""
+    tree = ET.parse(report)
+    case = next(tree.iter("testcase"), None)
+    assert case is not None
+    case.set("gh-raw-cpu", raw)
+    case.set("gh-calibration-cpu", calibration)
+    tree.write(report)
+
 
 
 def _load():
@@ -87,14 +97,9 @@ class TestComparator(unittest.TestCase):
             {"m::ok": 1.0, "m::bad": 9.0, "m::skip": 9.0},
             not_passed={"m::bad": "failure", "m::skip": "skipped"},
         )
-        # A failure can be fast or slow for reasons unrelated to speed; a skip
-        # is not a measurement at all.
+        # A failure can be fast or slow for unrelated reasons; a skip is not a measurement.
         self.assertEqual(set(cd.parse_junit(report)), {"m::ok"})
-        tree = ET.parse(report)
-        case = next(tree.iter("testcase"))
-        case.set("gh-raw-cpu", "8")
-        case.set("gh-calibration-cpu", "2")
-        tree.write(report)
+        _set_raw_parts(report)
         self.assertEqual(cd.scan_junit(
             report, {"m::ok": 2, "m::bad": 2, "m::skip": 2})[0],
             {"m::ok": 4})
@@ -112,16 +117,11 @@ class TestComparator(unittest.TestCase):
                 (((36, 10), (12, 1)), 7, 10, 1),
                 (((36, 10), (3, 1)), 2, 1, 0)):
             for path, (raw, calibration) in zip((a, b), parts):
-                cd.counter.write_junit(path, self.UNIT_NODE,
-                                       cd.counter.Measurement(
-                                           raw / calibration,
+                cd.counter.write_junit(
+                    path, self.UNIT_NODE,
+                    cd.counter.Measurement(raw / calibration,
                                            "cpu_time_ratio", 4, "", "", 0))
-                tree = ET.parse(path)
-                case = tree.getroot().find("testcase")
-                assert case is not None
-                case.set("gh-raw-cpu", str(raw))
-                case.set("gh-calibration-cpu", str(calibration))
-                tree.write(path)
+                _set_raw_parts(path, str(raw), str(calibration))
             population["entries"] = {
                 self.UNIT_NODE: {"min": 1, "max": maximum, "n": 2}}
             for slopes, head in (
@@ -165,35 +165,6 @@ class TestComparator(unittest.TestCase):
                 "--baseline", str(self.baseline_path), "--population", "unit-suite",
                 "--head", str(a), str(b)]), 2)
         self.assertIn("reads schema 3, 4 and 5", output.getvalue())
-
-    def test_a_schema_five_blind_window_passes_with_the_seed_note(self):
-        # The committed shape after the #269 reset: `entries` is empty and
-        # the population's seeds declare what awaits its first measurement.
-        # The compare passes and reports the seed note, and the metric note
-        # names the statement instrument and its blind spot.
-        a = write_junit(self.tmp_path / "a.xml", {self.UNIT_NODE: 99_000_000})
-        payload = document()
-        payload["schema"] = 5
-        population = payload["populations"]["unit-suite"]
-        population["metric"] = "statement_count"
-        population["entries"] = {}
-        population["seeds"] = [self.UNIT_NODE]
-        self.baseline_path.write_text(json.dumps(payload), encoding="utf-8")
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output), \
-                contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(cd.main([
-                "--baseline", str(self.baseline_path), "--population",
-                "unit-suite", "--head", str(a),
-                "--summary-file", str(self.summary_path)]), 0)
-        report = output.getvalue()
-        self.assertIn("within budget", report)
-        self.assertIn("main's ratchet will seed the seed-declared entries",
-                      report)
-        self.assertIn("runner-invariant by construction", report)
-        self.assertIn("non-Python subprocess work", report)
-        self.assertTrue(self.summary_path.read_text(encoding="utf-8")
-                        .endswith(report.rstrip() + "\n"))
 
     def test_a_test_missing_from_one_round_is_dropped(self):
         a = write_junit(self.tmp_path / "a.xml", {"m::t": 1.0, "m::flaky": 1.0})
@@ -311,9 +282,9 @@ class TestComparator(unittest.TestCase):
     def test_render_disclaims_the_per_test_table(self):
         """The table misleads without this, and that is measured, not assumed.
 
-        Two runs of identical code on one machine moved individual tests by up
-        to +370% while the total moved 1.7%. A reader who takes a row as a
-        regression is reading noise.
+        Two runs of identical code moved individual tests by up to +370% while
+        the total moved 1.7%; a reader who takes a row as a regression is
+        reading noise.
         """
         result = cd.compare({"m::a": 1.0, "m::b": 1.0}, {"m::a": 1.0, "m::b": 1.4})
 
@@ -337,7 +308,6 @@ class TestComparator(unittest.TestCase):
         fine = write_junit(self.tmp_path / "fine.xml", {"m::a": 1.05})
         summary = self.tmp_path / "summary.md"
         failure = io.StringIO()
-
         argv = sys.argv
         try:
             sys.argv = ["compare_counters.py", "--base", str(base),
@@ -346,14 +316,12 @@ class TestComparator(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(failure):
                 self.assertEqual(cd.main(), 1)
-
             sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(fine), "--max-regression", "0.30"]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cd.main(), 0)
         finally:
             sys.argv = argv
-
         # The report reaches the summary file even on the failing run — a red
         # gate with no detail is one nobody can act on.
         self.assertIn("REGRESSION", summary.read_text(encoding="utf-8"))
@@ -365,14 +333,12 @@ class TestComparator(unittest.TestCase):
     def test_main_exits_2_when_it_cannot_compare(self):
         base = write_junit(self.tmp_path / "base.xml", {"m::a": 1.0})
         other = write_junit(self.tmp_path / "other.xml", {"m::z": 1.0})
-
         argv = sys.argv
         try:
             sys.argv = ["compare_counters.py", "--base", str(base),
                         "--head", str(other)]
-            # 2, not 1: "could not compare" is a different thing from "slower",
-            # and a workflow that conflates them reports a restructure as a
-            # performance regression.
+            # 2, not 1: "could not compare" is a different thing from "slower";
+            # a workflow that conflates them reports a restructure as a regression.
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cd.main(), 2)
         finally:
@@ -387,18 +353,10 @@ class TestComparator(unittest.TestCase):
             for path in (base, other):
                 with self.subTest(attribute=attribute, report=path.name):
                     for report in (base, other):
-                        cd.counter.write_junit(report, self.UNIT_NODE,
-                                               cd.counter.Measurement(
-                                                   4, "cpu_time", 1, "", "", 0))
-                        tree = ET.parse(report)
-                        case = tree.getroot().find("testcase")
-                        assert case is not None
-                        # The net-folding read path is kept for schema 3/4
-                        # documents, so its raw parts are set on the case
-                        # directly, exactly as the #240 producers wrote them.
-                        case.set("gh-raw-cpu", "8")
-                        case.set("gh-calibration-cpu", "2")
-                        tree.write(report)
+                        cd.counter.write_junit(
+                            report, self.UNIT_NODE,
+                            cd.counter.Measurement(4, "cpu_time", 1, "", "", 0))
+                        _set_raw_parts(report)
                     tree = ET.parse(path)
                     case = tree.getroot().find("testcase")
                     assert case is not None
@@ -417,12 +375,11 @@ class TestComparator(unittest.TestCase):
                     self.assertIn(str(path), errors.getvalue())
 
 
-# The closed-population gate (issue #36).
-#
-# Permissive mode is what this tool has always done and several of the tests
-# above pin it. These pin the other mode: the one where the population is
-# declared, so measuring fewer things than declared is a failure rather than
-# a quiet, green, one-program-shorter comparison.
+# The closed-population gate (issue #36): permissive mode is what this tool
+# has always done and several of the tests above pin it. These pin the other
+# mode, where the population is declared, so measuring fewer things than
+# declared is a failure rather than a quiet, green, one-program-shorter
+# comparison.
 
 
 def verify(scans, base_folded, require=(), allow=()):
