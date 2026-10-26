@@ -40,7 +40,7 @@ def _load_counter():
 counter = _load_counter()
 
 
-SUPPORTED_SCHEMA = (3, 4)
+SUPPORTED_SCHEMA = (3, 4, 5)
 
 
 class ComparisonError(RuntimeError):
@@ -59,7 +59,8 @@ class MissingBaseline(ComparisonError):
 
 REQUIRED_KEYS = ("schema", "basis", "cell", "measured_commit", "measured_at",
                  "populations")
-POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall", "slopes")
+POPULATION_KEYS = ("metric", "tolerance", "population", "entries", "wall",
+                   "slopes", "seeds")
 ENVELOPE_KEYS = ("min", "max", "n")
 # An envelope from a single sample is not an envelope: it records what one
 # machine did once, and the "maximum" is then a measurement, not a worst case.
@@ -94,7 +95,7 @@ def read_baseline(path: Path) -> dict:
     if document["schema"] not in SUPPORTED_SCHEMA:
         raise ComparisonError(
             f"{path} declares schema={document['schema']!r}; this script "
-            "reads schema 3 and 4")
+            "reads schema 3, 4 and 5")
     if not isinstance(document["basis"], str) or not document["basis"].strip():
         raise ComparisonError(
             f"{path} has no basis — the reason a counter baseline sits "
@@ -112,11 +113,22 @@ def read_baseline(path: Path) -> dict:
             "one metric and one tolerance for both populations is the shape "
             "this document was changed to remove")
     for name in sorted(populations):
-        if (document["schema"] == 3 and isinstance(populations[name], dict)
-                and "slopes" in populations[name]):
+        population = populations[name]
+        if (document["schema"] == 3 and isinstance(population, dict)
+                and "slopes" in population):
             raise ComparisonError(
                 f"{path} populations[{name!r}] slopes requires schema 4")
-        _check_population(path, name, populations[name])
+        if (document["schema"] == 5 and isinstance(population, dict)
+                and "slopes" in population):
+            raise ComparisonError(
+                f"{path} populations[{name!r}] slopes is retired by schema 5 "
+                "(issue #269): the statement instrument records no slopes; "
+                "declare the instrument reset's removals through `seeds`")
+        if (document["schema"] != 5 and isinstance(population, dict)
+                and "seeds" in population):
+            raise ComparisonError(
+                f"{path} populations[{name!r}] seeds requires schema 5")
+        _check_population(path, name, population)
     return document
 
 
@@ -135,12 +147,20 @@ def read_population(document: dict, name: str) -> dict:
 
 
 def _check_population(path: Path, name: str, population) -> None:
-    """One population's metric, tolerance, digest and entry maps."""
+    """One population's metric, tolerance, digest and entry maps.
+
+    Schema 5 (the statement instrument) declares `seeds` instead of
+    `slopes`: the list of entry ids awaiting their seed, which is both the
+    validator's authorization and the ratchet writer's. An empty `entries`
+    map is the declared blind window and is lawful only beside a `seeds`
+    list — the mirror of the schema-3/4 rule that an empty `entries` needs
+    slopes.
+    """
     where = f"{path} populations[{name!r}]"
     if not isinstance(population, dict):
         raise ComparisonError(f"{where} is not an object")
     absent = [key for key in POPULATION_KEYS
-              if key != "slopes" and key not in population]
+              if key not in ("slopes", "seeds") and key not in population]
     if absent:
         raise ComparisonError(
             f"{where} is missing required key(s): " + ", ".join(absent))
@@ -158,8 +178,13 @@ def _check_population(path: Path, name: str, population) -> None:
         raise ComparisonError(
             f"{where} population={digest!r} is not a sha256 digest of that "
             "population's node ids")
-    _check_entry_map(path, name, population["entries"], "entries",
-                     required="slopes" not in population)
+    _check_seeds(where, population.get("seeds"))
+    # Either declared route licenses the blind window: slopes on schema 3/4,
+    # seeds on schema 5. The schema rules above already refuse carrying both
+    # eras in one document.
+    _check_entry_map(
+        path, name, population["entries"], "entries",
+        required=not ("seeds" in population or "slopes" in population))
     _check_entry_map(path, name, population["wall"], "wall", required=False)
     if "slopes" in population:
         slopes = population["slopes"]
@@ -176,6 +201,24 @@ def _check_population(path: Path, name: str, population) -> None:
         for node in population["entries"]:
             if node not in slopes:
                 raise ComparisonError(f"{where} slopes is missing entry {node!r}")
+
+
+def _check_seeds(where: str, seeds) -> None:
+    """`seeds`: a list of unique, non-empty entry ids, or absent entirely."""
+    if seeds is None:
+        return
+    if not isinstance(seeds, list):
+        raise ComparisonError(
+            f"{where} seeds={seeds!r} is not a list of entry ids")
+    seen = set()
+    for node in seeds:
+        if not isinstance(node, str) or not node:
+            raise ComparisonError(
+                f"{where} seeds has an empty or non-string entry id")
+        if node in seen:
+            raise ComparisonError(
+                f"{where} seeds names {node!r} more than once")
+        seen.add(node)
 
 
 def _check_entry_map(path: Path, name: str, mapping, key: str,
@@ -257,16 +300,17 @@ def _is_seed_addition(old: dict, name: str, key: str, node: str,
     """Whether `node`'s absence from `old` is the seeding path, not a raise.
 
     Three properties, all read from the documents: the base population
-    declares the node's slope (the authorisation that the entry's record
-    was redefined, not lost), the map is `entries` (wall never seeds), and
-    the candidate envelope is seed-shaped — the observed value as both
-    bounds, from at least the minimum sample count. Anything else about an
-    entry the base never recorded stays exactly the raise it was.
+    declares the node's id in its `seeds` list (the authorisation that the
+    entry's record awaits its first measurement, not that one was lost),
+    the map is `entries` (wall never seeds), and the candidate envelope is
+    seed-shaped — the observed value as both bounds, from at least the
+    minimum sample count. Anything else about an entry the base never
+    recorded stays exactly the raise it was.
     """
     if now is None or key != "entries" or now < 0 or not math.isfinite(now):
         return False
     declared = node in old.get("populations", {}).get(name, {}).get(
-        "slopes", {})
+        "seeds", ())
     shape = (after[node]["min"] == now
              and isinstance(after[node]["n"], int)
              and after[node]["n"] >= MIN_ENVELOPE_SAMPLES)
@@ -309,9 +353,9 @@ def raised_entries(old: dict, new: dict,
     and stays allowed: the ceiling is the maximum.
 
     An entry the base never recorded is a raise too — unless it is the
-    seeding path (issue #240): the base population declares the node's
-    calibration slope, the map is `entries`, and the candidate is
-    seed-shaped (`_is_seed_addition`). That addition is the automated
+    seeding path (issues #240 and #269): the base population declares the
+    node's id in its `seeds` list, the map is `entries`, and the candidate
+    is seed-shaped (`_is_seed_addition`). That addition is the automated
     ratchet commit landing after an instrument reset; every other
     absent-entry addition keeps its original raise.
 

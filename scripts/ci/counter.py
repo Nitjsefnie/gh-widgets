@@ -733,7 +733,15 @@ def main(argv: Optional[list] = None) -> int:
         parser.error("--junit-file and --name are both required")
 
     try:
-        measurement = measure(command, cwd=args.cwd, timeout=args.timeout)
+        # The CLI is the workflow's entry point, so the job's one probe
+        # selects the instrument here too: statement_count is
+        # measure_statement, anything else is the raw CPU path. A pin the
+        # CLI ignored would exit 2 on the very step that pinned it — and a
+        # pin silently ignored would be worse.
+        measurement = (
+            measure_statement(command, cwd=args.cwd, timeout=args.timeout)
+            if choose_metric() == STATEMENT_METRIC
+            else measure(command, cwd=args.cwd, timeout=args.timeout))
     except CounterError as exc:
         print(f"counter: {exc}", file=sys.stderr)
         return 2

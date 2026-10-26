@@ -99,7 +99,7 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(sorted(loaded["populations"]), ["unit-suite"])
         self.assertEqual(loaded["schema"], 4)
         self.assertEqual(cd.SUPPORTED_SCHEMA, baseline.SUPPORTED_SCHEMA)
-        for schema in (3, 4):
+        for schema in (3, 4, 5):
             payload = document()
             payload["schema"] = schema
             with self.subTest(schema=schema):
@@ -155,10 +155,10 @@ class TestValidation(unittest.TestCase):
 
     def test_an_unknown_schema_is_refused_by_number(self):
         payload = document()
-        for schema in (2, 5):
+        for schema in (2, 6):
             with self.subTest(schema=schema):
                 payload["schema"] = schema
-                self.refusal(payload, "reads schema 3 and 4")
+                self.refusal(payload, "reads schema 3, 4 and 5")
 
     def test_an_empty_basis_is_refused(self):
         payload = document()
@@ -194,179 +194,117 @@ class TestValidation(unittest.TestCase):
         self.assertIn("unit-suite", str(caught.exception))
 
 
-class TestEnvelopes(unittest.TestCase):
-    """The shape this schema was changed to, and the ways it is not one."""
+class TestSchemaFive(TestValidation):
+    """Schema 5: the statement instrument, seeding on the documents.
 
-    def setUp(self):
-        stack = contextlib.ExitStack()
-        self.addCleanup(stack.close)
-        self.path = (Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-envelope-")))
-            / "speed-baseline.json")
+    The calibrated instrument's records are gone (issue #269); schema 5
+    replaces its slopes with `seeds` — the entry ids awaiting their first
+    measurement — and refuses slopes outright.
+    """
 
-    def refusal(self, envelope, fragment):
+    @staticmethod
+    def seeded(entries=None, seeds=None):
+        """A schema-5 document, seeded or not."""
         payload = document()
-        payload["populations"]["unit-suite"]["entries"][
-            "counter::unit-suite"] = envelope
-        self.path.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaises(baseline.ComparisonError) as caught:
-            baseline.read_baseline(self.path)
-        self.assertIn(fragment, str(caught.exception))
-
-    def test_a_single_value_where_an_envelope_belongs_is_refused(self):
-        # This is what schema 2 looked like, and the message has to say so:
-        # a reader holding an old file should learn what changed and why.
-        self.refusal(16.0, "records the observed RANGE")
-
-    def test_an_envelope_from_one_observation_is_refused(self):
-        # A single sample's maximum is a measurement, not a worst case.
-        self.refusal({"min": 10.0, "max": 16.0, "n": 1}, "at least 2")
-
-    def test_an_envelope_missing_its_count_is_refused(self):
-        self.refusal({"min": 10.0, "max": 16.0}, "n")
-
-    def test_an_envelope_with_min_above_max_is_refused(self):
-        self.refusal({"min": 20.0, "max": 16.0, "n": 6}, "not a range")
-
-    def test_a_negative_bound_is_refused(self):
-        self.refusal({"min": -1.0, "max": 16.0, "n": 6}, "non-negative")
-
-    def test_a_fractional_count_is_refused(self):
-        self.refusal({"min": 10.0, "max": 16.0, "n": 2.5}, "not an integer")
-
-    def test_an_empty_entries_map_is_refused(self):
-        payload = document()
-        payload["populations"]["unit-suite"]["entries"] = {}
-        self.path.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaises(baseline.ComparisonError) as caught:
-            baseline.read_baseline(self.path)
-        self.assertIn("no entries", str(caught.exception))
-
-    def test_maxima_are_the_numbers_the_head_is_judged_against(self):
-        entries = {"a": {"min": 1.0, "max": 9.0, "n": 6},
-                   "b": {"min": 2.0, "max": 3.0, "n": 6}}
-        self.assertEqual(baseline.envelope_maxima(entries),
-                         {"a": 9.0, "b": 3.0})
-
-
-class TestRatchet(unittest.TestCase):
-    """An envelope's ceiling may go down; nothing else may go up."""
-
-    def population(self, render_max):
-        payload = document()
-        payload["populations"]["renderer-workloads"] = copy.deepcopy(
-            payload["populations"]["unit-suite"])
-        payload["populations"]["renderer-workloads"]["entries"] = {
-            "e2e::bench.render": {"min": 0.05, "max": render_max, "n": 6}}
-        payload["populations"]["unit-suite"] = {
-            "metric": "cpu_time", "tolerance": 0.25, "population": DIGEST,
-            "entries": {"counter::unit-suite":
-                        {"min": 1.0, "max": 1.0, "n": 6}}, "wall": {}}
+        payload["schema"] = 5
+        population = payload["populations"]["unit-suite"]
+        if seeds is not None:
+            population["seeds"] = seeds
+        if entries is not None:
+            population["entries"] = entries
         return payload
 
-    def test_a_raised_maximum_is_a_raise(self):
-        moved = baseline.raised_entries(self.population(0.09),
-                                        self.population(0.12))
-        self.assertEqual(list(moved),
-                         ["renderer-workloads:entries:e2e::bench.render"])
-        self.assertEqual(moved["renderer-workloads:entries:e2e::bench.render"],
-                         (0.09, 0.12))
+    def test_a_schema_five_document_reads_with_entries_or_with_seeds(self):
+        with_entries = self.seeded()
+        self.assertEqual(baseline.read_baseline(self.write(with_entries)),
+                         with_entries)
+        seeded = self.seeded(entries={}, seeds=["counter::unit-suite"])
+        self.assertEqual(baseline.read_baseline(self.write(seeded)), seeded)
 
-    def test_a_lowered_maximum_is_not(self):
-        moved = baseline.raised_entries(self.population(0.12),
-                                        self.population(0.09))
-        self.assertEqual(moved, {})
+    def test_schema_five_refuses_slopes(self):
+        payload = self.seeded(seeds=["counter::unit-suite"])
+        payload["populations"]["unit-suite"]["slopes"] = {
+            "counter::unit-suite": 2.0}
+        self.refusal(payload, "slopes is retired by schema 5")
 
-    def test_a_minimum_moving_up_alone_is_not_a_raise(self):
-        # The ceiling is the recorded maximum. A faster minimum is an
-        # improvement and must not red the ratchet.
-        old = self.population(0.09)
-        new = self.population(0.09)
-        renderer = new["populations"]["renderer-workloads"]["entries"]
-        renderer["e2e::bench.render"]["min"] = 0.07
-        self.assertEqual(baseline.raised_entries(old, new), {})
+    def test_seeds_are_refused_before_schema_five(self):
+        # Schema 5 declares the seed route; no earlier schema carries it,
+        # mirroring how schema 3 refuses the slopes it never carried.
+        for schema in (3, 4):
+            with self.subTest(schema=schema):
+                payload = document()
+                payload["schema"] = schema
+                payload["populations"]["unit-suite"]["seeds"] = [
+                    "counter::unit-suite"]
+                self.refusal(payload, "seeds requires schema 5")
 
-    def test_a_population_the_base_never_had_is_a_raise_by_definition(self):
-        old = self.population(0.09)
-        del old["populations"]["renderer-workloads"]
-        moved = baseline.raised_entries(old, self.population(0.09))
-        self.assertEqual(list(moved),
-                         ["renderer-workloads:entries:e2e::bench.render"])
+    def test_a_seed_list_must_be_unique_nonempty_strings(self):
+        for seeds in (["counter::unit-suite", "counter::unit-suite"],
+                      ["counter::unit-suite", ""],
+                      ["counter::unit-suite", 4],
+                      "counter::unit-suite",
+                      {"counter::unit-suite": 2}):
+            with self.subTest(seeds=seeds):
+                self.refusal(self.seeded(entries={}, seeds=seeds), "seeds")
 
-    def test_a_DELETED_entry_is_a_raise(self):
-        # Iterating only the new document never visits a removed entry, so
-        # dropping one passed this check silently while --require-test went
-        # on demanding the workload ran: it stopped being compared, which is
-        # a second and much quieter route to the same outcome as retiring it
-        # properly through WORKLOADS.
-        old = self.population(0.09)
-        new = self.population(0.09)
-        for side in (old, new):
-            side["populations"]["renderer-workloads"]["entries"][
-                "e2e::bench.render-responsiveness"] = {
-                    "min": 0.05, "max": 0.08, "n": 6}
-        del new["populations"]["renderer-workloads"]["entries"][
-            "e2e::bench.render-responsiveness"]
-        moved = baseline.raised_entries(old, new)
+    def test_an_empty_entries_map_needs_seeds_under_schema_five(self):
+        self.refusal(self.seeded(entries={}), "no entries")
+
+
+class TestRatchetSeeds(unittest.TestCase):
+    """The seed authorization is the OLD document's `seeds` list.
+
+    `_is_seed_addition` decides whether an entry the base never recorded is
+    the automated ratchet's seeding commit or a hand raise: membership in
+    the base population's `seeds` list, on `entries` (wall never seeds),
+    seed-shaped.
+    """
+
+    def population(self):
+        payload = document()
+        payload["schema"] = 5
+        for name in payload["populations"]:
+            payload["populations"][name] = {
+                "metric": "statement_count", "tolerance": 0.05,
+                "population": DIGEST, "entries": {}, "wall": {},
+                "seeds": ["counter::unit-suite", "e2e::bench.render"]}
+        return payload
+
+    @staticmethod
+    def seed(old, node="counter::unit-suite", envelope=None):
+        new = copy.deepcopy(old)
+        new["populations"]["unit-suite"]["entries"][node] = (
+            envelope or {"min": 14.0, "max": 14.0, "n": 2})
+        return new
+
+    def test_a_seed_declared_addition_is_not_a_raise(self):
         self.assertEqual(
-            moved,
-            {"renderer-workloads:entries:e2e::bench.render-responsiveness":
-             (0.08, None)})
+            baseline.raised_entries(self.population(),
+                                    self.seed(self.population())), {})
 
-    def test_a_deleted_whole_population_is_a_raise(self):
-        old = self.population(0.09)
-        new = self.population(0.09)
-        del new["populations"]["renderer-workloads"]
-        moved = baseline.raised_entries(old, new)
-        self.assertEqual(len(moved), 1)
-
-    def test_a_slope_backed_seed_addition_is_not_a_raise(self):
-        """The post-merge seed commit must pass the down-only ratchet.
-
-        Issue #240: after the instrument reset main records no entries, and
-        the first passing default-branch measurement seeds them through the
-        automated ratchet commit. That addition is lawful only while the
-        base document declares the node's slope and the candidate is
-        seed-shaped; both are read from the documents.
-        """
-        old = self.population(0.09)
-        old["populations"]["renderer-workloads"]["slopes"] = {
-            "e2e::bench.render": 0.5}
-        del old["populations"]["renderer-workloads"]["entries"][
-            "e2e::bench.render"]
-        new = self.population(0.09)
-        new["populations"]["renderer-workloads"]["slopes"] = {
-            "e2e::bench.render": 0.5}
-        new["populations"]["renderer-workloads"]["entries"][
-            "e2e::bench.render"] = {"min": 0.12, "max": 0.12, "n": 2}
-        self.assertEqual(baseline.raised_entries(old, new), {})
-
-    def test_a_seed_addition_needs_a_declared_slope(self):
-        """Without the base slope the same addition is the raise it is."""
-        old = self.population(0.09)
-        del old["populations"]["renderer-workloads"]["entries"][
-            "e2e::bench.render"]
-        new = self.population(0.09)
-        new["populations"]["renderer-workloads"]["entries"][
-            "e2e::bench.render"] = {"min": 0.12, "max": 0.12, "n": 2}
-        moved = baseline.raised_entries(old, new)
+    def test_an_addition_without_a_seed_declaration_stays_a_raise(self):
+        old = self.population()
+        old["populations"]["unit-suite"]["seeds"] = ["counter::other"]
         self.assertEqual(
-            moved,
-            {"renderer-workloads:entries:e2e::bench.render": (None, 0.12)})
+            baseline.raised_entries(old, self.seed(old)),
+            {"unit-suite:entries:counter::unit-suite": (None, 14.0)})
+
+    def test_a_non_seed_shaped_addition_stays_a_raise(self):
+        old = self.population()
+        self.assertEqual(
+            baseline.raised_entries(
+                old, self.seed(old, envelope={"min": 10.0, "max": 14.0,
+                                              "n": 2})),
+            {"unit-suite:entries:counter::unit-suite": (None, 14.0)})
 
     def test_a_seed_shaped_wall_addition_stays_a_raise(self):
-        """Wall never seeds, in the ratchet as in the writer."""
-        old = self.population(0.09)
-        new = self.population(0.09)
-        for side in (old, new):
-            side["populations"]["renderer-workloads"]["slopes"] = {
-                "e2e::bench.render": 0.5}
-        new["populations"]["renderer-workloads"]["wall"][
-            "e2e::bench.render"] = {"min": 0.09, "max": 0.09, "n": 2}
-        moved = baseline.raised_entries(old, new)
+        old = self.population()
+        new = self.seed(old)
+        new["populations"]["unit-suite"]["wall"]["counter::unit-suite"] = {
+            "min": 65.0, "max": 65.0, "n": 2}
         self.assertEqual(
-            moved,
-            {"renderer-workloads:wall:e2e::bench.render": (None, 0.09)})
+            baseline.raised_entries(old, new),
+            {"unit-suite:wall:counter::unit-suite": (None, 65.0)})
 
 
 class TestDeclaredRaises(unittest.TestCase):
@@ -570,9 +508,9 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
 
     def test_a_seed_shaped_addition_needs_no_feature(self):
         old = document()
+        old["schema"] = 5
         old["populations"]["unit-suite"]["entries"] = {}
-        old["populations"]["unit-suite"]["slopes"] = {
-            "counter::unit-suite": 2.0}
+        old["populations"]["unit-suite"]["seeds"] = ["counter::unit-suite"]
         seeded = copy.deepcopy(old)
         seeded["populations"]["unit-suite"]["entries"] = {
             "counter::unit-suite": {"min": 14.0, "max": 14.0, "n": 2}}

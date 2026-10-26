@@ -386,7 +386,7 @@ jobs:
               top_keys = {"schema", "basis", "cell", "measured_commit",
                           "measured_at", "populations"}
               population_keys = {"metric", "tolerance", "population",
-                                 "entries", "wall"}
+                                 "entries", "wall", "seeds"}
               envelope_keys = {"min", "max", "n"}
               if set(old) != top_keys or set(new) != top_keys:
                   refuse("speed-baseline.json has an unexpected key set")
@@ -394,6 +394,11 @@ jobs:
                           "measured_at"):
                   if not same(new[key], old[key]):
                       refuse(f"speed-baseline.json changed authored key {key}")
+              # Schema 5 only: post-merge main only ever sees the statement
+              # instrument's document, and the seeding authorization is its
+              # `seeds` lists. A schema 3/4 artifact has no route here.
+              if old["schema"] != 5 or new["schema"] != 5:
+                  refuse("speed-baseline.json must declare schema 5")
               old_pops, new_pops = old["populations"], new["populations"]
               if type(old_pops) is not dict or type(new_pops) is not dict \
                       or set(old_pops) != set(new_pops):
@@ -404,22 +409,18 @@ jobs:
                   if type(old_pop) is not dict or type(new_pop) is not dict \
                           or not population_keys <= set(old_pop) \
                           or not population_keys <= set(new_pop) \
-                          or set(old_pop) - population_keys - {"slopes"} \
-                          or set(new_pop) - population_keys - {"slopes"}:
+                          or set(old_pop) - population_keys \
+                          or set(new_pop) - population_keys:
                       refuse(f"{population_name} has an unexpected shape")
                   for pop in (old_pop, new_pop):
-                      if "slopes" in pop:
-                          slopes = pop["slopes"]
-                          if type(slopes) is not dict or not slopes \
-                                  or any(not isinstance(node, str) or not node
-                                         or not number(value) or value <= 0
-                                         for node, value in slopes.items()):
-                              refuse(f"{population_name} has invalid slopes")
-                          if type(pop["entries"]) is not dict \
-                                  or not set(pop["entries"]) <= set(slopes):
-                              refuse(f"{population_name} has entries without slopes")
-                  if not same(new_pop.get("slopes"), old_pop.get("slopes")):
-                      refuse(f"{population_name} changed slopes")
+                      seeds = pop["seeds"]
+                      if type(seeds) is not list \
+                              or any(not isinstance(node, str) or not node
+                                    for node in seeds) \
+                              or len(set(seeds)) != len(seeds):
+                          refuse(f"{population_name} has invalid seeds")
+                  if not same(new_pop.get("seeds"), old_pop.get("seeds")):
+                      refuse(f"{population_name} changed seeds")
                   for key in ("metric", "tolerance", "population"):
                       if not same(new_pop[key], old_pop[key]):
                           refuse(f"{population_name} changed {key}")
@@ -430,7 +431,7 @@ jobs:
                           refuse(f"{population_name}.{map_name} changed its entries")
                       for entry_name in set(new_map) - set(old_map):
                           if map_name != "entries" \
-                                  or entry_name not in old_pop.get("slopes", {}):
+                                  or entry_name not in old_pop["seeds"]:
                               refuse(f"{population_name}.{map_name} changed its entries")
                           seed = new_map[entry_name]
                           if type(seed) is not dict or set(seed) != envelope_keys:
