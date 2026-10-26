@@ -212,24 +212,6 @@ _BANNED_ATTRS = ("Temporary" + "Directory", "mkd" + "temp")
 _IMPACT_FAME_PREFIX = "impact-" + "fame-"
 
 
-def _tempfile_bindings(tree):
-    """The names a module's own imports bind to the tempfile module."""
-    module_names = {_TEMPFILE}
-    bound = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == _TEMPFILE and alias.asname:
-                    module_names.add(alias.asname)
-        elif isinstance(node, ast.ImportFrom) and node.module == _TEMPFILE \
-                and node.level == 0:
-            for alias in node.names:
-                if alias.name in _BANNED_ATTRS:
-                    bound[alias.asname or alias.name] = \
-                        f"{_TEMPFILE}.{alias.name}"
-    return module_names, bound
-
-
 def _dotted_tempfile_name(node, module_names, bound):
     """The banned tempfile dotted name a node resolves to, or None."""
     if isinstance(node, ast.Attribute):
@@ -261,25 +243,49 @@ class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
         for path in sorted((REPO_ROOT / "tests").glob("*.py")):
             if path.resolve() in (helper, own):
                 continue
-            tree = ast.parse(
-                path.read_text(encoding="utf-8"), filename=str(path))
-            module_names, bound = _tempfile_bindings(tree)
-            exempt = set()
+            source = path.read_text(encoding="utf-8")
+            # Any import or reference of the module spells it out, so a
+            # file that never says the name cannot carry a banned spelling.
+            if _TEMPFILE not in source:
+                continue
+            tree = ast.parse(source, filename=str(path))
+            module_names = {_TEMPFILE}
+            bound = {}
+            attrs = []
+            names = []
+            calls = []
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) \
-                        and _dotted_tempfile_name(
-                            node.func, module_names, bound) is not None \
-                        and _has_impact_fame_prefix(node):
-                    exempt.add(node.func)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute):
-                    dotted = _dotted_tempfile_name(
-                        node, module_names, bound)
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == _TEMPFILE and alias.asname:
+                            module_names.add(alias.asname)
+                elif isinstance(node, ast.ImportFrom) \
+                        and node.module == _TEMPFILE and node.level == 0:
+                    for alias in node.names:
+                        if alias.name in _BANNED_ATTRS:
+                            bound[alias.asname or alias.name] = \
+                                f"{_TEMPFILE}.{alias.name}"
+                elif isinstance(node, ast.Call) \
+                        and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr in _BANNED_ATTRS:
+                    calls.append(node)
+                elif isinstance(node, ast.Attribute) \
+                        and isinstance(node.value, ast.Name) \
+                        and node.attr in _BANNED_ATTRS:
+                    attrs.append(node)
                 elif isinstance(node, ast.Name):
-                    dotted = bound.get(node.id)
-                else:
-                    continue
+                    names.append(node)
+            exempt = {call.func for call in calls
+                      if _dotted_tempfile_name(
+                          call.func, module_names, bound) is not None
+                      and _has_impact_fame_prefix(call)}
+            for node in attrs:
+                dotted = _dotted_tempfile_name(node, module_names, bound)
                 if dotted is not None and node not in exempt:
+                    violations.append(f"{path.name}: {dotted}")
+            for node in names:
+                dotted = bound.get(node.id)
+                if dotted is not None:
                     violations.append(f"{path.name}: {dotted}")
         self.assertEqual(
             violations, [],
