@@ -9,7 +9,13 @@
       "metric": "statement_count",
       "tolerance": 0.05,
       "population": "1fd4ca77662965a471d640ff3c5de9c36a0d3ba7fc4b3ddbe955a036fc36ba80",
-      "entries": {},
+      "entries": {
+        "counter::unit-suite": {
+          "min": 99873148.0,
+          "max": 99873148.0,
+          "n": 2
+        }
+      },
       "wall": {
         "counter::unit-suite": {
           "min": 65.223,
@@ -25,7 +31,23 @@
       "metric": "statement_count",
       "tolerance": 0.05,
       "population": "a59ee4b0b38d2663c05b816c6549783ef895efb39c3604e1d18819e069054230",
-      "entries": {},
+      "entries": {
+        "e2e::bench.render": {
+          "min": 108578.0,
+          "max": 108578.0,
+          "n": 2
+        },
+        "e2e::bench.render-impact": {
+          "min": 701427.0,
+          "max": 701427.0,
+          "n": 2
+        },
+        "e2e::bench.render-responsiveness": {
+          "min": 93463.0,
+          "max": 93463.0,
+          "n": 2
+        }
+      },
       "wall": {
         "e2e::bench.render": {
           "min": 0.057,
