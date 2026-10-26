@@ -19,12 +19,10 @@ per `child_environment`), three runs of the full unit suite read:
     99,222,446 / 99,222,443 / 99,220,993 events — spread 0.0015%
     missed: 0 on every run; the suite exited 0 every run
 
-The count is the gated value; the overhead costs CI minutes, not
-correctness. The statement callback's own dispatch was measured lighter
-than the retired calibrated instrument's two-child protocol: an earlier
-prototype measured the same suite at 99.66M events (figures in issue #269),
-0.44% above this shipped bootstrap — the bootstrap's own lines are counted
-too, so its exact shape moves the number by that much.
+The count is the gated value; the overhead costs CI minutes, not correctness.
+An earlier prototype measured the same suite at 99.66M events (issue #269),
+0.44% above this shipped bootstrap: the bootstrap's own lines are counted too,
+so its exact shape moves the number by that much.
 
 WHAT THE COUNT DOES NOT SEE, STATED RATHER THAN HIDDEN. The monitoring
 callback fires in the measured child itself, so the count covers the direct
@@ -306,7 +304,7 @@ class Measurement(NamedTuple):
     returncode: int
 
 
-def _run_child(command, cwd, env, timeout):
+def _run_child(command, cwd, env, timeout, measure_cpu=True):
     """Run one child, returning (returncode, stdout, stderr, wall, cpu).
 
     A hand-rolled Popen rather than `subprocess.run` for exactly one reason:
@@ -318,9 +316,13 @@ def _run_child(command, cwd, env, timeout):
     is not `subprocess.run`. The traced instruments needed it too (the direct
     child was `strace` and the command was its grandchild), which is where
     the requirement came from; the requirement outlived the instrument.
+
+    `measure_cpu=False` skips the RUSAGE_CHILDREN reads: the statement
+    instrument counts in the child, so the POSIX-only read would make it
+    refuse where it can measure.
     """
     started = time.perf_counter()
-    before = _child_cpu_seconds()
+    before = _child_cpu_seconds() if measure_cpu else 0.0
     with subprocess.Popen(
             list(command), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -334,7 +336,8 @@ def _run_child(command, cwd, env, timeout):
                 command, timeout, output=stdout, stderr=stderr) from None
         returncode = process.returncode
     return (returncode, stdout or "", stderr or "",
-            time.perf_counter() - started, _child_cpu_seconds() - before)
+            time.perf_counter() - started,
+            (_child_cpu_seconds() - before) if measure_cpu else 0.0)
 
 
 def _kill_process_group(process) -> None:
@@ -478,9 +481,8 @@ def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
 def _read_statement_file(path: Path) -> tuple:
     """Parse and vet the count file the bootstrap's atexit handler wrote.
 
-    Every bad shape is a CounterError, never a number: a count this file
-    cannot vouch for is a guess, and a guess under a metric name is exactly
-    the failure the metric check exists to catch.
+    Every bad shape is a CounterError, never a number: a guess under a
+    metric name is the failure the metric check exists to catch.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -529,9 +531,8 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
     file at exit. Session/process-group semantics are the raw path's, so a
     timeout still kills the whole tree.
 
-    Requires Python 3.12+ (`sys.monitoring`), which the speed job pins.
-    Raises the same trio `measure` raises — CounterError, TimeoutExpired,
-    OSError.
+    Requires Python 3.12+ (`sys.monitoring`); raises the trio `measure`
+    raises — CounterError, TimeoutExpired, OSError.
     """
     command = list(command)
     if sys.version_info < (3, 12):
@@ -557,7 +558,7 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
     try:
         code, out, err, wall, _cpu = _run_child(
             [sys.executable, "-c", _STATEMENT_BOOTSTRAP, "--", *command[1:]],
-            cwd, child_env, timeout)
+            cwd, child_env, timeout, measure_cpu=False)
         count, _missed = _read_statement_file(count_path)
     finally:
         if count_path.exists():

@@ -204,12 +204,16 @@ def _check_population(path: Path, name: str, population) -> None:
 
 
 def _check_seeds(where: str, seeds) -> None:
-    """`seeds`: a list of unique, non-empty entry ids, or absent."""
+    """`seeds`: a non-empty list of unique, non-empty entry ids, or absent."""
     if seeds is None:
         return
     if not isinstance(seeds, list):
         raise ComparisonError(
             f"{where} seeds={seeds!r} is not a list of entry ids")
+    if not seeds:
+        raise ComparisonError(
+            f"{where} seeds must be a non-empty list; an empty seeds list "
+            "declares a blind window nothing will ever leave")
     seen = set()
     for node in seeds:
         if not isinstance(node, str) or not node:

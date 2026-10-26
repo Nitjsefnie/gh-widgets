@@ -229,7 +229,8 @@ class TestSchemaFive(TestValidation):
                 self.refusal(payload, "seeds requires schema 5")
 
     def test_a_seed_list_must_be_unique_nonempty_strings(self):
-        for seeds in (["counter::unit-suite", "counter::unit-suite"],
+        for seeds in ([],
+                      ["counter::unit-suite", "counter::unit-suite"],
                       ["counter::unit-suite", ""],
                       ["counter::unit-suite", 4],
                       "counter::unit-suite",
@@ -811,7 +812,12 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 for name, population in loaded["populations"].items()}
 
     def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
-        """Derive doubling detection from the current tightened record."""
+        """Derive doubling detection from the current tightened record.
+
+        While `entries` is {} (the declared blind window) this greens with
+        zero assertions exercised; it starts judging when main's ratchet
+        seeds, the same waiting shape as the absent-baseline skip.
+        """
         loaded = self._load()
         for name, population in loaded["populations"].items():
             entries = population["entries"]
@@ -853,7 +859,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def test_no_tolerance_is_tighter_than_the_cell_has_shown(self):
         """An envelope's tolerance must span what the cell has actually shown,
         INCLUDING its fastest and slowest machine — here as arithmetic, not a
-        sentence somebody can re-read and agree with.
+        sentence somebody can re-read and agree with. Greens vacuously while
+        `entries` is {} (the blind window); it judges once main seeds.
         """
         loaded = self._load()
         for name, population in loaded["populations"].items():
@@ -869,6 +876,7 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def test_no_tolerance_is_so_loose_that_the_gate_cannot_fire(self):
         """The other side: past 1.0 a doubled workload clears the ceiling and
         the gate is decorative — the shape this whole change exists to remove.
+        Vacuous while `entries` is {}; the tolerance loop needs a seeded entry.
         """
         loaded = self._load()
         for name, population in loaded["populations"].items():

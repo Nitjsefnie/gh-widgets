@@ -395,7 +395,7 @@ jobs:
                   if not same(new[key], old[key]):
                       refuse(f"speed-baseline.json changed authored key {key}")
               # Schema 5 only: post-merge main only ever sees the statement
-              # instrument's document, whose `seeds` authorize seeding.
+              # instrument's document, whose seeds lists authorize seeding.
               if old["schema"] != 5 or new["schema"] != 5:
                   refuse("speed-baseline.json must declare schema 5")
               old_pops, new_pops = old["populations"], new["populations"]
@@ -413,7 +413,7 @@ jobs:
                       refuse(f"{population_name} has an unexpected shape")
                   for pop in (old_pop, new_pop):
                       seeds = pop["seeds"]
-                      if type(seeds) is not list \
+                      if type(seeds) is not list or not seeds \
                               or any(not isinstance(node, str) or not node
                                     for node in seeds) \
                               or len(set(seeds)) != len(seeds):

@@ -16,6 +16,12 @@ from unittest import mock
 
 from scripts.bench.bench_platform import REQUIRES_BENCH
 
+REQUIRES_STATEMENT = unittest.skipUnless(
+    sys.version_info >= (3, 12),
+    "the statement instrument counts sys.monitoring LINE events, "
+    "which exist from Python 3.12; measure_statement refuses below "
+    "that and its refusal is pinned in tests/test_counter.py")
+
 import impact_clone
 
 
@@ -390,6 +396,8 @@ class TestHarness(unittest.TestCase):
         self.assertTrue((work / "outputs/head-1/render/last-updated.txt").is_file())
         self.assertNotIn("observed", result.stdout)
 
+    @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
     def test_statement_pin_measures_the_childs_executed_lines(self):
         # The gated instrument: with the job's pin in the environment the
         # dispatch is measure_statement, so `time` is a deterministic count
@@ -415,6 +423,8 @@ class TestHarness(unittest.TestCase):
         self.assertNotIn("raw_cpu", result)
         self.assertNotIn("calibration_cpu", result)
 
+    @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
     def test_statement_report_and_log_line_carry_the_count(self):
         # End to end through main(): the JUnit names the instrument, the
         # per-case time is the count, and the log line prints it without the

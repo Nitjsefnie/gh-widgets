@@ -439,5 +439,18 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self.assertIn(["add", "--", "gate/speed-baseline.json"], calls)
 
 
+    def test_the_validate_step_carries_no_backtick_anywhere(self):
+        """macOS /bin/bash 3.2 mis-scans a backtick inside $()+heredoc shapes.
+
+        Run 40274260074: one backtick pair in a COMMENT of the validate step
+        red every macOS delivery case at PARSE time ("unexpected EOF while
+        looking for matching `'") while linux bash 5 parsed the same block
+        clean and windows git-bash 4.4 stayed green — the failure set was
+        exactly the cells whose /bin/bash is 3.2. The step's run block
+        therefore carries no backtick character at all.
+        """
+        self.assertNotIn("`", push_body())
+
+
 if __name__ == "__main__":
     unittest.main()
