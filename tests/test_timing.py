@@ -384,7 +384,8 @@ class RendererTiming(unittest.TestCase):
         pages = {
             '/user': test_popularity.response(test_popularity.USER),
             '/user/orgs?per_page=100': test_popularity.response([]),
-            '/user/repos?affiliation=owner&per_page=100': test_popularity.response(
+            '/user/repos?affiliation=owner&visibility=public&per_page=100':
+            test_popularity.response(
                 [test_popularity.repo('Owner/A'), test_popularity.repo('Owner/B')]),
         }
         gates = {'Owner/A': threading.Event(), 'Owner/B': threading.Event()}
