@@ -100,8 +100,7 @@ class SiblingLoaderLifecycle(unittest.TestCase):
                          sibling, public_name, str(fallback)],
                         cwd=unrelated, env=env, capture_output=True, text=True,
                         timeout=15, check=False)
-                self.assertEqual(result.returncode, 0,
-                                 result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_overlapping_path_loads_share_modules_and_registries(self, fallback=False):
         self.run_scenario('''

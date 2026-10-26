@@ -82,8 +82,7 @@ def run_python_git_fixture(script, processes=None):
     real_popen = subprocess.Popen
 
     def launch(command, *args, **kwargs):
-        is_git = (isinstance(command, (list, tuple)) and command
-                  and command[0] == "git")
+        is_git = isinstance(command, (list, tuple)) and command and command[0] == "git"
         if is_git:
             command = [sys.executable, str(script), *command[1:]]
         # Production owns this real Popen's context and reap lifecycle.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Sentinel: every ``ghw-*`` test directory carries a live owner lock.
+# pylint: disable=protected-access
 
-The helper ``tests/_ghw_temp.py`` locks each ``ghw-*`` directory a test
-creates, and the ``tests`` package import scavenges the dead ones at the
-start of every run. The unit tests below drive the scavenger's three
-verdicts (dead owner reclaims, live owner survives, foreign directory
-survives) against the real lock primitives; the guard test fails the suite
-if any ``tests/*.py`` creates a temp directory behind the helper; the
+The helper locks each ghw-* directory a test creates, and the tests
+package import scavenges the dead ones at the start of every run. The
+unit tests drive the three verdicts (dead reclaims, live survives,
+foreign survives) against the real lock primitives; the guard fails the
+suite if any tests/*.py creates a temp directory behind the helper; the
 end-to-end test runs the real sequence a killed run leaves behind.
 
     python3 -m unittest tests.test_ghw_temp
@@ -27,29 +27,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _dead_ghw_dir(prefix):
-    """A ghw-* directory a dead run left: lock file present, lock unheld."""
     path = Path(tempfile.mkdtemp(prefix=prefix))
-    lock = _ghw_temp.impact_clone  # pylint: disable=protected-access
+    lock = _ghw_temp.impact_clone
     stream = lock._acquire_scratch_owner_lock(path, create=True)
     lock._release_scratch_owner_lock(stream)
     return path
 
 
 def _held_ghw_dir(prefix):
-    """A ghw-* directory whose owner is alive: lock held by this process.
-
-    A second open of the same lock file still conflicts with the held
-    flock, so this stand-in reads as a live owner the scavenge must spare.
-    """
     path = Path(tempfile.mkdtemp(prefix=prefix))
-    lock = _ghw_temp.impact_clone  # pylint: disable=protected-access
+    lock = _ghw_temp.impact_clone
     return path, lock._acquire_scratch_owner_lock(path, create=True)
 
 
 def _purge(path, stream=None):
-    """Best-effort cleanup that never raises into the test's own verdict."""
     if stream is not None:
-        _ghw_temp.impact_clone._release_scratch_owner_lock(  # pylint: disable=protected-access
+        _ghw_temp.impact_clone._release_scratch_owner_lock(
             stream)
     try:
         _ghw_temp.impact_clone.remove_scratch_dir(path)
@@ -93,10 +86,10 @@ class TestScavengerVerdicts(unittest.TestCase):
     def test_symlink_and_file_entries_are_skipped(self):
         target = Path(tempfile.mkdtemp(prefix="ghw-unit-target-"))
         link = Path(tempfile.gettempdir()) / (
-            "ghw-unit-link-%d" % time.monotonic_ns())
+            f"ghw-unit-link-{time.monotonic_ns()}")
         link.symlink_to(target)
         plain_file = Path(tempfile.gettempdir()) / (
-            "ghw-unit-file-%d" % time.monotonic_ns())
+            f"ghw-unit-file-{time.monotonic_ns()}")
         plain_file.write_text("", encoding="utf-8")
         try:
             _ghw_temp.scavenge()
@@ -112,51 +105,51 @@ class TestScavengerVerdicts(unittest.TestCase):
         held = _ghw_temp.tempdir(prefix="ghw-unit-registry-")
         made = _ghw_temp.mkdtemp(prefix="ghw-unit-registry-")
         try:
-            self.assertIn(Path(held.name), _ghw_temp._OWNED)  # pylint: disable=protected-access
+            self.assertIn(Path(held.name), _ghw_temp._OWNED)
             _ghw_temp.scavenge()
             self.assertTrue(Path(held.name).exists())
             self.assertTrue(made.exists())
         finally:
             held.cleanup()
-            _ghw_temp._release_owned()  # pylint: disable=protected-access
+            _ghw_temp._release_owned()
 
     def test_helper_tempdir_lock_is_dropped_at_cleanup(self):
         with _ghw_temp.tempdir(prefix="ghw-unit-cleanup-") as tmp:
             path = Path(tmp)
             self.assertTrue(path.is_dir())
             self.assertTrue(
-                _ghw_temp.impact_clone._scratch_owner_lock_path(  # pylint: disable=protected-access
+                _ghw_temp.impact_clone._scratch_owner_lock_path(
                     path).exists())
         self.assertFalse(path.exists())
         self.assertFalse(
-            _ghw_temp.impact_clone._scratch_owner_lock_path(  # pylint: disable=protected-access
+            _ghw_temp.impact_clone._scratch_owner_lock_path(
                 path).exists())
-        self.assertNotIn(path, _ghw_temp._OWNED)  # pylint: disable=protected-access
+        self.assertNotIn(path, _ghw_temp._OWNED)
 
     def test_helper_mkdtemp_registers_and_atexit_unlinks(self):
         made = _ghw_temp.mkdtemp(prefix="ghw-unit-mkdtemp-")
-        lock_path = _ghw_temp.impact_clone._scratch_owner_lock_path(  # pylint: disable=protected-access
+        lock_path = _ghw_temp.impact_clone._scratch_owner_lock_path(
             made)
         try:
             self.assertTrue(lock_path.exists())
-            self.assertIn(made, _ghw_temp._OWNED)  # pylint: disable=protected-access
+            self.assertIn(made, _ghw_temp._OWNED)
         finally:
-            _ghw_temp._release_owned()  # pylint: disable=protected-access
+            _ghw_temp._release_owned()
         self.assertFalse(lock_path.exists())
-        self.assertNotIn(made, _ghw_temp._OWNED)  # pylint: disable=protected-access
+        self.assertNotIn(made, _ghw_temp._OWNED)
         # Released, not merely forgotten: a fresh acquire must succeed.
-        stream = _ghw_temp.impact_clone._acquire_scratch_owner_lock(  # pylint: disable=protected-access
+        stream = _ghw_temp.impact_clone._acquire_scratch_owner_lock(
             made, create=True)
-        _ghw_temp.impact_clone._release_scratch_owner_lock(  # pylint: disable=protected-access
+        _ghw_temp.impact_clone._release_scratch_owner_lock(
             stream)
         _purge(made)
 
     def test_non_ghw_names_pass_through_unlocked(self):
         with _ghw_temp.tempdir(prefix="diff-coverage-") as tmp:
-            self.assertNotIn(Path(tmp), _ghw_temp._OWNED)  # pylint: disable=protected-access
+            self.assertNotIn(Path(tmp), _ghw_temp._OWNED)
             self.assertFalse(Path(str(tmp) + ".owner.lock").exists())
         with _ghw_temp.tempdir() as tmp:
-            self.assertNotIn(Path(tmp), _ghw_temp._OWNED)  # pylint: disable=protected-access
+            self.assertNotIn(Path(tmp), _ghw_temp._OWNED)
 
 
 _TEMPFILE = "temp" + "file"
@@ -206,12 +199,7 @@ def _has_impact_fame_prefix(call):
 
 
 class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
-    """tests/ creates temp dirs only via tests/_ghw_temp.py."""
-
     def test_no_test_module_creates_temp_dirs_behind_the_helper(self):
-        # Fail closed: every tempfile spelling the parser can see is either
-        # the impact-fame exception or a violation; a file that cannot be
-        # parsed raises and fails this test rather than passing it.
         violations = []
         helper = Path(_ghw_temp.__file__).resolve()
         own = Path(__file__).resolve()
@@ -245,8 +233,6 @@ class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
 
 
 class TestScavengeReclaimsAKilledRun(unittest.TestCase):
-    """The real sequence: a killed run's dir reclaimed, a live one spared."""
-
     def test_killed_run_is_reclaimed_and_live_run_survives(self):
         markers = Path(tempfile.mkdtemp(prefix="ghw-e2e-hang-"))
         marker_a = markers / "dir-a.txt"
@@ -303,9 +289,8 @@ class TestScavengeReclaimsAKilledRun(unittest.TestCase):
             self.assertTrue(dir_b.exists())
             _ghw_temp.scavenge()
             self.assertFalse(dir_b.exists())
-            self.assertTrue(
-                markers.exists(),
-                "this process's own held dirs must survive its scavenge")
+            self.assertTrue(markers.exists(),
+                            "this process's held dirs must survive")
         finally:
             for proc in (proc_a, proc_b):
                 if proc.poll() is None:
