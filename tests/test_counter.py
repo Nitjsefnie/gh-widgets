@@ -613,8 +613,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_bootstrap_strips_its_leading_separator(self):
-        # The parent spells `[python, "-c", BOOTSTRAP, "--", *target]`; the
-        # bootstrap strips exactly one leading `--` before dispatching.
+        # One leading `--` (the parent's own separator) is stripped.
         with tempfile.TemporaryDirectory() as td:
             count_path = Path(td) / "count.json"
             env = counter.child_environment()
@@ -657,6 +656,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_count_that_is_not_a_natural_number_refuses(self):
+        # Every malformed shape is the same refusal: not a natural count.
         for payload in ('{"count": -1, "missed": 0}',
                         '{"count": "many", "missed": 0}',
                         '{"count": 1.5, "missed": 0}',
@@ -683,8 +683,8 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_BENCH
     @REQUIRES_STATEMENT
     def test_the_statement_label_is_refused_by_the_raw_path(self):
-        # Raw CPU seconds must never carry statement_count: mislabel spellings
-        # of the category error the comparator's metric check exists for.
+        # Raw CPU seconds never carry statement_count: the mislabelled
+        # number would pass the comparator's metric check.
         with self.assertRaises(counter.CounterError) as raised:
             counter.measure([sys.executable, "-c", "pass"],
                             metric=counter.STATEMENT_METRIC)
@@ -713,9 +713,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_hard_child_exit_writes_no_count_and_refuses(self):
-        # A child that dies before atexit (os._exit) writes nothing, so the
-        # parent refuses on the missing file rather than recording zero work
-        # — the integration form of the missing-file refusal.
+        # os._exit skips atexit: the integration form of the missing-file refusal.
         with self.assertRaises(counter.CounterError) as raised:
             counter.measure_statement(
                 [sys.executable, "-c", "import os; os._exit(0)"])

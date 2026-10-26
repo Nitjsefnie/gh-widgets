@@ -67,7 +67,7 @@ SUPPORTED_SCHEMA = (3, 4, 5)
 # here.
 SMOKE_FACTOR = 3.0
 
-# The instrument names, and what a report may say about each.
+# The instrument names, and what a report may say.
 METRIC_NOTES = {
     "statement_count": (
         "a deterministic count of sys.monitoring LINE events in the "
