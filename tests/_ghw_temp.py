@@ -1,4 +1,4 @@
-"""Owner-locked ghw-* temp dirs for tests, plus the run-start scavenger."""
+"""Owner-locked ghw-* dirs, run-start scavenged."""
 # pylint: disable=protected-access
 import atexit
 import tempfile
@@ -40,7 +40,7 @@ def _discard(path):
 def tempdir(prefix=None, directory=None):
     tmp = _LockedTemporaryDirectory(prefix=prefix, dir=directory)
     if Path(tmp.name).name.startswith(_PREFIX):
-        # shortcut: a fresh dir is unheld until the flock below; a sibling scavenge in that window can win it, so upgrade when a test observes it.
+        # shortcut: unheld until the flock below; a sibling scavenge can win it (upgrade: seen)
         _register(tmp.name)
     return tmp
 
@@ -48,6 +48,7 @@ def tempdir(prefix=None, directory=None):
 def mkdtemp(prefix=None, directory=None):
     path = Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
     if path.name.startswith(_PREFIX):
+        # shortcut: same window as tempdir().
         _register(path)
     return path
 
@@ -68,7 +69,11 @@ def scavenge():
             continue
         impact_clone._release_scratch_owner_lock(
             owner_lock)
-        impact_clone.remove_scratch_dir(scratch)
+        try:
+            impact_clone.remove_scratch_dir(scratch)
+        except OSError:
+            # a stuck dir must not red every run (cross-user filtered above)
+            pass
 
 
 def _release_owned():
