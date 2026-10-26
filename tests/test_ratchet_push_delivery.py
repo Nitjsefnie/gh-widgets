@@ -89,10 +89,8 @@ def records(record_path):
             population.pop("slopes", None)
             population["seeds"] = population.get("seeds",
                                                  sorted(population["entries"]))
-        # The #269 reset leaves `entries` empty and the seeds declare the
-        # node, so the recorded side gains the entry here: the validator
-        # judges a lowering of a recorded maximum, whatever the document
-        # currently records.
+        # The #269 reset leaves `entries` empty with the node seed-declared:
+        # the recorded side gains it here, so the validator judges a lowering.
         population = old["populations"]["unit-suite"]
         envelope = population["entries"].get(entry)
         if envelope is None:
@@ -409,8 +407,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
         fixture = speed_tests.TestSpeedRatchetTightening()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        # The writer preserves the base schema and the validator reads
-        # schema 5 only: declare it, entries seed-declared.
+        # The writer preserves the base schema; the validator reads schema 5.
         fixture.baseline["schema"] = 5
         for population in fixture.baseline["populations"].values():
             population["seeds"] = sorted(population["entries"])
@@ -437,7 +434,6 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self.assertEqual(candidate["populations"]["unit-suite"]["entries"]
                          ["counter::unit-suite"]["max"], 9.0)
         self.assertIn(["add", "--", "gate/speed-baseline.json"], calls)
-
 
     def test_the_validate_step_carries_no_backtick_anywhere(self):
         """macOS /bin/bash 3.2 mis-scans backticks inside $()+heredoc shapes:
