@@ -12,12 +12,13 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 import urllib.error
 from email.message import Message
 from pathlib import Path
 from unittest import mock
+
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -100,7 +101,7 @@ class StoreContract(unittest.TestCase):
 
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.directory = tempfile.TemporaryDirectory()
+        self.directory = _ghw_temp.tempdir(prefix='ghw-rest-cache-')
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / 'rest-cache.json'
 
@@ -228,7 +229,7 @@ class PopularityRuns(unittest.TestCase):
 
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.directory = tempfile.TemporaryDirectory()
+        self.directory = _ghw_temp.tempdir(prefix='ghw-rest-cache-')
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / 'rest-cache.json'
         self.out = Path(self.directory.name) / 'widgets'
@@ -298,7 +299,7 @@ class PublicOrganizations(unittest.TestCase):
 
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.directory = tempfile.TemporaryDirectory()
+        self.directory = _ghw_temp.tempdir(prefix='ghw-rest-cache-')
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / 'rest-cache.json'
 
