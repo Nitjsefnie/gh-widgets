@@ -257,6 +257,13 @@ renderer caches the data that cannot change and refetches only what can.
 - `GH_WIDGETS_CACHE_FILE` — cache location, default `/var/lib/gh-widgets/cache.json`.
   Missing, unreadable, corrupt, or schema-mismatched caches are not errors: the
   run falls back to a full fetch.
+- `GH_WIDGETS_REST_CACHE` — REST conditional-GET store (per-URL ETag, body and
+  `Link` header), default `/var/lib/gh-widgets/rest-cache.json` under the units.
+  An unchanged resource is re-requested with `If-None-Match` and answered from
+  the store on a `304 Not Modified`, which GitHub does not charge against the
+  primary rate limit; each run prints `rest-cache: requests=N not-modified=M`.
+  Missing or corrupt stores degrade to a full fetch; unset, the renderers
+  fetch everything as before.
 - `cache.json` and `impact-cache.json` are private renderer implementation
   details. Do not use either cache as an interchange format for another
   process; use the versioned `ghwidgets_data` API instead.
