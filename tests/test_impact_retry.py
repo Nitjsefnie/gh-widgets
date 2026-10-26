@@ -106,4 +106,5 @@ class TestFailedRepoIsRetried(unittest.TestCase):
     def _clones_ok(moved):
         for repo, t in moved:
             tmp = _ghw_temp.mkdtemp(prefix="ghw-retry-")
+            _ghw_temp.abandon(tmp)
             yield repo, t, Path(tmp), 0.1, 0.2, None

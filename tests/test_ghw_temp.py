@@ -267,6 +267,8 @@ class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
             "test_impact_loc_coverage.py, name the guarded exceptions")
 
 
+@unittest.skipUnless(os.name == "posix",
+                     "the end-to-end kill needs POSIX signals")
 class TestScavengeReclaimsAKilledRun(unittest.TestCase):
     def test_killed_run_is_reclaimed_and_live_run_survives(self):
         markers = Path(tempfile.mkdtemp(prefix="ghw-e2e-hang-"))
