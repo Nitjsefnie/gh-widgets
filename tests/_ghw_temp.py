@@ -40,7 +40,7 @@ def _discard(path):
 def tempdir(prefix=None, directory=None):
     tmp = _LockedTemporaryDirectory(prefix=prefix, dir=directory)
     if Path(tmp.name).name.startswith(_PREFIX):
-        # shortcut: unheld until the flock below; a sibling scavenge can win it (upgrade: seen)
+        # shortcut: unheld until the flock below; a sibling scavenge can win it (upgrade: on a red)
         _register(tmp.name)
     return tmp
 
@@ -51,6 +51,18 @@ def mkdtemp(prefix=None, directory=None):
         # shortcut: same window as tempdir().
         _register(path)
     return path
+
+
+def abandon(path):
+    """End a test's ownership: release, unlink, keep."""
+    stream = _OWNED.pop(Path(path), None)
+    if stream is None:
+        raise ValueError(
+            "abandon() hands a helper-locked directory over before "
+            "production removes it; this process holds no owner lock for "
+            f"{path}")
+    impact_clone._release_scratch_owner_lock(stream)
+    impact_clone._scratch_owner_lock_path(path).unlink()
 
 
 def scavenge():
