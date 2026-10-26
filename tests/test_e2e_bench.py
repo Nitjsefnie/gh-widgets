@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -390,123 +391,56 @@ class TestHarness(unittest.TestCase):
         self.assertTrue((work / "outputs/head-1/render/last-updated.txt").is_file())
         self.assertNotIn("observed", result.stdout)
 
-    def test_ratio_observations_leave_raw_comparison_unchanged(self):
+    def test_statement_pin_measures_the_childs_executed_lines(self):
+        # The gated instrument: with the job's pin in the environment the
+        # dispatch is measure_statement, so `time` is a deterministic count
+        # of the renderer's own executed lines (not a duration) and `wall`
+        # stays the child's own elapsed seconds for the smoke gate.
         self.write_stubs()
-        report = self.root / "observations.xml"
-        output = io.StringIO()
-        env = {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time",
-               "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
-               "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
-        original_calibrated = e2e_bench.counter.measure_calibrated
-        original_measure = e2e_bench.counter.measure
-
-        def raw(command, **kwargs):
-            return original_measure(command, **kwargs)._replace(
-                value=8.0, wall=7.0)
-
-        def calibrated(command, **kwargs):
-            child_env = kwargs["env"]
-            seeded = json.loads(Path(
-                child_env["GH_WIDGETS_CACHE_FILE"]).read_text(
-                encoding="utf-8"))
-            if command[-1].endswith("render-impact.py"):
-                pristine = json.loads((self.fixture_root / "caches" /
-                                       "impact-cache.json").read_text(
-                                           encoding="utf-8"))
-                self.assertEqual(seeded, pristine)
-            self.assertFalse(Path(child_env["GH_WIDGETS_OUT_DIR"]).exists())
-            return original_calibrated(command, **kwargs)._replace(value=4.0)
-
-        with mock.patch.dict(os.environ, env), mock.patch.object(
-                e2e_bench.counter, "CALIBRATION_COMMAND",
-                (sys.executable, "-c", "print(24576)")), mock.patch.object(
-                e2e_bench.counter, "measure_calibrated", side_effect=calibrated), \
-                mock.patch.object(e2e_bench.counter, "measure", side_effect=raw), \
-                contextlib.redirect_stdout(output):
-            code = e2e_bench.main([
-                "--side", "head", "--repo-root", str(self.repo_root),
-                "--round", "1", "--junit-file", str(report),
-                "--work-root", str(self.root / "observations-work")])
-        self.assertEqual(code, 0)
-        suite = ET.parse(report).getroot()
-        self.assertEqual(suite.get("gh-metric"), "cpu_time")
-        lines = output.getvalue().splitlines()
-        self.assertEqual(len(lines), 3)
-        for line, case in zip(lines, suite.findall("testcase")):
-            self.assertIn(f"{_number(case, 'time'):.3f} cpu_time passed", line)
-            self.assertEqual(_number(case, "time"), 8.0)
-            self.assertEqual(_number(case, "gh-wall"), 7.0)
-            self.assertIn("; observed 4.000000 cpu_time_ratio", line)
-            self.assertIsNone(case.find("failure"))
-
-    def test_failed_ratio_observation_keeps_raw_result(self):
-        self.write_stubs()
+        cache_file = self.root / "statement-cache.json"
+        shutil.copyfile(self.fixture_root / "caches" / "profile-cache.json",
+                        cache_file)
+        env = e2e_bench._renderer_environment(  # pylint: disable=protected-access
+            self.fixture_root, BENCH_DIR, cache_file, self.root / "statement-out")
+        # The pin is read from the PARENT's environment, exactly as the
+        # workflow's step env carries it; the child env only carries the
+        # fixture wiring.
         with mock.patch.dict(os.environ, {
-                "GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time",
-                "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1"}), \
-                mock.patch.object(e2e_bench.counter, "measure_calibrated",
-                                  side_effect=e2e_bench.counter.CounterError(
-                                      "broken calibration")), \
-                contextlib.redirect_stderr(io.StringIO()) as errors:
-            result = e2e_bench._run_workload(  # pylint: disable=protected-access
-                "head", self.repo_root, 1, self.root / "observation-failed",
-                self.fixture_root, e2e_bench.WORKLOADS[0])
-        self.assertIsNone(result["failure"])
-        self.assertEqual(result["metric"], "cpu_time")
-        self.assertNotIn("calibrated_ratio", result)
-        self.assertIn("broken calibration", errors.getvalue())
-
-    def test_calibrated_pin_records_ratio_and_child_wall(self):
-        self.write_stubs()
-        report = self.root / "ratio.xml"
-        output = io.StringIO()
-        env = {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time_ratio",
-               "GH_WIDGETS_OBSERVE_RENDERER_RATIO": "1",
-               "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}
-        # Fixed child costs distinguish the ratio from raw CPU and wall.
-        with mock.patch.dict(os.environ, env), mock.patch.object(
-                e2e_bench.counter, "_run_child",
-                side_effect=[(0, "renderer output", "", 7.0, 8.0),
-                             (0, "24576", "", 11.0, 2.0)]) as child:
+                "GH_WIDGETS_GH_COUNTER_METRIC": "statement_count"}):
             result = e2e_bench._run_renderer(  # pylint: disable=protected-access
                 self.repo_root / "src/render.py", self.repo_root, env)
-        self.assertEqual(child.call_count, 2)
-        self.assertEqual(result["time"], 4.0)
-        self.assertEqual(result["wall"], 7.0)
-        self.assertEqual(result["stdout"], "renderer output")
-        self.assertEqual(result["metric"], "cpu_time_ratio")
-        self.assertEqual(result["raw_cpu"], 8.0)
-        self.assertEqual(result["calibration_cpu"], 2.0)
-        self.assertIsNone(result["failure"])
+        self.assertIsNone(result["failure"], result["failure"])
+        self.assertEqual(result["metric"], "statement_count")
+        self.assertGreater(result["time"], 0.0)
+        self.assertGreater(result["wall"], 0.0)
+        self.assertNotIn("raw_cpu", result)
+        self.assertNotIn("calibration_cpu", result)
 
-        with mock.patch.dict(os.environ, env), mock.patch.object(
-                e2e_bench.counter, "_checked_calibration", return_value=2.0), \
+    def test_statement_report_and_log_line_carry_the_count(self):
+        # End to end through main(): the JUnit names the instrument, the
+        # per-case time is the count, and the log line prints it without the
+        # retired ratio observation.
+        self.write_stubs()
+        report = self.root / "statement.xml"
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {
+                "GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
+                "GH_WIDGETS_GH_BENCH_FIXTURE_ROOT": str(self.fixture_root)}), \
                 contextlib.redirect_stdout(output):
             code = e2e_bench.main([
                 "--side", "head", "--repo-root", str(self.repo_root),
                 "--round", "1", "--junit-file", str(report),
-                "--work-root", str(self.root / "ratio-work")])
+                "--work-root", str(self.root / "statement-work")])
         self.assertEqual(code, 0)
         suite = ET.parse(report).getroot()
-        self.assertEqual(suite.get("gh-metric"), "cpu_time_ratio")
+        self.assertEqual(suite.get("gh-metric"), "statement_count")
         self.assertNotIn("observed", output.getvalue())
         for line, case in zip(output.getvalue().splitlines(),
                               suite.findall("testcase")):
-            self.assertIn(f"{_number(case, 'time'):.6f} cpu_time_ratio passed",
-                          line)
-            parts = re.search(r"calibration = ([0-9.]+) cpu_time; "
-                              r"renderer raw ([0-9.]+) cpu_time", line)
-            self.assertIsNotNone(parts, line)
-            if parts is None:
-                self.fail("calibrated result omitted its raw parts")
-            calibration, raw = map(float, parts.groups())
-            self.assertEqual(calibration, 2.0)
-            self.assertEqual(case.get("gh-calibration-cpu"), "2.000000")
-            self.assertEqual(case.get("gh-raw-cpu"), f"{raw:.6f}")
-            self.assertGreater(raw, 0)
-            self.assertAlmostEqual(raw / calibration, _number(case, "time"),
-                                   places=3)
-            self.assertGreater(_number(case, "gh-wall"), 0)
+            self.assertGreater(_number(case, "time"), 0.0)
+            self.assertIn(f"{_number(case, 'time'):.3f} "
+                          f"statement_count passed", line)
+            self.assertIsNone(case.find("failure"))
 
     def test_renderer_refuses_foreign_metric(self):
         with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_COUNTER_METRIC": "foreign"}):
