@@ -52,8 +52,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    32850,
-    52350
+    29959,
+    51213
   ],
   "ghwidgets_data.py": [
     2111,
@@ -88,8 +88,8 @@
     32453
   ],
   "scripts/ci/counter.py": [
-    16950,
-    27553
+    16739,
+    28028
   ],
   "scripts/ci/counter_platform.py": [
     363,
@@ -172,24 +172,24 @@
     32076
   ],
   "tests/__init__.py": [
-    68,
-    163
+    47,
+    186
   ],
   "tests/test_baseline.py": [
-    7497,
-    29630
+    5202,
+    31427
   ],
   "tests/test_comment_record_contract.py": [
     534,
     3533
   ],
   "tests/test_compare_counters.py": [
-    3076,
-    15728
+    3030,
+    19107
   ],
   "tests/test_counter.py": [
-    9847,
-    30545
+    9735,
+    31594
   ],
   "tests/test_coverage_ratchet.py": [
     6556,
