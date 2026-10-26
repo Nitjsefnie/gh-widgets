@@ -155,7 +155,8 @@ class TestScavengerVerdicts(unittest.TestCase):
 
 class TestAtexitExitPath(unittest.TestCase):
     def test_a_run_exiting_normally_leaves_no_owner_lock(self):
-        markers = Path(tempfile.mkdtemp(prefix="ghw-atexit-hang-"))
+        markers = Path(tempfile.mkdtemp(  # pylint: disable=consider-using-with
+            prefix="ghw-atexit-hang-"))
         marker = markers / "dir.txt"
         proc = subprocess.Popen(
             [sys.executable, "-c",
