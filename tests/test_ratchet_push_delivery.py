@@ -83,8 +83,7 @@ def records(record_path):
                    measured_commit=BASE)
     elif record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
-        # Schema 5 only: seeds instead of slopes.
-        old["schema"] = 5
+        old["schema"] = 5  # schema 5 only: seeds instead of slopes
         for population in old["populations"].values():
             population.pop("slopes", None)
             population["seeds"] = population.get("seeds",
