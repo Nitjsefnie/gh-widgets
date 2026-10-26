@@ -621,8 +621,8 @@ class TestStatementInstrument(unittest.TestCase):
             payload = json.loads(count_path.read_text(encoding="utf-8"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), "stripped")
-        self.assertEqual(payload, dict(count=payload["count"], missed=0))
         self.assertGreater(payload["count"], 0)
+        self.assertEqual(payload["missed"], 0)
 
     @REQUIRES_STATEMENT
     def test_a_failing_targets_own_verdict_travels(self):

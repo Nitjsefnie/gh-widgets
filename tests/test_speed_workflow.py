@@ -31,15 +31,9 @@ import xml.etree.ElementTree as ET
 
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
-
-REQUIRES_STATEMENT = unittest.skipUnless(
-    sys.version_info >= (3, 12),
-    "the statement instrument counts sys.monitoring LINE events, "
-    "which exist from Python 3.12; measure_statement refuses below "
-    "that and its refusal is pinned in tests/test_counter.py")
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
 from tests.test_gate_base_freshness import _config
-
+from tests.test_e2e_bench import REQUIRES_STATEMENT
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STEP_EXEC_SENTINEL = "GHW_SPEED_UNIT_STEP_EXEC_ACTIVE"
 
@@ -382,8 +376,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     def test_the_unit_suite_step_carries_no_retired_flag(self):
         # The retired flag would ask measure() for a foreign label.
-        _env, _working_dir, block = self.steps.step_run(
-            "Measure the unit suite")
+        _env, _wd, block = self.steps.step_run("Measure the unit suite")
         self.assertNotIn("--calibrated", block)
         self.assertIn("-- python3 -m unittest discover", block)
 
@@ -831,8 +824,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
-                    "GH_WIDGETS_ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count", "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         completed = self.steps.bash(block, root, working_dir, env)
         self.assertEqual(completed.returncode, 0,
@@ -863,8 +855,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
-                    "GH_WIDGETS_ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count", "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         reports = Path(env["GH_WIDGETS_REPORTS"])
         completed = self.steps.bash(block, root, working_dir, env)
@@ -891,8 +882,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             "Measure the unit suite")
         self.assertEqual(working_dir, "head")
         env = self.steps.env_for(declared, root)
-        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count",
-                    "GH_WIDGETS_ROUNDS": "1"})
+        env.update({"GH_WIDGETS_GH_COUNTER_METRIC": "statement_count", "GH_WIDGETS_ROUNDS": "1"})
         _arm_step_exec_env(env)
         broken = self.steps.bash(block, root, None, env)
         self.assertNotEqual(broken.returncode, 0)

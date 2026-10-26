@@ -16,13 +16,13 @@ from unittest import mock
 
 from scripts.bench.bench_platform import REQUIRES_BENCH
 
+import impact_clone
+
 REQUIRES_STATEMENT = unittest.skipUnless(
     sys.version_info >= (3, 12),
     "the statement instrument counts sys.monitoring LINE events, "
     "which exist from Python 3.12; measure_statement refuses below "
     "that and its refusal is pinned in tests/test_counter.py")
-
-import impact_clone
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
