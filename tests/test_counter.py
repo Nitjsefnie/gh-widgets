@@ -575,7 +575,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_count_is_deterministic_for_identical_code(self):
-        # Same program, same executed lines, same count: three runs, one number.
+        # Same program and lines, three runs, one count.
         workload = [sys.executable, "-c",
                     "for _ in range(4096):\n    total = sum(range(64))\n"
                     "print(total)"]
@@ -584,7 +584,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_measurement_carries_a_positive_count_and_its_metric(self):
-        measured = self.run_statement(["-c", "print('counted')"])
+        measured = self.run_statement(["-c", "print('counted')"])  # the happy path
         self.assertEqual(measured.metric, counter.STATEMENT_METRIC)
         self.assertEqual(measured.returncode, 0)
         self.assertGreater(measured.value, 0.0)
@@ -593,7 +593,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_the_module_dispatch_runs_the_target_module(self):
-        # Production shape for the unit suite: `python3 -m unittest discover`.
+        # Production shape for the unit suite (-m unittest discover).
         measured = self.run_statement(["-m", "timeit", "-n", "1", "-r", "1",
                                        "pass"])
         self.assertEqual(measured.returncode, 0, measured.stderr)
@@ -656,7 +656,6 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_count_that_is_not_a_natural_number_refuses(self):
-        # Every malformed shape is the same refusal: not a natural count.
         for payload in ('{"count": -1, "missed": 0}',
                         '{"count": "many", "missed": 0}',
                         '{"count": 1.5, "missed": 0}',
@@ -701,9 +700,7 @@ class TestStatementInstrument(unittest.TestCase):
                           counter.STATEMENT_METRIC))
 
     def test_the_measured_figures_are_recorded_where_the_code_is(self):
-        # The instrument's own measured cost, so the next reader does not
-        # have to re-derive it: the three counts and the spread, the missed
-        # events, and the blind spots.
+        # The instrument's own measured cost, so it need not be re-derived.
         doc = (counter.__doc__ or "")
         self.assertIn("99,222,446", doc)
         self.assertIn("0.0015%", doc)
