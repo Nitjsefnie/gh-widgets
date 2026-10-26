@@ -380,6 +380,8 @@ class TestScratchCoverage(unittest.TestCase):
 
     def test_prefetch_removes_scratch_if_owner_lock_registration_fails(self):
         created = []
+        # Guarded exception: the real mkdtemp handed through the helper
+        # module; the helper's own mkdtemp would re-enter the patched mock.
         real_mkdtemp = _ghw_temp.tempfile.mkdtemp
 
         def make_scratch(prefix):

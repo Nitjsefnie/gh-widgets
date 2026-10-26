@@ -153,6 +153,38 @@ class TestScavengerVerdicts(unittest.TestCase):
             self.assertNotIn(Path(tmp), _ghw_temp._OWNED)
 
 
+class TestAtexitExitPath(unittest.TestCase):
+    def test_a_run_exiting_normally_leaves_no_owner_lock(self):
+        markers = Path(tempfile.mkdtemp(prefix="ghw-atexit-hang-"))
+        marker = markers / "dir.txt"
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "import os, pathlib\n"
+             "from tests import _ghw_temp\n"
+             "tmp = _ghw_temp.mkdtemp(prefix='ghw-atexit-probe-')\n"
+             "pathlib.Path(os.environ['GH_WIDGETS_ATPROBE_DIR_FILE'])"
+             ".write_text(str(tmp))"],
+            cwd=REPO_ROOT,
+            env={**os.environ, "GH_WIDGETS_ATPROBE_DIR_FILE": str(marker)})
+        self.addCleanup(proc.wait)
+        self.addCleanup(
+            lambda: _ghw_temp.impact_clone.remove_scratch_dir(markers))
+        deadline = time.monotonic() + 60
+        while not marker.exists():
+            if proc.poll() is not None:
+                self.fail("the probe exited before naming its dir")
+            if time.monotonic() > deadline:
+                self.fail("the probe never named its directory")
+            time.sleep(0.02)
+        self.assertEqual(proc.wait(), 0)
+        made = Path(marker.read_text(encoding="utf-8"))
+        self.addCleanup(
+            lambda: _ghw_temp.impact_clone.remove_scratch_dir(made))
+        self.assertFalse(
+            _ghw_temp.impact_clone._scratch_owner_lock_path(made).exists(),
+            "a run exiting normally must not leak its owner lock file")
+
+
 _TEMPFILE = "temp" + "file"
 _BANNED_ATTRS = ("Temporary" + "Directory", "mkd" + "temp")
 _IMPACT_FAME_PREFIX = "impact-" + "fame-"
@@ -230,7 +262,8 @@ class TestGuardSuiteOwnsTempDirCreation(unittest.TestCase):
         self.assertEqual(
             violations, [],
             "convert these sites to tests/_ghw_temp.py; an impact-fame- "
-            "literal prefix names the guarded exception")
+            "literal prefix, and the _ghw_temp.tempfile hand-through in "
+            "test_impact_loc_coverage.py, name the guarded exceptions")
 
 
 class TestScavengeReclaimsAKilledRun(unittest.TestCase):
@@ -256,6 +289,7 @@ class TestScavengeReclaimsAKilledRun(unittest.TestCase):
                 time.sleep(0.02)
             return Path(marker.read_text(encoding="utf-8"))
 
+        proc_a = proc_b = None
         try:
             proc_a = spawn(marker_a)
             self.addCleanup(proc_a.wait)
@@ -290,11 +324,13 @@ class TestScavengeReclaimsAKilledRun(unittest.TestCase):
             self.assertTrue(dir_b.exists())
             _ghw_temp.scavenge()
             self.assertFalse(dir_b.exists())
-            self.assertTrue(markers.exists(),
-                            "this process's held dirs must survive")
+            self.assertTrue(
+                markers.exists(),
+                "a foreign ghw-* dir (raw mkdtemp, no lock file) must "
+                "survive the scavenge")
         finally:
             for proc in (proc_a, proc_b):
-                if proc.poll() is None:
+                if proc is not None and proc.poll() is None:
                     os.kill(proc.pid, signal.SIGKILL)
             _ghw_temp.impact_clone.remove_scratch_dir(markers)
             _ghw_temp.scavenge()
