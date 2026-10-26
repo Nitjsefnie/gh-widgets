@@ -395,7 +395,7 @@ jobs:
                   if not same(new[key], old[key]):
                       refuse(f"speed-baseline.json changed authored key {key}")
               # Schema 5 only: post-merge main only ever sees the statement
-              # instrument's document, whose seeds lists authorize seeding.
+              # document; its seeds authorize seeding. No quote chars may sit in this body: bash 3.2 re-scans $() bodies quote-aware (the delivery suite pins it).
               if old["schema"] != 5 or new["schema"] != 5:
                   refuse("speed-baseline.json must declare schema 5")
               old_pops, new_pops = old["populations"], new["populations"]

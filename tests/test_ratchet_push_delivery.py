@@ -1,6 +1,7 @@
 """Execute reuse, merge, validation, installation and the git boundary."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -434,11 +435,17 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self.assertIn(["add", "--", "gate/speed-baseline.json"], calls)
 
     def test_the_validate_step_carries_no_backtick_anywhere(self):
-        """macOS /bin/bash 3.2 mis-scans backticks inside $()+heredoc shapes:
-        run 40274260074 red every macOS delivery case at PARSE time on one
-        backtick pair in a step COMMENT, while linux bash 5 parsed clean.
-        """
+        """macOS bash 3.2 mis-scans backticks inside $()+heredoc: run
+        40274260074 red every macOS delivery case at parse time."""
         self.assertNotIn("`", push_body())
+
+    def test_the_validate_step_heredoc_bodies_carry_no_quote_characters(self):
+        """bash 3.2 re-scans $() bodies quote-aware: one comment apostrophe in a heredoc body red both macOS cells at parse time (run 40308278034)."""
+        bodies = re.findall(r"<<'PY'\n(.*?)\nPY\n", push_body(), re.S)
+        self.assertTrue(bodies, "the validate step lost its heredocs")
+        for heredoc in bodies:
+            self.assertNotIn("'", heredoc)
+            self.assertNotIn("`", heredoc)
 
 
 if __name__ == "__main__":
