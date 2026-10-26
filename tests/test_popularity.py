@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from email.message import Message
 from unittest import mock
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('popularity', ROOT / 'src/render-popularity.py')
@@ -64,12 +65,12 @@ def git_repository(path, author=None):
 
 class Authors(unittest.TestCase):
     def test_real_empty_git_repository_counts_zero(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             repository = git_repository(Path(directory) / 'empty.git')
             self.assertEqual(popularity.outsider_commits(repository, USER, set()), 0)
 
     def test_real_nonempty_history_with_missing_default_branch_fails(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             path = Path(directory) / 'history.git'
             repository = git_repository(path, 'Real Person')
             repository['default_branch'] = 'missing'
@@ -81,7 +82,7 @@ class Authors(unittest.TestCase):
                 popularity.outsider_commits(repository, USER, set())
 
     def test_real_corrupt_repository_is_not_treated_as_empty(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             path = Path(directory) / 'corrupt.git'
             repository = git_repository(path, 'Real Person')
             (path / 'refs' / 'heads' / 'trunk').write_bytes(b'1' * 40 + b'\n')
@@ -89,7 +90,7 @@ class Authors(unittest.TestCase):
                 popularity.outsider_commits(repository, USER, set())
 
     def test_real_git_unicode_line_separators_are_author_data(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             for index, author in enumerate(('Real\u2028Person', 'Real\u0085Person')):
                 with self.subTest(author=author):
                     repository = git_repository(Path(directory) / f'history{index}.git', author)
@@ -509,7 +510,7 @@ class CardAndCLI(unittest.TestCase):
         self.assertIn('o/&lt;' + 'x' * 30 + '…', svg)
 
     def test_main_writes_fresh_and_preserves_previous_on_failure(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             argv = ['render-popularity.py', '--token', 't', '--out-dir', directory]
             output = Path(directory) / 'popularity.svg'
             pages = [response(USER), response([]), response([repo()]),
@@ -536,7 +537,7 @@ class CardAndCLI(unittest.TestCase):
             self.assertEqual(list(Path(directory).iterdir()), [output])
 
     def test_token_file_env_and_cli_override(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             token_file = Path(directory) / 'token'
             token_file.write_text('from-file\n', encoding='utf-8')
             env = {'GH_WIDGETS_GH_TOKEN_FILE': str(token_file),
@@ -581,7 +582,7 @@ class CardAndCLI(unittest.TestCase):
         self.assertEqual(self.parse(both).theme, 'github-dark')
 
     def test_help_from_other_directory(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with _ghw_temp.tempdir() as directory:
             proc = subprocess.run([sys.executable, str(ROOT / 'src/render-popularity.py'), '--help'],
                                   cwd=directory, capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)

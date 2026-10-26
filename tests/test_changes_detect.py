@@ -3,12 +3,12 @@ import contextlib
 import io
 import json
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import changes_detect as cd
+from tests import _ghw_temp
 
 
 class FakeTransport:
@@ -483,7 +483,7 @@ class AcquisitionTests(unittest.TestCase):
 
 class FailClosedTests(unittest.TestCase):
     def test_api_failure_writes_run_for_every_gate(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-changes-fail-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-changes-fail-") as temp:
             root = Path(temp)
             payload_path = root / "event.json"
             payload_path.write_text(json.dumps({
@@ -531,7 +531,7 @@ class DefaultBranchPushTests(unittest.TestCase):
     }
 
     def _push_result(self, before, ref, transport, default_branch="main"):
-        with tempfile.TemporaryDirectory(prefix="ghw-default-push-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-default-push-") as temp:
             root = Path(temp)
             event_path = root / "event.json"
             event_path.write_text(json.dumps({
@@ -612,7 +612,7 @@ class DefaultBranchPushTests(unittest.TestCase):
 
 class ReportingTests(unittest.TestCase):
     def test_tag_push_explains_run_everywhere_in_gate_outputs(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-tag-push-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-tag-push-") as temp:
             event_path = Path(temp) / "event.json"
             event_path.write_text(json.dumps({
                 "ref": "refs/tags/v1.0", "before": "0" * 40,
@@ -662,7 +662,7 @@ class ReportingTests(unittest.TestCase):
                       schedule.getvalue())
 
     def test_pull_request_docs_prints_skip_reasons_for_both_gate_kinds(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-docs-pr-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-docs-pr-") as temp:
             event_path = Path(temp) / "event.json"
             event_path.write_text(json.dumps({}), encoding="utf-8")
             api_path = "repos/owner/repo/pulls/37/files?per_page=100"
@@ -683,7 +683,7 @@ class ReportingTests(unittest.TestCase):
                           stdout.getvalue())
 
     def test_payload_and_output_errors_are_reported(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-payload-error-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-payload-error-") as temp:
             path = Path(temp) / "event.json"
             for event_path, reason in (
                     ("", "no GH_WIDGETS_EVENT_PATH"),
@@ -715,7 +715,7 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("cannot write GITHUB_OUTPUT", stderr.getvalue())
 
     def test_capped_reason_describes_the_run_everything_fallback(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-capped-push-") as temp:
+        with _ghw_temp.tempdir(prefix="ghw-capped-push-") as temp:
             path = Path(temp) / "event.json"
             path.write_text(json.dumps({
                 "before": "b" * 40, "after": "a" * 40,

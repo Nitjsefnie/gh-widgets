@@ -15,7 +15,6 @@ import os
 import re
 import runpy
 import sys
-import tempfile
 import unittest
 import urllib.error
 import urllib.request
@@ -25,6 +24,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Optional
 from unittest import mock
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "render", (Path(__file__).resolve().parents[1] / "src" / "render.py"))
@@ -370,7 +370,7 @@ def recent_days(n):
 
 class CacheFile(unittest.TestCase):
     def test_roundtrip(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             f = Path(td) / "cache.json"
             payload = {"version": render.CACHE_VERSION, "fetched_at": "x",
                        "calendar_days": {"2026-01-01": 1}}
@@ -378,13 +378,13 @@ class CacheFile(unittest.TestCase):
             self.assertEqual(render.load_cache(f), payload)
 
     def test_version_mismatch_is_discarded(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             f = Path(td) / "cache.json"
             f.write_text(json.dumps({"version": render.CACHE_VERSION + 1}))
             self.assertEqual(render.load_cache(f), {})
 
     def test_v2_cache_is_discarded(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             f = Path(td) / "cache.json"
             f.write_text(json.dumps({"version": 2}))
             self.assertEqual(render.load_cache(f), {})
@@ -526,7 +526,7 @@ class DurabilityFallback(unittest.TestCase):
         return complete_cache()
 
     def test_failed_fetch_renders_from_cache_and_exits_zero(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             render.save_cache(cache_file, self.snapshot())
@@ -549,7 +549,7 @@ class DurabilityFallback(unittest.TestCase):
                              "2026-07-20T06:00:00+00:00")
 
     def test_failed_fetch_without_cache_still_fails(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             api = FakeAPI()
             api.fail = True
             with self.assertRaises(RuntimeError):
@@ -570,7 +570,7 @@ class FallbackNaming(unittest.TestCase):
     def fallback_run(self, phase, error):
         """Run main() with `phase` failing against a complete cache, and
         return (everything it printed, the output directory)."""
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             render.save_cache(cache_file, complete_cache())
@@ -839,7 +839,7 @@ class PullRequestCache(unittest.TestCase):
         return re.findall(r'font-size="36"[^>]*>([^<]+)</text>', svg)
 
     def test_open_to_merged_transition_counts_exactly_once(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             api = FakeAPI()
@@ -909,7 +909,7 @@ class ForksReceived(unittest.TestCase):
     def test_v2_cache_is_discarded_and_refetched(self):
         # A v2 cache predates the extra-org stats in the cached user payload.
         # It must be discarded and fully refetched rather than trusted.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             stale = {
@@ -950,7 +950,7 @@ class ForksReceived(unittest.TestCase):
 
 class CorruptCache(unittest.TestCase):
     def test_corrupt_cache_falls_back_to_full_fetch(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             cache_file.write_text("{not valid json")
             out = Path(td) / "out"
@@ -1230,7 +1230,7 @@ class HttpErrorAtMain(unittest.TestCase):
         error = urllib.error.HTTPError(
             'https://api.test/x', 403, 'Forbidden', headers,
             io.BytesIO(b'{"message":"secondary rate limit"}'))
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             stderr = io.StringIO()
             argv = ['render.py', '--user', 'o', '--token', 't',
                     '--out-dir', str(Path(tmp) / 'out')]

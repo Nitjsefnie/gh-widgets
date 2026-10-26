@@ -8,12 +8,12 @@ import ast
 import hashlib
 import json
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tests import test_ci_workflows as workflow_tests
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,7 +41,7 @@ def consumer_decoder():
 
 class TestCommentRecordContract(unittest.TestCase):
     def test_git_checkout_preserves_reference_bytes_with_autocrlf(self):
-        with tempfile.TemporaryDirectory(prefix="reference checkout ") as tmp:
+        with _ghw_temp.tempdir(prefix="reference checkout ") as tmp:
             root = Path(tmp)
             relative = "tests/fixtures/comment-ratchet-v1-policy.txt"
             result = subprocess.run(
@@ -58,7 +58,7 @@ class TestCommentRecordContract(unittest.TestCase):
         decoder = consumer_decoder()
         case = workflow_tests.TestRatchetPushWorkflow()
         case.setUpClass()
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)

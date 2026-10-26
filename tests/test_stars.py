@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 import runpy
 import urllib.error
@@ -16,6 +15,7 @@ from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('stars', ROOT / 'src/render-stars.py')
@@ -157,7 +157,7 @@ class Graph(unittest.TestCase):
 class InputsAndCLI(unittest.TestCase):
     def setUp(self):
         # pylint: disable=consider-using-with
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = _ghw_temp.tempdir()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cache = self.root / 'stars-cache.json'
@@ -376,7 +376,7 @@ class HttpErrorAtMain(unittest.TestCase):
         error = urllib.error.HTTPError(
             'https://api.test/graphql', 403, 'Forbidden', headers,
             io.BytesIO(b'{"message":"You have exceeded a secondary rate limit"}'))
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             cache = Path(tmp) / 'cache.json'
             cache.write_text('{}', encoding='utf-8')
             stderr = io.StringIO()

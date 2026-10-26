@@ -16,10 +16,10 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 
 def _load(name, relative):
@@ -72,7 +72,7 @@ class TestWriteManifest(unittest.TestCase):
     """The file the renderer reads back."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-pinout-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-pinout-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.path = self.tmp / "pins.json"
 
@@ -132,7 +132,7 @@ class TestEnvFallback(unittest.TestCase):
         self.assertIn('--user', stderr.getvalue())
 
     def test_the_bare_token_file_is_read_for_the_token(self):
-        token_path = Path(tempfile.mkdtemp(prefix='ghw-pinenv-')) / 'token'
+        token_path = Path(_ghw_temp.mkdtemp(prefix='ghw-pinenv-')) / 'token'
         token_path.write_text('from-bare-file\n', encoding='utf-8')
         self.addCleanup(shutil.rmtree, token_path.parent, ignore_errors=True)
         _args, token = self.parse({'GH_USER': 'u',
@@ -140,7 +140,7 @@ class TestEnvFallback(unittest.TestCase):
         self.assertEqual(token, 'from-bare-file')
 
     def test_the_prefixed_token_file_wins_over_a_missing_bare_file(self):
-        token_path = Path(tempfile.mkdtemp(prefix='ghw-pinenv-')) / 'token'
+        token_path = Path(_ghw_temp.mkdtemp(prefix='ghw-pinenv-')) / 'token'
         token_path.write_text('from-prefixed-file\n', encoding='utf-8')
         self.addCleanup(shutil.rmtree, token_path.parent, ignore_errors=True)
         _args, token = self.parse({'GH_USER': 'u',

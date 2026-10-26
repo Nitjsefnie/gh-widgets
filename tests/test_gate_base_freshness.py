@@ -12,10 +12,10 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +159,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
 
     def setUp(self):
         # addCleanup owns the fixture until this test finishes.
-        temporary = tempfile.TemporaryDirectory(  # pylint: disable=consider-using-with
+        temporary = _ghw_temp.tempdir(  # pylint: disable=consider-using-with
             prefix='ghw-gate_base_freshness-')
         self.addCleanup(temporary.cleanup)
         self.tmp = Path(temporary.name)
@@ -689,7 +689,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         for changed_path in ('.github/workflows/tests.yml',
                              'scripts/ci/aggregate_gate.py',
                              'scripts/ci/changes_detect.py'):
-            with self.subTest(path=changed_path), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(path=changed_path), _ghw_temp.tempdir() as tmp:
                 repo, origin = _fixture(Path(tmp))
                 workflow = ('name: tests\njobs:\n  aggregate:\n'
                             '    steps:\n'
@@ -745,7 +745,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         for path in ('scripts/ci/coverage_ratchet.py',
                      'scripts/ci/gate_base_freshness.py',
                      'scripts/ci/commit_scopes.py'):
-            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(path=path), _ghw_temp.tempdir() as tmp:
                 repo, origin = _dependency_fixture(Path(tmp))
                 _advance_main(Path(tmp), origin, 'ci: move a dependency gate',
                               {path: '# gate changed\n'})
@@ -760,7 +760,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         for path in ('coverage-floor.json', 'speed-baseline.json',
                      'workflow-thresholds.json', 'step-thresholds.json',
                      'action-thresholds.json'):
-            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(path=path), _ghw_temp.tempdir() as tmp:
                 repo, origin = _dependency_fixture(Path(tmp))
                 _advance_main(Path(tmp), origin, 'ci: move a gate parameter',
                               {path: '{"changed": true}\n'})
@@ -772,7 +772,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
 
     def test_informational_and_unrelated_job_scripts_are_not_gate_inputs(self):
         for path in ('extras/informational.py', 'extras/unrelated.py'):
-            with self.subTest(path=path), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(path=path), _ghw_temp.tempdir() as tmp:
                 repo, origin = _dependency_fixture(Path(tmp))
                 module = _load()
                 self.assertNotIn(path, module.gate_paths(repo))
@@ -786,7 +786,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
                          '    needs: [unit] # static list\n',
                          '    needs:\n      - unit\n',
                          '    needs: ["unit"]\n'):
-            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(spelling=spelling), _ghw_temp.tempdir() as tmp:
                 repo, _ = _fixture(Path(tmp))
                 _commit(repo, 'ci: spell a static dependency', {
                     '.github/workflows/tests.yml':
@@ -810,7 +810,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
             '    needs: unit\n    needs: other\n',
         )
         for spelling in spellings:
-            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(spelling=spelling), _ghw_temp.tempdir() as tmp:
                 repo, _ = _fixture(Path(tmp))
                 _commit(repo, 'ci: unmodelled needs', {
                     '.github/workflows/tests.yml':
@@ -823,7 +823,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
 
     def test_missing_dependency_and_cycles_refuse(self):
         for needs, child_needs in (('absent', ''), ('unit', '    needs: aggregate\n')):
-            with self.subTest(needs=needs), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(needs=needs), _ghw_temp.tempdir() as tmp:
                 repo, _ = _fixture(Path(tmp))
                 _commit(repo, 'ci: invalid graph', {
                     '.github/workflows/tests.yml':

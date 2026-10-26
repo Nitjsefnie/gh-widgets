@@ -2,13 +2,13 @@
 """Offline tests for GH_EXTRA_ORGS in render.py."""
 import hashlib
 import os
-import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
 from tests import test_render as fixtures
+from tests import _ghw_temp
 
 render = fixtures.render
 FakeAPI = fixtures.FakeAPI
@@ -45,7 +45,7 @@ class ExtraOrganizationStats(unittest.TestCase):
         return rows["115"], rows["138"], rows["161"]
 
     def test_empty_default_preserves_stats_svg_bytes_and_skips_org_queries(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             api = FakeAPI()
             api.full_calendar = recent_days(3)
             out = Path(td) / "out"
@@ -176,7 +176,7 @@ class ExtraOrganizationStats(unittest.TestCase):
             self.fetched_user(api, "PrivateOrg")
 
     def test_durability_fallback_uses_cached_org_stats(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "cache.json"
             out = Path(td) / "out"
             cache = complete_cache()

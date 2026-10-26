@@ -8,7 +8,6 @@ The suite is stdlib unittest and every test runs the real reporter offline.
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from contextlib import redirect_stdout
@@ -20,6 +19,7 @@ from unittest import mock
 from coverage.sqldata import CoverageData
 
 from scripts.ci import diff_coverage as reporter
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +31,7 @@ class TestDiffCoverageCli(unittest.TestCase):
     """The report counts added executable statements from XML and a diff."""
 
     def setUp(self):
-        self.directory = Path(tempfile.mkdtemp(prefix="diff-coverage-"))
+        self.directory = Path(_ghw_temp.mkdtemp(prefix="diff-coverage-"))
         self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
         self.coverage = self.directory / "coverage.xml"
         self.diff = self.directory / "patch.diff"

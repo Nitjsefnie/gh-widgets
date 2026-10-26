@@ -20,11 +20,11 @@ import io
 import json
 import shutil
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "render_impact", (Path(__file__).resolve().parents[1] / "src" / "render-impact.py"))
@@ -91,7 +91,7 @@ class TestDurabilityFallback(unittest.TestCase):
         """main() with `patchers` in place. `cache` False means no cache file
         at all, which is the incomplete-cache path. Returns (everything main
         printed, the output directory, the cache file)."""
-        td = tempfile.mkdtemp()
+        td = _ghw_temp.mkdtemp()
         self.addCleanup(shutil.rmtree, td)
         cache_file = Path(td) / "impact-cache.json"
         if cache:
@@ -196,7 +196,7 @@ class TestDurabilityFallback(unittest.TestCase):
     def test_an_incomplete_cache_still_propagates(self):
         # No fallback data: the fetch's own error escapes and the run exits
         # non-zero rather than rendering a partial card.
-        td = tempfile.mkdtemp()
+        td = _ghw_temp.mkdtemp()
         self.addCleanup(shutil.rmtree, td)
         argv = ["render-impact.py", "--user", "me", "--token", "t",
                 "--out-dir", str(Path(td) / "out"),

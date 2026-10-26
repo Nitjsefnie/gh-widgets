@@ -12,9 +12,9 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -156,7 +156,7 @@ class RepoVersionConstantTests(unittest.TestCase):
         Reporting "unknown" is correct there; raising would break the
         deploy over a cosmetic field.
         """
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             copied = copy_common_with_siblings(Path(tmp))
             isolate_sibling_modules(self)
             common = load_common(copied)
@@ -169,7 +169,7 @@ class RepoVersionConstantTests(unittest.TestCase):
             self.assertEqual(common.REPO_VERSION, "unknown")
 
     def test_blank_file_degrades_to_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             copied = copy_common_with_siblings(Path(tmp))
             isolate_sibling_modules(self)
             (Path(tmp) / "VERSION").write_text("   \n", encoding="utf-8")

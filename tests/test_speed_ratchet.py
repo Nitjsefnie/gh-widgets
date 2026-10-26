@@ -9,7 +9,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -20,6 +19,7 @@ from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
 from tests.test_gate_base_freshness import _config
 from tests.test_speed_workflow import CarrierFixture
+from tests import _ghw_temp
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPARATOR = REPO_ROOT / "scripts" / "ci" / "compare_counters.py"
@@ -89,7 +89,7 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         return Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix=prefix)))
+            _ghw_temp.tempdir(prefix=prefix)))
 
     def run_ratchet(self, base, head, allow_removals=()):
         """The real comparator, in its ratchet mode, over two documents."""
@@ -445,7 +445,7 @@ class TestMainPushRatchet(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-push-ratchet-")))
+            _ghw_temp.tempdir(prefix="ghw-push-ratchet-")))
         self.fixture = CarrierFixture(self.root, document())
         self.fixture.base_path.unlink()
         bench = self.fixture.head / "scripts" / "bench"
@@ -586,7 +586,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-speed-tighten-")))
+            _ghw_temp.tempdir(prefix="ghw-speed-tighten-")))
         self.reports_dir = self.root / "reports"
         self.reports_dir.mkdir()
         self.baseline_path = self.root / "speed-baseline.json"

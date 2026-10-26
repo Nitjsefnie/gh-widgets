@@ -23,7 +23,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -34,6 +33,7 @@ from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
 from tests.test_gate_base_freshness import _config
 from tests.test_e2e_bench import REQUIRES_STATEMENT
+from tests import _ghw_temp
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STEP_EXEC_SENTINEL = "GHW_SPEED_UNIT_STEP_EXEC_ACTIVE"
 
@@ -330,7 +330,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         return Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix=prefix)))
+            _ghw_temp.tempdir(prefix=prefix)))
 
     def _run_with_tree(self, prefix, **tree):
         root = self._temp_root(prefix)
@@ -1247,7 +1247,7 @@ class TestPullRequestRatchet(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-pr-ratchet-")))
+            _ghw_temp.tempdir(prefix="ghw-pr-ratchet-")))
         self.fixture = CarrierFixture(self.root)
         self.fixture.base_path.unlink()
         bench = self.fixture.head / "scripts" / "bench"
@@ -1397,7 +1397,7 @@ class TestFeatureRaiseCLI(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-carrier-")))
+            _ghw_temp.tempdir(prefix="ghw-carrier-")))
         self.fixture = CarrierFixture(self.root)
 
     def assert_admits(self, result, slots):

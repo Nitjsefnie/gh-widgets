@@ -20,12 +20,12 @@ import importlib.util
 import io
 import json
 import sys
-import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tests.test_baseline import document
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -82,7 +82,7 @@ class TestComparator(unittest.TestCase):
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.tmp_path = Path(stack.enter_context(_ghw_temp.tempdir()))
         self.baseline_path = self.tmp_path / "baseline.json"
         self.summary_path = self.tmp_path / "summary.md"
 
@@ -417,7 +417,7 @@ class TestVerifyPopulation(unittest.TestCase):
     def setUp(self):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        self.tmp_path = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        self.tmp_path = Path(stack.enter_context(_ghw_temp.tempdir()))
 
     def test_no_flags_leaves_removals_permissive(self):
         """The unit-suite comparison must keep behaving exactly as before."""

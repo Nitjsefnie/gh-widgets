@@ -24,10 +24,10 @@ import re
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests import _ghw_temp
 
 
 def _load(name, relative):
@@ -103,7 +103,7 @@ class _Case(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         self.root = Path(stack.enter_context(
-            tempfile.TemporaryDirectory(prefix="ghw-ratchet-")))
+            _ghw_temp.tempdir(prefix="ghw-ratchet-")))
         self.report_path = self.root / "coverage.json"
         self.floor_path = self.root / "coverage-floor.json"
 
@@ -677,7 +677,7 @@ class TestTheCommandLine(unittest.TestCase):
     SCRIPT = str(REPO_ROOT / "scripts" / "ci" / "coverage_ratchet.py")
 
     def test_gate_exits_zero_through_the_real_entry_point(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-cli-") as root:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-cli-") as root:
             directory = Path(root)
             (directory / "coverage.json").write_text(
                 json.dumps(_report(percent=72.0)), encoding="utf-8")
@@ -693,7 +693,7 @@ class TestTheCommandLine(unittest.TestCase):
         self.assertIn("at or above it", completed.stdout)
 
     def test_a_below_floor_measurement_exits_non_zero_through_the_entry_point(self):
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-cli-") as root:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-cli-") as root:
             directory = Path(root)
             (directory / "coverage.json").write_text(
                 json.dumps(_report(percent=60.0)), encoding="utf-8")

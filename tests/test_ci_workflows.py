@@ -7,7 +7,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -15,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -63,7 +63,7 @@ def _argv_calls_with_recording_python(installs):
     boundaries preserved.
     """
     calls = []
-    with tempfile.TemporaryDirectory(prefix="ghw-fame-pin-") as tmp:
+    with _ghw_temp.tempdir(prefix="ghw-fame-pin-") as tmp:
         stub = Path(tmp) / "python"
         stub.write_text(_ARGV_JSON_STUB)
         stub.chmod(0o755)
@@ -128,7 +128,7 @@ def _steps_block(job_block):
 
 def _run_download_with_failed_digest(script):
     """Run the workflow download script with a failing checksum command."""
-    with tempfile.TemporaryDirectory(prefix="gitleaks-download-control-") as tmp:
+    with _ghw_temp.tempdir(prefix="gitleaks-download-control-") as tmp:
         directory = Path(tmp)
         curl_args = directory / "curl-args"
         tar_called = directory / "tar-called"
@@ -638,7 +638,7 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
     def test_marker_step_passes_clean_tree_and_refuses_each_git_marker(self):
         self.assertTrue(self.job, 'missing gates job')
         script = self.job['steps'][1]['run']
-        with tempfile.TemporaryDirectory(prefix='ghw-markers-') as tmp:
+        with _ghw_temp.tempdir(prefix='ghw-markers-') as tmp:
             repo = Path(tmp)
             subprocess.run(['git', 'init', str(repo)], check=True,
                            capture_output=True)
@@ -660,7 +660,7 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     def test_marker_step_propagates_git_errors(self):
         self.assertTrue(self.job, 'missing gates job')
-        with tempfile.TemporaryDirectory(prefix='ghw-no-git-') as tmp:
+        with _ghw_temp.tempdir(prefix='ghw-no-git-') as tmp:
             done = subprocess.run(
                 ['bash', '-e', '-o', 'pipefail', '-c',
                  self.job['steps'][1]['run']], cwd=tmp,
@@ -807,7 +807,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
     def _run_post_step(self, *, claimed_number="42", current_sha=None,
                        current_repo="owner/repo", comments=(), failure=None):
         """Run the shipped writer script with an allow-listed offline gh stub."""
-        with tempfile.TemporaryDirectory(
+        with _ghw_temp.tempdir(
                 prefix="diff-coverage-comment-") as directory:
             cwd = Path(directory)
             (cwd / "body.md").write_text(
@@ -1060,7 +1060,7 @@ class TestPatchCoverageWorkflows(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_trusted_writer_runs_stub_with_interpreter_path_containing_spaces(self):
-        with tempfile.TemporaryDirectory(prefix="python interpreter ") as root:
+        with _ghw_temp.tempdir(prefix="python interpreter ") as root:
             interpreter = Path(root) / "python"
             interpreter.symlink_to(sys.executable)
             self._stub_interpreter = str(interpreter)
@@ -1155,7 +1155,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     def test_artifact_listing_executes_the_paginated_nonexpired_lookup(self):
         listing = self._step("List the triggering run's artifacts")
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-list-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-list-") as tmp:
             root = Path(tmp)
             binary = root / "bin"
             binary.mkdir()
@@ -1226,7 +1226,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     def test_empty_deploy_key_fails_loudly_before_ssh(self):
         push = self._step("Validate and push the ratchet record")
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-empty-key-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-empty-key-") as tmp:
             directory = Path(tmp)
             environment = dict(
                 os.environ,
@@ -1246,7 +1246,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     @REQUIRES_POSIX_SHELL
     def test_artifact_preflight_accepts_one_sha_line_and_rejects_extra_files(self):
         script = self._artifact_preflight()
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-preflight-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-preflight-") as tmp:
             data = Path(tmp) / "ratchet-data"
             data.mkdir()
             (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
@@ -1272,7 +1272,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         start = push.index('base="$(cat "$data/base.txt")"')
         end = push.index("eval \"$(ssh-agent -s)\"")
         mapping = push[start:end]
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-size-map-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-size-map-") as tmp:
             data = Path(tmp) / "ratchet-data"
             data.mkdir()
             (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
@@ -1304,7 +1304,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         start = run.index(
             'if git -C "$repo" push origin HEAD:refs/heads/main; then')
         fragment = run[start:]
-        with tempfile.TemporaryDirectory(prefix="ghw-ratchet-push-reject-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-push-reject-") as tmp:
             root = Path(tmp)
             binary = root / "bin"
             binary.mkdir()
@@ -1357,7 +1357,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_inline_coverage_validator_enforces_hysteresis_gap_and_counts(self):
         script = self._validator()
-        with tempfile.TemporaryDirectory(prefix="ghw-coverage-validator-") as tmp:
+        with _ghw_temp.tempdir(prefix="ghw-coverage-validator-") as tmp:
             data, repo = Path(tmp) / "artifact", Path(tmp) / "main"
             data.mkdir()
             (repo / "gate").mkdir(parents=True)
@@ -1423,7 +1423,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         because the artifact preflight refuses a `$data` holding any third
         entry.
         """
-        root = Path(tempfile.mkdtemp(prefix=prefix))
+        root = Path(_ghw_temp.mkdtemp(prefix=prefix))
         data, repo = root / "data", root / "main"
         data.mkdir()
         return data, repo
@@ -1562,7 +1562,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         script = self._validator()
         old = {"same.py": [1, 3], "down.py": [1, 3], "gone.py": [1, 2]}
         accepted = {"same.py": [2, 6], "down.py": [1, 4], "new.py": [1, 5]}
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)
@@ -1610,7 +1610,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         script = self._validator()
         old = {"schema_version": 1, "baseline": {"same.py": 501,
                                                  "down.py": 700}}
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)
@@ -1641,7 +1641,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             ({"new.py": 0}, "positive line count"),
             ({"new.py": True}, "positive line count"),
         )
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)
@@ -1669,7 +1669,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             # One shape per refused limb: a non-object baseline.
             {"schema_version": 1, "baseline": []},
         )
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)
@@ -1707,7 +1707,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         script = self._validator()
         old = {"schema_version": 1, "baseline": {"a.py": 501}}
         baseline = {"same.py": 501, "down.py": 700}
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             data, repo = Path(tmp) / "data", Path(tmp) / "repo"
             data.mkdir()
             (repo / ".github").mkdir(parents=True)

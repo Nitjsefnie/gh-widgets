@@ -20,7 +20,6 @@ import runpy
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -34,6 +33,7 @@ from pathlib import Path
 from unittest import mock
 
 import impact_clone
+from tests import _ghw_temp
 
 
 spec = importlib.util.spec_from_file_location(
@@ -76,7 +76,7 @@ class TestImpactCacheLoading(unittest.TestCase):
             "totals": {"outside/project": {"issues": 1}},
             "ourloc": {},
         }
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             path = Path(td) / "impact-cache.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -114,7 +114,7 @@ class TestGitFameParallel(unittest.TestCase):
                     "GH_WIDGETS_REQUIRE_GIT_FAME is set but git-fame is absent; "
                     "expected the pinned Nitjsefnie-OSC/git-fame build")
             raise unittest.SkipTest("git-fame is not installed")
-        cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-fame-"))
+        cls.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-fame-"))
         git("init", "-q", "-b", "main", ".", cwd=cls.tmp)
         git("config", "user.email", "t@example.com", cwd=cls.tmp)
         git("config", "user.name", "T", cwd=cls.tmp)
@@ -195,7 +195,7 @@ class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
         "is covered by the next test on every OS")
     def test_stock_git_fame_warns_instead_of_lieing(self):
         """A git-fame without --jobs is detected and warned about."""
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             fake_bin = Path(td)
             script = fake_bin / "git-fame"
             script.write_text(
@@ -210,7 +210,7 @@ class TestGitFameRuntimeCheckAlarms(unittest.TestCase):
 
     def test_missing_git_fame_fails_loudly(self):
         """git-fame missing from PATH must not be treated as success."""
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             ok, out = self._check_with_path(td)
         self.assertFalse(ok, "missing git-fame must be rejected")
         self.assertIn("CHECK FAILED", out)
@@ -314,7 +314,7 @@ class TestTargetedCounts(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp(prefix="ghw-targeted-"))
+        cls.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-targeted-"))
         # a GitHub noreply address: the `+` is a regex quantifier, and the
         # capital letters matter once the address is lower-cased for matching
         cls.email = "75166987+MixedCase@users.noreply.github.com"
@@ -388,7 +388,7 @@ class TestTargetedRenames(unittest.TestCase):
     """
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-rename-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-rename-"))
         self.email = "75166987+MixedCase@users.noreply.github.com"
         git("init", "-q", "-b", "main", ".", cwd=self.tmp)
         git("config", "user.name", "Other", cwd=self.tmp)
@@ -841,7 +841,7 @@ class TestRepoPins(unittest.TestCase):
     loc = getattr(render_impact, "_LOC_MODULE")
 
     def manifest(self, payload):
-        path = Path(tempfile.mkdtemp(prefix="ghw-pins-")) / "pins.json"
+        path = Path(_ghw_temp.mkdtemp(prefix="ghw-pins-")) / "pins.json"
         path.write_text(payload if isinstance(payload, str)
                         else json.dumps(payload))
         self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
@@ -900,7 +900,7 @@ class TestPinnedUpdateLoc(unittest.TestCase):
         return seen
 
     def write(self, pins):
-        path = Path(tempfile.mkdtemp(prefix="ghw-pins-")) / "pins.json"
+        path = Path(_ghw_temp.mkdtemp(prefix="ghw-pins-")) / "pins.json"
         path.write_text(json.dumps(pins))
         self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
         return str(path)
@@ -941,7 +941,7 @@ class TestCheckoutPin(unittest.TestCase):
     loc = getattr(render_impact, "_LOC_MODULE")
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="ghw-pin-repo-"))
+        self.tmp = Path(_ghw_temp.mkdtemp(prefix="ghw-pin-repo-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         git("init", "-q", "-b", "main", ".", cwd=self.tmp)
         git("config", "user.name", "Us", cwd=self.tmp)
@@ -1047,7 +1047,7 @@ class HttpErrorAtMain(unittest.TestCase):
         error = urllib.error.HTTPError(
             'https://api.test/x', 403, 'Forbidden', headers,
             io.BytesIO(b'{"message":"secondary rate limit"}'))
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             stderr = io.StringIO()
             argv = ['render-impact.py', '--user', 'o', '--token', 't',
                     '--cache-file', str(Path(tmp) / 'impact-cache.json'),

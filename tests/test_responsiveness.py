@@ -16,7 +16,6 @@ import os
 import re
 import runpy
 import sys
-import tempfile
 import unittest
 import urllib.error
 import urllib.request
@@ -27,6 +26,7 @@ from pathlib import Path
 from unittest import mock
 
 import ghwidgets_cache
+from tests import _ghw_temp
 
 spec = importlib.util.spec_from_file_location(
     "responsiveness", (Path(__file__).resolve().parents[1] / "src" / "render-responsiveness.py"))
@@ -347,7 +347,7 @@ class RenderCard(unittest.TestCase):
     def render(self, nodes):
         """One end-to-end run against a cold cache: the fetch supplies every
         PR, so the card is drawn from what this script itself just fetched."""
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             out = Path(td) / "out"
             run_main(Path(td) / "impact-cache.json", out, nodes=nodes)
             return (out / "responsiveness.svg").read_text()
@@ -396,7 +396,7 @@ class CacheContract(unittest.TestCase):
     def test_a_missing_cache_is_not_an_error_when_the_fetch_works(self):
         # This script no longer depends on someone else having written a
         # cache: a cold start fetches everything and creates one.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "nope.json"
             out = Path(td) / "out"
             run_main(cache_file, out, nodes=prs("a/x", [1.0] * 3))
@@ -407,7 +407,7 @@ class CacheContract(unittest.TestCase):
         # It used to be a hard error, because the cached set was the only way
         # to know who is an insider. Identity now comes from the token, so the
         # cached set is not consulted at all on the fetch path.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = cache_payload(prs("a/x", [1.0] * 3))
             del payload["insiders"]
@@ -421,7 +421,7 @@ class CacheContract(unittest.TestCase):
         # The insider set decides what counts as external. A cache naming a
         # different account must not be able to promote our own org's repos
         # into the board.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             cache_file.write_text(json.dumps(
                 cache_payload([], insiders=["nobody"])))
@@ -466,7 +466,7 @@ class CacheMerge(unittest.TestCase):
     """
 
     def run_and_read(self, cached_nodes, fetched_nodes):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             cache_file.write_text(json.dumps(full_cache(cached_nodes)))
             run_main(cache_file, Path(td) / "out", nodes=fetched_nodes)
@@ -545,7 +545,7 @@ class AtomicWrite(unittest.TestCase):
             with mock.patch.object(os, "fdopen", half_written):
                 return real_write_cache(path, payload)
 
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             before = json.dumps(full_cache(prs("a/x", [1.0] * 3)))
             cache_file.write_text(before)
@@ -566,7 +566,7 @@ class AtomicWrite(unittest.TestCase):
                 [f for f in os.listdir(td) if f.endswith(".tmp")], [])
 
     def test_a_failed_cache_write_keeps_the_previous_card(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             out = Path(td) / "out"
             out.mkdir()
             card = out / "responsiveness.svg"
@@ -619,7 +619,7 @@ class DegradedPath(unittest.TestCase):
     BOOM = RuntimeError("GraphQL errors: [{'type': 'SERVICE_UNAVAILABLE'}]")
 
     def test_fetch_failure_renders_from_the_cache(self):
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             cache_file.write_text(json.dumps(
                 full_cache(prs("someone/theirs", [1.0] * 3))))
@@ -631,7 +631,7 @@ class DegradedPath(unittest.TestCase):
     def test_fetch_failure_leaves_the_cache_byte_identical(self):
         # The cache is the only data left on this path; writing a
         # half-fetched PR set over it would throw that away too.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             cache_file.write_text(json.dumps(
                 full_cache(prs("someone/theirs", [1.0] * 3))))
@@ -643,7 +643,7 @@ class DegradedPath(unittest.TestCase):
     def test_fetch_failure_with_no_cache_raises_the_fetch_error(self):
         # Nothing to render from: exiting non-zero leaves the previous SVG
         # serving, and the message names what actually broke.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             with self.assertRaises(RuntimeError):
                 run_main(Path(td) / "nope.json", Path(td) / "out",
                          gql_fn=fake_gql(error=self.BOOM))
@@ -651,7 +651,7 @@ class DegradedPath(unittest.TestCase):
     def test_a_long_outage_is_stamped_on_the_card(self):
         # A card drawn from data this old must say so — the run's stdout line
         # is for the operator, the stamp is for whoever sees the SVG.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = full_cache(prs("someone/theirs", [1.0] * 3))
             payload["prs_fetched_at"] = "2020-01-01T00:00:00+00:00"
@@ -664,7 +664,7 @@ class DegradedPath(unittest.TestCase):
     def test_a_recent_cache_is_not_stamped_on_the_degraded_path(self):
         # One failed hourly run is a blip, not a caveat worth printing on a
         # public card.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = full_cache(prs("someone/theirs", [1.0] * 3))
             payload["prs_fetched_at"] = datetime.datetime.now(
@@ -678,7 +678,7 @@ class DegradedPath(unittest.TestCase):
     def test_a_cache_without_insiders_degrades_to_the_account(self):
         # render-impact.py makes the same concession on the same path: one
         # render that can over-report externals beats no render at all.
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = cache_payload(prs("me/mine", [1.0] * 3)
                                     + prs("someone/theirs", [1.0] * 3))
@@ -701,7 +701,7 @@ class DegradedPath(unittest.TestCase):
         """A complete cache, then main() with `patchers` (and an optional
         error for the whole fetch) in place. `cache` False means no cache file
         at all, which is the path that propagates. Returns all of stdout."""
-        with tempfile.TemporaryDirectory() as td:
+        with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             if cache:
                 cache_file.write_text(json.dumps(
@@ -828,7 +828,7 @@ class HttpErrorAtMain(unittest.TestCase):
         error = urllib.error.HTTPError(
             'https://api.test/x', 403, 'Forbidden', headers,
             io.BytesIO(b'{"message":"secondary rate limit"}'))
-        with tempfile.TemporaryDirectory() as tmp:
+        with _ghw_temp.tempdir() as tmp:
             stderr = io.StringIO()
             argv = ['render-responsiveness.py', '--user', 'o', '--token', 't',
                     '--cache-file', str(Path(tmp) / 'impact-cache.json'),
