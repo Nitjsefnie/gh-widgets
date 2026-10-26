@@ -110,6 +110,7 @@ class TestScavengerVerdicts(unittest.TestCase):
             self.assertTrue(Path(held.name).exists())
             self.assertTrue(made.exists())
         finally:
+            _purge(made)
             held.cleanup()
             _ghw_temp._release_owned()
 
@@ -295,4 +296,5 @@ class TestScavengeReclaimsAKilledRun(unittest.TestCase):
             for proc in (proc_a, proc_b):
                 if proc.poll() is None:
                     os.kill(proc.pid, signal.SIGKILL)
+            _ghw_temp.impact_clone.remove_scratch_dir(markers)
             _ghw_temp.scavenge()
