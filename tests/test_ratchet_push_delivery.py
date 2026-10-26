@@ -88,8 +88,7 @@ def records(record_path):
             population.pop("slopes", None)
             population["seeds"] = population.get("seeds",
                                                  sorted(population["entries"]))
-        # The #269 reset leaves `entries` empty with the node seed-declared:
-        # the recorded side gains it here, so the validator judges a lowering.
+        # The reset seed-declares the node; the recorded side gains it here.
         population = old["populations"]["unit-suite"]
         envelope = population["entries"].get(entry)
         if envelope is None:
