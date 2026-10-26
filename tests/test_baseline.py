@@ -292,8 +292,7 @@ class TestEnvelopes(unittest.TestCase):
     def test_maxima_are_the_numbers_the_head_is_judged_against(self):
         entries = {"a": {"min": 1.0, "max": 9.0, "n": 6},
                    "b": {"min": 2.0, "max": 3.0, "n": 6}}
-        self.assertEqual(baseline.envelope_maxima(entries),
-                         {"a": 9.0, "b": 3.0})
+        self.assertEqual(baseline.envelope_maxima(entries), {"a": 9.0, "b": 3.0})
 
 
 class TestRatchet(unittest.TestCase):
@@ -670,9 +669,8 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
 class ReadsTheCommittedBaseline(unittest.TestCase):
     """Shared access to the committed `speed-baseline.json`, skipping when absent.
 
-    A control that cannot run because the thing it describes is missing has
-    not failed, it is waiting; the commit that re-adds the file gets it
-    checked against this tree on the box, in under a second.
+    A control whose subject is missing has not failed, it is waiting; the
+    commit that re-adds the file gets it checked here, in under a second.
     """
 
     def _load(self):
@@ -772,11 +770,9 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 self.assertLess(population["tolerance"], 1.0)
 
     def test_the_committed_digest_matches_this_tree(self):
-        """The control that catches a stale digest.
-
-        Adding a test invalidates the committed digest, so this assertion is
-        deliberately the last thing that changes when a test is added: the
-        drift fails HERE on the box, in under a second, not on a runner.
+        """The control that catches a stale digest: adding a test invalidates
+        the committed digest, so the drift fails HERE in under a second, not
+        on a runner.
         """
         loaded = self._load()
         collected = baseline.counter.collect_node_ids(REPO_ROOT / "tests")
@@ -814,9 +810,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def test_a_doubled_workload_is_caught_wherever_the_gate_can(self):
         """Derive doubling detection from the current tightened record.
 
-        While `entries` is {} (the declared blind window) this greens with
-        zero assertions exercised; it starts judging when main's ratchet
-        seeds, the same waiting shape as the absent-baseline skip.
+        Greens with zero assertions exercised while `entries` is {} (the
+        blind window); it judges when main's ratchet seeds.
         """
         loaded = self._load()
         for name, population in loaded["populations"].items():
@@ -839,9 +834,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
         """The wall ceilings, against the constant the gate really uses.
 
         An earlier version carried its own literal `3.0` and stayed green when
-        `SMOKE_FACTOR` changed to 1.0 — it claimed a protection it did not
-        have. So the factor comes from `compare_counters.SMOKE_FACTOR`, and
-        every ceiling must leave headroom over the worst wall recorded.
+        `SMOKE_FACTOR` changed to 1.0. So the factor comes from
+        `compare_counters.SMOKE_FACTOR`, and every ceiling must leave headroom.
         """
         loaded = self._load()
         factor = cd.SMOKE_FACTOR
@@ -884,11 +878,9 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
                 self.assertLess(population["tolerance"], 1.0)
 
     def test_the_stated_ceilings_are_not_transcribed_anywhere(self):
-        """No hard-coded ceiling figures in the prose (the wrong ones lived in
-        the baseline's `basis` and in the workflow header). The suite's own
-        entry is named only while the population records entries at all: the
-        #269 reset empties `entries` for the declared blind window and the
-        automated ratchet re-seeds the node after the merge.
+        """No hard-coded ceiling figures in the prose. The suite's own entry is
+        named only while the population records entries at all: the #269 reset
+        empties `entries` for the blind window; main's ratchet re-seeds it.
         """
         loaded = self._load()
         ceilings = self.ceilings(loaded)
