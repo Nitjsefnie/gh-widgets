@@ -258,12 +258,14 @@ renderer caches the data that cannot change and refetches only what can.
   Missing, unreadable, corrupt, or schema-mismatched caches are not errors: the
   run falls back to a full fetch.
 - `GH_WIDGETS_REST_CACHE` — REST conditional-GET store (per-URL ETag, body and
-  `Link` header), default `/var/lib/gh-widgets/rest-cache.json` under the units.
-  An unchanged resource is re-requested with `If-None-Match` and answered from
-  the store on a `304 Not Modified`, which GitHub does not charge against the
-  primary rate limit; each run prints `rest-cache: requests=N not-modified=M`.
-  Missing or corrupt stores degrade to a full fetch; unset, the renderers
-  fetch everything as before.
+  `Link` header) for the popularity renderer's reads of public listings,
+  default `/var/lib/gh-widgets/rest-cache.json` under the units. An unchanged
+  resource is re-requested with `If-None-Match` and answered from the store on
+  a `304 Not Modified`, which GitHub does not charge against the primary rate
+  limit; each run prints `rest-cache: requests=N not-modified=M`. Each save
+  rewrites the file with just the URLs that run used, so idle URLs drop out.
+  Missing or corrupt stores degrade to a full fetch; unset, the renderer
+  fetches everything as before.
 - `cache.json` and `impact-cache.json` are private renderer implementation
   details. Do not use either cache as an interchange format for another
   process; use the versioned `ghwidgets_data` API instead.

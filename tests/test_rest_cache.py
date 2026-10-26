@@ -211,11 +211,44 @@ class StoreContract(unittest.TestCase):
     def test_a_failed_save_degrades_with_a_warning(self):
         store = ghwidgets_cache.RestCache(self.path)
         store.remember(API + '/user', '"etag-1"', json.dumps(USER).encode(), '')
-        with mock.patch.object(ghwidgets_cache, 'merge_cache',
+        with mock.patch.object(ghwidgets_cache, 'save_cache',
                                side_effect=OSError('no space left')), \
                 contextlib.redirect_stderr(io.StringIO()) as stderr:
             store.save()
         self.assertIn('warning: could not save REST cache', stderr.getvalue())
+
+    def test_a_body_that_is_not_json_degrades_to_a_full_fetch(self):
+        # A stored body that loads as text but never parsed as JSON would
+        # poison every later run: the entry is refused, so the next request
+        # goes out bare and a fresh 200 replaces the bad body.
+        self.path.write_text(json.dumps({
+            'version': 1, API + '/user': {
+                'etag': '"etag-1"', 'body': '{not json', 'link': ''}}),
+            encoding='utf-8')
+        store = ghwidgets_cache.RestCache(self.path)
+        self.assertIsNone(store.entry(API + '/user'))
+        drive, seen = self.fetch([response(USER, etag='"etag-1"')])
+        self.assertEqual(drive(store), (USER, ''))
+        self.assertEqual(seen, [None])
+        store.save()
+        reread = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual(reread[API + '/user']['body'], json.dumps(USER))
+
+    def test_a_save_keeps_only_the_urls_this_run_used(self):
+        first = ghwidgets_cache.RestCache(self.path)
+        first.remember(API + '/a', '"etag-a"', json.dumps(USER).encode(), '')
+        first.remember(API + '/b', '"etag-b"', json.dumps(USER).encode(), '')
+        first.save()
+        seeded = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual(sorted(seeded), [API + '/a', API + '/b', 'version'])
+
+        # A run that visits only /a rewrites the file without /b: idle URLs
+        # drop out at save time instead of accumulating.
+        second = ghwidgets_cache.RestCache(self.path)
+        self.assertIsNotNone(second.entry(API + '/a'))
+        second.save()
+        pruned = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual(sorted(pruned), [API + '/a', 'version'])
 
     def test_save_without_a_path_or_updates_writes_nothing(self):
         ghwidgets_cache.RestCache(None).save()
