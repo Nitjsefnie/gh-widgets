@@ -558,12 +558,11 @@ REQUIRES_STATEMENT = unittest.skipUnless(
 class TestStatementInstrument(unittest.TestCase):
     """The deterministic instrument issue #269 made the gate's value.
 
-    Five instruments red main on unchanged code across #190, #216, #221,
-    #240 and #269, every one traceable to the runner. The statement count is
-    not a time at all — it is the number of `sys.monitoring` LINE events the
-    measured child executes, so the same code and the same population give
-    the same count on any runner. The cases pin the dispatch, determinism
-    and refusals: an undercount is not a measurement, nor a number the child never wrote.
+    Five instruments red main on unchanged code (#190-#269), every one
+    traceable to the runner. The statement count is the number of
+    `sys.monitoring` LINE events the measured child executes, so the same
+    code and population give the same count on any runner. The cases pin
+    the dispatch, determinism and refusals.
     """
 
     @staticmethod
@@ -582,7 +581,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_measurement_carries_a_positive_count_and_its_metric(self):
-        measured = self.run_statement(["-c", "print('counted')"])  # the happy path
+        measured = self.run_statement(["-c", "print('counted')"])
         self.assertEqual(measured.metric, counter.STATEMENT_METRIC)
         self.assertEqual(measured.returncode, 0)
         self.assertGreater(measured.value, 0.0)
@@ -592,15 +591,14 @@ class TestStatementInstrument(unittest.TestCase):
     @REQUIRES_STATEMENT
     def test_the_module_dispatch_runs_the_target_module(self):
         # Production shape for the unit suite (-m unittest discover).
-        measured = self.run_statement(["-m", "timeit", "-n", "1", "-r", "1",
-                                       "pass"])
+        measured = self.run_statement(["-m", "timeit", "-n", "1", "-r", "1", "pass"])
         self.assertEqual(measured.returncode, 0, measured.stderr)
         self.assertIn("1 loop", measured.stdout)
         self.assertGreater(measured.value, 0.0)
 
     @REQUIRES_STATEMENT
     def test_the_script_dispatch_runs_the_target_script(self):
-        # Production shape for the renderers: a script path.
+        # Production shape for the renderers.
         with tempfile.TemporaryDirectory(prefix="ghw-statement-") as td:
             script = Path(td) / "subject.py"
             script.write_text("import sys\nprint('script ran', sys.argv[1:])\n",
@@ -623,8 +621,8 @@ class TestStatementInstrument(unittest.TestCase):
             payload = json.loads(count_path.read_text(encoding="utf-8"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), "stripped")
+        self.assertEqual(payload, dict(count=payload["count"], missed=0))
         self.assertGreater(payload["count"], 0)
-        self.assertEqual(payload["missed"], 0)
 
     @REQUIRES_STATEMENT
     def test_a_failing_targets_own_verdict_travels(self):
@@ -675,7 +673,7 @@ class TestStatementInstrument(unittest.TestCase):
             with self.subTest(interpreter=head):
                 with self.assertRaises(counter.CounterError) as raised:
                     counter.measure_statement([head, "-c", "pass"])
-        self.assertIn("interpreter", str(raised.exception))
+                self.assertIn("interpreter", str(raised.exception))
 
     @REQUIRES_BENCH
     @REQUIRES_STATEMENT
@@ -697,6 +695,28 @@ class TestStatementInstrument(unittest.TestCase):
                          (counter.CPU_METRIC, counter.CALIBRATED_METRIC,
                           counter.STATEMENT_METRIC))
 
+    @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
+    def test_the_statement_path_never_reads_the_cpu_facility(self):
+        # The count is taken in the child; the parent needs no RUSAGE read. One
+        # fixture separates the instruments: measure() refuses, the statement measures.
+        with mock.patch.object(counter, "resource", None):
+            with self.assertRaises(counter.CounterError) as refused:
+                counter.measure([sys.executable, "-c", "pass"])
+            measured = counter.measure_statement(
+                [sys.executable, "-c", "print('still counted')"])
+        self.assertIn("RUSAGE_CHILDREN", str(refused.exception))
+        self.assertEqual(measured.returncode, 0)
+        self.assertEqual(measured.metric, counter.STATEMENT_METRIC)
+        self.assertGreater(measured.value, 0.0)
+
+    @unittest.skipIf(sys.version_info >= (3, 12),
+                     "sys.monitoring exists; the refusal fires on 3.10, where this runs")
+    def test_the_statement_refusal_fires_below_three_twelve(self):
+        with self.assertRaises(counter.CounterError) as raised:
+            counter.measure_statement([sys.executable, "-c", "pass"])
+        self.assertIn("3.12", str(raised.exception))
+
     def test_the_measured_figures_are_recorded_where_the_code_is(self):
         # The instrument's own measured cost, so it need not be re-derived.
         doc = (counter.__doc__ or "")
@@ -708,7 +728,7 @@ class TestStatementInstrument(unittest.TestCase):
 
     @REQUIRES_STATEMENT
     def test_a_hard_child_exit_writes_no_count_and_refuses(self):
-        # os._exit skips atexit: the integration form of the missing-file refusal.
+        # os._exit skips atexit: the missing-file refusal, end to end.
         with self.assertRaises(counter.CounterError) as raised:
             counter.measure_statement(
                 [sys.executable, "-c", "import os; os._exit(0)"])

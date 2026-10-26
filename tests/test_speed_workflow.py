@@ -31,6 +31,12 @@ import xml.etree.ElementTree as ET
 
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
+
+REQUIRES_STATEMENT = unittest.skipUnless(
+    sys.version_info >= (3, 12),
+    "the statement instrument counts sys.monitoring LINE events, "
+    "which exist from Python 3.12; measure_statement refuses below "
+    "that and its refusal is pinned in tests/test_counter.py")
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
 from tests.test_gate_base_freshness import _config
 
@@ -809,6 +815,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          {"tests.test_one.TestOne.test_a"})
 
     @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
     def test_step_exec_sentinel_reaches_measured_unit_suite(self):
         root = self._temp_root("ghw-speed-unit-step-sentinel-")
         head = self._small_checkout(root)
@@ -839,6 +846,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         self.assertIn("Ran 2 tests", completed.stdout + completed.stderr)
 
     @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
     def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
         """The step executed, and its output proved to land where it must.
 
@@ -869,6 +877,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          "the Compare step looks for it")
 
     @REQUIRES_BENCH
+    @REQUIRES_STATEMENT
     def test_the_unit_suite_step_would_write_nothing_without_its_directory(self):
         """The mutation, proven.
 

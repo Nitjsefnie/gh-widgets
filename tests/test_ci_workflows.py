@@ -1508,6 +1508,10 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             unit["seeds"] = ["counter::unit-suite", "counter::unit-suite"]
         yield mutated("invalid seeds", duplicate_seeds)
 
+        def empty_seeds(unit):
+            unit["seeds"] = []
+        yield mutated("invalid seeds", empty_seeds)
+
         def non_string_seed(unit):
             unit["seeds"] = [4]
         yield mutated("invalid seeds", non_string_seed)
