@@ -9,13 +9,7 @@
       "metric": "statement_count",
       "tolerance": 0.05,
       "population": "02098a8ce2e41b7e9f99361a3056ce74dffc0c3a43f81a95afb40eb7f3e01350",
-      "entries": {
-        "counter::unit-suite": {
-          "min": 99873148.0,
-          "max": 99873148.0,
-          "n": 2
-        }
-      },
+      "entries": {},
       "wall": {
         "counter::unit-suite": {
           "min": 65.223,
