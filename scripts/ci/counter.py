@@ -8,44 +8,48 @@ behind issue #81 is that paired wall-clock A/B is not a valid magnitude
 ANYWHERE — not on a shared box, and not in one job on a CI runner. So the
 quantity gated here is not an elapsed time.
 
-ONE INSTRUMENT BECAME TWO: RAW AND CALIBRATED CPU SECONDS.
-`resource.getrusage(RUSAGE_CHILDREN)`, as a delta across one child. On-CPU
-time, so steal time — the thing that makes a duration on a shared runner
-meaningless — is excluded, which is what makes this valid under the ruling
-at all.
+THE INSTRUMENT IS A DETERMINISTIC STATEMENT COUNT. It counts
+`sys.monitoring` LINE events in the measured Python child (Python 3.12+;
+the speed job pins 3.13): every executed line of the child's own code fires
+one event, so the same code with the same population executes the same lines
+and returns the same count, on any runner, under any load. Measured on the
+box that shipped this change (2026-10-26, /root/gh-widgets at 447e92f, env
+pinned per `child_environment`), three runs of the full unit suite read:
 
-THE SECOND INSTRUMENT EXISTS BECAUSE RAW CPU SECONDS STILL CARRY THE
-MACHINE. Steal is excluded, but the pool spans CPU models and load states:
-the same tree measured 27.70 and 54.25 CPU seconds across seven runs of
-2026-10-19 (issue #190), a 1.96x spread on identical code — wider than the
-30% budget the gate judges, which is why main went red on unchanged code.
-The calibrated instrument divides the child's CPU seconds by adjacent fixed
-synthetic work. Cancellation depends on the COST MIX, not just adjacency.
-Issue #221's twelve rounds fit suite_cpu = 19.4243 I + 18.4290 S, where I
-is the old calibrator's reading and S approximates fixed spawn/kernel work.
-The new workload retains that I block and adds 312 fork/wait pairs: its
-design target is I + 0.9488 S. Predicted suite ratios span 18.9277-19.7655
-(4.43%), inside the 30% budget; this is a fitted prediction, not a measured
-cross-runner result. The first four runs also measured older test populations,
-as the maintainer's correction records. File I/O has no independent predictor
-in those rows, so its cost cannot be separated from S.
+    99,661,405 / 99,667,559 / 99,658,415 events — spread 0.0092%
+    missed: 0 on every run; the suite exited 0 every run
 
-The six runs are 39922290165, 39942310219, 39953487997, 39960771504,
-39970388041 and 39969886729 (https://github.com/Nitjsefnie/gh-widgets/issues/221).
-The last two differ only in comment-share records and demonstrate runner
-dependence on the same measured program. This mix targets the suite; the
-more child-heavy renderers can still rise on faster interpreter runners.
-A purely fixed-cost subject would rise about 51% as I falls from 2 to 1;
-phase-2 cell observations must decide the renderer residual. Independent
-kernel/filesystem variation and calibration noise remain uncancelled, so
-the baseline still records an envelope rather than a point.
+The count is the gated value; the overhead costs CI minutes, not
+correctness (CPU 102.9-128.9 against 93.4 plain, and wall 173-208 s against
+164 s plain, on that box — box-noisy, indicative figures).
 
-THIS MODULE IS POSIX-ONLY, AND IT REFUSES RATHER THAN GUESSES. `resource`
-does not exist on Windows and `/proc` does not exist on macOS, and this
-module is imported by scripts/ci/compare_counters.py, which the test suite
-exercises on every OS — so a bare `import resource` turned a platform
-limitation into an import error in thirty-five unrelated tests, on a
-repository whose own CI runs a windows-latest and macos-latest matrix.
+WHAT THE COUNT DOES NOT SEE, STATED RATHER THAN HIDDEN. The monitoring
+callback fires in the measured child itself, so the count covers the direct
+child's own executed lines. Nested Python children (unittest spawns none in
+this suite's measured path) and non-Python subprocesses — the renderers'
+`git` calls — are not counted. A commit that moved all the renderers' work
+into git would show the renderer entry flat; that is what the wall smoke
+bound is for. Not a wall or CPU quantity, so neither machine factor nor
+load reaches it: this is the property five instruments lost to (#190,
+#216, #221, #240, #269 each red main on unchanged code, the last at
++43.4% over budget), and it is why the count is the gate's value.
+
+THE RETIRED CALIBRATED INSTRUMENT. Between #190 and #240 the unit suite was
+judged on its raw CPU seconds divided by an adjacent fixed synthetic
+workload's. No scalar calibration cancels a heterogeneous runner pool: the
+net value still scales with the machine factor whenever the slope is not
+exactly the local ratio (d(raw)/d(calibration) measured ~30.1 between two
+#269 runs against the committed 21.3716). It was retired by #269; issue
+#269 and the baseline's `basis` carry the account. CALIBRATED_METRIC stays
+declared in METRICS so schema 3/4 baseline documents still validate against
+`metric in counter.METRICS`, and nothing produces it any more.
+
+THIS MODULE IS POSIX-ONLY FOR CPU SECONDS, AND IT REFUSES RATHER THAN
+GUESSES. `resource` does not exist on Windows and `/proc` does not exist on
+macOS, and this module is imported by scripts/ci/compare_counters.py, which
+the test suite exercises on every OS — so a bare `import resource` turned a
+platform limitation into an import error in thirty-five unrelated tests, on
+a repository whose own CI runs a windows-latest and macos-latest matrix.
 
 So: the module IMPORTS everywhere. `measure()` on a platform with no
 RUSAGE_CHILDREN raises CounterError naming the platform, rather than
@@ -55,23 +59,25 @@ are unreadable on this platform — "I looked and there was nothing there"
 is a real record, and it is a different record from "the file exists and
 says 4". Nothing here falls back to wall time, because a silent fallback
 that measures something else is precisely the failure this instrument
-exists to prevent.
+exists to prevent. (`measure_statement` needs no `resource` at all — the
+callback runs in the child — but it does need Python 3.12+.)
 
-IT IS NOT DETERMINISTIC, AND THE GATE IS WEAKER FOR IT. That is a real cost
-and it is named rather than buried: measured on this box, the same program
-measured repeatedly spreads 21.3% over six runs (unit suite) and 10.8%, 35.2%
-and 47.3% over eight runs each (the three renderer workloads, the brief ones
-among the noisiest because fixed overhead and co-tenant load dominate a short
-measurement). A quiet
-dedicated cell spreads far less — 7.6% min-to-max for one workload, run
-36812285024 — but even there the budget has to be looser than a
-deterministic counter would need. The budgets in the committed baseline are
-per population for exactly this reason, and at its budget the unit-suite
-half is a GROSS-REGRESSION NET, not a sensitive gate.
+IT IS THE CPU PATH THAT IS NOT DETERMINISTIC, AND THE GATE IS WEAKER FOR
+EVERY ENTRY IT STILL JUDGES ON IT. That is a real cost and it is named
+rather than buried: measured on this box, the same program measured
+repeatedly spreads 21.3% over six runs (unit suite) and 10.8%, 35.2% and
+47.3% over eight runs each (the three renderer workloads, the brief ones
+among the noisiest because fixed overhead and co-tenant load dominate a
+short measurement). A quiet dedicated cell spreads far less — 7.6%
+min-to-max for one workload, run 36812285024. The statement count is
+deterministic; every entry is judged on it after main's ratchet seeds the
+first measurements, and until then the populations are in a declared blind
+window. The gross wall smoke bound is unchanged.
 
-THE TWO BETTER INSTRUMENTS, AND WHY NEITHER IS HERE. Both were measured, not
-assumed, and both are recorded here so the next reader does not re-derive
-them — and so nobody adds one back without also re-deriving what it costs.
+THE TWO BETTER CPU INSTRUMENTS, AND WHY NEITHER IS HERE. Both were
+measured, not assumed, and both are recorded here so the next reader does
+not re-derive them — and so nobody adds one back without also re-deriving
+what it costs.
 
   Instruction counts (`perf stat -e instructions`) — UNAVAILABLE. On
   ubuntu24 image 20260927.320.1, kernel 6.17.0-1022-azure (run 36811152307)
@@ -89,23 +95,20 @@ them — and so nobody adds one back without also re-deriving what it costs.
   render-impact.py, which shells out to git. On a cell whose suite round is
   ~20 s, 12.8x on two bench rounds costs minutes to save tens of seconds.
 
-The standing rule this leaves: an instrument the cell cannot use does not
-belong in the gate, and neither does one that costs more than the thing it
-measures. Both were tried; both lost on numbers.
+The statement count needs neither kernel facility — the callback runs
+inside the child it counts — which is why it can be deterministic where
+both of those lose.
 
 ONE PROBE PER JOB, NOT PER CALL SITE. The workflow runs the probe once, in
-its own step, and exports the result as GH_WIDGETS_GH_COUNTER_METRIC; the raw path
-honours that variable and does not have to be asked. Two call sites in one
-comparison that picked different instruments would produce two incomparable
-numbers. The calibrated path takes no env: --calibrated selects it, and
-under the unit step's ratio pin the raw path refuses rather than mislabel
-(a raw number under the ratio name would pass the comparator's metric
-check while measuring something else).
+its own step, and exports the result as GH_WIDGETS_GH_COUNTER_METRIC; the
+steps that measure pin the same value again explicitly. Two call sites in
+one comparison that picked different instruments would produce two
+incomparable numbers.
 
-THE PROBE RECORDS WHY THERE IS NO BETTER INSTRUMENT. It reports the metric
-in use together with perf_event_paranoid and yama ptrace_scope — the two
-kernel settings that decide whether instruction or syscall counting is even
-possible — so a reader can see that CPU seconds are a measured choice on
+THE PROBE RECORDS WHY THERE IS NO BETTER CPU INSTRUMENT. It reports the
+metric in use together with perf_event_paranoid and yama ptrace_scope — the
+two kernel settings that decide whether instruction or syscall counting is
+even possible — so a reader can see that the alternatives were measured on
 this cell and not an oversight. Existence of a binary proves nothing: `perf`
 is installed on the runner and cannot count.
 
@@ -115,10 +118,11 @@ category error that reads as either a catastrophic regression or a
 spectacular speedup. The comparator raises ComparisonError, which is exit 2
 and names both; nothing here silently converts one into the other.
 
-THE TIME ATTRIBUTE IN THE JUNIT THIS WRITES IS NOT SECONDS. It is the CPU
-seconds the child consumed. That is still not the quantity a reader assumes
-on first sight, so: a `time="3.2"` written by this file means three-point-two
-CPU seconds of on-CPU time and never three-point-two seconds of elapsed time.
+THE TIME ATTRIBUTE IN THE JUNIT THIS WRITES IS NOT SECONDS. It is the
+instrument's counter — a statement count, or CPU seconds on the raw path.
+That is still not the quantity a reader assumes on first sight, so: a
+`time="3.2"` written by this file means three-point-two of the named
+instrument's unit and never three-point-two seconds of elapsed time.
 Elapsed time is recorded separately, as gh-wall, and exists only for the
 gross smoke gate — never as a magnitude.
 
@@ -126,8 +130,9 @@ DETERMINISM LEVERS, ALL OF THEM NAMED IN `child_environment`. The headline
 one is PYTHONHASHSEED=0, but the one that actually moved the numbers was
 PYTHONDONTWRITEBYTECODE=1: without it the first round compiles and writes a
 .pyc and the second reads them, so two rounds of identical code do different
-amounts of work. None of this makes the measurement deterministic and nothing
-here pretends that it does.
+amounts of work — which is exactly the kind of split the statement count
+would see as two different populations, so it stays pinned. None of this
+makes the CPU path deterministic and nothing here pretends that it does.
 
 IT ALSO OWNS THE POPULATION. `population_digest` and `collect_node_ids` are
 here rather than in the comparator because a digest computed two different
@@ -154,17 +159,17 @@ CLI:
 
     counter.py --probe
     counter.py --junit-file <path> --name <node-id> --cwd <dir> -- <cmd> ...
-    counter.py --calibrated --junit-file <path> --name counter::unit-suite \
-               --cwd <dir> -- <cmd> ...
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
@@ -180,13 +185,15 @@ except ImportError:  # POSIX only. Windows has no RUSAGE_CHILDREN, and this
 
 
 CPU_METRIC = "cpu_time"
-# The second instrument: the suite's CPU seconds divided by a fixed
-# calibration workload's, run adjacently. Cancellation requires matching
-# cost mixes; the docstring records the fit and its limits.
+# Retired by #269 (see the docstring's calibrated section). Declared so
+# schema 3/4 documents keep validating against `metric in counter.METRICS`;
+# `measure()` refuses it, and no producer writes it any more.
 CALIBRATED_METRIC = "cpu_time_ratio"
+# The gated instrument: a deterministic count of the child's executed lines.
+STATEMENT_METRIC = "statement_count"
 # The metric names this file is willing to record. Anything else arriving in
 # METRIC_ENV is a stale export from a shape this file has left behind, and it is refused rather than measured — a number recorded under a name this file does not define is the exact failure the baseline's metric check exists to catch, and it should never get that far.
-METRICS = (CPU_METRIC, CALIBRATED_METRIC)
+METRICS = (CPU_METRIC, CALIBRATED_METRIC, STATEMENT_METRIC)
 METRIC_ENV = "GH_WIDGETS_GH_COUNTER_METRIC"
 # Read by the probe and printed next to the instrument, because a reader
 # deciding whether to trust a fallback needs to know whether it was the kernel
@@ -200,53 +207,80 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
 
-# THE CALIBRATION WORKLOAD. The six #221 runs above fit I + 0.9488 S.
-# Retain 1400 arithmetic rounds, 25 Python starts and 25 file write/read
-# pairs as I; append 312 fork/wait pairs for S. With this block's heap,
-# a local probe priced 600 pairs at 1.824539 CPU s: round(0.9488 /
-# (1.824539 / 600)) = 312. This sizes work, not cross-runner validation.
-# Serial children share the counter's timeout-owned process group.
-# Fixed counts run in seconds; the unchanged arithmetic retains its pin.
-_CALIBRATION_PROGRAM = """\
-import os, shutil, subprocess, sys, tempfile
-acc = 0
-scratch = tempfile.mkdtemp()
-try:
-    path = os.path.join(scratch, "calibration")
-    for i in range(1400):
-        keys = [(j * 2654435761 + i * 97) & 0xFFFF for j in range(2048)]
-        table = {}
-        for j, k in enumerate(keys):
-            table[k] = (j ^ acc) & 0xFF
-        for k in sorted(table):
-            acc = (acc + k + table[k]) & 0xFFFF
-        if i % 56 == 0:
-            subprocess.run([sys.executable, "-c", "pass"],
-                           capture_output=True, check=False)
-            with open(path, "w") as handle:
-                handle.write("x" * 1024)
-            with open(path) as handle:
-                if len(handle.read()) != 1024:
-                    raise SystemExit(2)
-finally:
-    shutil.rmtree(scratch, ignore_errors=True)
-for _ in range(312):
-    pid = os.fork()
-    if pid == 0:
-        os._exit(0)
-    _, status = os.waitpid(pid, 0)
-    if status != 0:
-        raise SystemExit(2)
-print(acc)
+# THE STATEMENT BOOTSTRAP. This is the program the measured child actually
+# runs: it counts its own LINE events and writes the total where the parent
+# can read it, then dispatches the real subject exactly the way an
+# interpreter would. Tool id 5 is arbitrary but fixed; "ghw-speed" names the
+# tool in sys.monitoring's internal registry, and a collision would raise at
+# use_tool_id, not mislabel the count.
+#
+# Dispatch mirrors the interpreter's three shapes, because the measured
+# commands are exactly those shapes: `-m unittest discover` for the suite,
+# a script path for the renderers, `-c` for anything inline. A leading `--`
+# is stripped so the parent can spell `[python, "-c", BOOTSTRAP, "--",
+# *command]` unambiguously. SystemExit propagates on purpose: atexit runs
+# for SystemExit, so a `sys.exit(1)` from the subject still writes its count
+# and the parent sees both the count and the verdict.
+#
+# Not counted: lines executed inside nested Python children and non-Python
+# subprocesses (git), because the callback lives in THIS process only.
+_STATEMENT_BOOTSTRAP = """\
+import atexit, json, os, runpy, sys
+
+_COUNT_FILE = os.environ["GH_WIDGETS_STATEMENT_COUNT_FILE"]
+_counted = 0
+_missed = 0
+
+
+def _record():
+    with open(_COUNT_FILE, "w", encoding="utf-8") as handle:
+        json.dump({"count": _counted, "missed": _missed}, handle)
+
+
+def _count_line(code, instruction_offset):
+    global _counted
+    _counted += 1
+
+
+def _count_missed(code, instruction_offset):
+    global _missed
+    _missed += 1
+
+
+_events = sys.monitoring.events
+sys.monitoring.use_tool_id(5, "ghw-speed")
+_watched = _events.LINE
+_missed_event = getattr(_events, "MISSED", None)
+if _missed_event is not None:
+    _watched |= _missed_event
+sys.monitoring.set_events(5, _watched)
+sys.monitoring.register_callback(5, _events.LINE, _count_line)
+if _missed_event is not None:
+    sys.monitoring.register_callback(5, _missed_event, _count_missed)
+atexit.register(_record)
+
+argv = sys.argv[1:]
+if argv[:1] == ["--"]:
+    del argv[:1]
+if not argv:
+    raise SystemExit("statement bootstrap: no target to run")
+_target, *_rest = argv
+if _target == "-m":
+    if not _rest:
+        raise SystemExit("statement bootstrap: -m needs a module name")
+    sys.argv = [_rest[0], *_rest[1:]]
+    runpy.run_module(_rest[0], run_name="__main__", alter_sys=True)
+elif _target == "-c":
+    if not _rest:
+        raise SystemExit("statement bootstrap: -c needs a program")
+    sys.argv = ["-c", *_rest[1:]]
+    exec(compile(_rest[0], "<cmdline -c>", "exec"),
+         {"__name__": "__main__", "__file__": "<cmdline -c>"})
+else:
+    sys.argv = [_target, *_rest]
+    sys.path.insert(0, os.path.dirname(os.path.abspath(_target)))
+    runpy.run_path(_target, run_name="__main__")
 """
-CALIBRATION_COMMAND = (sys.executable, "-c", _CALIBRATION_PROGRAM)
-# The retained arithmetic still answers 24576. Change this with any change
-# to that answer; a wrong sum refuses rather than producing a plausible ratio.
-CALIBRATION_OUTPUT = "24576"
-# Generous: the calibrator is fixed work that takes seconds. A timeout here
-# means the cell itself is broken, and a broken calibration is refused, not
-# waited on.
-CALIBRATION_TIMEOUT = 300
 
 
 class CounterError(RuntimeError):
@@ -362,8 +396,8 @@ def child_environment(env=None) -> dict:
     """The child environment, with every variance source found pinned.
 
     Each of these was pinned for a stated reason, and none of them makes wall
-    time deterministic — they remove sources of drift from the COUNTER, which
-    is a different and much smaller claim:
+    time deterministic — they remove sources of drift from the CPU COUNTER,
+    which is a different and much smaller claim:
 
       PYTHONHASHSEED=0       hash-order drift, which reaches the work
                              wherever a set or dict is iterated.
@@ -396,12 +430,11 @@ def child_environment(env=None) -> dict:
 
 
 def choose_metric(forced: Optional[str] = None) -> str:
-    """The instrument for this job, from the env var or from a real probe.
+    """The instrument for this job, from the env var or the default.
 
     `forced` is the workflow's one-probe-per-job answer; it is honoured
-    verbatim, so every call site in a job measures the same quantity. Without
-    it the preference order applies, and the probe is a real measurement
-    rather than a check that a binary exists.
+    verbatim, so every call site in a job measures the same quantity. The
+    workflow pins statement_count; without a pin the raw CPU path applies.
     """
     if forced is None:
         forced = os.environ.get(METRIC_ENV) or None
@@ -417,7 +450,7 @@ def choose_metric(forced: Optional[str] = None) -> str:
 
 def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
             metric: Optional[str] = None) -> Measurement:
-    """Run one command and return its counter, metric and wall together.
+    """Run one command and return its raw CPU counter, metric and wall.
 
     Raises CounterError when the instrument cannot produce a number at all,
     subprocess.TimeoutExpired on a timeout, and OSError when the command
@@ -425,116 +458,108 @@ def measure(command: Sequence[str], cwd=None, env=None, timeout=None,
     `subprocess.run`, so nothing downstream grows a new failure path.
     """
     chosen = choose_metric(metric)
-    if chosen == CALIBRATED_METRIC:
+    if chosen != CPU_METRIC:
         # A label this function cannot earn: raw CPU seconds carrying the
-        # ratio name would pass the comparator's metric check while
-        # measuring something else. The ratio is measure_calibrated's.
+        # ratio or the statement name would pass the comparator's metric
+        # check while measuring something else. Each name belongs to the
+        # instrument that produces it.
         raise CounterError(
-            f"{CALIBRATED_METRIC} is the calibrated instrument's label; "
-            "the raw path refuses it. Pass no metric for raw CPU seconds, "
-            "or call measure_calibrated for the ratio.")
+            f"{chosen} is not the raw path's label; the raw path records "
+            f"{CPU_METRIC} only. Pass metric={CPU_METRIC!r} or none, or "
+            "call the instrument that owns the name.")
     code, out, err, wall, cpu = _run_child(
         list(command), cwd, child_environment(env), timeout)
     return Measurement(cpu, chosen, wall, out, err, code)
 
 
-class CalibratedMeasurement(NamedTuple):
-    """A calibrated Measurement, plus the raw parts the ratio came from.
+def _read_statement_file(path: Path) -> tuple:
+    """Parse and vet the count file the bootstrap's atexit handler wrote.
 
-    The first six fields line up with `Measurement`, so anything that reads
-    a Measurement reads this. `value` is the RATIO, under CALIBRATED_METRIC.
-    The raw parts travel with it because a ratio without the figures behind
-    it is unauditable; the baseline's re-derivations quote them per run.
+    Every bad shape is a CounterError, never a number: a count this file
+    cannot vouch for is a guess, and a guess under a metric name is exactly
+    the failure the metric check exists to catch.
     """
-    value: float
-    metric: str
-    wall: float
-    stdout: str
-    stderr: str
-    returncode: int
-    suite_cpu: float
-    calibration_cpu: float
-
-
-def _checked_calibration(calib_command, calib_timeout, env) -> float:
-    """Run the calibration child, and refuse anything a ratio cannot sit on.
-
-    A failed exit, a wrong pinned sum, a timeout, or a zero-cost measurement
-    is a CounterError, never a division: a broken calibration turned into a
-    plausible ratio is precisely the lie this instrument exists to prevent.
-    Returns the calibration's CPU seconds.
-
-    The workload prices the machine, not the subject's PYTHONPATH (#240).
-    e2e_bench's renderer env carries the sitecustomize shim path; each of
-    25 nested interpreter starts imported it (+59 ms/start measured, whole
-    calibrator +85% locally and +0.9–1.3 CPU s hosted).
-    """
-    calibration_env = child_environment(env)
-    calibration_env.pop("PYTHONPATH", None)
     try:
-        rc, out, _err, wall, cpu = _run_child(
-            list(calib_command), None, calibration_env, calib_timeout)
-    except subprocess.TimeoutExpired:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         raise CounterError(
-            "the calibration workload exceeded its "
-            f"{calib_timeout:g}s timeout; refusing to record a ratio "
-            "against a calibration that never finished") from None
-    if rc != 0:
+            f"the statement count file {path} was never written; the child "
+            "died before its atexit handler ran, so there is no "
+            "measurement to record") from None
+    except (OSError, ValueError) as exc:
         raise CounterError(
-            f"the calibration workload exited {rc}; a ratio against a "
-            "calibration that failed is a number this instrument refuses "
-            "to invent")
-    if (out or "").strip() != CALIBRATION_OUTPUT.strip():
+            f"the statement count file {path} is not readable JSON: "
+            f"{exc}") from exc
+    if not isinstance(payload, dict) or "count" not in payload:
         raise CounterError(
-            f"the calibration workload printed {out!r} where "
-            f"{CALIBRATION_OUTPUT!r} was pinned; a calibrator answering a "
-            "different sum is a broken cell, and a ratio against it would "
-            "be a number this instrument refuses to invent")
-    if cpu <= 0 or wall <= 0:
+            f"the statement count file {path} does not carry a count")
+    count = payload["count"]
+    missed = payload.get("missed", 0)
+    for name, value in (("count", count), ("missed", missed)):
+        # `bool` is an int in Python; True is not a count.
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise CounterError(
+                f"the statement count file {path} carries {name}="
+                f"{value!r}, which is not a natural number")
+    if missed > 0:
         raise CounterError(
-            "the calibration workload measured at zero cost, which is not "
-            "a calibration; refusing to divide by it")
-    return cpu
+            f"the statement count file {path} records {missed} missed "
+            "event(s); the count is an undercount, and an undercount is "
+            "not a measurement this gate can fail against")
+    return count, missed
 
 
-def measure_calibrated(command: Sequence[str], cwd=None, env=None,
-                       timeout=None, calibration_command=None,
-                       calibration_timeout=None) -> CalibratedMeasurement:
-    """Run the command and the calibration workload, return their ratio.
+def _is_python_interpreter(name: str) -> bool:
+    """Whether `name` names a Python interpreter the bootstrap can wrap."""
+    return name == sys.executable or os.path.basename(name).startswith(
+        "python")
 
-    The children run SEQUENTIALLY, suite first: `RUSAGE_CHILDREN` is a
-    running total (see `_child_cpu_seconds`), so two deltas around two
-    back-to-back children are each child's own cost, and nothing else is
-    reaped in between. The ratio is `suite_cpu / calibration_cpu`, recorded
-    under CALIBRATED_METRIC — the machine factor multiplies both children
-    alike and cancels in the division, which is the entire reason this
-    function exists (issue #190).
 
-    `calibration_command` / `calibration_timeout` default to the module's
-    pinned workload and are parameters ONLY so a test can substitute a
-    cheaper one; the workflow passes nothing and gets the real calibrator.
+def measure_statement(command: Sequence[str], cwd=None, env=None,
+                      timeout=None) -> Measurement:
+    """Count the child's executed lines and return the count as the value.
 
+    The child is `[sys.executable, "-c", _STATEMENT_BOOTSTRAP, "--",
+    *command]`: the bootstrap registers a `sys.monitoring` LINE callback on
+    itself, dispatches `command[1:]` the way an interpreter would (its
+    `command[0]` must BE an interpreter), and writes the total to a temp
+    file at exit. Session/process-group semantics are the raw path's, so a
+    timeout still kills the whole tree.
+
+    Requires Python 3.12+ (`sys.monitoring`), which the speed job pins.
     Raises the same trio `measure` raises — CounterError, TimeoutExpired,
-    OSError — plus the calibration refusals `_checked_calibration` names.
-    The measured command's own verdict is NOT refused here; it travels in
-    `returncode` exactly as `measure` carries it, and write_junit records
-    it as a failure.
+    OSError.
     """
-    code, out, err, wall, cpu = _run_child(
-        list(command), cwd, child_environment(env), timeout)
-    calib_command = (CALIBRATION_COMMAND if calibration_command is None
-                     else list(calibration_command))
-    calib_timeout = (CALIBRATION_TIMEOUT if calibration_timeout is None
-                     else calibration_timeout)
-    calib_cpu = _checked_calibration(calib_command, calib_timeout, env)
-    # wall stays the measured child's OWN elapsed seconds: gh-wall's
-    # contract, and the smoke gate's, is seconds on both sides of the
-    # comparison, so the calibration divides the counter and only the
-    # counter.
-    return CalibratedMeasurement(
-        value=cpu / calib_cpu, metric=CALIBRATED_METRIC,
-        wall=wall, stdout=out, stderr=err, returncode=code,
-        suite_cpu=cpu, calibration_cpu=calib_cpu)
+    command = list(command)
+    if sys.version_info < (3, 12):
+        raise CounterError(
+            "measure_statement counts sys.monitoring LINE events, which "
+            f"{sys.version_info[0]}.{sys.version_info[1]} does not have; "
+            "they exist from Python 3.12, and the speed job pins 3.13")
+    if not command or not _is_python_interpreter(command[0]):
+        raise CounterError(
+            f"measure_statement counts the Python child's executed lines, "
+            f"so command[0] must be a Python interpreter, not "
+            f"{command[0] if command else '(nothing)'!r}")
+    count_fd, count_name = tempfile.mkstemp(
+        prefix="ghw-statement-", suffix=".json")
+    os.close(count_fd)
+    os.unlink(count_name)
+    # Deleted, not truncated: a path that exists empty would let a child
+    # that wrote nothing read as {"count": 0} if this side ever changed to
+    # tolerate an empty file. Absent means unwritten; that is the contract.
+    count_path = Path(count_name)
+    child_env = child_environment(env)
+    child_env["GH_WIDGETS_STATEMENT_COUNT_FILE"] = str(count_path)
+    try:
+        code, out, err, wall, _cpu = _run_child(
+            [sys.executable, "-c", _STATEMENT_BOOTSTRAP, "--", *command[1:]],
+            cwd, child_env, timeout)
+        count, _missed = _read_statement_file(count_path)
+    finally:
+        if count_path.exists():
+            count_path.unlink()
+    return Measurement(float(count), STATEMENT_METRIC, wall, out, err, code)
 
 
 def population_digest(node_ids) -> str:
@@ -591,8 +616,7 @@ def _node_parts(node_id: str):
     return classname, name
 
 
-def write_junit(path: Path, node_id: str,
-                measurement: "Measurement | CalibratedMeasurement",
+def write_junit(path: Path, node_id: str, measurement: Measurement,
                 command=None) -> None:
     """One testcase whose `time` is the COUNTER, not seconds. Read the module
     docstring before believing the attribute.
@@ -618,9 +642,6 @@ def write_junit(path: Path, node_id: str,
         "time": f"{measurement.value:.6f}",
         "gh-wall": f"{measurement.wall:.6f}",
     })
-    if isinstance(measurement, CalibratedMeasurement):
-        case.set("gh-raw-cpu", f"{measurement.suite_cpu:.6f}")
-        case.set("gh-calibration-cpu", f"{measurement.calibration_cpu:.6f}")
     if measurement.returncode:
         failure = ET.SubElement(case, "failure", {
             "message": f"command exited with code {measurement.returncode}",
@@ -636,20 +657,22 @@ def write_junit(path: Path, node_id: str,
 def _probe_lines() -> list:
     """The `key=value` lines the workflow's probe step writes to $GITHUB_OUTPUT.
 
-    There is one instrument, so nothing here is being chosen — what this step
-    exists for is the RECORD of why. It prints the two kernel settings that
-    decide whether a deterministic counter is even possible on this cell:
-    perf_event_paranoid for instruction counts, yama ptrace_scope for syscall
-    counts. A reader who sees CPU seconds in use can then see that the
-    alternatives were measured and unavailable-or-too-expensive, rather than
-    assuming nobody thought of them.
+    The gate's instrument is chosen here, so the record names it — and it
+    prints the two kernel settings that decide whether the CPU-side
+    deterministic counters are even possible on this cell:
+    perf_event_paranoid for instruction counts, yama ptrace_scope for
+    syscall counts. A reader can then see why the count is taken inside the
+    child instead: both alternatives were measured and unavailable-or-too-
+    expensive, rather than assumed away.
     """
     return [
-        f"metric={CPU_METRIC}",
-        "metric_reason=on-CPU seconds, so steal time is excluded; "
-        "instruction counts are refused by this kernel's perf_event_paranoid "
-        "and syscall counts cost 12.8x the workload they measure, so CPU "
-        "seconds is the only instrument this cell can afford to run",
+        f"metric={STATEMENT_METRIC}",
+        "metric_reason=the gate counts " + STATEMENT_METRIC + ": "
+        "sys.monitoring LINE events in the measured child, deterministic "
+        "for identical code; CPU seconds remain the raw fallback and the "
+        "CPU-side deterministic counters stay out — instruction counts are "
+        "refused by this kernel's perf_event_paranoid and syscall counts "
+        "cost 12.8x the workload they measure",
         f"perf_event_paranoid={_setting(PARANOID_PATH)}",
         f"ptrace_scope={_setting(PTRACE_SCOPE_PATH)}",
     ]
@@ -670,33 +693,6 @@ def _setting(path: Path) -> str:
         return "unavailable on this platform"
 
 
-def _measured_for_args(args, command) -> "Measurement | CalibratedMeasurement":
-    """The CLI's one measurement call, dispatched on --calibrated.
-
-    Both arms raise the same trio, so main's handler covers the flag
-    without growing a second error path for it.
-    """
-    if args.calibrated:
-        return measure_calibrated(command, cwd=args.cwd, timeout=args.timeout)
-    return measure(command, cwd=args.cwd, timeout=args.timeout)
-
-
-def _report_measurement(name, measurement) -> None:
-    """The CLI's stdout record of what was measured.
-
-    The calibrated parts print with the ratio so a run's log can be audited
-    without pulling the JUnit artifact: a ratio without the raw figures
-    behind it is a number nobody can recompute from the report it appears
-    in. The verdict line follows for every measurement.
-    """
-    if isinstance(measurement, CalibratedMeasurement):
-        print(f"counter: calibration = {measurement.calibration_cpu:.6f} "
-              f"{CPU_METRIC}; suite raw {measurement.suite_cpu:.6f} "
-              f"{CPU_METRIC}")
-    print(f"counter: {name} = {measurement.value:.6f} "
-          f"{measurement.metric}")
-
-
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
@@ -712,15 +708,6 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--name", metavar="NODE-ID",
                         help="node id for the testcase, e.g. "
                              "counter::unit-suite")
-    parser.add_argument("--calibrated", action="store_true",
-                        help="divide the measured child's CPU seconds by "
-                             "the pinned calibration workload's, and record "
-                             f"{CALIBRATED_METRIC} instead of raw "
-                             f"{CPU_METRIC} — the runner pool's machine "
-                             "factor multiplies both children and cancels "
-                             "in the ratio; the workload mixes interpreter "
-                             "rounds, child spawns and small file I/O to "
-                             "represent the measured suite's own cost mix")
     parser.add_argument("--timeout", type=float, default=None,
                         help="seconds before the child's process group is "
                              "killed (default: none)")
@@ -746,7 +733,7 @@ def main(argv: Optional[list] = None) -> int:
         parser.error("--junit-file and --name are both required")
 
     try:
-        measurement = _measured_for_args(args, command)
+        measurement = measure(command, cwd=args.cwd, timeout=args.timeout)
     except CounterError as exc:
         print(f"counter: {exc}", file=sys.stderr)
         return 2
@@ -766,7 +753,8 @@ def main(argv: Optional[list] = None) -> int:
         sys.stdout.write(measurement.stdout)
     if measurement.stderr:
         sys.stderr.write(measurement.stderr)
-    _report_measurement(args.name, measurement)
+    print(f"counter: {args.name} = {measurement.value:.6f} "
+          f"{measurement.metric}")
     return measurement.returncode
 
 

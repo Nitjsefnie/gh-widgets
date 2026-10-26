@@ -16,6 +16,7 @@ import contextlib
 import importlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -81,12 +82,15 @@ class TestPlatformLimits(unittest.TestCase):
             finally:
                 del sys.modules[spec.name]
         self.assertIsNone(module.resource)
-        # The calibrated instrument (issue #190) is the second name the
-        # module defines; both must exist without `resource`, because the
-        # refusal for a missing facility happens at measurement time, not
-        # at import time.
+        # All three metric names the module defines must exist without
+        # `resource`, because the refusal for a missing facility happens at
+        # measurement time, not at import time. The statement instrument
+        # (issue #269) is the gated one; the calibrated ratio is retired
+        # (declared so schema 3/4 documents keep validating) and the raw
+        # CPU path is the fallback the harness dispatches to explicitly.
         self.assertEqual(module.METRICS,
-                         (module.CPU_METRIC, module.CALIBRATED_METRIC))
+                         (module.CPU_METRIC, module.CALIBRATED_METRIC,
+                          module.STATEMENT_METRIC))
 
     @REQUIRES_BENCH
     def test_measuring_without_resource_refuses_rather_than_guessing(self):
@@ -124,7 +128,7 @@ class TestPlatformLimits(unittest.TestCase):
                                   Path("/nonexistent/ptrace_scope")):
             lines = counter._probe_lines()  # pylint: disable=protected-access
         joined = "\n".join(lines)
-        self.assertIn(f"metric={counter.CPU_METRIC}", joined)
+        self.assertIn(f"metric={counter.STATEMENT_METRIC}", joined)
         self.assertIn("perf_event_paranoid=unavailable on this platform", joined)
         self.assertIn("ptrace_scope=unavailable on this platform", joined)
         self.assertIn("metric_reason=", joined)
@@ -222,11 +226,12 @@ class TestTheRemovedInstrument(unittest.TestCase):
     """
 
     def test_syscalls_is_no_longer_a_metric(self):
-        # Two instruments, and `syscalls` is neither: raw CPU seconds and
-        # the calibration ratio (issue #190) are the only names a run can
-        # measure under.
+        # Three names, and `syscalls` is none of them: raw CPU seconds, the
+        # retired ratio label and the statement count are the only names a
+        # run can measure under.
         self.assertEqual(counter.METRICS,
-                         (counter.CPU_METRIC, counter.CALIBRATED_METRIC))
+                         (counter.CPU_METRIC, counter.CALIBRATED_METRIC,
+                          counter.STATEMENT_METRIC))
 
     def test_an_environment_naming_the_removed_instrument_is_refused(self):
         with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_COUNTER_METRIC": "syscalls"}):
@@ -433,11 +438,14 @@ class TestMetricChoice(unittest.TestCase):
         # The workflow pins GH_WIDGETS_GH_COUNTER_METRIC explicitly in both
         # measurement steps rather than relying on a fallback, so the
         # instrument a population is judged by is visible in the workflow
-        # rather than buried here. This is what that pin resolves to.
-        with mock.patch.dict(os.environ,
-                             {"GH_WIDGETS_GH_COUNTER_METRIC": "cpu_time"}):
-            self.assertEqual(counter.choose_metric(), counter.CPU_METRIC)
-        self.assertEqual(counter.choose_metric("cpu_time"), counter.CPU_METRIC)
+        # rather than buried here. The pin is the statement count now, and
+        # the harness dispatches on it to measure_statement.
+        with mock.patch.dict(os.environ, {counter.METRIC_ENV:
+                                          counter.STATEMENT_METRIC}):
+            self.assertEqual(counter.choose_metric(),
+                             counter.STATEMENT_METRIC)
+        self.assertEqual(counter.choose_metric(counter.STATEMENT_METRIC),
+                         counter.STATEMENT_METRIC)
 
     def test_an_unrecognised_export_is_refused(self):
         with self.assertRaises(counter.CounterError) as caught:
@@ -469,7 +477,7 @@ class TestProbe(unittest.TestCase):
         with mock.patch.object(counter, "_setting", return_value="4"):
             lines = counter._probe_lines()  # pylint: disable=protected-access
         joined = "\n".join(lines)
-        self.assertIn("metric=cpu_time", joined)
+        self.assertIn(f"metric={counter.STATEMENT_METRIC}", joined)
         # There is nothing to choose, so the step's job is the RECORD of why:
         # the two kernel settings that decide whether a deterministic counter
         # is possible at all.
@@ -543,185 +551,189 @@ class TestMeasure(unittest.TestCase):
                             metric=counter.CPU_METRIC, timeout=2)
 
 
-class TestCalibratedInstrument(unittest.TestCase):
-    """The ratio instrument issue #190 added, and the ways it must refuse.
+REQUIRES_STATEMENT = unittest.skipUnless(
+    sys.version_info >= (3, 12),
+    "measure_statement counts sys.monitoring LINE events, which exist "
+    "from Python 3.12; the speed job pins 3.13")
 
-    Raw CPU seconds carry the runner pool's machine factor — the same tree
-    measured 27.70 and 54.25 CPU seconds across seven runs — so the
-    unit-suite population is judged on the suite's CPU seconds divided by a
-    pinned calibration workload's. The cases here pin the arithmetic, the
-    metric name, and the refusals: a broken, lying or vanished calibration
-    is refused rather than turned into a plausible ratio.
+
+class TestStatementInstrument(unittest.TestCase):
+    """The deterministic instrument issue #269 made the gate's value.
+
+    Five instruments red main on unchanged code across #190, #216, #221,
+    #240 and #269, every one traceable to the runner. The statement count is
+    not a time at all — it is the number of `sys.monitoring` LINE events the
+    measured child executes, so the same code and the same population give
+    the same count on any runner. The cases pin the dispatch, determinism
+    and refusals: an undercount is not a measurement, nor a number the
+    child never wrote.
     """
 
-    # A calibration that answers the pinned sum at interpreter-startup cost,
-    # so these cases test the instrument and not the workload's runtime.
-    CHEAP_CALIBRATION = [sys.executable, "-c", "print(24576)"]
+    @staticmethod
+    def run_statement(command, **kwargs):
+        return counter.measure_statement(
+            [sys.executable, *command], **kwargs)
 
-    @REQUIRES_BENCH
-    def test_shipped_calibration_matches_its_pin_and_costs_cpu(self):
-        measured = counter.measure(counter.CALIBRATION_COMMAND,
-                                   metric=counter.CPU_METRIC,
-                                   timeout=counter.CALIBRATION_TIMEOUT)
+    @REQUIRES_STATEMENT
+    def test_the_count_is_deterministic_for_identical_code(self):
+        # The property the gate rests on: same program, same executed lines,
+        # same count — three runs, one number. Wall and CPU move on this box
+        # by tens of percent; this does not move at all.
+        workload = [sys.executable, "-c",
+                    "for _ in range(4096):\n    total = sum(range(64))\n"
+                    "print(total)"]
+        counts = {counter.measure_statement(workload).value for _ in range(3)}
+        self.assertEqual(len(counts), 1, f"counts spread: {counts}")
+
+    @REQUIRES_STATEMENT
+    def test_a_measurement_carries_a_positive_count_and_its_metric(self):
+        measured = self.run_statement(["-c", "print('counted')"])
+        self.assertEqual(measured.metric, counter.STATEMENT_METRIC)
+        self.assertEqual(measured.returncode, 0)
+        self.assertGreater(measured.value, 0.0)
+        self.assertGreater(measured.wall, 0.0)
+        self.assertEqual(measured.stdout.strip(), "counted")
+
+    @REQUIRES_STATEMENT
+    def test_the_module_dispatch_runs_the_target_module(self):
+        # The unit suite is measured as `python3 -m unittest discover`, so
+        # the -m arm is the production shape and a broken one there would
+        # measure an interpreter that never started the suite.
+        measured = self.run_statement(["-m", "timeit", "-n", "1", "-r", "1",
+                                       "pass"])
         self.assertEqual(measured.returncode, 0, measured.stderr)
-        self.assertEqual(measured.stdout.strip(), counter.CALIBRATION_OUTPUT)
+        self.assertIn("1 loop", measured.stdout)
         self.assertGreater(measured.value, 0.0)
 
-    @REQUIRES_BENCH
-    def test_the_ratio_is_suite_cpu_over_calibration_cpu(self):
-        env = dict(os.environ, PYTHONPATH="subject-only")
-        measured = counter.measure_calibrated(
-            [sys.executable, "-c",
-             "import os; print(os.environ['PYTHONPATH'])"], env=env,
-            calibration_command=[sys.executable, "-c",
-                                 "import os\n"
-                                 "if 'PYTHONPATH' in os.environ:\n"
-                                 "    raise SystemExit(3)\n"
-                                 "print(24576)"])
+    @REQUIRES_STATEMENT
+    def test_the_script_dispatch_runs_the_target_script(self):
+        # The renderer workloads are measured as a script path, so the
+        # run_path arm is the production shape there.
+        with tempfile.TemporaryDirectory(prefix="ghw-statement-") as td:
+            script = Path(td) / "subject.py"
+            script.write_text("import sys\nprint('script ran', sys.argv[1:])\n",
+                              encoding="utf-8")
+            measured = self.run_statement([str(script), "arg"])
+        self.assertEqual(measured.returncode, 0, measured.stderr)
+        self.assertIn("script ran ['arg']", measured.stdout)
 
-        self.assertEqual(measured.stdout.strip(), "subject-only")
-        self.assertEqual(env["PYTHONPATH"], "subject-only")
-        self.assertEqual(measured.metric, counter.CALIBRATED_METRIC)
-        self.assertGreater(measured.value, 0.0)
-        self.assertAlmostEqual(
-            measured.value, measured.suite_cpu / measured.calibration_cpu)
-        self.assertGreater(measured.suite_cpu, 0.0)
-        self.assertGreater(measured.calibration_cpu, 0.0)
+    @REQUIRES_STATEMENT
+    def test_the_bootstrap_strips_its_leading_separator(self):
+        # The parent always spells `[python, "-c", BOOTSTRAP, "--",
+        # *target]`, so the bootstrap strips exactly one leading `--` before
+        # dispatching; this drives the real program string directly.
+        with tempfile.TemporaryDirectory() as td:
+            count_path = Path(td) / "count.json"
+            env = counter.child_environment()
+            env["GH_WIDGETS_STATEMENT_COUNT_FILE"] = str(count_path)
+            done = subprocess.run(
+                [sys.executable, "-c", counter._STATEMENT_BOOTSTRAP,  # pylint: disable=protected-access
+                 "--", "-c", "print('stripped')"],
+                env=env, capture_output=True, text=True, check=False)
+            payload = json.loads(count_path.read_text(encoding="utf-8"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "stripped")
+        self.assertGreater(payload["count"], 0)
+        self.assertEqual(payload["missed"], 0)
+
+    @REQUIRES_STATEMENT
+    def test_a_failing_targets_own_verdict_travels(self):
+        measured = self.run_statement(["-c", "raise SystemExit(7)"])
+        self.assertEqual(measured.returncode, 7)
+        self.assertEqual(measured.metric, counter.STATEMENT_METRIC)
+
+    @REQUIRES_STATEMENT
+    def test_a_missing_count_file_refuses(self):
+        # A child that died hard (os._exit, SIGKILL) never runs atexit, so
+        # the file is never written; that is a refusal, never a zero.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "never-written.json"
+            with self.assertRaises(counter.CounterError) as raised:
+                counter._read_statement_file(path)  # pylint: disable=protected-access
+        self.assertIn(str(path), str(raised.exception))
+
+    @REQUIRES_STATEMENT
+    def test_an_undercount_is_refused_not_recorded(self):
+        # missed > 0 means the monitoring callback could not keep up, so the
+        # count is a lower bound rather than a number; recording it would be
+        # an optimistic lie in a gate that only ever fails high.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "undercount.json"
+            path.write_text('{"count": 100, "missed": 3}', encoding="utf-8")
+            with self.assertRaises(counter.CounterError) as raised:
+                counter._read_statement_file(path)  # pylint: disable=protected-access
+        self.assertIn("missed", str(raised.exception))
+        self.assertIn("undercount", str(raised.exception))
+
+    @REQUIRES_STATEMENT
+    def test_a_count_that_is_not_a_natural_number_refuses(self):
+        for payload in ('{"count": -1, "missed": 0}',
+                        '{"count": "many", "missed": 0}',
+                        '{"count": 1.5, "missed": 0}',
+                        '{"count": true, "missed": 0}',
+                        '{"missed": 0}',
+                        'not json at all'):
+            with self.subTest(payload=payload):
+                with tempfile.TemporaryDirectory() as td:
+                    path = Path(td) / "broken.json"
+                    path.write_text(payload, encoding="utf-8")
+                    with self.assertRaises(counter.CounterError) as raised:
+                        counter._read_statement_file(path)  # pylint: disable=protected-access
+                self.assertIn("count", str(raised.exception))
+
+    @REQUIRES_STATEMENT
+    def test_a_non_interpreter_command_refuses(self):
+        # The count is taken inside the Python child, so a command whose
+        # first element is not an interpreter would be measured by counting
+        # the bootstrap and never the subject — refused rather than
+        # mislabelled.
+        for head in ("/bin/sh", "/usr/bin/env"):
+            with self.subTest(interpreter=head):
+                with self.assertRaises(counter.CounterError) as raised:
+                    counter.measure_statement([head, "-c", "pass"])
+        self.assertIn("interpreter", str(raised.exception))
 
     @REQUIRES_BENCH
-    def test_a_failing_calibration_is_refused_not_divided_by(self):
-        with self.assertRaises(counter.CounterError) as raised:
-            counter.measure_calibrated(
-                [sys.executable, "-c", "pass"],
-                calibration_command=[sys.executable, "-c",
-                                     "raise SystemExit(3)"])
-        self.assertIn("exited 3", str(raised.exception))
-
-    @REQUIRES_BENCH
-    def test_a_lying_calibration_is_refused_not_divided_by(self):
-        # The pinned sum is what makes a broken cell a refusal: a
-        # calibrator that answers a different number is not a calibration.
-        with self.assertRaises(counter.CounterError) as raised:
-            counter.measure_calibrated(
-                [sys.executable, "-c", "pass"],
-                calibration_command=[sys.executable, "-c", "print(999)"])
-        self.assertIn("999", str(raised.exception))
-        self.assertIn(counter.CALIBRATION_OUTPUT, str(raised.exception))
-
-    @REQUIRES_BENCH
-    def test_a_raw_measurement_refuses_the_ratio_label(self):
-        # The label/computation contract: raw CPU seconds must never carry
-        # cpu_time_ratio, or a raw number would pass the comparator's
-        # metric check while measuring something else.
+    @REQUIRES_STATEMENT
+    def test_the_statement_label_is_refused_by_the_raw_path(self):
+        # The label/computation contract, extended to the new name: raw CPU
+        # seconds must never carry statement_count, or a CPU number would
+        # pass the comparator's metric check while measuring something else.
         with self.assertRaises(counter.CounterError) as raised:
             counter.measure([sys.executable, "-c", "pass"],
-                            metric=counter.CALIBRATED_METRIC)
-        self.assertIn("ratio", str(raised.exception))
+                            metric=counter.STATEMENT_METRIC)
+        self.assertIn("statement", str(raised.exception))
         with mock.patch.dict(os.environ,
-                             {counter.METRIC_ENV: counter.CALIBRATED_METRIC}):
+                             {counter.METRIC_ENV: counter.STATEMENT_METRIC}):
             with self.assertRaises(counter.CounterError):
                 counter.measure([sys.executable, "-c", "pass"])
 
-    @REQUIRES_BENCH
-    def test_the_calibrated_wall_stays_the_childs_own_seconds(self):
-        # gh-wall's contract, and the smoke gate's, is elapsed seconds on
-        # both sides. Dividing it by the calibration would silently change
-        # the unit of a field the smoke consumer reads as seconds, so the
-        # wall travels undivided even while the counter is a ratio.
-        suite = (0, "out", "", 400.0, 6.0)
-        calib = (0, "24576\n", "", 10.0, 3.0)
-        with mock.patch.object(counter, "_run_child",
-                               side_effect=[suite, calib]):
-            measured = counter.measure_calibrated(
-                [sys.executable, "-c", "pass"])
-        self.assertEqual(measured.wall, 400.0)
-        self.assertEqual(measured.value, 2.0)
-        with tempfile.TemporaryDirectory() as name:
-            path = Path(name) / "unit-1.xml"
-            counter.write_junit(path, "counter::unit-suite", measured)
-            case = ET.parse(path).getroot().find("testcase")
-        self.assertAlmostEqual(number(case, "gh-wall"), 400.0)
+    def test_the_statement_metric_is_declared_beside_the_others(self):
+        self.assertEqual(counter.STATEMENT_METRIC, "statement_count")
+        self.assertEqual(counter.METRICS,
+                         (counter.CPU_METRIC, counter.CALIBRATED_METRIC,
+                          counter.STATEMENT_METRIC))
 
-    @REQUIRES_BENCH
-    def test_a_calibration_measured_at_zero_is_refused(self):
-        # The calibration's own wall/cpu come from _run_child, so zero cost
-        # is forced rather than arranged: an instrument that divides by a
-        # zero denominator reports infinity as a regression.
-        cheap = (0, "24576\n", "", 0.1, 0.05)
-        zeroed = (0, "24576\n", "", 0.0, 0.0)
-        with mock.patch.object(counter, "_run_child",
-                               side_effect=[cheap, zeroed]):
-            with self.assertRaises(counter.CounterError) as raised:
-                counter.measure_calibrated([sys.executable, "-c", "pass"])
-        self.assertIn("zero cost", str(raised.exception))
+    def test_the_measured_figures_are_recorded_where_the_code_is(self):
+        # The instrument's own measured cost, so the next reader does not
+        # have to re-derive it: the three counts and the spread, the missed
+        # events, and the blind spots.
+        doc = (counter.__doc__ or "")
+        self.assertIn("99,661,405", doc)
+        self.assertIn("0.0092%", doc)
+        self.assertIn("missed: 0", doc)
+        self.assertIn("not counted", doc)
+        self.assertIn("#269", doc)
 
-    @REQUIRES_BENCH
-    def test_a_timed_out_calibration_is_refused(self):
+    @REQUIRES_STATEMENT
+    def test_a_hard_child_exit_writes_no_count_and_refuses(self):
+        # A child that dies before atexit (os._exit) writes nothing, so the
+        # parent refuses on the missing file rather than recording zero work
+        # — the integration form of the missing-file refusal.
         with self.assertRaises(counter.CounterError) as raised:
-            counter.measure_calibrated(
-                [sys.executable, "-c", "pass"],
-                calibration_command=[sys.executable, "-c",
-                                     "import time; time.sleep(30)"],
-                calibration_timeout=0.5)
-        self.assertIn("timeout", str(raised.exception))
-
-    @REQUIRES_BENCH
-    def test_the_suite_childs_own_verdict_travels(self):
-        # The calibration is not the thing under test; a failing measured
-        # command is recorded as one, exactly as measure() records it.
-        measured = counter.measure_calibrated(
-            [sys.executable, "-c", "raise SystemExit(7)"],
-            calibration_command=self.CHEAP_CALIBRATION)
-        self.assertEqual(measured.returncode, 7)
-        self.assertEqual(measured.metric, counter.CALIBRATED_METRIC)
-
-    @REQUIRES_BENCH
-    def test_a_calibrated_junit_names_the_ratio_metric(self):
-        measured = counter.measure_calibrated(
-            [sys.executable, "-c", "pass"],
-            calibration_command=self.CHEAP_CALIBRATION)
-        with tempfile.TemporaryDirectory() as name:
-            path = Path(name) / "unit-1.xml"
-            counter.write_junit(path, "counter::unit-suite", measured)
-            suite = ET.parse(path).getroot()
-        self.assertEqual(suite.get("gh-metric"), counter.CALIBRATED_METRIC)
-        case = suite.find("testcase")
-        self.assertAlmostEqual(number(case, "time"), measured.value, places=5)
-
-    @REQUIRES_BENCH
-    def test_the_calibration_cli_prints_the_raw_parts(self):
-        # The ratio alone is unauditable; the log line carries the parts so
-        # a run's numbers can be recomputed from its own output.
-        with tempfile.TemporaryDirectory() as name:
-            path = Path(name) / "unit-1.xml"
-            with mock.patch.object(counter, "CALIBRATION_COMMAND",
-                                   self.CHEAP_CALIBRATION):
-                stream = io.StringIO()
-                with contextlib.redirect_stdout(stream):
-                    status = counter.main(
-                        ["--calibrated", "--junit-file", str(path),
-                         "--name", "counter::unit-suite", "--",
-                         sys.executable, "-c", "sum(range(100000))"])
-            report = ET.parse(path).getroot()
-        self.assertEqual(status, 0)
-        self.assertEqual(report.get("gh-metric"), counter.CALIBRATED_METRIC)
-        self.assertIn("counter: calibration = ", stream.getvalue())
-        self.assertIn("suite raw ", stream.getvalue())
-
-    def test_the_ratio_metric_is_defined_next_to_the_raw_one(self):
-        self.assertEqual(counter.CALIBRATED_METRIC, "cpu_time_ratio")
-        self.assertEqual(counter.METRICS, (counter.CPU_METRIC,
-                                           counter.CALIBRATED_METRIC))
-
-    @REQUIRES_BENCH
-    def test_a_calibration_without_the_facility_refuses(self):
-        # Same refusal shape as measure(): no RUSAGE_CHILDREN, no number.
-        with mock.patch.object(counter, "resource", None):
-            with self.assertRaises(counter.CounterError) as raised:
-                counter.measure_calibrated(
-                    [sys.executable, "-c", "pass"],
-                    calibration_command=self.CHEAP_CALIBRATION)
-        self.assertIn("does not provide", str(raised.exception))
+            counter.measure_statement(
+                [sys.executable, "-c", "import os; os._exit(0)"])
+        self.assertIn("count file", str(raised.exception))
 
 
 class TestWriteJunit(unittest.TestCase):
@@ -747,17 +759,6 @@ class TestWriteJunit(unittest.TestCase):
         # The wall seconds are carried separately, for the smoke gate alone.
         self.assertEqual(number(case, "gh-wall"), 0.5)
         self.assertIsNone(case.find("failure"))
-
-        calibrated = counter.CalibratedMeasurement(
-            4.0, counter.CALIBRATED_METRIC, 0.5, "out", "err", 0,
-            8.1234567, 2.0308642)
-        with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "calibrated.xml"
-            counter.write_junit(path, "counter::unit-suite", calibrated)
-            case = ET.parse(path).getroot().find("testcase")
-        assert case is not None
-        self.assertEqual(case.get("gh-raw-cpu"), "8.123457")
-        self.assertEqual(case.get("gh-calibration-cpu"), "2.030864")
 
     def test_a_failing_command_is_a_junit_failure(self):
         # Which is what drops it out of the comparator's intersection: a
