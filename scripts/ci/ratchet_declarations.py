@@ -65,7 +65,8 @@ def derive_raises(old, new, subjects, window="the judged window"):
             f"recorded:\n{raised}\n"
             "No commit subject admits an entry the base never recorded; an "
             "envelope enters the document only through the seeding route "
-            "(the declared slope), never written by hand. " + _TRIM_REMEDY)
+            "(the base document's seeds), never written by hand. "
+            + _TRIM_REMEDY)
     unit_raises = {
         slot: values for slot, values in moved.items()
         if slot.startswith('unit-suite:') and values[0] is not None

@@ -94,8 +94,8 @@ until someone looks at a broken README.
 **`unittest discover` is the runner and stays the runner**, and pytest has
 nothing left to do here. It was the `speed` job in `tests.yml`, collecting
 these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
-that job now counts CPU seconds with `scripts/ci/counter.py` and writes its
-own JUnit. It was also imported by `tests/test_compare_counters.py`, which
+that job now counts deterministic statement counts with `scripts/ci/counter.py`
+and writes its own JUnit. It was also imported by `tests/test_compare_counters.py`, which
 `unittest discover` had to be able to import in order to collect the suite;
 that file is now stdlib unittest like everything else. `requirements/test.txt`
 still pins it for optional local `pytest` runs. CI installs that toolchain in
@@ -109,10 +109,12 @@ the documented command.
 The consolidated `tests.yml` workflow owns the path-aware CI gates:
 unit tests and coverage, Python style and lint checks, Python type checks,
 dependency vulnerability checks, security analysis, workflow syntax and
-security checks, and the speed job. The speed job counts **CPU seconds** for
-each renderer workload and for the unit suite, on pinned offline fixtures,
-and compares each against a committed baseline in `gate/speed-baseline.json` that
-only ever ratchets down. A unit-suite maximum may rise only when the judged
+security checks, and the speed job. The speed job counts deterministic
+**statement counts** (sys.monitoring LINE events in the measured Python
+child) for each renderer workload and for the unit suite, on pinned offline
+fixtures, and compares each against a committed baseline in
+`gate/speed-baseline.json` that only ever ratchets down. A unit-suite
+maximum may rise only when the judged
 range contains a commit subject starting `feat:` or `feat(scope):`
 (case-sensitive, read from git's folded subject). On a PR the range is
 the merge checkout's first parent..HEAD; on a main push it is
@@ -120,23 +122,24 @@ the merge checkout's first parent..HEAD; on a main push it is
 starts `feat:`. Shallow or unreadable history refuses: the step fails closed.
 Any other unit-suite raise is refused with the remedy: a non-feature change
 trims its own tests until the suite fits its envelope. Renderer ceilings
-remain strictly down-only, feature or not. Seeding an absent slope-declared
+remain strictly down-only, feature or not. Seeding an absent seed-declared
 entry stays allowed without a feature, population digest moves ride with the
 tests that cause them, and lowering a recorded maximum is always allowed.
 Keep measured provenance (n ≥ 2 envelopes and dispatch run ids in `basis`) in
 the baseline for any raise.
 
-CPU seconds rather than a deterministic instruction
-or syscall count, because neither survives measurement on the cell that reads
-the baseline: one is refused by the kernel's `perf_event_paranoid`, the other
-costs 12.8× the work it measures. The gate is therefore a **step-change
-detector, not a regression detector** — it catches a gross step change and
-the gross wall smoke bound; it will not catch a 20 % regression anywhere,
-and whether it catches a doubling is derived from the current record.
-The baseline records an observed
-**range** per entry rather than a single number, because these counters are
-not deterministic and a budget wide enough to cover their spread would be a
-gate that cannot fire.
+The statement count is runner-invariant by construction — the same code with
+the same collected population executes the same lines — so neither load nor
+the machine factor reaches the gated value. It counts the direct child's own
+executed lines: nested Python children and non-Python subprocesses (the
+renderers' git calls) are not counted, which is what the gross wall smoke
+bound is the net for. The gate is therefore a **step-change detector, not a
+regression detector** — it catches a gross step change and the gross wall
+smoke bound; it will not catch a 20 % regression anywhere, and whether it
+catches a doubling is derived from the current record. The baseline records
+an observed **range** per entry rather than a single number, because the
+raw CPU fallback path is not deterministic and a budget wide enough to cover
+its spread would be a gate that cannot fire.
 The aggregate job in `tests.yml` reports on every pull request and push to
 `main`, regardless of changed paths (issue #89); branch protection requires
 it instead of the path-filtered gates. The `changes` job decides which gates
@@ -230,10 +233,11 @@ above also stays human-reviewed: a person writes the raised envelope into a
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
-work this commit does in CPU seconds — per renderer workload and for the
-unit suite, on pinned offline fixtures — and fails when a committed
-baseline is exceeded, with renderer ceilings strictly down-only and
-unit-suite raises requiring a `feat:` subject in the judged range; with no
+work this commit does in deterministic statement counts — per renderer
+workload and for the unit suite, on pinned offline fixtures — and fails
+when a committed baseline is exceeded, with renderer ceilings strictly
+down-only and unit-suite raises requiring a `feat:` subject in the judged
+range; with no
 baseline committed it reports what
 it measured and exits 0, because no data is not a regression; elapsed time
 survives only as a gross smoke check that reports no number), `release`
