@@ -405,9 +405,9 @@ jobs:
     # any load — which is exactly the property five earlier instruments lost to
     # (#190, #216, #221, #240 and #269 each red main on unchanged code, the
     # last at +43.4% over budget). Measured on the box that shipped the change
-    # (2026-10-26, at 447e92f, env pinned per counter.child_environment), three
-    # runs of the full unit suite read 99,661,405 / 99,667,559 / 99,658,415
-    # events — spread 0.0092% — with `missed: 0` every run and the suite
+    # (2026-10-26, at 5c3b9d6, env pinned per counter.child_environment), three
+    # runs of the full unit suite read 99,222,446 / 99,222,443 / 99,220,993
+    # events — spread 0.0015% — with `missed: 0` every run and the suite
     # exiting 0 every run. The overhead costs CI minutes, not correctness.
     # Not a wall or CPU quantity, so neither load nor the machine factor
     # reaches it. BLIND SPOTS, stated rather than hidden: the count covers
@@ -456,79 +456,28 @@ jobs:
     # use, so the record of why stays on the runner where it was taken.
     #
     # THE BASELINE IS AN OBSERVED ENVELOPE, NOT A NUMBER. Each entry in
-    # gate/speed-baseline.json records the RANGE it was actually seen over — a min, a
-    # max, and how many observations — and the gate fails only when a head value
-    # exceeds `observed maximum x (1 + tolerance)`. The ratchet acts on that
-    # recorded maximum, so an improvement lowers the ceiling and a regression has
-    # to clear the worst machine actually seen.
+    # gate/speed-baseline.json records the RANGE it was actually seen over — a
+    # min, a max, and how many observations — and the gate fails only when a
+    # head value exceeds `observed maximum x (1 + tolerance)`. The ratchet acts
+    # on that recorded maximum, so an improvement lowers the ceiling. Until
+    # main's ratchet seeds the first statement counts, both populations sit in
+    # a DECLARED BLIND WINDOW: `entries` is empty, only the wall smoke bound is
+    # armed, and the compare steps pass with the seed note.
     #
-    # WHY AN ENVELOPE, AND WHY THE TOLERANCES ARE THIS WIDE. CPU seconds exclude
-    # steal, so a co-tenant does not reach them — that is what makes them a
-    # magnitude where elapsed time is not. They are still hardware-dependent: a
-    # faster or narrower core runs the same instructions in fewer CPU seconds,
-    # and the pool spans instance types. FOUR windows on this cell, the renderer
-    # workloads shipping IDENTICAL CODE at every one of them:
+    # WHY THE TOLERANCE IS 0.05. The statement count's observed three-run
+    # spread is ~0.002% (see the instrument paragraph above), so 0.05 is
+    # thousands-fold headroom — an ordinary run passes by orders of magnitude,
+    # and a doubled program cannot. Doubling detection re-derives from the
+    # record once entries are seeded (test_baseline.py computes it). The CPU
+    # era's wide tolerances (0.45 suite / 0.6 renderer, fitted to the pool's
+    # four-window spreads of 2026-10-01..04 — full tables in git history) died
+    # with the instrument that needed them: a quantity the pool cannot move
+    # needs no wide allowance, and slack here would only hide real steps.
     #
-    #   window 1  07:46-07:56Z  at 3c30eca  4 runs
-    #   window 2  10:15-10:24Z  at 4c003c6  4 runs
-    #   window 3  10:35-10:47Z  at 94e8a78  5 runs
-    #   window 4  2026-10-01    at 0f767ce  3 runs
-    #
-    #   entry                         window 1        window 2        window 3        window 4
-    #   counter::unit-suite            16.593-23.203   22.852-24.544   21.657-24.360   16.333-23.603
-    #   e2e::bench.render               0.056- 0.084     0.080- 0.087     0.079- 0.084     0.057- 0.082
-    #   e2e::bench.render-impact        1.019- 1.351     1.332- 1.404     1.045- 1.355     0.956- 1.346
-    #   e2e::bench.render-responsiveness 0.060- 0.080     0.078- 0.086     0.078- 0.082     0.059- 0.080
-    #
-    # THE SPREAD IS NOT A PROPERTY OF THE WORKLOAD. It is the workload AND the
-    # state of the pool during the window. Windows 2 and 3 were quiet; windows 1
-    # and 4 were not, on the same cell, the same image and the same programs —
-    # window 4's suite spans 16.333 against a body around 22-23.6, the same shape
-    # as window 1. A tolerance derived from the quiet windows alone would have
-    # been far too tight, and a quiet window is not a measurement of the cell.
-    # THAT IS WHY NOTHING HERE IS DERIVED FROM THE MOST RECENT RUNS.
-    #
-    # The renderer envelopes span all four windows: no renderer and no WORKLOADS
-    # entry has changed since 3c30eca, so all sixteen dispatches measure one
-    # program. The SUITE's envelope is window 4 alone, because each earlier
-    # window measured a tree with a different number of collected tests — 770,
-    # 777, 780, 784 — and the renderer's justification for unioning does not
-    # transfer to a different program. Its 44.5% is this suite's own figure,
-    # and its tolerance is the rule's answer to it: 0.45.
-    #
-    # THE WIDTH IS A STRUCTURAL ARGUMENT, NOT AN EMPIRICAL ONE. This gate compares
-    # a per-run MINIMUM against a recorded MAXIMUM, so its false-red risk comes
-    # from the head landing HIGH. Folding the observed spread in as one fraction
-    # covers the LOW tail too, which this gate cannot be hurt by. The rule is
-    # conservative by construction: it measures in one direction and protects in
-    # the other, and that is the right side to err on for a gate whose failure
-    # mode is a red on main that teaches people to ignore it.
-    #
-    # What the data does NOT support, and this header previously claimed, is
-    # that a tolerance was needed to stop the suite false-reding on a busy run.
-    # Window 1's 39.8% is a LOW-tail artefact — one run at 16.6 against a body
-    # of 22.2-23.2 — so it was one fast machine, not a busy pool. That claim
-    # is withdrawn. The suite's tolerance MOVED from 0.40 to 0.45, and the
-    # reason is not slack: it is the rule applied to this tree's own 44.5%
-    # instead of to a neighbour's quiet-window 13.3%.
-    #
-    # WHAT THAT COSTS, STATED RATHER THAN ASSUMED. A DOUBLED workload is caught
-    # on NO ENTRY — every one of these is `observed maximum x (1 + tolerance)`
-    # against `2 x observed minimum`, recomputed by test_baseline.py from
-    # gate/speed-baseline.json rather than written here, because a transcribed
-    # figure in this file has already been wrong twice. At the tolerances this
-    # baseline actually ships, that is the suite missing by a fraction of a
-    # second and all three renderer workloads missing by a wider margin. That
-    # is the rule applied to this tree's own measurement, not a rounding
-    # artefact. Going tighter would mean going below each entry's own observed
-    # spread — a ceiling the fastest machine already clears, which fires on
-    # ordinary pool variation. A gate that cries wolf is deader than one with a
-    # documented blind spot, so nothing here is tuned. The gate catches a gross
-    # step change and the gross wall smoke bound; it will not catch a 20%
-    # regression anywhere, and now not a doubling either. Read "load-invariant
-    # counter" as "a quantity the machine's load does not reach", not as "a sharp
-    # budget". No ceiling is written here: test_baseline.py recomputes every
-    # one, CPU and wall, from the document.
+    # The structural rule survives unchanged: this gate compares a per-run
+    # MINIMUM against a recorded MAXIMUM, so it measures in one direction and
+    # protects in the other. No ceiling is written here: test_baseline.py
+    # recomputes every one, counter and wall, from the document.
     #
     # GH_WIDGETS_ROUNDS stays 2, and for two reasons that are not the same
     # reason.
@@ -537,10 +486,9 @@ jobs:
     # instrument could have weakened it. Separately, the minimum across rounds is
     # the least-noisy observation of the same work.
     #
-    # THE COMMITTED BASELINE RECORDS MEASURED_COMMIT 0f767ce, the head its
-    # window-4 dispatches ran against, and its `population` digest is computed
-    # from the node ids THIS tree collects. The renderer envelopes describe this
-    # tree exactly; the suite's do too, because window 4 measured it.
+    # PROVENANCE LIVES IN THE DOCUMENT: gate/speed-baseline.json carries
+    # measured_commit / measured_at (the tree the instrument figures above were
+    # measured on), the population digests, and the wall envelopes' cell.
     #
     # WHY A COMMITTED BASELINE. It removes the pairing entirely and makes the
     # comparison point reviewable. The previous shape ran the last release and
@@ -552,24 +500,6 @@ jobs:
     # diffs the committed baseline against the MERGE BASE's copy and fails if any
     # entry went up — otherwise a commit could raise the ceiling it is measured
     # against in the same push, and the gate would be switched off from inside.
-    #
-    # THE BASELINE IS COMMITTED, AND IT IS NOT YET ABOUT THIS PROGRAM. It records
-    # four dispatches of 3c30eca — runs 36832215161, 36832519319, 36832824918 and
-    # 36833056763, between 07:46Z and 07:56Z — recomputed from their artifacts.
-    # It was ABSENT for one commit, and the reason is the most useful thing in
-    # this file: the previous baseline was measured at d051020, against a
-    # ghwidgets_common.py that the module split (ecd77b5) took apart, and a split
-    # changes what the renderers import and therefore what they cost. Those
-    # envelopes were a measurement of a DIFFERENT PROGRAM, so they were deleted
-    # rather than carried. Re-derive, never carry, sometimes means removing a
-    # document that describes a program this tree is not.
-    #
-    # THE SUITE'S ENVELOPE IS NOW WINDOW 5 (issue #133): four dispatches at
-    # 2901f4e, after the suite grew 784 -> 988 tests and every observation
-    # landed above window 4's maximum. A raised ceiling lands through a
-    # declared, derived raise in the ratchet step below — renderer raises and
-    # undeclared raises stay refused. The figures and the dispatch run ids are
-    # in gate/speed-baseline.json's basis.
     #
     # The population digests DO describe this tree, and they are checked on the
     # box by test_baseline.py before anything reaches a runner: adding a test

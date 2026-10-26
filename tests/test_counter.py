@@ -718,8 +718,8 @@ class TestStatementInstrument(unittest.TestCase):
         # have to re-derive it: the three counts and the spread, the missed
         # events, and the blind spots.
         doc = (counter.__doc__ or "")
-        self.assertIn("99,661,405", doc)
-        self.assertIn("0.0092%", doc)
+        self.assertIn("99,222,446", doc)
+        self.assertIn("0.0015%", doc)
         self.assertIn("missed: 0", doc)
         self.assertIn("not counted", doc)
         self.assertIn("#269", doc)

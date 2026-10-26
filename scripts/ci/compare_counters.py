@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compare a counter against the committed baseline, per test and per workload.
 
-THE NAME STATES ITS JOB. `compare_counters` compares CPU-second counters
-against the committed baseline. CPU seconds exclude steal time and are
-therefore the first quantity runner load cannot move.
+THE NAME STATES ITS JOB. `compare_counters` compares the speed gate's
+counter against the committed baseline: the gated statement count, the first
+quantity runner load cannot move (the raw CPU fallback is second).
 
 WHY NOT WALL TIME. A GitHub-hosted runner is a multi-tenant VM: steal time, a
 neighbour, a different core and a different CPU model all move an elapsed
@@ -72,9 +72,8 @@ METRIC_NOTES = {
     "statement_count": (
         "a deterministic count of sys.monitoring LINE events in the "
         "measured Python child; runner-invariant by construction — the same "
-        "code executes the same lines, and neither load nor the machine "
-        "factor reaches a non-time quantity. Blind to non-Python "
-        "subprocess work: git is not counted, the wall smoke bound is"),
+        "code executes the same lines, and neither load nor the machine factor "
+        "reaches it. Blind to non-Python subprocess work: git is not counted"),
     "cpu_time": (
         "CPU seconds, so steal time is excluded — but NOT deterministic, "
         "which is why its tolerance is the loose one and why this is a "
