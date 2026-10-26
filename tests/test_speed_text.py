@@ -14,7 +14,6 @@ import io
 import json
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from scripts.ci.speed_workflow_steps import StepRunner

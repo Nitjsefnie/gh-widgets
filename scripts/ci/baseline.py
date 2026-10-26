@@ -74,6 +74,29 @@ def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _check_schema_keys(path: Path, name: str, population, schema: int) -> None:
+    """The keys one schema's population may carry, and the eras it refuses.
+
+    Schema 3 never carried slopes; schema 5 retires them for `seeds`. A
+    document carrying an era's keys it does not declare is refused rather
+    than read loosely — a key this file does not define is the drift the
+    schema bump exists to catch.
+    """
+    if not isinstance(population, dict):
+        return
+    if schema == 3 and "slopes" in population:
+        raise ComparisonError(
+            f"{path} populations[{name!r}] slopes requires schema 4")
+    if schema == 5 and "slopes" in population:
+        raise ComparisonError(
+            f"{path} populations[{name!r}] slopes is retired by schema 5 "
+            "(issue #269): the statement instrument records no slopes; "
+            "declare the instrument reset's removals through `seeds`")
+    if schema != 5 and "seeds" in population:
+        raise ComparisonError(
+            f"{path} populations[{name!r}] seeds requires schema 5")
+
+
 def read_baseline(path: Path) -> dict:
     """The committed baseline document, validated before it is used."""
     try:
@@ -113,22 +136,8 @@ def read_baseline(path: Path) -> dict:
             "one metric and one tolerance for both populations is the shape "
             "this document was changed to remove")
     for name in sorted(populations):
-        population = populations[name]
-        if (document["schema"] == 3 and isinstance(population, dict)
-                and "slopes" in population):
-            raise ComparisonError(
-                f"{path} populations[{name!r}] slopes requires schema 4")
-        if (document["schema"] == 5 and isinstance(population, dict)
-                and "slopes" in population):
-            raise ComparisonError(
-                f"{path} populations[{name!r}] slopes is retired by schema 5 "
-                "(issue #269): the statement instrument records no slopes; "
-                "declare the instrument reset's removals through `seeds`")
-        if (document["schema"] != 5 and isinstance(population, dict)
-                and "seeds" in population):
-            raise ComparisonError(
-                f"{path} populations[{name!r}] seeds requires schema 5")
-        _check_population(path, name, population)
+        _check_schema_keys(path, name, populations[name], document["schema"])
+        _check_population(path, name, populations[name])
     return document
 
 
