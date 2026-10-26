@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Run deterministic renderer workloads and write one JUnit suite.
 
-Each workload is measured on a load-invariant COUNTER — CPU seconds, which
-exclude steal time — not on wall time: see
-scripts/ci/counter.py, which is imported by path rather than as a package
-because scripts/ci deliberately holds standalone CI entry points. The JUnit
-`time` attribute written here is therefore the COUNTER, not seconds, and the
-wall seconds travel separately in gh-wall for the gross smoke gate alone.
+Each workload is measured on a load-invariant COUNTER — the gated
+statement count, or raw CPU seconds where the job pins that — not on wall
+time: see scripts/ci/counter.py, which is imported by path rather than as a
+package because scripts/ci deliberately holds standalone CI entry points.
+The JUnit `time` attribute written here is therefore the COUNTER, not
+seconds, and the wall seconds travel separately in gh-wall for the gross
+smoke gate alone.
 """
 import argparse
 import importlib.util
@@ -35,7 +36,6 @@ DEAD_PROXY = "http://127.0.0.1:9"
 # module for its workload list by --list-workloads rather than hard-coding
 # names, which is only safe because they come from here.
 JUNIT_CLASSNAME = "e2e"
-OBSERVE_RATIO_ENV = "GH_WIDGETS_OBSERVE_RENDERER_RATIO"
 
 
 def _load_counter():
@@ -144,13 +144,14 @@ def _run_renderer(renderer, repo_root, env, metric=None):
     renderer that cannot even be measured lands in the same JUnit failure path
     as one that ran and failed. The `time` key is the counter value; `wall` is
     the elapsed seconds, kept only so the smoke gate has something gross to
-    look at.
+    look at. The dispatch follows the job's one probe: statement_count
+    measures the deterministic counter, anything else is the raw CPU path.
     """
     result = {"time": 0.0, "metric": "", "wall": 0.0,
               "failure": None, "stdout": "", "stderr": ""}
     try:
-        measure = (counter.measure_calibrated
-                   if counter.choose_metric(metric) == counter.CALIBRATED_METRIC
+        measure = (counter.measure_statement
+                   if counter.choose_metric(metric) == counter.STATEMENT_METRIC
                    else counter.measure)
         measured = measure(
             [sys.executable, str(renderer)], cwd=str(repo_root), env=env,
@@ -160,9 +161,6 @@ def _run_renderer(renderer, repo_root, env, metric=None):
         result["wall"] = measured.wall
         result["stdout"] = measured.stdout
         result["stderr"] = measured.stderr
-        if isinstance(measured, counter.CalibratedMeasurement):
-            result["raw_cpu"] = measured.suite_cpu
-            result["calibration_cpu"] = measured.calibration_cpu
         if measured.returncode != 0:
             result["failure"] = (
                 f"renderer exited with code {measured.returncode}\n"
@@ -241,26 +239,6 @@ def _validate_impact_refresh(result, cache_file, fixture_root):
             + "\n- ".join(problems))
 
 
-def _observe_ratio(renderer, repo_root, run_dir, fixture_root, workload):
-    """Bank a log-only ratio on fresh inputs without replacing the raw run."""
-    observation_dir = run_dir / "calibrated"
-    observation_dir.mkdir()
-    cache_file = _prepare_cache(observation_dir, fixture_root, workload[3])
-    out_dir = observation_dir / "out"
-    env = _renderer_environment(fixture_root, Path(__file__).resolve().parent,
-                                cache_file, out_dir)
-    observation = _run_renderer(renderer, repo_root, env,
-                                metric=counter.CALIBRATED_METRIC)
-    _validate_live_result(observation, out_dir, workload[2])
-    if workload[0] == "render-impact" and observation["failure"] is None:
-        _validate_impact_refresh(observation, cache_file, fixture_root)
-    if observation["failure"]:
-        print(f"{workload_name(workload[0])}: ratio observation failed: "
-              f"{observation['failure']}", file=sys.stderr)
-        return {}
-    return {"calibrated_ratio": observation["time"]}
-
-
 def _run_workload(side, repo_root, round_number, work_root, fixture_root,
                   workload):
     name, script_name = workload[:2]
@@ -310,10 +288,6 @@ def _run_workload(side, repo_root, round_number, work_root, fixture_root,
     _validate_live_result(result, out_dir, workload[2])
     if name == "render-impact" and result["failure"] is None:
         _validate_impact_refresh(result, cache_file, fixture_root)
-    if (env.get(OBSERVE_RATIO_ENV) and result["metric"] == counter.CPU_METRIC
-            and result["failure"] is None):
-        result.update(_observe_ratio(renderer, repo_root, run_dir, fixture_root,
-                                     workload))
     return result
 
 
@@ -418,9 +392,6 @@ def _write_junit(path, results):
             # Wall seconds, for the gross smoke gate only. Never a magnitude.
             "gh-wall": f"{result['wall']:.6f}",
         })
-        if "raw_cpu" in result and "calibration_cpu" in result:
-            case.set("gh-raw-cpu", f"{result['raw_cpu']:.6f}")
-            case.set("gh-calibration-cpu", f"{result['calibration_cpu']:.6f}")
         if result["skipped"]:
             ET.SubElement(case, "skipped", {"message": "renderer not present"})
         elif result["failure"] is not None:
@@ -497,21 +468,11 @@ def main(argv=None):
         status = "skipped" if result["skipped"] else (
             "failed" if result["failure"] else "passed")
         # The counter, labelled with the instrument it is. The `s` suffix is
-        # gone because the number is not seconds; leaving it would print an
-        # a counter as though it were a duration.
-        observation = (f"; observed {result['calibrated_ratio']:.6f} "
-                       f"{counter.CALIBRATED_METRIC}"
-                       if "calibrated_ratio" in result else "")
-        value = f"{result['time']:.3f}"
-        if "calibration_cpu" in result:
-            value = f"{result['time']:.6f}"
-            observation += (
-                f"; calibration = {result['calibration_cpu']:.6f} "
-                f"{counter.CPU_METRIC}; renderer raw {result['raw_cpu']:.6f} "
-                f"{counter.CPU_METRIC}")
+        # gone because the number is not seconds; leaving it would print a
+        # counter as though it were a duration.
         print(f"{result['name']} ({args.side} round {args.round}): "
-              f"{value} {result['metric'] or 'unmeasured'} "
-              f"{status}{observation}")
+              f"{result['time']:.3f} {result['metric'] or 'unmeasured'} "
+              f"{status}")
         # The status line above is the shape the suite asserts, and it says
         # only that something failed. The reason goes to stderr, because a red
         # step whose only detail lives in an uploaded JUnit artifact is a step
