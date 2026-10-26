@@ -152,6 +152,27 @@ class TestScavengerVerdicts(unittest.TestCase):
         with _ghw_temp.tempdir() as tmp:
             self.assertNotIn(Path(tmp), _ghw_temp._OWNED)
 
+    def test_an_abandoned_directory_is_foreign_to_the_scavenge(self):
+        made = _ghw_temp.mkdtemp(prefix="ghw-unit-abandon-")
+        _ghw_temp.abandon(made)
+        self.assertNotIn(made, _ghw_temp._OWNED)
+        self.assertFalse(
+            _ghw_temp.impact_clone._scratch_owner_lock_path(made).exists())
+        _ghw_temp.scavenge()
+        self.assertTrue(
+            made.exists(),
+            "an abandoned dir carries no lock file, so the scavenge must "
+            "leave it for production's own removal")
+        _purge(made)
+
+    def test_abandon_of_a_path_this_process_does_not_hold_raises(self):
+        path = Path(tempfile.mkdtemp(prefix="ghw-unit-abandon-foreign-"))
+        try:
+            with self.assertRaisesRegex(ValueError, "abandon"):
+                _ghw_temp.abandon(path)
+        finally:
+            _purge(path)
+
 
 class TestAtexitExitPath(unittest.TestCase):
     def test_a_run_exiting_normally_leaves_no_owner_lock(self):
