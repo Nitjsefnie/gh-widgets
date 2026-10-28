@@ -25,6 +25,6 @@
 #
 #   PyYAML — the workflow-shape controls decode workflow and Dependabot YAML
 #   to check its structure.
-coverage==7.16.2
+coverage==7.17.0
 pytest==9.1.1
 PyYAML==6.0.3
