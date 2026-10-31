@@ -1,23 +1,36 @@
 """Only orgs the account administers are its own: a plain membership feeds no card."""
+import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from tests import _ghw_temp
 from tests.test_popularity import USER, popularity, repo, response
-from tests.test_render import FakeAPI, render
+from tests.test_render import FakeAPI, complete_cache, render
 
 common = render.common
 FIELD = "viewerCanAdminister"
 ADMIN = {"login": "AdminOrg", FIELD: True}
 MEMBER = {"login": "MemberOrg", FIELD: False}
+WORKFLOW_TOKEN = "github-actions[bot]"
 
 
-def as_requested(answer):
-    """GitHub answers only the fields a query names, so drop the admin flag unless asked."""
+def as_requested(answer, viewer):
+    """GitHub as `viewer`'s token sees it: only requested fields come back, and
+    viewerCanAdminister asked of another account's orgs fails the whole query."""
     def gql(token, query, variables=None, **kwargs):
         data = answer(token, query, variables, **kwargs)
-        if FIELD not in query:
-            for node in ((data.get("user") or {}).get("organizations") or {}).get("nodes", []):
+        if "viewer { login }" in query:
+            data["viewer"] = {"login": viewer}
+        gated = f"{FIELD} @include(if: $self)" in query
+        requested = FIELD in query and (not gated or (variables or {}).get("self") is True)
+        user = data.get("user") or {}
+        nodes = (user.get("organizations") or {}).get("nodes", [])
+        if requested and nodes and user["login"].casefold() != viewer.casefold():
+            raise RuntimeError("GraphQL errors: Resource not accessible by integration")
+        if not requested:
+            for node in nodes:
                 node.pop(FIELD, None)
         return data
     return gql
@@ -38,33 +51,52 @@ def pr_to(owner):
 
 class Identity(unittest.TestCase):
     def test_a_member_org_is_neither_an_org_nor_an_insider(self):
-        legacy = {"login": "UnflaggedOrg"}
         me = common.fetch_identity("t", "octocat", include_environment=False,
-                                   gql_fn=as_requested(identity_answer([ADMIN, MEMBER, legacy])))
+                                   gql_fn=as_requested(identity_answer([ADMIN, MEMBER]), "Octocat"))
         self.assertEqual(me.orgs, ["AdminOrg"])
         self.assertEqual(me.insiders, {"octocat", "adminorg"})
+
+    def test_another_viewer_never_asks_the_flag_and_keeps_the_visible_orgs(self):
+        me = common.fetch_identity("t", "octocat", include_environment=False,
+                                   gql_fn=as_requested(identity_answer([ADMIN, MEMBER]), WORKFLOW_TOKEN))
+        self.assertEqual(me.orgs, ["AdminOrg", "MemberOrg"])
+        self.assertEqual(me.insiders, {"octocat", "adminorg", "memberorg"})
 
     def test_the_public_snapshot_view_keeps_only_administered_public_orgs(self):
         nodes = [{**ADMIN, "isPublic": True}, {**MEMBER, "isPublic": True}]
         me = common.fetch_identity("t", "octocat", include_environment=False, include_public_orgs=True,
-                                   gql_fn=as_requested(identity_answer(nodes)))
+                                   gql_fn=as_requested(identity_answer(nodes), "Octocat"))
         self.assertEqual(me.public_orgs, ["AdminOrg"])
         # The production path reads public memberships unauthenticated, which knows no roles.
-        with mock.patch.object(common, "gql", side_effect=as_requested(identity_answer([ADMIN, MEMBER]))), \
+        github = as_requested(identity_answer([ADMIN, MEMBER]), "Octocat")
+        with mock.patch.object(common, "gql", side_effect=github), \
                 mock.patch.object(common, "fetch_public_organizations", return_value=["ADMINORG", "MemberOrg"]):
             me = common.fetch_identity("t", "octocat", include_environment=False, include_public_orgs=True)
         self.assertEqual(me.public_orgs, ["ADMINORG"])
 
 
 class Profile(unittest.TestCase):
-    def test_work_in_a_member_org_counts_as_external(self):
-        api = FakeAPI()
-        api.org_pages = [[dict(ADMIN), dict(MEMBER)]]
-        with mock.patch.object(render, "gql", as_requested(api)), \
+    def external_prs(self, viewer, asks):
+        api = FakeAPI()  # serves one queued page per ask: the account's own token asks the page twice
+        api.org_pages = [[dict(ADMIN), dict(MEMBER)] for _ in range(asks)]
+        with mock.patch.object(render, "gql", as_requested(api, viewer)), \
                 mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}):
             user, _days = render.fetch("t", "me")
-        self.assertEqual(render.external_counts(user, [pr_to("MemberOrg")], []).pr_opened, 1)
-        self.assertEqual(render.external_counts(user, [pr_to("AdminOrg")], []).pr_opened, 0)
+        return [render.external_counts(user, [pr_to(owner)], []).pr_opened
+                for owner in ("AdminOrg", "MemberOrg")]
+
+    def test_work_in_a_member_org_counts_as_external(self):
+        self.assertEqual(self.external_prs("me", asks=2), [0, 1])
+
+    def test_another_viewer_never_asks_the_flag_and_keeps_the_visible_orgs(self):
+        self.assertEqual(self.external_prs(WORKFLOW_TOKEN, asks=1), [0, 0])
+
+    def test_a_cache_from_before_the_admin_flag_is_refetched(self):
+        # v3 org nodes carry no flag, so a fallback render could not tell a member org from an admin one.
+        with _ghw_temp.tempdir() as directory:
+            path = Path(directory) / "cache.json"
+            path.write_text(json.dumps({**complete_cache(), "version": 3}), encoding="utf-8")
+            self.assertEqual(render.load_cache(path), {})
 
 
 class Popularity(unittest.TestCase):

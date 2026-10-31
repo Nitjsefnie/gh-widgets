@@ -363,10 +363,10 @@ def fetch_authored_snapshot(token: str, login: str, *, gql_fn=None,
     issues = ghwidgets_common.fetch_issues(
         token, identity.login, max_pages=max_pages, gql_fn=gql_fn)
 
-    # Public organization memberships are the only membership relationship
-    # used for the public classification.  The set is transient and never
-    # crosses the snapshot boundary; concealed/private memberships are not
-    # serialized or used to make a public ownership claim.
+    # Public memberships of orgs the account administers are the only
+    # membership relationship in the public classification.  The set is
+    # transient and never crosses the snapshot boundary; concealed ones are
+    # neither serialized nor used for a public ownership claim.
     public_insiders = ghwidgets_common.insider_set(
         identity.login, identity.public_orgs, extra=())
     public_pull_requests = [

@@ -396,17 +396,17 @@ everything, so it takes far longer than an incremental run.
 > and the addresses are lower-cased for comparison while `--author` matching
 > is case-sensitive. Any change to author matching needs `-F` and `-i` kept.
 
-> **The CI audit blames a SUPERSET of what production does**, so its timings
-> are not production's. The runner token cannot see the account's private org
-> memberships, so `Nitjsefnie-OSC` and `Nitjsefnie-Games` repos come out
-> external there and get blamed; on the box they are derived insiders and are
-> never cloned. Those three repos were 33.2s of the audit's 44.1s blame phase,
-> so production's would be nearer 11s — indicative wall figures, like every
-> wall figure here. The load-invariant statement is the one to keep: the audit
-> blames strictly MORE repos than production does, on purpose, because a
-> superset is a stricter correctness check. Do not read the audit's wall time
-> as the box's, as production's, or as a magnitude at all: it is the wall of
-> a shared CI runner measuring a different program.
+> **The CI audit's insider set is not production's**, so neither are its
+> repos or timings. Production counts only the orgs the account administers
+> (`viewerCanAdminister`, asked only when the token's viewer is the account).
+> The audit runs as the workflow token, whose viewer is not the account, so
+> the flag is never requested there and its insiders are every org that token
+> can see in the account's membership: the public ones. A private membership
+> is therefore external in CI and blamed there (a superset); a PUBLIC plain
+> membership is an insider in CI but external on the box, so the audit skips
+> repos production blames. Do not read the audit's wall time as the box's,
+> as production's, or as a magnitude at all: it is the wall of a shared CI
+> runner measuring a different program.
 
 > **`GH_WIDGETS_CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
 > blame consuming them. Clone waits on the network, blame saturates the CPUs,
