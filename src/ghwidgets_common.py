@@ -8,7 +8,7 @@ that drifted independently. It also owns the identity model both scripts need:
 who counts as an insider, and which commit-author addresses count as ours.
 
 Identity is DERIVED, not configured. `fetch_identity` asks the API who the
-token's account is and which orgs it belongs to; the environment can only ADD
+token's account is and which orgs it administers; the environment can only ADD
 to that, never replace it. An override would let a stale value silently
 reintroduce the drift this module removes.
 
@@ -116,7 +116,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped when the interface changes so an older script would misbehave;
 # each script pins the version it expects.
-COMMON_VERSION = 17
+COMMON_VERSION = 18
 
 
 # One import-time switch, shared by all instrumentation in this renderer.
@@ -455,11 +455,9 @@ class Identity(namedtuple(
         "login database_id orgs insiders emails public_orgs")):
     """Resolved account identity and its transient/public org views.
 
-    ``orgs`` and ``insiders`` intentionally retain every membership visible to
-    the authenticated token: render-time ownership classification needs that
-    information.  ``public_orgs`` is the only membership collection suitable
-    for a public snapshot.  The optional default keeps five-field callers
-    compatible without treating authenticated organizations as public.
+    ``orgs`` and ``insiders`` hold only orgs the token's account administers;
+    ``public_orgs``, their publicly visible subset, is the only membership
+    collection fit for a public snapshot and defaults to empty.
     """
 
     __slots__ = ()
@@ -481,16 +479,21 @@ query($login: String!, $cursor: String) {
     databaseId
     organizations(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { login }
+      nodes { login viewerCanAdminister }
     }
   }
 }
 """
 
 
+def admin_orgs(nodes):
+    # A plain membership (role member) makes nobody's repositories ours.
+    return [node for node in nodes if node.get("viewerCanAdminister") is True]
+
+
 def insider_set(login, orgs, extra=None):
     """Casefolded set of owner logins that are NOT external: the account
-    itself, every org it belongs to, plus GH_WIDGETS_GH_EXTRA_INSIDERS.
+    itself, every org it administers, plus GH_WIDGETS_GH_EXTRA_INSIDERS.
 
     Additive by construction — there is no way to remove a fetched org, so a
     stale configuration cannot make an owned repo look external.
@@ -596,7 +599,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
             canonical = user["login"]
             database_id = user.get("databaseId")
         connection = user.get("organizations") or {}
-        org_nodes.extend(connection.get("nodes") or [])
+        org_nodes.extend(admin_orgs(connection.get("nodes") or []))
         page_info = connection.get("pageInfo")
         if page_info is None or "hasNextPage" not in page_info:
             raise PaginationLimitError(
@@ -622,17 +625,14 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
     public_orgs = []
     if include_public_orgs:
         explicit_visibility = all("isPublic" in node for node in org_nodes)
-        if explicit_visibility and org_nodes:
-            public_orgs = [node["login"] for node in org_nodes
-                           if node.get("isPublic") is True]
-        elif g is gql:
+        if g is gql and not (explicit_visibility and org_nodes):
             # Only the snapshot producer opts into this unauthenticated view;
             # ordinary identity consumers retain their GraphQL-only behavior.
-            public_orgs = fetch_public_organizations(canonical)
+            ours = insider_set(canonical, orgs, extra=())
+            public_orgs = [o for o in fetch_public_organizations(canonical) if o.casefold() in ours]
         else:
-            # A custom injected transport cannot establish visibility without
-            # an explicit marker. Fail closed for the serialized view rather
-            # than treating authenticated memberships as public.
+            # An explicit marker decides; a custom injected transport without
+            # one fails closed rather than treating memberships as public.
             public_orgs = [node["login"] for node in org_nodes
                            if node.get("isPublic") is True]
     extras = None if include_environment else ()

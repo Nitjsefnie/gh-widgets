@@ -49,8 +49,8 @@ UMask=0077
 
 # render.py counts these orgs' public, non-fork repos into the stats card;
 # private organization repos never reach the SVG. The list is every org the
-# token's account belongs to, looked up at each run (read:org also returns
-# private memberships), so joining or leaving an org needs no edit here.
+# token's account administers (role admin, state active; read:org also returns
+# private memberships), looked up at each run, so no org needs an edit here.
 # A failed lookup fails the unit rather than rendering an under-count.
 # The runner retains the opt-in orgs-lookup timing journal line.
 ExecStart=/bin/bash /usr/local/bin/run-gh-widgets.sh normal

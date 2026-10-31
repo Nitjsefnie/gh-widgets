@@ -79,8 +79,9 @@ so the rename is safe.
 
 The external-contribution and impact cards need to know which repos are
 *yours* and which lines are *yours*. Both are **derived from the token's own
-account** — `login`, `databaseId`, and the org list — so joining an
-organisation needs no config change. Ownership of a line is decided by exact
+account** — `login`, `databaseId`, and the orgs it administers — so taking
+over an organisation needs no config change; an org where the account is only
+a member is not yours and counts on no card. Ownership of a line is decided by exact
 match against the account's GitHub noreply addresses, not by pattern-matching
 a name.
 
@@ -92,7 +93,7 @@ the stats card.
 |---|---|
 | `GH_WIDGETS_GH_EXTRA_INSIDERS` | Owners to treat as yours that the API will not report — e.g. an org whose membership is private. Comma-separated. |
 | `GH_WIDGETS_GH_EXTRA_EMAILS` | Commit-author addresses that are yours but are not a GitHub noreply address — e.g. the address you use on a workstation. Comma-separated. |
-| `GH_WIDGETS_GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account belongs to (`gh api user/orgs`); private repos are filtered out. |
+| `GH_WIDGETS_GH_EXTRA_ORGS` | Organization logins whose public, non-fork repos add to the stats card's repo, stars, and forks totals. Comma-separated; empty by default; the units in `units/` fill it at each run with every org the token's account administers (`gh api user/memberships/orgs`, role `admin`, state `active`); private repos are filtered out. |
 
 ## Tuning the impact score (`src/render-impact.py`)
 
@@ -229,7 +230,7 @@ The supported public functions are `normalise_issue`,
 `write_snapshot` (plus `SCHEMA_VERSION`). Arbitrary snapshot construction is
 internal (`_build_snapshot`) and is not a consumer API. The producer publishes
 public external data only: private repositories are removed, the account and
-explicitly public organization owners are excluded transiently during
+explicitly public organizations it administers are excluded transiently during
 acquisition, and credentials are never serialized. Membership relationships
 are not part of the interchange contract. Environment-based insider and email
 additions are not read by the public producer.
@@ -356,8 +357,8 @@ After deployment, embed Overflow's widget with:
 ## Repository popularity (`src/render-popularity.py`)
 
 `popularity.svg` ranks your public, non-fork, non-archived repositories and
-those owned by every organization returned by the token's `GET /user/orgs`
-membership list. It uses the shared card, fonts, accessibility and four themes.
+those owned by every organization the token's `GET /user/memberships/orgs`
+lists with role `admin` and state `active`. It uses the shared card, fonts, accessibility and four themes.
 
 ```sh
 GH_WIDGETS_GH_TOKEN_FILE=/etc/gh-widget.token GH_WIDGETS_OUT_DIR=./widgets ./src/render-popularity.py

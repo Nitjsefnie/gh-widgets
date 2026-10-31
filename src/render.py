@@ -79,7 +79,7 @@ common = _load_common()
 # The interface version this script was written against. A mismatch means one
 # file was copied without the other: fail loudly here rather than render
 # wrong numbers from a stale module.
-REQUIRED_COMMON = 17
+REQUIRED_COMMON = 18
 common.check_version(REQUIRED_COMMON)
 
 # Re-exported so this module's surface is unchanged for callers and tests.
@@ -190,8 +190,8 @@ def monthly_windows(now):
 
 
 # The account's own profile: who it is, how many followers, and every org
-# it belongs to. `pageInfo` is requested so the membership can be walked to
-# its end — the first 100 memberships are not all of them, and an org left
+# it belongs to; only those it administers are its own. `pageInfo` walks the
+# membership to its end — the first 100 are not all of them, and an org left
 # out of this list classifies the account's own work in that org as external.
 ORG_QUERY = """
 query($login: String!, $cursor: String) {
@@ -201,7 +201,7 @@ query($login: String!, $cursor: String) {
     followers { totalCount }
     organizations(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { login }
+      nodes { login viewerCanAdminister }
     }
   }
 }
@@ -912,7 +912,7 @@ ExternalCounts = namedtuple(
 def external_counts(user, prs, issues):
     """The six external-contribution figures: PR opened/merged/repos, then
     issue opened/accepted/repos."""
-    orgs = [o["login"] for o in user["organizations"]["nodes"]]
+    orgs = [o["login"] for o in common.admin_orgs(user["organizations"]["nodes"])]
     opened, merged, repos = external_contributions(prs, user["login"], orgs)
     iss_opened, iss_accepted, iss_repos = external_issues(
         issues, user["login"], orgs)

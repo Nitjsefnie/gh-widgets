@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 17
+REQUIRED_COMMON = 18
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -630,7 +630,7 @@ def fetch_all(token, user, cache, resync):
         shared = common.share.load(user)
     # Identity first: everything downstream depends on knowing who we are
     # and which owners are insiders. Derived from the token's own account,
-    # so joining an org needs no code or config change.
+    # so administering an org needs no config change.
     if shared is not None:
         identity = shared["identity"]
         me = common.Identity(identity["login"], identity["databaseId"],

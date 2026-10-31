@@ -243,7 +243,7 @@ class FetchIdentity(unittest.TestCase):
                              "organizations": {
                                  "pageInfo": {"hasNextPage": False,
                                               "endCursor": None},
-                                 "nodes": [{"login": o, "isPublic": True}
+                                 "nodes": [{"login": o, "isPublic": True, "viewerCanAdminister": True}
                                            for o in orgs]}}}
         return _gql
 
@@ -261,11 +261,11 @@ class FetchIdentity(unittest.TestCase):
         calls = []
         pages = {
             None: {"pageInfo": {"hasNextPage": True, "endCursor": "org-c1"},
-                   "nodes": [{"login": "PublicOne", "isPublic": True},
-                             {"login": "PrivateOne", "isPublic": False}]},
+                   "nodes": [{"login": "PublicOne", "isPublic": True, "viewerCanAdminister": True},
+                             {"login": "PrivateOne", "isPublic": False, "viewerCanAdminister": True}]},
             "org-c1": {
                 "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": [{"login": "PublicTwo", "isPublic": True}],
+                "nodes": [{"login": "PublicTwo", "isPublic": True, "viewerCanAdminister": True}],
             },
         }
 
@@ -326,7 +326,7 @@ class FetchIdentity(unittest.TestCase):
                              "organizations": {
                                  "pageInfo": {"hasNextPage": False,
                                               "endCursor": None},
-                                 "nodes": [{"login": "Concealed"}],
+                                 "nodes": [{"login": "Concealed", "viewerCanAdminister": True}],
                              }}}
 
         me = common.fetch_identity("t", "octocat", gql_fn=gql_fn,
@@ -352,7 +352,7 @@ class FetchIdentity(unittest.TestCase):
                             "organizations": {
                                 "pageInfo": {"hasNextPage": False,
                                              "endCursor": None},
-                                "nodes": [{"login": "PrivateOrg"}],
+                                "nodes": [{"login": "PrivateOrg", "viewerCanAdminister": True}],
                             }}}
         with mock.patch.object(common, "gql", return_value=payload), \
                 mock.patch.object(
