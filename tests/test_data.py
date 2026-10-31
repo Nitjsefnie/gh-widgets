@@ -341,8 +341,8 @@ class AuthoredSnapshot(unittest.TestCase):
                         "pageInfo": {"hasNextPage": False,
                                      "endCursor": None},
                         "nodes": [
-                            {"login": "PublicOrg", "isPublic": True},
-                            {"login": "PrivateOrg", "isPublic": False},
+                            {"login": "PublicOrg", "isPublic": True, "viewerCanAdminister": True},
+                            {"login": "PrivateOrg", "isPublic": False, "viewerCanAdminister": True},
                         ],
                     },
                 }}

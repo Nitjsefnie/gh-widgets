@@ -36,7 +36,7 @@ def _load_common():
 common = _load_common()
 # Clock alias kept for tests and callers.
 time = common.time
-REQUIRED_COMMON = 17
+REQUIRED_COMMON = 18
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 API = 'https://api.github.com'
@@ -182,7 +182,8 @@ def fetch_scores(token, store=None):
     emails = common.our_emails(user['login'], user['id'])
     if user.get('email'):
         emails = emails | {user['email'].lower()}
-    orgs = rest_pages(token, '/user/orgs?per_page=100')
+    orgs = [membership['organization'] for membership in rest_pages(token, '/user/memberships/orgs?per_page=100')
+            if membership['role'] == 'admin' and membership['state'] == 'active']
     repositories = rest_pages(
         token, '/user/repos?affiliation=owner&visibility=public&per_page=100',
         store=store)

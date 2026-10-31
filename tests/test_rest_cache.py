@@ -289,7 +289,7 @@ class PopularityRuns(unittest.TestCase):
     def single_repo_bodies(self):
         return {
             '/user': USER,
-            '/user/orgs?per_page=100': [],
+            '/user/memberships/orgs?per_page=100': [],
             '/user/repos?affiliation=owner&visibility=public&per_page=100': [repo()],
             '/repos/Owner/Repo/traffic/clones': {'uniques': 7},
             '/repos/Owner/Repo/traffic/views': {'uniques': 11},
@@ -303,10 +303,10 @@ class PopularityRuns(unittest.TestCase):
             second_out, second_svg = self.run_main(github)
             self.assertIn('rest-cache: requests=3 not-modified=3', second_out)
         self.assertEqual(first_svg, second_svg)
-        # /user and /user/orgs stay outside the store: private-shaped bodies
+        # /user and /user/memberships/orgs stay outside the store: private-shaped bodies
         # are never persisted, and only public listings go conditional.
         cold = [(path, None) for path in self.single_repo_bodies()]
-        warm = [('/user', None), ('/user/orgs?per_page=100', None)]
+        warm = [('/user', None), ('/user/memberships/orgs?per_page=100', None)]
         warm += [(path, f'"{API}{path}"') for path in (
             '/user/repos?affiliation=owner&visibility=public&per_page=100',
             '/repos/Owner/Repo/traffic/clones',

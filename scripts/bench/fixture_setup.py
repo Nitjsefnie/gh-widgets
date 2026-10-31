@@ -211,7 +211,7 @@ def _write_json(path, payload):
 
 def _organization(login, org_id):
     return {"id": org_id, "login": login, "isPublic": True,
-            "url": f"https://github.com/{login}"}
+            "viewerCanAdminister": True, "url": f"https://github.com/{login}"}
 
 
 def _write_identity_payload(payload_dir):

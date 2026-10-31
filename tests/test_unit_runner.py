@@ -16,7 +16,7 @@ UNITS = ('gh-widgets.service', 'gh-widgets-resync.service')
 STEPS = ('lookup', 'profile', 'impact', 'responsiveness', 'stars', 'popularity')
 COMMANDS = ('gh', 'render-gh-widgets.py', 'render-impact.py',
             'render-responsiveness.py', 'render-stars.py', 'render-popularity.py')
-STUB = '''import json, os, sys, time
+STUB = '''import json, os, subprocess, sys, time
 from pathlib import Path
 root = Path(os.environ['GH_WIDGETS_OUT_DIR'])
 step = sys.argv[1]
@@ -27,7 +27,12 @@ step = sys.argv[1]
 time.sleep(json.loads(os.environ['GH_WIDGETS_STUB_DELAYS']).get(step, 0))
 failed = os.environ.get('GH_WIDGETS_STUB_FAIL') == step
 if step == 'lookup':
-    print('A\\nB')
+    # Emulate `gh api --jq` over one membership per filter limb: only A and B count.
+    print(subprocess.run(['jq', '-r', sys.argv[-1]], check=True, capture_output=True, text=True, input=json.dumps([
+        {'role': 'admin', 'state': 'active', 'organization': {'login': 'A'}},
+        {'role': 'member', 'state': 'active', 'organization': {'login': 'Member'}},
+        {'role': 'admin', 'state': 'pending', 'organization': {'login': 'Pending'}},
+        {'role': 'admin', 'state': 'active', 'organization': {'login': 'B'}}])).stdout, end='')
 elif not failed:
     (root / (step + '.svg')).write_text(step)
 (root / (step + '.end')).write_text(str(time.monotonic()))
@@ -151,7 +156,8 @@ class UnitSchedule(unittest.TestCase):
                 args = {s: json.loads(files[s + '.start'])['args'] for s in STEPS}
                 resync = ['--resync'] if unit == UNITS[1] else []
                 self.assertEqual(args, {
-                    'lookup': ['api', '--paginate', 'user/orgs', '--jq', '.[].login'],
+                    'lookup': ['api', '--paginate', 'user/memberships/orgs', '--jq',
+                               '.[] | select(.role == "admin" and .state == "active") | .organization.login'],
                     'profile': resync, 'impact': resync + [
                         '--cache-file', '/var/lib/gh-widgets/impact-cache.json'],
                     'responsiveness': ['--cache-file', '/var/lib/gh-widgets/impact-cache.json'],

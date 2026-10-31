@@ -137,7 +137,7 @@ class RunTiming(unittest.TestCase):
     def test_endpoint_shapes_drop_names_and_pagination(self):
         """Pin each endpoint family used by popularity and public identity."""
         shapes = {
-            '/user': '/user', '/user/orgs?per_page=100': '/user/orgs',
+            '/user': '/user', '/user/memberships/orgs?per_page=100': '/user/memberships/orgs',
             '/user/repos?affiliation=owner&page=2': '/user/repos',
             '/users/A%2FB/orgs?page=1': '/users/{user}/orgs',
             '/orgs/Company/repos': '/orgs/{org}/repos',
@@ -383,7 +383,7 @@ class RendererTiming(unittest.TestCase):
         self.clock = 0.0  # pylint: disable=attribute-defined-outside-init
         pages = {
             '/user': test_popularity.response(test_popularity.USER),
-            '/user/orgs?per_page=100': test_popularity.response([]),
+            '/user/memberships/orgs?per_page=100': test_popularity.response([]),
             '/user/repos?affiliation=owner&visibility=public&per_page=100':
             test_popularity.response(
                 [test_popularity.repo('Owner/A'), test_popularity.repo('Owner/B')]),
@@ -432,7 +432,7 @@ class RendererTiming(unittest.TestCase):
                 module.main()
             recorder = module.common.timing
             self.assertEqual(recorder.totals[('rest', '/user')], [1, 1.0, 0.0])
-            self.assertEqual(recorder.totals[('rest', '/user/orgs')], [1, 1.0, 0.0])
+            self.assertEqual(recorder.totals[('rest', '/user/memberships/orgs')], [1, 1.0, 0.0])
             self.assertEqual(recorder.totals[('rest', '/user/repos')], [1, 1.0, 0.0])
             self.assertEqual(
                 recorder.totals[('rest', '/repos/{owner}/{repo}/traffic/clones')],

@@ -246,9 +246,9 @@ class Acquisition(unittest.TestCase):
         urls = []
         fixtures = {
             '/user': response(USER),
-            '/user/orgs?per_page=100': response(
-                [{'login': 'Org'}], '<https://api.github.com/org-page2>; rel="next"'),
-            '/org-page2': response([{'login': 'Other'}]),
+            '/user/memberships/orgs?per_page=100': response(
+                [{'role': 'admin', 'state': 'active', 'organization': {'login': 'Org'}}], '<https://api.github.com/org-page2>; rel="next"'),
+            '/org-page2': response([{'role': 'admin', 'state': 'active', 'organization': {'login': 'Other'}}]),
             '/user/repos?affiliation=owner&visibility=public&per_page=100': response([
                 repo(), repo('Owner/Private', visibility='private'),
                 repo('Owner/Fork', fork=True), repo('Owner/Old', archived=True)],
@@ -347,7 +347,7 @@ class Overlap(unittest.TestCase):
         """A barrier pairs one repository's traffic read with another's."""
         fixtures = {
             '/user': response(USER),
-            '/user/orgs?per_page=100': response([]),
+            '/user/memberships/orgs?per_page=100': response([]),
             '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B')]),
         }
@@ -376,7 +376,7 @@ class Overlap(unittest.TestCase):
         """Nonempty repositories still cost one clone and two traffic reads."""
         fixtures = {
             '/user': response(USER),
-            '/user/orgs?per_page=100': response([]),
+            '/user/memberships/orgs?per_page=100': response([]),
             '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B'), repo('Owner/C')]),
         }
@@ -416,7 +416,7 @@ class Overlap(unittest.TestCase):
         """A sibling still cloning on failure cleans its own temporary clone."""
         fixtures = {
             '/user': response(USER),
-            '/user/orgs?per_page=100': response([]),
+            '/user/memberships/orgs?per_page=100': response([]),
             '/user/repos?affiliation=owner&visibility=public&per_page=100': response(
                 [repo('Owner/A'), repo('Owner/B')]),
         }

@@ -671,7 +671,7 @@ class ProfilePagination(unittest.TestCase):
         api.repo_pages = [[repo_node(1, 1) for _ in range(100)],
                           [repo_node(7, 3, [self.LANG])]]
         api.repo_total = 101
-        api.org_pages = [[{"login": "first-org"}], [{"login": "late-org"}]]
+        api.org_pages = [[{"login": "first-org", "viewerCanAdminister": True}], [{"login": "late-org", "viewerCanAdminister": True}]]
         api.full_calendar = recent_days(3)
         return api
 

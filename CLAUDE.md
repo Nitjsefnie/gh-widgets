@@ -111,7 +111,7 @@ The supported public functions are `normalise_issue`,
 `write_snapshot`, plus `SCHEMA_VERSION`. Arbitrary construction is internal
 (`_build_snapshot`) and is not a consumer API. The producer is public-only and
 external-only: private repositories are filtered, the account and explicitly
-public organization owners are excluded transiently, credentials are never
+public organizations it administers are excluded transiently, credentials are never
 serialized, and environment insider/email additions are not read by the public
 producer. Membership data never crosses the boundary. `load_snapshot()` and
 `write_snapshot()` both enforce the full nested schema. Invalid data raises

@@ -319,7 +319,7 @@ def fake_gql(nodes=(), orgs=("myorg",), error=None):
                              "organizations": {
                                  "pageInfo": {"hasNextPage": False,
                                               "endCursor": None},
-                                 "nodes": [{"login": o} for o in orgs]}}}
+                                 "nodes": [{"login": o, "viewerCanAdminister": True} for o in orgs]}}}
         return {"user": {"pullRequests": {
             "pageInfo": {"hasNextPage": False, "endCursor": None},
             "nodes": list(nodes)}}}

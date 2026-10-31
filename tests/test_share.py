@@ -61,7 +61,7 @@ class CountingAPI(test_render.FakeAPI):
             kind = "identity"
             data = {"user": {"login": "me", "databaseId": 42,
                              "organizations": self.page(
-                                 [{"login": "MyOrg" if cursor is None else "SecondOrg"}],
+                                 [{"login": "MyOrg" if cursor is None else "SecondOrg", "viewerCanAdminister": True}],
                                  "org-next" if cursor is None else None)}}
         elif "user(login:" in query and "pullRequests" in query:
             kind = "sweep" if "states: [MERGED]" in query else "prs"
