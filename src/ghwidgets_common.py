@@ -455,16 +455,15 @@ class Identity(namedtuple(
         "login database_id orgs insiders emails public_orgs")):
     """Resolved account identity and its transient/public org views.
 
-    ``orgs`` and ``insiders`` hold only orgs the token's account administers;
-    ``public_orgs``, their publicly visible subset, is the only membership
-    collection fit for a public snapshot and defaults to empty.
+    ``orgs`` and ``insiders`` hold the orgs the token's account administers (every
+    visible org when the token is another viewer's); ``public_orgs``, their public
+    subset, is the only membership collection fit for a public snapshot (default empty).
     """
 
     __slots__ = ()
 
     def __new__(cls, login, database_id, orgs, insiders, emails, public_orgs=None):
-        if public_orgs is None:
-            public_orgs = []
+        public_orgs = [] if public_orgs is None else public_orgs
         return super().__new__(cls, login, database_id, orgs, insiders, emails, public_orgs)
 
 
@@ -473,22 +472,31 @@ class PaginationLimitError(RuntimeError):
 
 
 IDENTITY_QUERY = """
-query($login: String!, $cursor: String) {
+query($login: String!, $cursor: String, $self: Boolean = false) {
+  viewer { login }
   user(login: $login) {
     login
     databaseId
     organizations(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { login viewerCanAdminister }
+      nodes { login viewerCanAdminister @include(if: $self) }
     }
   }
 }
 """
 
 
+def account_query(g, token, query, variables, login):
+    # viewerCanAdminister speaks for the token's account only: ask it ($self) once the viewer is `login`.
+    data = g(token, query, {**variables, "self": False})
+    if ((data.get("viewer") or {}).get("login") or "").casefold() == login.casefold():
+        data = g(token, query, {**variables, "self": True})
+    return data
+
+
 def admin_orgs(nodes):
-    # A plain membership (role member) makes nobody's repositories ours.
-    return [node for node in nodes if node.get("viewerCanAdminister") is True]
+    # Drops the orgs the account is only a plain member of; unflagged nodes (not requested) stay.
+    return [node for node in nodes if node.get("viewerCanAdminister") is not False]
 
 
 def insider_set(login, orgs, extra=None):
@@ -570,8 +578,7 @@ def fetch_public_organizations(login, request_fn=None):
     return public_orgs
 
 
-# The identity query deliberately keeps pagination, visibility, and derived
-# sets together so the transient membership data cannot leak into snapshots.
+# Pagination, visibility and derived sets stay together so membership data cannot leak.
 # pylint: disable=too-many-locals
 def fetch_identity(token, login, gql_fn=None, *, include_environment=True, include_public_orgs=False):
     """Resolve who we are from the token's own account.
@@ -583,15 +590,11 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
     ``include_public_orgs``; ordinary renderer callers remain GraphQL-only.
     """
     g = gql_fn or gql
-    # The GraphQL connection is the authoritative transient membership set;
-    # page it fully rather than silently accepting the old first-100 cap.
     org_nodes = []
-    cursor = None
-    seen_cursors = {None}
-    canonical = None
-    database_id = None
+    cursor, seen_cursors = None, {None}
+    canonical = database_id = None
     while True:
-        data = g(token, IDENTITY_QUERY, {"login": login, "cursor": cursor})
+        data = account_query(g, token, IDENTITY_QUERY, {"login": login, "cursor": cursor}, login)
         user = data["user"]
         if not user:
             raise RuntimeError(f"no such GitHub user: {login}")
@@ -604,8 +607,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
         if page_info is None or "hasNextPage" not in page_info:
             raise PaginationLimitError(
                 "organizations pagination missing pageInfo or hasNextPage "
-                "after cursor "
-                f"{cursor!r}")
+                f"after cursor {cursor!r}")
         if not page_info.get("hasNextPage"):
             break
         next_cursor = page_info.get("endCursor")
@@ -616,8 +618,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
         if next_cursor in seen_cursors:
             raise PaginationLimitError(
                 "organizations pagination stalled after cursor "
-                f"{cursor!r}: endCursor {next_cursor!r} repeats an earlier "
-                "cursor")
+                f"{cursor!r}: endCursor {next_cursor!r} repeats an earlier cursor")
         seen_cursors.add(next_cursor)
         cursor = next_cursor
 
@@ -626,8 +627,7 @@ def fetch_identity(token, login, gql_fn=None, *, include_environment=True, inclu
     if include_public_orgs:
         explicit_visibility = all("isPublic" in node for node in org_nodes)
         if g is gql and not (explicit_visibility and org_nodes):
-            # Only the snapshot producer opts into this unauthenticated view;
-            # ordinary identity consumers retain their GraphQL-only behavior.
+            # Only the snapshot producer opts into this unauthenticated view.
             ours = insider_set(canonical, orgs, extra=())
             public_orgs = [o for o in fetch_public_organizations(canonical) if o.casefold() in ours]
         else:

@@ -97,9 +97,9 @@ base_card = common.base_card
 stamp_cache_notice = common.stamp_cache_notice
 CacheFallback = common.CacheFallback
 
-# v3: the cached user payload gains extra-organization stats; v2 caches must
-# be discarded and refetched rather than trusted.
-CACHE_VERSION = 3
+# v4: cached org nodes carry the admin flag; older caches must be discarded
+# and refetched rather than trusted.
+CACHE_VERSION = 4
 DEFAULT_CACHE_FILE = "/var/lib/gh-widgets/cache.json"
 
 # WCAG non-text contrast: swatches must reach 3:1 on track and card endpoints.
@@ -189,19 +189,19 @@ def monthly_windows(now):
     return list(zip(bounds, bounds[1:]))
 
 
-# The account's own profile: who it is, how many followers, and every org
-# it belongs to; only those it administers are its own. `pageInfo` walks the
-# membership to its end — the first 100 are not all of them, and an org left
-# out of this list classifies the account's own work in that org as external.
+# The account's own profile: who it is, how many followers, and every org it belongs
+# to, flagged where the token's account ($self) administers it. `pageInfo` walks the
+# membership to its end: an org left out classifies the account's own work there as external.
 ORG_QUERY = """
-query($login: String!, $cursor: String) {
+query($login: String!, $cursor: String, $self: Boolean = false) {
+  viewer { login }
   user(login: $login) {
     login
     name
     followers { totalCount }
     organizations(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { login viewerCanAdminister }
+      nodes { login viewerCanAdminister @include(if: $self) }
     }
   }
 }
@@ -309,7 +309,7 @@ def page_profile_connection(token, query, field, login, max_pages):
         _next_pagination_cursor(
             field, cursor, pages, max_pages, seen_cursors,
             before_request=True)
-        user = gql(token, query, {"login": login, "cursor": cursor})["user"]
+        user = common.account_query(gql, token, query, {"login": login, "cursor": cursor}, login)["user"]
         pages += 1
         connection = user.get(field) or {}
         if head is None:
