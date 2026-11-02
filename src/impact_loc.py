@@ -108,6 +108,8 @@ futures = impact_clone.futures
 
 
 common: Any = None
+# The -c reaches git-fame's own git calls, which otherwise quote non-ASCII names.
+FAME_CMD = ["git", "-c", "core.quotePath=false", "fame", "-e", "-w", "--format", "json"]
 
 
 def configure(common_module: Any) -> None:
@@ -291,7 +293,7 @@ def _run_bounded(cmd, *, cwd=None, timeout=600):
     Timing includes stdout drain and timeout cleanup.
     """
     limit = _git_output_cap_bytes()
-    program = 'git-fame' if cmd[:2] == ['git', 'fame'] else Path(cmd[0]).name
+    program = 'git-fame' if cmd == FAME_CMD else Path(cmd[0]).name
     with common.timing.track('process', program), \
             subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL,
@@ -350,9 +352,8 @@ def git_out(dest, *args):
 
 def _countable_path(path):
     """Whether line-based consumers can safely identify this Git path."""
-    # NUL-delimited Git output preserves control bytes until this shared check;
-    # exclude such paths from both the text and touched sets so counts agree.
-    return not any(ord(char) < 32 or ord(char) == 127 for char in path)
+    # Git quotes these even under core.quotePath=false; git-fame cannot blame them.
+    return not any(ord(c) < 32 or ord(c) == 127 or c in '"\\' for c in path)
 
 
 def _without_head_prefix(path):
@@ -494,8 +495,7 @@ def blamed_lines_for(blame_out, emails):
 def blame_repo(repo, dest, emails, clone_s=0.0, wait_s=0.0):
     """Aggregate surviving LOC per author email with git-fame."""
     t1 = time.monotonic()
-    cmd = ["git", "fame", "-e", "-w", "--format", "json"]
-    fm = _run_bounded(cmd, cwd=str(dest), timeout=600)
+    fm = _run_bounded(list(FAME_CMD), cwd=str(dest), timeout=600)
     fame_s = time.monotonic() - t1
     if fm.returncode:
         stdout = fm.stdout.decode("utf-8", errors="replace")

@@ -169,7 +169,7 @@ class TestGitFameFailures(unittest.TestCase):
 
     def install_git(self, body):
         fake_git = self.bin / "git-fixture.py"
-        expected = ["fame", "-e", "-w", "--format", "json"]
+        expected = ["-c", "core.quotePath=false", "fame", "-e", "-w", "--format", "json"]
         source = (
             "import sys\n"
             f"expected = {expected!r}\n"
@@ -866,7 +866,7 @@ class TestBoundedGitOutput(unittest.TestCase):
 
     @staticmethod
     def fame_args():
-        return ["fame", "-e", "-w", "--format", "json"]
+        return ["-c", "core.quotePath=false", "fame", "-e", "-w", "--format", "json"]
 
     def cap_environment(self):
         return {"PATH": str(self.bin),
