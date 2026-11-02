@@ -51,6 +51,7 @@ class TestTimeout(unittest.TestCase):
         self.assertLess(elapsed, 15)
 
     @unittest.skipUnless(sys.version_info >= (3, 12), "needs sys.monitoring")
+    @REQUIRES_BENCH
     def test_a_watchdog_exit_under_the_statement_counter_keeps_its_stack(self):
         # The watchdog's _exit skips the count file; its dump must still print.
         env = dict(os.environ, **{_ghw_watchdog.ENV: "1",
