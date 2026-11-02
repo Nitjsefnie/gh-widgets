@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Targeted counting and git-fame agree on file names Git quotes.
-
-    python3 -m unittest discover -v
-
-git-fame lists files with `git ls-files` and blames each name it prints.
-Under the default core.quotePath that name is C-quoted for any non-ASCII
-byte, and `git blame` rejects the quoted form, so git-fame dropped the file
-without a word while targeted counting kept it: the weekly `both` audit
-failed on three Greek-lettered files in one repository (+964 lines).
-"""
+"""git-fame and targeted counting agree on names Git C-quotes."""
 import importlib.util
 import os
 import shutil
@@ -27,6 +18,7 @@ if spec is None or spec.loader is None:
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
 impact_loc = getattr(render_impact, "_LOC_MODULE")
+countable = getattr(impact_loc, "_countable_path")
 
 
 def git(*args, cwd):
@@ -35,8 +27,6 @@ def git(*args, cwd):
 
 
 class TestQuotedNamesAgree(unittest.TestCase):
-    """Both methods count the same files whatever their names look like."""
-
     @classmethod
     def setUpClass(cls):
         if shutil.which("git-fame") is None:
@@ -50,9 +40,7 @@ class TestQuotedNamesAgree(unittest.TestCase):
         git("config", "user.name", "Us", cwd=cls.tmp)
         git("config", "user.email", "us@example.com", cwd=cls.tmp)
         git("config", "core.quotePath", "true", cwd=cls.tmp)
-        # Counted: plain, space (never quoted) and non-ASCII (quoted only
-        # under core.quotePath=true). Skipped by both: `"`, `\` and control
-        # bytes, which Git quotes whatever the setting.
+        # Both skip `"`, `\` and control bytes, quoted under any setting.
         names = ["plain.txt", "sp ace.txt", "α.txt"]
         if os.name == "posix":
             names += ['a"b.txt', "a\\b.txt", "tab\tx.txt"]
@@ -74,20 +62,17 @@ class TestQuotedNamesAgree(unittest.TestCase):
             fame = impact_loc.blame_repo("outside/quoted", self.tmp, emails)
         targeted = impact_loc.targeted_counts(self.tmp, emails)
         self.assertEqual((fame, targeted), ((6, 6), (6, 6)))
-        # The -c in front of `fame` must not move the child off its label.
         self.assertEqual(recorder.totals[("process", "git-fame")][0], 1)
 
 
 class TestCountablePath(unittest.TestCase):
-    """The shared filter rejects exactly the names Git quotes regardless."""
-
     def test_names_git_always_quotes_are_rejected(self):
         for name in ('a"b.txt', "a\\b.txt", "tab\tx.txt", "del\x7f.txt"):
-            self.assertFalse(impact_loc._countable_path(name), name)  # pylint: disable=protected-access
+            self.assertFalse(countable(name), name)
 
     def test_names_git_leaves_unquoted_are_kept(self):
         for name in ("plain.txt", "sp ace.txt", "α.txt", "café.py"):
-            self.assertTrue(impact_loc._countable_path(name), name)  # pylint: disable=protected-access
+            self.assertTrue(countable(name), name)
 
 
 if __name__ == "__main__":
