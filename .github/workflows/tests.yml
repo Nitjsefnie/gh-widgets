@@ -148,7 +148,7 @@ jobs:
       - name: Run tests
         id: unittest
         # Still stdlib `unittest discover` (never pytest), under coverage on the
-        # measured cell. Below the job's limit, so a hang keeps this step's log.
+        # measured cell. Below the job's limit, so a hang fails the step itself.
         timeout-minutes: 12
         env:
           # Undefined on the other five cells, so these read as "" there.
@@ -621,9 +621,9 @@ jobs:
         # counter measures interpreter startup over a population it never ran.
         # Reports go to $GITHUB_WORKSPACE, so the cwd never moves this output.
         #
-        # timeout-minutes sits below the job's 20 so a hang fails this step
-        # with its log kept (a cancelled job keeps none); each round's 390 s
-        # --timeout fits twice inside it and prints the child's output.
+        # Below the job's 20, a hang fails this step rather than cancelling
+        # the job mid-step, which finalizes no log; two rounds of 390 s
+        # --timeout plus 10 s drain fit, and the counter prints the output.
         #
         # The suite's exit code is deliberately NOT this job's verdict:
         # tests.yml owns pass/fail. But a counter measured over a suite that
