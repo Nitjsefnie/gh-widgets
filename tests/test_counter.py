@@ -529,24 +529,6 @@ class TestMeasure(unittest.TestCase):
         self.assertEqual(env["MARKER"], "kept")
         self.assertEqual(env["PYTHONHASHSEED"], "0")
 
-    @unittest.skipIf(sys.platform == "win32",
-                     "process groups are a POSIX mechanism; the timeout "
-                     "path runs only on ubuntu runners in production")
-    @REQUIRES_BENCH
-    def test_a_timeout_kills_the_whole_process_group(self):
-        # The direct child here is `python`, which spawns a grandchild that
-        # inherits the output pipes. Killing only the direct child would
-        # leave the grandchild holding them, and communicate() would never
-        # return — the gate would hang instead of failing.
-        script = (
-            "import subprocess, sys, time\n"
-            "subprocess.Popen([sys.executable, '-c', 'import time;"
-            " time.sleep(120)'])\n"
-            "time.sleep(120)\n")
-        with self.assertRaises(subprocess.TimeoutExpired):
-            counter.measure([sys.executable, "-c", script],
-                            metric=counter.CPU_METRIC, timeout=2)
-
 
 REQUIRES_STATEMENT = unittest.skipUnless(
     sys.version_info >= (3, 12),

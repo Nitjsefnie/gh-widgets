@@ -207,6 +207,7 @@ PTRACE_SCOPE_PATH = Path("/proc/sys/kernel/yama/ptrace_scope")
 # without depending on anything.
 PROBE_COMMAND = (sys.executable, "-c", "pass")
 PROBE_TIMEOUT = 60
+DRAIN_SECONDS = 10  # read what a killed child wrote; see _run_child
 
 # THE STATEMENT BOOTSTRAP. This is the program the measured child actually
 # runs: it counts its own LINE events and writes the total where the parent
@@ -307,15 +308,11 @@ class Measurement(NamedTuple):
 def _run_child(command, cwd, env, timeout, measure_cpu=True):
     """Run one child, returning (returncode, stdout, stderr, wall, cpu).
 
-    A hand-rolled Popen rather than `subprocess.run` for exactly one reason:
-    the renderers shell out to `git`, so a timeout that killed only the
-    direct child would orphan the real work and leave it running with its
-    output pipes held open — the timeout would then never return at all, and
-    the gate would hang rather than fail. The child is therefore started in
-    its own session and the whole process group is killed, which is why this
-    is not `subprocess.run`. The traced instruments needed it too (the direct
-    child was `strace` and the command was its grandchild), which is where
-    the requirement came from; the requirement outlived the instrument.
+    A hand-rolled Popen, not `subprocess.run`: the renderers shell out to
+    `git`, and killing only the direct child would orphan that work with the
+    pipes held open, so the child gets its own session and its whole group is
+    killed. A grandchild in a session of its own survives even that, so the
+    drain after the kill is bounded by DRAIN_SECONDS.
 
     `measure_cpu=False` skips the RUSAGE_CHILDREN reads: the statement
     instrument counts in the child, so the POSIX-only read would make it
@@ -331,7 +328,10 @@ def _run_child(command, cwd, env, timeout, measure_cpu=True):
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_process_group(process)
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=DRAIN_SECONDS)
+            except subprocess.TimeoutExpired as held:
+                stdout, stderr = held.stdout, held.stderr
             raise subprocess.TimeoutExpired(
                 command, timeout, output=stdout, stderr=stderr) from None
         returncode = process.returncode
