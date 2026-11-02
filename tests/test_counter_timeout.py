@@ -1,6 +1,5 @@
 """counter.py's timeout path: kill the child's group, then drain it bounded."""
 import contextlib
-import io
 import os
 import signal
 import subprocess
@@ -54,16 +53,18 @@ class TestTimeout(unittest.TestCase):
     @unittest.skipUnless(sys.version_info >= (3, 12), "needs sys.monitoring")
     def test_a_watchdog_exit_under_the_statement_counter_keeps_its_stack(self):
         # The watchdog's _exit skips the count file; its dump must still print.
-        env = {_ghw_watchdog.ENV: "1", counter.METRIC_ENV: "statement_count"}
-        with _ghw_temp.tempdir(prefix="ghw-stall-") as tmp, \
-                mock.patch.dict(os.environ, env), \
-                contextlib.redirect_stderr(io.StringIO()) as err:
-            code = counter.main([
+        env = dict(os.environ, **{_ghw_watchdog.ENV: "1",
+                                  counter.METRIC_ENV: "statement_count"})
+        with _ghw_temp.tempdir(prefix="ghw-stall-") as tmp:
+            done = subprocess.run([
+                sys.executable, str(ROOT / "scripts" / "ci" / "counter.py"),
                 "--junit-file", str(Path(tmp, "unit.xml")), "--name",
                 "counter::stall", "--cwd", str(ROOT), "--timeout", "60", "--",
-                sys.executable, "-c", SUITE, "60", "1", "test_stalls_here"])
-        self.assertEqual(code, 2)
-        self.assertIn("in __main__.Case.test_stalls_here\n", err.getvalue())
+                sys.executable, "-c", SUITE, "60", "1", "test_stalls_here"],
+                env=env, capture_output=True, text=True, timeout=120,
+                check=False)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("in __main__.Case.test_stalls_here\n", done.stderr)
 
 
 if __name__ == "__main__":
