@@ -147,14 +147,14 @@ jobs:
 
       - name: Run tests
         id: unittest
-        # Still `unittest discover`, under coverage on the measured cell.
-        # pytest is not the runner here and should not become one; every
-        # test module in this suite is stdlib unittest and none of them
-        # imports it.
+        # Still stdlib `unittest discover` (never pytest), under coverage on the
+        # measured cell. Below the job's limit, so a hang keeps this step's log.
+        timeout-minutes: 12
         env:
           # Undefined on the other five cells, so these read as "" there.
           GH_WIDGETS_MEASURED: ${{ matrix.measured }}
           GH_WIDGETS_REQUIRE_GIT_FAME: ${{ matrix.measured }}
+          GH_WIDGETS_TEST_TIMEOUT: "120"  # tests/_ghw_watchdog.py
         run: |
           if [ "$GH_WIDGETS_MEASURED" = "true" ]; then
             # Every shipped source family is in the population, scripts/
@@ -617,25 +617,25 @@ jobs:
         # is deterministic for this collected population.
         #
         # --cwd IS NOT OPTIONAL HERE. The checkout is `head/`, so discovery
-        # run from $GITHUB_WORKSPACE — the PARENT of it — finds no tests,
-        # exits 5, and the counter faithfully measures a near-zero count of
-        # interpreter startup. That is exactly what three CI runs did with
-        # the old instrument: the step before this one had collected 724 node
-        # ids from the checkout, so the job collected a 724-test population
-        # and measured none of it, and a baseline derived from that would
-        # have been derived from a population it never actually ran. The
-        # reports are written to $GITHUB_WORKSPACE too, so that naming the
-        # cwd can never also move where this step's own output lands.
+        # run from $GITHUB_WORKSPACE, its parent, finds no tests and the
+        # counter measures interpreter startup over a population it never ran.
+        # Reports go to $GITHUB_WORKSPACE, so the cwd never moves this output.
+        #
+        # timeout-minutes sits below the job's 20 so a hang fails this step
+        # with its log kept (a cancelled job keeps none); each round's 390 s
+        # --timeout fits twice inside it and prints the child's output.
         #
         # The suite's exit code is deliberately NOT this job's verdict:
         # tests.yml owns pass/fail. But a counter measured over a suite that
         # did not run is not comparable, and the step below says so, which is
         # why a non-zero code is reported here rather than swallowed.
         working-directory: head
+        timeout-minutes: 14
         env:
           # The gated instrument; the baseline records it for both
           # populations.
           GH_WIDGETS_GH_COUNTER_METRIC: statement_count
+          GH_WIDGETS_TEST_TIMEOUT: "120"  # tests/_ghw_watchdog.py
         run: |
           mkdir -p "$GH_WIDGETS_REPORTS"
           for round in $(seq 1 "$GH_WIDGETS_ROUNDS"); do
@@ -645,7 +645,7 @@ jobs:
               --junit-file "$GH_WIDGETS_REPORTS/unit-$round.xml" \
               --name 'counter::unit-suite' \
               --cwd "$GH_WIDGETS_REPO" \
-              --timeout 3600 \
+              --timeout 390 \
               -- python3 -m unittest discover || status=$?
             echo "unit suite round $round exited $status" \
                  "(tests.yml owns that verdict)"

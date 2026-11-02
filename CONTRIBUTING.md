@@ -91,6 +91,11 @@ touches the network, and it must stay that way. If you add a rendering
 branch, add a case that pins its output; SVG regressions are invisible
 until someone looks at a broken README.
 
+`GH_WIDGETS_TEST_TIMEOUT=<seconds>` arms the per-test hang watchdog in
+`tests/_ghw_watchdog.py`: when no test starts or ends for that long, it dumps
+every thread's stack, which names the stalled test, and exits 1. CI sets it
+to 120 in the `unittest` and `speed` jobs; unset, it is off.
+
 **`unittest discover` is the runner and stays the runner**, and pytest has
 nothing left to do here. It was the `speed` job in `tests.yml`, collecting
 these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
