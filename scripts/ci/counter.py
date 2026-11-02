@@ -525,14 +525,11 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
     """Count the child's executed lines and return the count as the value.
 
     The child is `[sys.executable, "-c", _STATEMENT_BOOTSTRAP, "--",
-    *command]`: the bootstrap registers a `sys.monitoring` LINE callback on
-    itself, dispatches `command[1:]` the way an interpreter would (its
-    `command[0]` must BE an interpreter), and writes the total to a temp
-    file at exit. Session/process-group semantics are the raw path's, so a
-    timeout still kills the whole tree.
-
-    Requires Python 3.12+ (`sys.monitoring`); raises the trio `measure`
-    raises — CounterError, TimeoutExpired, OSError.
+    *command]`: the bootstrap counts its own `sys.monitoring` LINE events,
+    dispatches `command[1:]` as an interpreter would (`command[0]` must BE
+    one), and writes the total to a temp file at exit; a timeout kills the
+    whole tree. Requires Python 3.12+; raises what `measure` raises, and a
+    count-file CounterError carries the child's output (a stack dump).
     """
     command = list(command)
     if sys.version_info < (3, 12):
@@ -549,9 +546,8 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
         prefix="ghw-statement-", suffix=".json")
     os.close(count_fd)
     os.unlink(count_name)
-    # Deleted, not truncated: a path that exists empty would let a child
-    # that wrote nothing read as {"count": 0} if this side ever changed to
-    # tolerate an empty file. Absent means unwritten; that is the contract.
+    # Deleted, not truncated: absent means unwritten, so a child that wrote
+    # nothing can never read as {"count": 0}.
     count_path = Path(count_name)
     child_env = child_environment(env)
     child_env["GH_WIDGETS_STATEMENT_COUNT_FILE"] = str(count_path)
@@ -559,7 +555,10 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
         code, out, err, wall, _cpu = _run_child(
             [sys.executable, "-c", _STATEMENT_BOOTSTRAP, "--", *command[1:]],
             cwd, child_env, timeout, measure_cpu=False)
-        count, _missed = _read_statement_file(count_path)
+        try:
+            count = _read_statement_file(count_path)[0]
+        except CounterError as exc:
+            raise CounterError(f"{exc}\n{out}{err}") from None
     finally:
         if count_path.exists():
             count_path.unlink()

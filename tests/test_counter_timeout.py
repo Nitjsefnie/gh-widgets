@@ -1,13 +1,18 @@
 """counter.py's timeout path: kill the child's group, then drain it bounded."""
+import contextlib
+import io
 import os
 import signal
 import subprocess
 import sys
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, counter
+from tests import _ghw_temp, _ghw_watchdog
+from tests.test_ghw_watchdog import ROOT, SUITE
 
 SLEEPER = "[sys.executable, '-c', 'import time; time.sleep(120)']"
 
@@ -42,8 +47,23 @@ class TestTimeout(unittest.TestCase):
                   "time.sleep(120)\n")
         exc, elapsed = time_out(script, drain=1)
         assert exc.stderr, "the drain lost what the child wrote"
-        os.kill(int(exc.stderr), signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(exc.stderr), signal.SIGKILL)
         self.assertLess(elapsed, 15)
+
+    @unittest.skipUnless(sys.version_info >= (3, 12), "needs sys.monitoring")
+    def test_a_watchdog_exit_under_the_statement_counter_keeps_its_stack(self):
+        # The watchdog's _exit skips the count file; its dump must still print.
+        env = {_ghw_watchdog.ENV: "1", counter.METRIC_ENV: "statement_count"}
+        with _ghw_temp.tempdir(prefix="ghw-stall-") as tmp, \
+                mock.patch.dict(os.environ, env), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            code = counter.main([
+                "--junit-file", str(Path(tmp, "unit.xml")), "--name",
+                "counter::stall", "--cwd", str(ROOT), "--timeout", "60", "--",
+                sys.executable, "-c", SUITE, "60", "1", "test_stalls_here"])
+        self.assertEqual(code, 2)
+        self.assertIn("in __main__.Case.test_stalls_here\n", err.getvalue())
 
 
 if __name__ == "__main__":
