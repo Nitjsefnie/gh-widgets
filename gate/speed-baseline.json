@@ -8,7 +8,7 @@
     "unit-suite": {
       "metric": "statement_count",
       "tolerance": 0.05,
-      "population": "8340b5c475d94939a05375af61c69059ef2810517647ee76a6eaed186518ccf5",
+      "population": "609bf29f9f20af8419ca24916d9aaecad6d7220f795a1c075fba77d25b883ccd",
       "entries": {
         "counter::unit-suite": {
           "min": 99873148.0,
