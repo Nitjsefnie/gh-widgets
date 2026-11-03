@@ -1,6 +1,7 @@
 """Opt-in run attribution, using deterministic clocks and offline transports."""
 import contextlib
 import io
+import itertools
 import os
 import subprocess
 import sys
@@ -451,7 +452,11 @@ class RendererTiming(unittest.TestCase):
         # Configure the path-loaded donor just as render-impact does.
         module.configure(test_impact_loc.render_impact.common)
         shared = module.common
-        with mock.patch.object(shared, 'DEBUG_TIMING', True):
+        # Every read advances 1 us, so a child that exits inside one tick of a
+        # coarse platform clock still records a positive duration.
+        ticks = itertools.count(1)
+        with mock.patch.object(shared, 'DEBUG_TIMING', True), \
+                mock.patch.object(shared.time, 'monotonic', lambda: next(ticks) * 1e-6):
             recorder = shared.TimingRecorder()
             with mock.patch.object(shared, 'timing', recorder):
                 module._run_bounded([sys.executable, '-c', 'pass'])  # pylint: disable=protected-access
