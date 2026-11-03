@@ -11,7 +11,6 @@ kernel settings. So the instrument is injected — a fake `strace` on disk, or
 `metric=` passed straight in — rather than inherited from whatever the test
 happens to land on.
 """
-import ast
 import importlib
 import importlib.util
 import json
@@ -28,7 +27,7 @@ from unittest import mock
 # rather than reloading the module in this file, is what makes every guard
 # in the suite read the SAME module object.
 from scripts.bench.bench_platform import REQUIRES_BENCH, counter
-from tests import _ghw_temp
+from tests import _ghw_temp, test_ghw_guard_scan
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -270,9 +269,6 @@ class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
     guard lands on the preceding method and nobody sees it for a round.
     """
 
-    # Reaches, spelled the two ways the instrument is actually entered.
-    REACHES = (".measure(", "counter.py")
-
     # Named, with the reason each cannot reach `measure()`. An allowlist is
     # only worth having if it is explicit and narrow: anything NEW is
     # flagged, which is the whole point. Each of these was checked, not
@@ -305,24 +301,8 @@ class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
         offenders = []
         for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
             source = path.read_text(encoding="utf-8")
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.FunctionDef):
-                    continue
-                if not node.name.startswith("test_"):
-                    continue
-                body = ast.get_source_segment(source, node) or ""
-                if not any(reach in body for reach in self.REACHES):
-                    continue
-                decorators = "".join(
-                    ast.get_source_segment(source, d) or ""
-                    for d in node.decorator_list)
-                # A class-level guard covers everything in it.
-                enclosing = self._enclosing_guards(source, node)
-                if any(word in decorators + enclosing
-                       for word in ("REQUIRES_BENCH", "REQUIRES_POSIX_SHELL")):
-                    continue
-                name = f"{path.name}::{node.name}"
+            for test in test_ghw_guard_scan.unguarded_tests(source):
+                name = f"{path.name}::{test}"
                 if name not in self.ALLOWED:
                     offenders.append(name)
         self.assertEqual(
@@ -347,19 +327,6 @@ class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
                     and f"def {test}(" in (REPO_ROOT / "tests" / module).read_text(
                         encoding="utf-8"),
                     f"{name} is allowlisted but no longer exists")
-
-    @staticmethod
-    def _enclosing_guards(source, target):
-        """Guards declared on a class the function sits inside."""
-        for node in ast.walk(ast.parse(source)):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            if any(child is target for child in node.body):
-                return "".join(ast.get_source_segment(source, d) or ""
-                               for d in node.decorator_list) + "".join(
-                                   ast.get_source_segment(source, stmt) or ""
-                                   for stmt in node.body[:1])
-        return ""
 
 
 class TestTheBenchPredicate(unittest.TestCase):
