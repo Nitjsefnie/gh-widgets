@@ -4,7 +4,8 @@ touches a file the REQUIRED status checks read as a parameter.
 
 A green pull-request head only vouches for the tree its checks read. If
 main advances a gate-defining file before merge, that verdict does not cover
-the updated gate. Require the head to carry those commits before merging.
+the updated gate. Require the head to carry those commits before merging; a
+commit already on main (a push run main has since moved past) has no merge to refuse.
 
 The set of such files is DERIVED from the workflows under .github/workflows,
 not kept in a list here. A remembered list is only as current as the last time
@@ -722,13 +723,8 @@ def check(root):
     paths = gate_paths(root)
     stale = stale_commits(root, head, base, paths)
     if not stale:
-        # "reads", not "reads" with no limit attached. The merge-marker step
-        # reads EVERY tracked file through the `.` spelling, and this derivation
-        # resolves that to nothing, so the count below includes the defining workflow and static imports,
-        # as well as the files a required check names — not every file one touches. A green line is the one
-        # sentence a maintainer reads on this check, and a sentence that
-        # over-claims here is the same defect as an over-claiming report: it
-        # looks like the set is complete.
+        # The count is the derived set, not every file a check reads: the
+        # merge-marker step's `.` resolves to nothing, so the line names that limit.
         print(f"This head carries every commit on {BASE_BRANCH} that touches "
               f"the {len(paths)} gate-defining file(s) derived BY NAME.")
         print("  A step reading every tracked file — the `.` spelling, which the "
@@ -736,14 +732,16 @@ def check(root):
               "limit and is not\n  counted above; see the module docstring.")
         return 0
     plural = "s" if len(stale) != 1 else ""
+    if git(root, "merge-base", head, base, what=f"find where this head meets {BASE_BRANCH}").strip() == head:
+        print(f"This commit is already on {BASE_BRANCH}, which holds {len(stale)} gate-defining "
+              f"commit{plural} past it: no merge is left for this run to refuse.")
+        return 0
     print(f"{BASE_BRANCH} holds {len(stale)} commit{plural} this head does not:")
     for sha, subject, touched in stale:
         print(f"  {sha} {subject}")
         if not touched:
-            # `git log --name-only` reports no file for a merge commit, and the
-            # commits it brought in are in the list as themselves. Saying so is
-            # the whole point: a header claiming each entry names a file, over
-            # an entry that names none, is a sentence the reader cannot check.
+            # `git log --name-only` names no file for a merge commit (the commits it
+            # brought in are listed as themselves): say so, or the entry is uncheckable.
             print("    (a merge commit, which git names no file for; the "
                   "commits it brought in are listed as themselves)")
             continue

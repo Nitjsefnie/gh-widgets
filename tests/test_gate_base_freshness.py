@@ -94,13 +94,49 @@ def _fixture(tmp):
     return repo, origin
 
 
-def _advance_main(tmp, origin, subject, files):
-    """Push a commit to origin's main from a second clone."""
+def _advance_main(tmp, origin, subject, files, head_commit=True):
+    """Push a commit to origin's main from a second clone, first giving the head
+    under test (repo) a commit main lacks, as every pull-request head has."""
+    if head_commit:
+        _commit(Path(tmp) / 'repo', 'feat: the head under test', {'head.txt': 'head\n'})
     other = Path(tmp) / 'other'
     _git(tmp, 'clone', str(origin), str(other))
     _config(other)
     _commit(other, subject, files)
     _git(other, 'push', 'origin', 'main')
+
+
+def _merged_main(tmp):
+    """A head with a commit of its own, behind a main that took a real merge."""
+    _, origin = _fixture(tmp)
+    # The stale clone is taken BEFORE the merge lands on origin: its own
+    # fetch_base is what brings the merge into view, which is the situation
+    # the check exists to answer.
+    behind = Path(tmp) / 'behind'
+    _git(tmp, 'clone', str(origin), str(behind))
+    _config(behind)
+    _commit(behind, 'feat: the head under test', {'head.txt': 'head\n'})
+    side = Path(tmp) / 'side'
+    _git(tmp, 'clone', str(origin), str(side))
+    _config(side)
+    _commit(side, 'ci: the side parent', {
+        '.github/workflows/actionlint.yml':
+            'name: actionlint\non: push\njobs:\n  actionlint:\n'
+            '    runs-on: side\n    steps:\n'
+            '      - run: ./actionlint -color .github/workflows/*.yml\n'})
+    # adv diverges BEFORE the side push, so the pull must merge: origin's
+    # main then carries a real merge commit for the stale listing to name.
+    adv = Path(tmp) / 'adv'
+    _git(tmp, 'clone', str(origin), str(adv))
+    _config(adv)
+    _commit(adv, 'ci: the second parent', {
+        '.github/workflows/tests.yml':
+            'name: tests\non: push\njobs:\n  aggregate:\n'
+            '    steps:\n      - run: python run_tests.py\n'})
+    _git(side, 'push', 'origin', 'main')
+    _git(adv, 'pull', '--no-rebase', 'origin', 'main')
+    _git(adv, 'push', 'origin', 'main')
+    return behind
 
 
 def _dependency_fixture(tmp):
@@ -209,6 +245,18 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         assert '.github/workflows/actionlint.yml' in done.stdout
         assert 'Rebase onto main' in done.stdout
 
+    def test_green_on_a_main_push_run_main_has_since_moved_past(self):
+        repo, origin = _fixture(self.tmp)
+        _advance_main(self.tmp, origin, 'chore(ratchet): tighten size records',
+                      {'.github/workflows/actionlint.yml': 'name: actionlint\n'},
+                      head_commit=False)
+        done = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
+             '--root', str(repo)], check=False, capture_output=True, text=True)
+        assert done.returncode == 0, (done.stdout, done.stderr)
+        assert 'already on main, which holds 1 gate-defining commit past it' in done.stdout
+        assert 'Rebase' not in done.stdout
+
     # The workflow step runs the script from the checkout root with no --root,
     # so the default root has to be the repository root. git resolves pathspecs
     # against the `git -C` chdir, so a default root at scripts/ would empty the
@@ -263,34 +311,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         self.assertFalse(any('--detach' in argv for argv in maintenance), maintenance)
 
     def test_red_names_a_merge_commit(self):
-        tmp = self.tmp
-        _, origin = _fixture(tmp)
-        # The stale clone is taken BEFORE the merge lands on origin: its own
-        # fetch_base is what brings the merge into view, which is the situation
-        # the check exists to answer.
-        behind = Path(tmp) / 'behind'
-        _git(tmp, 'clone', str(origin), str(behind))
-        _config(behind)
-        side = Path(tmp) / 'side'
-        _git(tmp, 'clone', str(origin), str(side))
-        _config(side)
-        _commit(side, 'ci: the side parent', {
-            '.github/workflows/actionlint.yml':
-                'name: actionlint\non: push\njobs:\n  actionlint:\n'
-                '    runs-on: side\n    steps:\n'
-                '      - run: ./actionlint -color .github/workflows/*.yml\n'})
-        # adv diverges BEFORE the side push, so the pull must merge: origin's
-        # main then carries a real merge commit for the stale listing to name.
-        adv = Path(tmp) / 'adv'
-        _git(tmp, 'clone', str(origin), str(adv))
-        _config(adv)
-        _commit(adv, 'ci: the second parent', {
-            '.github/workflows/tests.yml':
-                'name: tests\non: push\njobs:\n  aggregate:\n'
-                '    steps:\n      - run: python run_tests.py\n'})
-        _git(side, 'push', 'origin', 'main')
-        _git(adv, 'pull', '--no-rebase', 'origin', 'main')
-        _git(adv, 'push', 'origin', 'main')
+        behind = _merged_main(self.tmp)
         done = subprocess.run(
             [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
              '--root', str(behind)], check=False, capture_output=True, text=True)
@@ -636,29 +657,7 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
             'is a gate-read file')
 
     def test_check_reports_a_merge_commit_in_process(self):
-        tmp = self.tmp
-        _, origin = _fixture(tmp)
-        behind = Path(tmp) / 'behind'
-        _git(tmp, 'clone', str(origin), str(behind))
-        _config(behind)
-        side = Path(tmp) / 'side'
-        _git(tmp, 'clone', str(origin), str(side))
-        _config(side)
-        _commit(side, 'ci: the side parent', {
-            '.github/workflows/actionlint.yml':
-                'name: actionlint\non: push\njobs:\n  actionlint:\n'
-                '    steps:\n'
-                '      - run: ./actionlint -color .github/workflows/*.yml\n'})
-        adv = Path(tmp) / 'adv'
-        _git(tmp, 'clone', str(origin), str(adv))
-        _config(adv)
-        _commit(adv, 'ci: the second parent', {
-            '.github/workflows/tests.yml':
-                'name: tests\non: push\njobs:\n  aggregate:\n'
-                '    steps:\n      - run: python run_tests.py\n'})
-        _git(side, 'push', 'origin', 'main')
-        _git(adv, 'pull', '--no-rebase', 'origin', 'main')
-        _git(adv, 'push', 'origin', 'main')
+        behind = _merged_main(self.tmp)
         module = _load()
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
