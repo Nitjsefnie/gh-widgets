@@ -85,6 +85,7 @@ class TestUnguardedTests(unittest.TestCase):
         for guard in GUARDS:
             with self.subTest(guard=guard):
                 doc = klass(doc=[f"Wants {guard}."])
+                self.assertEqual(ast.get_docstring(ast.parse(doc).body[0]), f"Wants {guard}.")
                 body = klass(call=f"{MEASURE}; _ = '{guard}'")
                 self.assertEqual(unguarded_tests(doc), ["test_probe"])
                 self.assertEqual(unguarded_tests(body), ["test_probe"])
@@ -108,6 +109,7 @@ class TestUnguardedTests(unittest.TestCase):
                 self.assertEqual(unguarded_tests(bare), [inner])
                 self.assertEqual(unguarded_tests(guarded), [])
                 outer_guarded = klass(guard=[guard], nested=[bare])
+                self.assertEqual(len(ast.parse(outer_guarded).body), 1)
                 outer_bare = klass(nested=[guarded])
                 self.assertEqual(unguarded_tests(outer_guarded), [inner])
                 self.assertEqual(unguarded_tests(outer_bare), ["test_probe"])
