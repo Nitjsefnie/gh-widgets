@@ -96,7 +96,7 @@ def _fixture(tmp):
 
 def _advance_main(tmp, origin, subject, files, head_commit=True):
     """Push a commit to origin's main from a second clone, first giving the head
-    under test (repo) a commit main lacks, as every pull-request head has."""
+    under test (repo) a commit main lacks, as an unmerged pull-request head has."""
     if head_commit:
         _commit(Path(tmp) / 'repo', 'feat: the head under test', {'head.txt': 'head\n'})
     other = Path(tmp) / 'other'
@@ -246,16 +246,16 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         assert 'Rebase onto main' in done.stdout
 
     def test_green_on_a_main_push_run_main_has_since_moved_past(self):
-        repo, origin = _fixture(self.tmp)
-        _advance_main(self.tmp, origin, 'chore(ratchet): tighten size records',
-                      {'.github/workflows/actionlint.yml': 'name: actionlint\n'},
-                      head_commit=False)
-        done = subprocess.run(
-            [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
-             '--root', str(repo)], check=False, capture_output=True, text=True)
-        assert done.returncode == 0, (done.stdout, done.stderr)
-        assert 'already on main, which holds 1 gate-defining commit past it' in done.stdout
-        assert 'Rebase' not in done.stdout
+        for subject in ('chore(ratchet): tighten size records', 'fix: an ordinary gate change'):
+            with self.subTest(subject=subject), _ghw_temp.tempdir() as tmp:
+                repo, origin = _fixture(Path(tmp))
+                _advance_main(Path(tmp), origin, subject, {'.github/workflows/actionlint.yml': 'moved\n'}, head_commit=False)
+                done = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts/ci/gate_base_freshness.py'),
+                     '--root', str(repo)], check=False, capture_output=True, text=True)
+                assert done.returncode == 0, (done.stdout, done.stderr)
+                assert ('already on main, which holds 1 gate-defining commit past it' in done.stdout
+                        and 'Rebase' not in done.stdout), done.stdout
 
     # The workflow step runs the script from the checkout root with no --root,
     # so the default root has to be the repository root. git resolves pathspecs
