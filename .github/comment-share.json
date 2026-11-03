@@ -52,8 +52,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    29959,
-    51213
+    29812,
+    51159
   ],
   "ghwidgets_data.py": [
     2108,
@@ -88,8 +88,8 @@
     32453
   ],
   "scripts/ci/counter.py": [
-    16739,
-    28028
+    16369,
+    27844
   ],
   "scripts/ci/counter_platform.py": [
     363,
@@ -104,8 +104,8 @@
     11806
   ],
   "scripts/ci/gate_base_freshness.py": [
-    12221,
-    26305
+    11894,
+    26214
   ],
   "scripts/ci/ratchet_declarations.py": [
     1243,
