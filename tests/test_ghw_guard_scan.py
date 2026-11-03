@@ -85,7 +85,9 @@ class TestUnguardedTests(unittest.TestCase):
         for guard in GUARDS:
             with self.subTest(guard=guard):
                 doc = klass(doc=[f"Wants {guard}."])
-                self.assertEqual(ast.get_docstring(ast.parse(doc).body[0]), f"Wants {guard}.")
+                klass_node = ast.parse(doc).body[0]
+                assert isinstance(klass_node, ast.ClassDef)
+                self.assertEqual(ast.get_docstring(klass_node), f"Wants {guard}.")
                 body = klass(call=f"{MEASURE}; _ = '{guard}'")
                 self.assertEqual(unguarded_tests(doc), ["test_probe"])
                 self.assertEqual(unguarded_tests(body), ["test_probe"])
