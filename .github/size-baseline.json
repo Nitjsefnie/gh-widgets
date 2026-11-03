@@ -20,7 +20,7 @@
     "tests/test_ci_workflows.py": 1767,
     "tests/test_common.py": 1298,
     "tests/test_compare_counters.py": 566,
-    "tests/test_counter.py": 843,
+    "tests/test_counter.py": 810,
     "tests/test_coverage_ratchet.py": 774,
     "tests/test_coverage_ratchet_ci.py": 968,
     "tests/test_data.py": 891,
