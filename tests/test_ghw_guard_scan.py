@@ -178,6 +178,8 @@ class TestUnguardedTests(unittest.TestCase):
             for call, found in calls:
                 with self.subTest(keyword=keyword, call=call):
                     source = klass(call=call, kind=keyword)
+                    # ast.parse takes an await in a plain def; compile does not.
+                    compile(source, "<fixture>", "exec")
                     self.assertIs(type(definition(source)), node_type)
                     self.assertEqual(unguarded_tests(source), found)
             with self.subTest(keyword=keyword, method="probe"):
