@@ -9,13 +9,14 @@ GUARDS = ("REQUIRES_BENCH", "REQUIRES_POSIX_SHELL")
 MEASURE = "counter.measure(cmd)"
 RUNNER = "runner.measure(cmd)"
 CLI = "run(['scripts/ci/counter.py'])"
+KINDS = {"def": ast.FunctionDef, "async def": ast.AsyncFunctionDef}
 
 
 def unguarded_tests(source):
     tree = ast.parse(source)
     found = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if not node.name.startswith("test_"):
             continue
@@ -51,13 +52,13 @@ def _enclosing_decorators(tree, target):
 
 
 def klass(guard=(), own=(), method="test_probe", call=MEASURE, doc=(),
-          nested=()):
+          nested=(), kind="def"):
     return "".join([
         *(f"@{name}\n" for name in guard),
         "class TestSample(unittest.TestCase):\n",
         *(f'    """{text}"""\n' for text in doc),
         *(f"    @{name}\n" for name in own),
-        f"    def {method}(self):\n",
+        f"    {kind} {method}(self):\n",
         f"        {call}\n",
         *(textwrap.indent(source, "    ") for source in nested)])
 
@@ -67,17 +68,50 @@ def decorator_types(source):
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.ClassDef)
     method = node.body[0]
-    assert isinstance(method, ast.FunctionDef)
+    assert isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
     return ([type(d) for d in node.decorator_list],
             [type(d) for d in method.decorator_list])
 
 
+def member(keyword, name, own=()):
+    """One more method for klass() to nest in its class."""
+    return "".join([*(f"@{text}\n" for text in own),
+                    f"{keyword} {name}(self):\n",
+                    f"    {MEASURE}\n"])
+
+
+def definition(source):
+    """The one function, or the one method of the one class, in source."""
+    node = ast.parse(source).body[0]
+    if isinstance(node, ast.ClassDef):
+        node = node.body[0]
+    assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    return node
+
+
+def body_shape(source):
+    """Node type, name and decorator node types of each member of the class."""
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.ClassDef)
+    shape = []
+    for child in node.body:
+        assert isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        shape.append((type(child), child.name,
+                      [type(d) for d in child.decorator_list]))
+    return shape
+
+
 class TestUnguardedTests(unittest.TestCase):
-    def verdicts(self, text, node_type):
+    def assert_defines(self, source, keyword):
+        self.assertIs(type(definition(source)), KINDS[keyword])
+
+    def verdicts(self, text, node_type, keyword="def"):
         """The scan's verdict on one decorator, on a class and on a method."""
         found = []
-        for source, types in ((klass(guard=[text]), ([node_type], [])),
-                              (klass(own=[text]), ([], [node_type]))):
+        for source, types in (
+                (klass(guard=[text], kind=keyword), ([node_type], [])),
+                (klass(own=[text], kind=keyword), ([], [node_type]))):
+            self.assert_defines(source, keyword)
             self.assertEqual(decorator_types(source), types)
             found.append(unguarded_tests(source))
         return found
@@ -128,27 +162,34 @@ class TestUnguardedTests(unittest.TestCase):
 
     def test_a_guard_on_one_class_does_not_cover_another(self):
         for guard in GUARDS:
-            with self.subTest(guard=guard):
-                guarded = klass(guard=[guard])
-                bare = klass()
-                self.assertEqual(unguarded_tests(guarded), [])
-                self.assertEqual(unguarded_tests(bare), ["test_probe"])
-                for source in (guarded + bare, bare + guarded):
-                    self.assertEqual(unguarded_tests(source), ["test_probe"])
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    guarded = klass(guard=[guard], kind=keyword)
+                    bare = klass(kind=keyword)
+                    self.assert_defines(bare, keyword)
+                    self.assertEqual(unguarded_tests(guarded), [])
+                    self.assertEqual(unguarded_tests(bare), ["test_probe"])
+                    for source in (guarded + bare, bare + guarded):
+                        self.assertEqual(unguarded_tests(source),
+                                         ["test_probe"])
 
     def test_a_nested_class_is_judged_by_its_own_guards(self):
         for guard in GUARDS:
-            with self.subTest(guard=guard):
-                inner = "test_inner"
-                bare = klass(method=inner)
-                guarded = klass(guard=[guard], method=inner)
-                self.assertEqual(unguarded_tests(bare), [inner])
-                self.assertEqual(unguarded_tests(guarded), [])
-                outer_guarded = klass(guard=[guard], nested=[bare])
-                self.assertEqual(len(ast.parse(outer_guarded).body), 1)
-                outer_bare = klass(nested=[guarded])
-                self.assertEqual(unguarded_tests(outer_guarded), [inner])
-                self.assertEqual(unguarded_tests(outer_bare), ["test_probe"])
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    inner = "test_inner"
+                    bare = klass(method=inner, kind=keyword)
+                    self.assert_defines(bare, keyword)
+                    guarded = klass(guard=[guard], method=inner, kind=keyword)
+                    self.assertEqual(unguarded_tests(bare), [inner])
+                    self.assertEqual(unguarded_tests(guarded), [])
+                    outer_guarded = klass(guard=[guard], nested=[bare],
+                                          kind=keyword)
+                    self.assertEqual(len(ast.parse(outer_guarded).body), 1)
+                    outer_bare = klass(nested=[guarded], kind=keyword)
+                    self.assertEqual(unguarded_tests(outer_guarded), [inner])
+                    self.assertEqual(unguarded_tests(outer_bare),
+                                     ["test_probe"])
 
     def test_a_decorator_that_only_names_a_guard_is_not_one(self):
         for guard in GUARDS:
@@ -191,3 +232,116 @@ class TestUnguardedTests(unittest.TestCase):
                                  [ast.Name])
                 self.assertEqual(unguarded_tests(bare), ["test_probe"])
                 self.assertEqual(unguarded_tests(guarded), [])
+
+    def test_a_test_is_reported_whether_or_not_it_is_async(self):
+        for keyword in KINDS:
+            with self.subTest(keyword=keyword):
+                source = klass(kind=keyword)
+                self.assert_defines(source, keyword)
+                self.assertEqual(unguarded_tests(source), ["test_probe"])
+                other = klass(kind=keyword, method="probe")
+                self.assert_defines(other, keyword)
+                self.assertEqual(unguarded_tests(other), [])
+
+    def test_an_async_test_reaches_the_instrument_through_its_awaits(self):
+        for call, found in ((f"await {MEASURE}", ["test_probe"]),
+                            (f"await {RUNNER}", ["test_probe"]),
+                            (f"await {CLI}", ["test_probe"]),
+                            (f"async with {MEASURE}: pass", ["test_probe"]),
+                            ("await run(cmd)", [])):
+            with self.subTest(call=call):
+                source = klass(kind="async def", call=call)
+                self.assert_defines(source, "async def")
+                self.assertEqual(unguarded_tests(source), found)
+
+    def test_an_async_method_is_exempt_by_its_own_or_its_class_guard(self):
+        for guard in GUARDS:
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    patch = 'mock.patch("x.y", None)'
+                    for source, types in (
+                            (klass(own=[guard], kind=keyword),
+                             ([], [ast.Name])),
+                            (klass(guard=[guard], kind=keyword),
+                             ([ast.Name], [])),
+                            (klass(guard=[guard], own=[patch], kind=keyword),
+                             ([ast.Name], [ast.Call])),
+                            (klass(guard=[patch, guard], kind=keyword),
+                             ([ast.Call, ast.Name], [])),
+                            (klass(guard=[guard, patch], kind=keyword),
+                             ([ast.Name, ast.Call], [])),
+                            (klass(own=[patch, guard], kind=keyword),
+                             ([], [ast.Call, ast.Name])),
+                            (klass(own=[guard, patch], kind=keyword),
+                             ([], [ast.Name, ast.Call]))):
+                        self.assert_defines(source, keyword)
+                        self.assertEqual(decorator_types(source), types)
+                        self.assertEqual(unguarded_tests(source), [])
+
+    def test_an_async_test_is_not_exempted_by_a_decorator_that_names_a_guard(
+            self):
+        for guard in GUARDS:
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    self.assertEqual(
+                        self.verdicts(f'mock.patch("x.{guard}", None)',
+                                      ast.Call, keyword),
+                        [["test_probe"]] * 2)
+
+    def test_an_async_function_outside_any_class_is_judged_by_its_decorators(
+            self):
+        for guard in GUARDS:
+            for keyword in KINDS:
+                bare = f"{keyword} test_probe():\n    {MEASURE}\n"
+                for text, types, found in (
+                        ("", [], ["test_probe"]),
+                        (f"@{guard}\n", [ast.Name], []),
+                        (f'@mock.patch("x.{guard}", None)\n', [ast.Call],
+                         ["test_probe"])):
+                    with self.subTest(guard=guard, keyword=keyword,
+                                      decorator=text):
+                        source = text + bare
+                        self.assert_defines(source, keyword)
+                        self.assertEqual(
+                            [type(d) for d in definition(source).decorator_list],
+                            types)
+                        self.assertEqual(unguarded_tests(source), found)
+
+    def test_sync_and_async_methods_of_one_class_are_judged_independently(self):
+        for guard in GUARDS:
+            with self.subTest(guard=guard):
+                patch = f'mock.patch("x.{guard}", None)'
+                members = ["async def test_async_unreached(self):\n    run(cmd)\n",
+                           member("async def", "test_async_bare"),
+                           member("def", "test_sync_guarded", own=[guard]),
+                           member("async def", "test_async_patched",
+                                  own=[patch]),
+                           member("async def", "test_async_guarded",
+                                  own=[guard]),
+                           member("def", "test_sync_patched", own=[patch]),
+                           member("async def", "helper_async"),
+                           member("def", "helper_sync")]
+                bare = klass(method="test_sync_bare", nested=members)
+                covered = klass(guard=[guard], method="test_sync_bare",
+                                nested=members)
+                for source in (bare, covered):
+                    self.assertEqual(
+                        body_shape(source),
+                        [(ast.FunctionDef, "test_sync_bare", []),
+                         (ast.AsyncFunctionDef, "test_async_unreached", []),
+                         (ast.AsyncFunctionDef, "test_async_bare", []),
+                         (ast.FunctionDef, "test_sync_guarded", [ast.Name]),
+                         (ast.AsyncFunctionDef, "test_async_patched",
+                          [ast.Call]),
+                         (ast.AsyncFunctionDef, "test_async_guarded",
+                          [ast.Name]),
+                         (ast.FunctionDef, "test_sync_patched", [ast.Call]),
+                         (ast.AsyncFunctionDef, "helper_async", []),
+                         (ast.FunctionDef, "helper_sync", [])])
+                self.assertEqual(decorator_types(bare)[0], [])
+                self.assertEqual(decorator_types(covered)[0], [ast.Name])
+                reported = ["test_sync_bare", "test_async_bare",
+                            "test_async_patched", "test_sync_patched"]
+                self.assertEqual(unguarded_tests(bare), reported)
+                self.assertEqual(unguarded_tests(bare + bare), reported * 2)
+                self.assertEqual(unguarded_tests(covered), [])
