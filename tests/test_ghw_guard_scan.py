@@ -170,16 +170,19 @@ class TestUnguardedTests(unittest.TestCase):
                   (f"await {CLI}", ["test_probe"]),
                   (f"async with {MEASURE}: pass", ["test_probe"]),
                   ("await run(cmd)", []))
-        for keyword, calls in (("def", reaches),
-                               ("async def", reaches + awaits)):
+        for keyword, node_type, calls in (
+                ("def", ast.FunctionDef, reaches),
+                ("async def", ast.AsyncFunctionDef, reaches + awaits)):
+            with self.subTest(keyword=keyword):
+                self.assertIs(KINDS[keyword], node_type)
             for call, found in calls:
                 with self.subTest(keyword=keyword, call=call):
                     source = klass(call=call, kind=keyword)
-                    self.assert_defines(source, keyword)
+                    self.assertIs(type(definition(source)), node_type)
                     self.assertEqual(unguarded_tests(source), found)
             with self.subTest(keyword=keyword, method="probe"):
                 source = klass(method="probe", kind=keyword)
-                self.assert_defines(source, keyword)
+                self.assertIs(type(definition(source)), node_type)
                 self.assertEqual(unguarded_tests(source), [])
 
     def test_naming_a_guard_in_the_class_is_not_declaring_one(self):
@@ -203,6 +206,7 @@ class TestUnguardedTests(unittest.TestCase):
                 with self.subTest(guard=guard, keyword=keyword):
                     guarded = klass(guard=[guard], kind=keyword)
                     bare = klass(kind=keyword)
+                    self.assert_defines(guarded, keyword)
                     self.assert_defines(bare, keyword)
                     self.assertEqual(unguarded_tests(guarded), [])
                     self.assertEqual(unguarded_tests(bare), ["test_probe"])
@@ -218,12 +222,15 @@ class TestUnguardedTests(unittest.TestCase):
                     bare = klass(method=inner, kind=keyword)
                     self.assert_defines(bare, keyword)
                     guarded = klass(guard=[guard], method=inner, kind=keyword)
+                    self.assert_defines(guarded, keyword)
                     self.assertEqual(unguarded_tests(bare), [inner])
                     self.assertEqual(unguarded_tests(guarded), [])
                     outer_guarded = klass(guard=[guard], nested=[bare],
                                           kind=keyword)
                     self.assertEqual(len(ast.parse(outer_guarded).body), 1)
+                    self.assert_defines(outer_guarded, keyword)
                     outer_bare = klass(nested=[guarded], kind=keyword)
+                    self.assert_defines(outer_bare, keyword)
                     self.assertEqual(unguarded_tests(outer_guarded), [inner])
                     self.assertEqual(unguarded_tests(outer_bare),
                                      ["test_probe"])
