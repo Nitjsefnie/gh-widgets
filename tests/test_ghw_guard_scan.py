@@ -84,7 +84,7 @@ def definition(source):
     """The one function, or the one method of the one class, in source."""
     node = ast.parse(source).body[0]
     if isinstance(node, ast.ClassDef):
-        node = node.body[0]
+        node = next(n for n in node.body if not isinstance(n, ast.Expr))
     assert isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     return node
 
@@ -105,7 +105,7 @@ class TestUnguardedTests(unittest.TestCase):
     def assert_defines(self, source, keyword):
         self.assertIs(type(definition(source)), KINDS[keyword])
 
-    def verdicts(self, text, node_type, keyword="def"):
+    def verdicts(self, text, node_type, keyword):
         """The scan's verdict on one decorator, on a class and on a method."""
         found = []
         for source, types in (
@@ -117,48 +117,85 @@ class TestUnguardedTests(unittest.TestCase):
         return found
 
     def test_an_undecorated_class_reports_its_method(self):
-        self.assertEqual(unguarded_tests(klass()), ["test_probe"])
+        for keyword in KINDS:
+            with self.subTest(keyword=keyword):
+                source = klass(kind=keyword)
+                self.assert_defines(source, keyword)
+                self.assertEqual(unguarded_tests(source), ["test_probe"])
 
     def test_a_class_level_guard_covers_its_method(self):
         for guard in GUARDS:
-            with self.subTest(guard=guard):
-                self.assertEqual(unguarded_tests(klass()), ["test_probe"])
-                self.assertEqual(unguarded_tests(klass(guard=[guard])), [])
-                self.assertEqual(
-                    unguarded_tests(klass(guard=[guard], doc=["Doc."])), [])
-                patch = 'mock.patch("x.y", None)'
-                for source, types in (
-                        (klass(guard=[guard], own=[patch]),
-                         ([ast.Name], [ast.Call])),
-                        (klass(guard=[patch, guard]), ([ast.Call, ast.Name], [])),
-                        (klass(guard=[guard, patch]), ([ast.Name, ast.Call], [])),
-                        (klass(own=[patch, guard]), ([], [ast.Call, ast.Name])),
-                        (klass(own=[guard, patch]), ([], [ast.Name, ast.Call]))):
-                    self.assertEqual(decorator_types(source), types)
-                    self.assertEqual(unguarded_tests(source), [])
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    self.assertEqual(unguarded_tests(klass(kind=keyword)),
+                                     ["test_probe"])
+                    doc = klass(guard=[guard], doc=["Doc."], kind=keyword)
+                    self.assert_defines(doc, keyword)
+                    self.assertEqual(unguarded_tests(doc), [])
+                    patch = 'mock.patch("x.y", None)'
+                    for source, types in (
+                            (klass(guard=[guard], kind=keyword),
+                             ([ast.Name], [])),
+                            (klass(guard=[guard], own=[patch], kind=keyword),
+                             ([ast.Name], [ast.Call])),
+                            (klass(guard=[patch, guard], kind=keyword),
+                             ([ast.Call, ast.Name], [])),
+                            (klass(guard=[guard, patch], kind=keyword),
+                             ([ast.Name, ast.Call], [])),
+                            (klass(own=[patch, guard], kind=keyword),
+                             ([], [ast.Call, ast.Name])),
+                            (klass(own=[guard, patch], kind=keyword),
+                             ([], [ast.Name, ast.Call]))):
+                        self.assert_defines(source, keyword)
+                        self.assertEqual(decorator_types(source), types)
+                        self.assertEqual(unguarded_tests(source), [])
 
     def test_a_method_level_guard_covers_its_method(self):
         for guard in GUARDS:
-            with self.subTest(guard=guard):
-                self.assertEqual(unguarded_tests(klass()), ["test_probe"])
-                self.assertEqual(unguarded_tests(klass(own=[guard])), [])
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    self.assertEqual(unguarded_tests(klass(kind=keyword)),
+                                     ["test_probe"])
+                    source = klass(own=[guard], kind=keyword)
+                    self.assert_defines(source, keyword)
+                    self.assertEqual(decorator_types(source), ([], [ast.Name]))
+                    self.assertEqual(unguarded_tests(source), [])
 
     def test_each_way_of_reaching_the_instrument_is_found(self):
-        self.assertEqual(unguarded_tests(klass(call="run(cmd)")), [])
-        self.assertEqual(unguarded_tests(klass(call=RUNNER)), ["test_probe"])
-        self.assertEqual(unguarded_tests(klass(call=CLI)), ["test_probe"])
-        self.assertEqual(unguarded_tests(klass(method="probe")), [])
+        reaches = (("run(cmd)", []),
+                   (RUNNER, ["test_probe"]),
+                   (CLI, ["test_probe"]))
+        awaits = ((f"await {MEASURE}", ["test_probe"]),
+                  (f"await {RUNNER}", ["test_probe"]),
+                  (f"await {CLI}", ["test_probe"]),
+                  (f"async with {MEASURE}: pass", ["test_probe"]),
+                  ("await run(cmd)", []))
+        for keyword, calls in (("def", reaches),
+                               ("async def", reaches + awaits)):
+            for call, found in calls:
+                with self.subTest(keyword=keyword, call=call):
+                    source = klass(call=call, kind=keyword)
+                    self.assert_defines(source, keyword)
+                    self.assertEqual(unguarded_tests(source), found)
+            with self.subTest(keyword=keyword, method="probe"):
+                source = klass(method="probe", kind=keyword)
+                self.assert_defines(source, keyword)
+                self.assertEqual(unguarded_tests(source), [])
 
     def test_naming_a_guard_in_the_class_is_not_declaring_one(self):
         for guard in GUARDS:
-            with self.subTest(guard=guard):
-                doc = klass(doc=[f"Wants {guard}."])
-                klass_node = ast.parse(doc).body[0]
-                assert isinstance(klass_node, ast.ClassDef)
-                self.assertEqual(ast.get_docstring(klass_node), f"Wants {guard}.")
-                body = klass(call=f"{MEASURE}; _ = '{guard}'")
-                self.assertEqual(unguarded_tests(doc), ["test_probe"])
-                self.assertEqual(unguarded_tests(body), ["test_probe"])
+            for keyword in KINDS:
+                with self.subTest(guard=guard, keyword=keyword):
+                    doc = klass(doc=[f"Wants {guard}."], kind=keyword)
+                    self.assert_defines(doc, keyword)
+                    klass_node = ast.parse(doc).body[0]
+                    assert isinstance(klass_node, ast.ClassDef)
+                    self.assertEqual(ast.get_docstring(klass_node),
+                                     f"Wants {guard}.")
+                    body = klass(call=f"{MEASURE}; _ = '{guard}'", kind=keyword)
+                    self.assert_defines(body, keyword)
+                    self.assertEqual(unguarded_tests(doc), ["test_probe"])
+                    self.assertEqual(unguarded_tests(body), ["test_probe"])
 
     def test_a_guard_on_one_class_does_not_cover_another(self):
         for guard in GUARDS:
@@ -193,103 +230,43 @@ class TestUnguardedTests(unittest.TestCase):
 
     def test_a_decorator_that_only_names_a_guard_is_not_one(self):
         for guard in GUARDS:
-            for text in (f'mock.patch("x.{guard}", None)',
-                         f"unittest.skipUnless({guard}, 'why')",
-                         f"mock.patch.object(bench.{guard}, 'x')",
-                         f"{guard}()"):
-                with self.subTest(guard=guard, text=text):
-                    self.assertEqual(self.verdicts(text, ast.Call),
-                                     [["test_probe"]] * 2)
+            for keyword in KINDS:
+                for text in (f'mock.patch("x.{guard}", None)',
+                             f"unittest.skipUnless({guard}, 'why')",
+                             f"mock.patch.object(bench.{guard}, 'x')",
+                             f"{guard}()"):
+                    with self.subTest(guard=guard, keyword=keyword, text=text):
+                        self.assertEqual(
+                            self.verdicts(text, ast.Call, keyword),
+                            [["test_probe"]] * 2)
 
     def test_a_guard_is_a_name_or_an_attribute_ending_in_one(self):
         for guard in GUARDS:
-            for text, node_type in ((guard, ast.Name),
-                                    (f"bench_platform.{guard}", ast.Attribute),
-                                    (f"scripts.bench.{guard}", ast.Attribute)):
-                with self.subTest(guard=guard, text=text):
-                    self.assertEqual(unguarded_tests(klass()), ["test_probe"])
-                    self.assertEqual(self.verdicts(text, node_type), [[], []])
+            for keyword in KINDS:
+                for text, node_type in (
+                        (guard, ast.Name),
+                        (f"bench_platform.{guard}", ast.Attribute),
+                        (f"scripts.bench.{guard}", ast.Attribute)):
+                    with self.subTest(guard=guard, keyword=keyword, text=text):
+                        self.assertEqual(unguarded_tests(klass(kind=keyword)),
+                                         ["test_probe"])
+                        self.assertEqual(
+                            self.verdicts(text, node_type, keyword), [[], []])
 
     def test_a_name_that_only_contains_a_guard_is_not_one(self):
         for guard in GUARDS:
-            for text, node_type in ((f"{guard}_X", ast.Name),
-                                    (f"NOT_{guard}", ast.Name),
-                                    (f"bench.{guard}_X", ast.Attribute),
-                                    (f"bench.NOT_{guard}", ast.Attribute),
-                                    (f"{guard}.skip", ast.Attribute)):
-                with self.subTest(guard=guard, text=text):
-                    self.assertEqual(self.verdicts(text, node_type),
-                                     [["test_probe"]] * 2)
+            for keyword in KINDS:
+                for text, node_type in ((f"{guard}_X", ast.Name),
+                                        (f"NOT_{guard}", ast.Name),
+                                        (f"bench.{guard}_X", ast.Attribute),
+                                        (f"bench.NOT_{guard}", ast.Attribute),
+                                        (f"{guard}.skip", ast.Attribute)):
+                    with self.subTest(guard=guard, keyword=keyword, text=text):
+                        self.assertEqual(
+                            self.verdicts(text, node_type, keyword),
+                            [["test_probe"]] * 2)
 
     def test_a_function_outside_any_class_is_judged_by_its_own_decorators(self):
-        for guard in GUARDS:
-            with self.subTest(guard=guard):
-                bare = f"def test_probe():\n    {MEASURE}\n"
-                guarded = f"@{guard}\n{bare}"
-                function = ast.parse(guarded).body[0]
-                assert isinstance(function, ast.FunctionDef)
-                self.assertEqual([type(d) for d in function.decorator_list],
-                                 [ast.Name])
-                self.assertEqual(unguarded_tests(bare), ["test_probe"])
-                self.assertEqual(unguarded_tests(guarded), [])
-
-    def test_a_test_is_reported_whether_or_not_it_is_async(self):
-        for keyword in KINDS:
-            with self.subTest(keyword=keyword):
-                source = klass(kind=keyword)
-                self.assert_defines(source, keyword)
-                self.assertEqual(unguarded_tests(source), ["test_probe"])
-                other = klass(kind=keyword, method="probe")
-                self.assert_defines(other, keyword)
-                self.assertEqual(unguarded_tests(other), [])
-
-    def test_an_async_test_reaches_the_instrument_through_its_awaits(self):
-        for call, found in ((f"await {MEASURE}", ["test_probe"]),
-                            (f"await {RUNNER}", ["test_probe"]),
-                            (f"await {CLI}", ["test_probe"]),
-                            (f"async with {MEASURE}: pass", ["test_probe"]),
-                            ("await run(cmd)", [])):
-            with self.subTest(call=call):
-                source = klass(kind="async def", call=call)
-                self.assert_defines(source, "async def")
-                self.assertEqual(unguarded_tests(source), found)
-
-    def test_an_async_method_is_exempt_by_its_own_or_its_class_guard(self):
-        for guard in GUARDS:
-            for keyword in KINDS:
-                with self.subTest(guard=guard, keyword=keyword):
-                    patch = 'mock.patch("x.y", None)'
-                    for source, types in (
-                            (klass(own=[guard], kind=keyword),
-                             ([], [ast.Name])),
-                            (klass(guard=[guard], kind=keyword),
-                             ([ast.Name], [])),
-                            (klass(guard=[guard], own=[patch], kind=keyword),
-                             ([ast.Name], [ast.Call])),
-                            (klass(guard=[patch, guard], kind=keyword),
-                             ([ast.Call, ast.Name], [])),
-                            (klass(guard=[guard, patch], kind=keyword),
-                             ([ast.Name, ast.Call], [])),
-                            (klass(own=[patch, guard], kind=keyword),
-                             ([], [ast.Call, ast.Name])),
-                            (klass(own=[guard, patch], kind=keyword),
-                             ([], [ast.Name, ast.Call]))):
-                        self.assert_defines(source, keyword)
-                        self.assertEqual(decorator_types(source), types)
-                        self.assertEqual(unguarded_tests(source), [])
-
-    def test_an_async_test_is_not_exempted_by_a_decorator_that_names_a_guard(
-            self):
-        for guard in GUARDS:
-            for keyword in KINDS:
-                with self.subTest(guard=guard, keyword=keyword):
-                    self.assertEqual(
-                        self.verdicts(f'mock.patch("x.{guard}", None)',
-                                      ast.Call, keyword),
-                        [["test_probe"]] * 2)
-
-    def test_an_async_function_outside_any_class_is_judged_by_its_decorators(
-            self):
         for guard in GUARDS:
             for keyword in KINDS:
                 bare = f"{keyword} test_probe():\n    {MEASURE}\n"
