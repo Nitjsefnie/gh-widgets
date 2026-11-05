@@ -327,17 +327,26 @@ subject to the rules.
 
 ## Commit messages
 
-Use `type(scope): summary` when a scope helps identify the change. The types
-in use are:
+Every commit message follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+`type(scope)!: subject`, the scope and `!` optional, and the type one of:
 
 | Type | Change |
 | --- | --- |
+| `build` | Build system and dependency updates |
+| `chore` | Maintenance that fits no other type |
 | `ci` | Workflows and CI tooling |
-| `deps` | Dependency updates |
 | `docs` | Documentation |
+| `feat` | New features |
 | `fix` | Bug fixes |
+| `perf` | Performance improvements |
+| `refactor` | Code changes that neither fix a bug nor add a feature |
+| `revert` | Reverts of earlier commits |
 | `style` | Formatting and style |
 | `test` | Tests |
+
+A breaking change carries `!`. Messages an automation writes follow the
+same format: Dependabot commits pip bumps as `build(deps)` or
+`build(deps-dev)` and GitHub Actions bumps as `ci(deps)`.
 
 A workflow's name (its top-level `name:`) or file stem is a scope only with
 the `ci` type: use `ci(tests)` for the tests workflow. The
