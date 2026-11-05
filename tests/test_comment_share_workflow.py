@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.test_ratchet_concurrency import RATCHET_SUFFIX
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -13,7 +15,8 @@ class TestCommentShareWorkflow(unittest.TestCase):
         workflow = yaml.safe_load(text)
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertEqual(workflow["concurrency"], {
-            "group": "comment-share-${{ github.ref }}", "cancel-in-progress": True})
+            "group": "comment-share-${{ github.ref }}" + RATCHET_SUFFIX,
+            "cancel-in-progress": True})
         self.assertEqual(set(workflow["jobs"]), {"comment-share"})
         job = workflow["jobs"]["comment-share"]
         self.assertNotIn("name", job)

@@ -44,6 +44,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.test_ratchet_concurrency import RATCHET_SUFFIX
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -898,17 +900,8 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
         concurrency = _block(records, 0, "concurrency")
         self.assertEqual(
             _value(concurrency, 2, "group"),
-            "coverage-ratchet-${{ github.ref }}")
-        self.assertEqual(
-            _value(concurrency, 2, "cancel-in-progress"),
-            "${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}")
-
-    def test_an_unknown_committer_still_supersedes_the_measurement(self):
-        # Missing context properties compare unequal to this nonempty username.
-        concurrency = _block(_records(self.text), 0, "concurrency")
-        self.assertEqual(
-            _value(concurrency, 2, "cancel-in-progress"),
-            "${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}")
+            "coverage-ratchet-${{ github.ref }}" + RATCHET_SUFFIX)
+        self.assertEqual(_value(concurrency, 2, "cancel-in-progress"), "true")
 
     def test_the_workflow_measures_the_cell_the_committed_floor_names(self):
         # The floor names one cell (coverage-floor.json's `cell`). A second

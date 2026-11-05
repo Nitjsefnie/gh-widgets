@@ -67,10 +67,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Ratchet pushes preserve the code push's in-flight measurement. Other
-  # pushes supersede it; a null/absent committer username still cancels.
-  group: coverage-ratchet-${{ github.ref }}
-  cancel-in-progress: ${{ github.event.head_commit.committer.username != 'github-actions[bot]' }}
+  group: coverage-ratchet-${{ github.ref }}${{ github.event.head_commit.committer.email == '41898282+github-actions[bot]@users.noreply.github.com' && format('-ratchet-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
 
 jobs:
   measure:
