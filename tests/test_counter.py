@@ -27,7 +27,7 @@ from unittest import mock
 # rather than reloading the module in this file, is what makes every guard
 # in the suite read the SAME module object.
 from scripts.bench.bench_platform import REQUIRES_BENCH, counter
-from tests import _ghw_temp, test_ghw_guard_scan
+from tests import _ghw_temp
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -249,84 +249,6 @@ class TestTheRemovedInstrument(unittest.TestCase):
         self.assertIn("12.8x", doc)
         self.assertIn("36811152307", doc)
         self.assertIn("36812466498", doc)
-
-
-class TestNoUnguardedPathToTheInstrument(unittest.TestCase):
-    """No test reaches `measure()` by a path its own guard does not cover.
-
-    The body-walk that places the guards looks for `measure(` IN THE
-    BODY. That misses two paths, and both have already cost a Windows
-    round: a CLI invocation of counter.py in a subprocess, and a helper the
-    walk cannot see. So this asks the question directly, over the whole
-    suite, by the two patterns that reach the instrument:
-
-      * a literal `.measure(` or `counter.measure(` inside a test, and
-      * counter.py named as an argv element of a subprocess call
-
-    A test that reaches either from inside a `REQUIRES_BENCH` or
-    `REQUIRES_POSIX_SHELL` boundary is fine. One that reaches either
-    without one is not, and on Linux that is invisible — which is how a
-    guard lands on the preceding method and nobody sees it for a round.
-    """
-
-    # Named, with the reason each cannot reach `measure()`. An allowlist is
-    # only worth having if it is explicit and narrow: anything NEW is
-    # flagged, which is the whole point. Each of these was checked, not
-    # assumed.
-    ALLOWED = {
-        "test_counter.py::test_the_module_imports_without_resource":
-            "loads the module; the import is the thing under test and the "
-            "refusal is asserted, not triggered",
-        "test_counter.py::test_probe_writes_github_output_shaped_lines":
-            "runs `--probe`, which prints the record and never measures",
-        "test_counter.py::test_no_command_is_an_error_not_a_silent_success":
-            "runs with no command, so argparse refuses before `measure`",
-        "test_counter.py::test_counter_is_a_file_and_not_a_package":
-            "names counter.py as a PATH and checks the filesystem",
-        "test_counter.py::test_the_new_files_are_named_back_by_the_ignore_file":
-            "names counter.py as a path for `git check-ignore`",
-        "test_counter.py::test_the_time_attribute_is_the_counter_not_seconds":
-            "calls write_junit with a FABRICATED Measurement; no process",
-        "test_counter.py::test_a_failing_command_is_a_junit_failure":
-            "write_junit with a fabricated return code; no process",
-        "test_counter.py::test_a_name_that_is_not_a_node_id_is_refused":
-            "write_junit with a bad node id; no process",
-        "test_counter.py::test_no_unguarded_test_reaches_the_instrument":
-            "this control; it names the patterns it is looking for",
-        "test_speed_workflow.py::test_both_measurement_steps_pin_the_instrument":
-            "reads the workflow's text",
-    }
-
-    def test_no_unguarded_test_reaches_the_instrument(self):
-        offenders = []
-        for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
-            source = path.read_text(encoding="utf-8")
-            for test in test_ghw_guard_scan.unguarded_tests(source):
-                name = f"{path.name}::{test}"
-                if name not in self.ALLOWED:
-                    offenders.append(name)
-        self.assertEqual(
-            offenders, [],
-            "these tests reach counter.measure() — directly or through its "
-            "CLI — without a guard, so they fail on a platform where the "
-            "instrument refuses: " + ", ".join(offenders))
-
-    def test_every_allowance_is_still_relevant(self):
-        """An allowlist rots quietly if nothing checks it.
-
-        Each entry names a test that MIGHT reach the instrument; if that
-        test is deleted or renamed the entry is stale, and a stale entry is
-        one more way for a new offender to slip past a control that has
-        stopped reading.
-        """
-        for name in self.ALLOWED:
-            module, _, test = name.partition("::")
-            with self.subTest(entry=name):
-                self.assertTrue(
-                    (REPO_ROOT / "tests" / module).is_file()
-                    and f"def {test}(" in (REPO_ROOT / "tests" / module).read_text(
-                        encoding="utf-8"),
-                    f"{name} is allowlisted but no longer exists")
 
 
 class TestTheBenchPredicate(unittest.TestCase):

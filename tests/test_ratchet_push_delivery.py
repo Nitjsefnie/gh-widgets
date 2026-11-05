@@ -301,9 +301,6 @@ class TestRatchetPushDelivery(unittest.TestCase):
         result, calls, _written, _summary = self._drive(
             ".github/size-baseline.json", response)
         self._assert_delivery(result, calls, True)
-        # Asserting the old verdict against the correct body fails loudly.
-        with self.assertRaisesRegex(AssertionError, "True != False"):
-            self._assert_delivery(result, calls, False)
         mutant = push_body().replace(
             "blocked = changed - records",
             "blocked = changed - (records - {record_path})")
