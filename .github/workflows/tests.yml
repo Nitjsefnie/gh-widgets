@@ -501,10 +501,10 @@ jobs:
     # entry went up — otherwise a commit could raise the ceiling it is measured
     # against in the same push, and the gate would be switched off from inside.
     #
-    # The population digests DO describe this tree, and they are checked on the
-    # box by test_baseline.py before anything reaches a runner: adding a test
-    # invalidates them, so a commit that does fails the suite in under a second
-    # rather than a dispatch minutes later.
+    # The population digests DO describe this tree, and this job checks them
+    # (`--population-file`): a commit that adds or removes a test re-derives
+    # the unit-suite digest (`compare_counters.py --print-population tests`)
+    # in the same change.
     #
     # The document's measured_commit is the REMOTE head the dispatches resolved
     # `--ref issue-81-82` against, which is not this branch's current head. That
