@@ -52,8 +52,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    29812,
-    51159
+    29799,
+    51146
   ],
   "ghwidgets_data.py": [
     2108,
@@ -176,8 +176,8 @@
     186
   ],
   "tests/test_baseline.py": [
-    5202,
-    31427
+    5074,
+    30865
   ],
   "tests/test_comment_record_contract.py": [
     534,
@@ -211,10 +211,6 @@
     903,
     3425
   ],
-  "tests/test_owner_locks.py": [
-    624,
-    788
-  ],
   "tests/test_release_workflow.py": [
     11544,
     34664
@@ -240,7 +236,7 @@
     51829
   ],
   "tests/test_version.py": [
-    2418,
-    6287
+    2200,
+    5841
   ]
 }
