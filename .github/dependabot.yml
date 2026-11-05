@@ -23,7 +23,8 @@ updates:
       timezone: Etc/UTC
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "deps"
+      prefix: "build"
+      include: scope
     labels:
       - dependencies
 
@@ -42,6 +43,7 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+      include: scope
     labels:
       - dependencies
     # github/codeql-action/init and .../analyze are separate dependencies to
