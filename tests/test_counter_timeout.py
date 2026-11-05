@@ -11,8 +11,21 @@ from unittest import mock
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, counter
 from tests import _ghw_temp, _ghw_watchdog
-from tests.test_ghw_watchdog import ROOT, SUITE
 
+ROOT = Path(__file__).resolve().parents[1]
+SUITE = """\
+import sys, time, unittest
+import tests
+
+
+class Case(unittest.TestCase):
+    def test_stalls_here(self):
+        time.sleep(float(sys.argv[1]))
+
+
+suite = unittest.TestSuite(Case("test_stalls_here") for _ in range(int(sys.argv[2])))
+sys.exit(not unittest.TextTestRunner().run(suite).wasSuccessful())
+"""
 SLEEPER = "[sys.executable, '-c', 'import time; time.sleep(120)']"
 
 
@@ -61,7 +74,7 @@ class TestTimeout(unittest.TestCase):
                 sys.executable, str(ROOT / "scripts" / "ci" / "counter.py"),
                 "--junit-file", str(Path(tmp, "unit.xml")), "--name",
                 "counter::stall", "--cwd", str(ROOT), "--timeout", "60", "--",
-                sys.executable, "-c", SUITE, "60", "1", "test_stalls_here"],
+                sys.executable, "-c", SUITE, "60", "1"],
                 env=env, capture_output=True, text=True, timeout=120,
                 check=False)
         self.assertEqual(done.returncode, 2, done.stderr)

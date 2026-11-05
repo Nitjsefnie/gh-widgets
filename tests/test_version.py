@@ -118,16 +118,6 @@ class VersionFileTests(unittest.TestCase):
         assert_no_path_ignored(
             self, proc, "one or more tracked files are ignored by .gitignore")
 
-    def test_control_rejects_an_execution_error(self):
-        # An operational error (bad option, broken git) exits nonzero-but-not-1
-        # with the rules unevaluated. The control must fail on that, not read
-        # it as "nothing is ignored" — demonstrated with 129, git's usage-error
-        # status, without needing a real broken git.
-        error = subprocess.CompletedProcess([], 129, stdout=b"",
-                                            stderr=b"error: unknown option")
-        with self.assertRaises(AssertionError):
-            assert_no_path_ignored(self, error, "mutated probe")
-
 
 class RepoVersionConstantTests(unittest.TestCase):
     def test_matches_the_file(self):

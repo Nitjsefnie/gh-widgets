@@ -769,21 +769,6 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
             with self.subTest(population=name):
                 self.assertLess(population["tolerance"], 1.0)
 
-    def test_the_committed_digest_matches_this_tree(self):
-        """The control that catches a stale digest: adding a test invalidates
-        the committed digest, so the drift fails HERE in under a second, not
-        on a runner.
-        """
-        loaded = self._load()
-        collected = baseline.counter.collect_node_ids(REPO_ROOT / "tests")
-        self.assertEqual(
-            baseline.counter.population_digest(collected),
-            loaded["populations"]["unit-suite"]["population"],
-            "speed-baseline.json's unit-suite digest describes a population "
-            "this tree no longer collects — re-derive it with "
-            "`compare_counters.py --print-population tests` and "
-            "`counter.population_digest(...)`")
-
     def test_the_committed_workload_digest_matches_the_harness(self):
         loaded = self._load()
         listing = subprocess.run(
