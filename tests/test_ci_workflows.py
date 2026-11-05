@@ -1115,8 +1115,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_workflow_run_trigger_and_push_guard_are_exact(self):
         self.assertEqual(self.workflow[self.trigger_key]["workflow_run"], {
-            "workflows": ["tests", "coverage-ratchet", "comment share",
-                          "size baseline"],
+            "workflows": ["tests", "coverage-ratchet", "size baseline"],
             "types": ["completed"],
         })
         self.assertRegex(
@@ -1557,41 +1556,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.addCleanup(shutil.rmtree, data.parent, True)
         self._speed_validator_case(script, data, repo, recorded, candidate,
                                    1, "must declare schema 5")
-
-    def test_comment_share_validator_uses_exact_bytes_and_integer_shares(self):
-        script = self._validator()
-        old = {"same.py": [1, 3], "down.py": [1, 3], "gone.py": [1, 2]}
-        accepted = {"same.py": [2, 6], "down.py": [1, 4], "new.py": [1, 5]}
-        with _ghw_temp.tempdir() as tmp:
-            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
-            data.mkdir()
-            (repo / ".github").mkdir(parents=True)
-            (repo / ".github/comment-share.json").write_text(json.dumps(old))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            path = data / "comment-share.json"
-            cases = [(accepted, 0, ""), ({}, 0, ""),
-                     ({"new.py": [0, 0]}, 1, "total > 0"),
-                     ({"same.py": [334, 1000]}, 1, "rose"),
-                     ({"new.py": [-1, 3]}, 1, "non-negative"),
-                     ({"new.py": [True, 3]}, 1, "non-negative"),
-                     ({"new.py": [4, 3]}, 1, "comments <= total"),
-                     ({"new.py": [1, 3, 5]}, 1, "non-negative"),
-                     ([], 1, "not a JSON object")]
-            for document, status, message in cases:
-                with self.subTest(document=document):
-                    canonical = (json.dumps(document, sort_keys=True,
-                                            indent=2) + "\n").encode("utf-8")
-                    path.write_bytes(canonical)
-                    self.assertEqual(path.read_bytes(), canonical)
-                    result = self._run_validator(script, data, repo, "comment-share.json")
-                    self.assertEqual(result.returncode, status, result.stderr)
-                    self.assertIn(message, result.stderr)
-            for serialized in (json.dumps(accepted),
-                               json.dumps(accepted, sort_keys=True, indent=2)):
-                path.write_bytes(serialized.encode("utf-8"))
-                result = self._run_validator(script, data, repo, "comment-share.json")
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("serialization", result.stderr)
 
     @staticmethod
     def _size_document(baseline):

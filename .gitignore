@@ -27,7 +27,6 @@
 # ---- repository root — public boundary, docs and project config ----------
 !/ghwidgets_data.py
 !/.gitignore
-!/.gitattributes
 !/.pylintrc
 !/.gitleaks.toml
 !/AGENTS.md
@@ -51,9 +50,6 @@
 !/tests/
 /tests/*
 !/tests/*.py
-!/tests/fixtures/
-/tests/fixtures/*
-!/tests/fixtures/comment-ratchet-v1-policy.txt
 
 # ---- gate/ — committed coverage and speed records ------------------------
 !/gate/
