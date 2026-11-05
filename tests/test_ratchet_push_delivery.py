@@ -18,7 +18,8 @@ from tests import _ghw_temp
 ROOT = Path(__file__).resolve().parents[1]
 RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
            ".github/comment-share.json", ".github/size-baseline.json"}
-DELIVERED = RECORDS - {".github/comment-share.json"}
+DELIVERED = RECORDS - {".github/comment-share.json",
+                       ".github/size-baseline.json"}
 BASE, TIP = "a" * 40, "b" * 40
 
 
@@ -56,8 +57,7 @@ def boundaries(root):
         " sys.exit(0)\n"
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
-        "subject = {'.github/size-baseline.json': 'chore(ratchet): tighten size records (automated)',\n"
-        " 'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
+        "subject = {'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
         " 'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
         " ['config', 'user.name', 'github-actions[bot]'],\n"
@@ -71,11 +71,6 @@ def boundaries(root):
 
 
 def records(record_path):
-    if record_path == ".github/size-baseline.json":
-        # Literals, not the committed seed: the validator must hold for
-        # any accepted shape.
-        return ({"schema_version": 1, "baseline": {"one.py": 42}},
-                {"schema_version": 1, "baseline": {"one.py": 41}})
     old = json.loads((ROOT / record_path).read_text())
     new = json.loads(json.dumps(old))
     if record_path == "gate/coverage-floor.json":
@@ -100,19 +95,7 @@ def records(record_path):
         envelope["max"] = envelope["min"] + 2
         new = json.loads(json.dumps(old))
         new["populations"]["unit-suite"]["entries"][entry]["max"] -= 1
-    elif record_path == ".github/size-baseline.json":
-        # A count moves DOWN only; never-raised is judged.
-        old = {"schema_version": 1, "baseline": {"one.py": 42}}
-        new = {"schema_version": 1, "baseline": {"one.py": 41}}
     return old, new
-
-
-def size_document(baseline):
-    """The action writer's exact bytes for one baseline map."""
-    return ('{\n  "schema_version": 1,\n  "baseline": '
-            + json.dumps(baseline, indent=2, sort_keys=True)
-            .replace("\n", "\n  ")
-            + "\n}\n").encode("utf-8")
 
 
 def canonical_document(document):
@@ -175,21 +158,14 @@ class TestRatchetPushDelivery(unittest.TestCase):
         # writers produce. The base copy defaults to the OLD record —
         # never to an edited main copy, or the merge would see main's
         # edit as already-landed.
-        canonical_old = (size_document(old["baseline"])
-                         if record_path == ".github/size-baseline.json"
-                         else (json.dumps(old, sort_keys=True, indent=2)
-                               + "\n").encode())
+        canonical_old = canonical_document(old)
         if main_bytes is None:
             main_bytes = canonical_old
         if base_bytes is None:
             base_bytes = canonical_old
         target.write_bytes(main_bytes)
         name = Path(record_path).name
-        if record_path == ".github/size-baseline.json":
-            (root / "data" / name).write_bytes(size_document(new["baseline"]))
-        else:
-            (root / "data" / name).write_bytes(
-                (json.dumps(new, sort_keys=True, indent=2) + "\n").encode())
+        (root / "data" / name).write_bytes(canonical_document(new))
         (root / "data/base.txt").write_bytes((BASE + "\n").encode())
         (root / "base-record").write_bytes(base_bytes)
         if coverage is not None:
@@ -295,47 +271,18 @@ class TestRatchetPushDelivery(unittest.TestCase):
         moving is exactly as reusable as a sibling's. The mutant restores
         the old subtraction and must drop green again.
         """
-        response = self._comparison([".github/size-baseline.json"])
+        response = self._comparison(["gate/speed-baseline.json"])
         result, calls, _written, _summary = self._drive(
-            ".github/size-baseline.json", response)
+            "gate/speed-baseline.json", response)
         self._assert_delivery(result, calls, True)
         mutant = push_body().replace(
             "blocked = changed - records",
             "blocked = changed - (records - {record_path})")
         self.assertNotEqual(mutant, push_body())
         result, calls, _written, _summary = self._drive(
-            ".github/size-baseline.json", response, body=mutant)
+            "gate/speed-baseline.json", response, body=mutant)
         # The restored subtraction drops the same movement green.
         self._assert_delivery(result, calls, False)
-
-    @REQUIRES_POSIX_SHELL
-    def test_the_merge_preserves_main_edit_and_delivers_both(self):
-        """A non-conflicting in-between edit must survive the landing.
-
-        The whole-file copy the old apply used loses main's entry — the
-        mutant's tell on the delivered bytes.
-        """
-        base_bytes = size_document({"a1.py": 300, "one.py": 42})
-        main_bytes = size_document({"a0.py": 100, "a1.py": 300,
-                                    "one.py": 42})
-        # The edits sit apart (main inserts above, the artifact lowers
-        # below); adjacent hunks or a deleted entry would conflict.
-        merged_bytes = size_document({"a0.py": 100, "a1.py": 300,
-                                      "one.py": 41})
-        documents = (
-            {"schema_version": 1,
-             "baseline": {"a1.py": 300, "one.py": 42}},
-            {"schema_version": 1,
-             "baseline": {"a1.py": 300, "one.py": 41}},
-        )
-        result, calls, written, _summary = self._drive(
-            ".github/size-baseline.json",
-            self._comparison({".github/size-baseline.json"}),
-            documents=documents,
-            base_bytes=base_bytes, main_bytes=main_bytes)
-        self._assert_delivery(result, calls, True)
-        self.assertEqual(written, merged_bytes)
-        self.assertIn("merged and preserved", result.stdout)
 
     @REQUIRES_POSIX_SHELL
     def test_a_conflicting_records_edit_drops_green(self):
@@ -346,12 +293,13 @@ class TestRatchetPushDelivery(unittest.TestCase):
         disarmed: the validator refuses, the run goes RED); the
         single-layer fall-through is equivalent by the parse backstop.
         """
-        base_bytes = size_document({"one.py": 42})
-        main_bytes = size_document({"one.py": 50})
+        record_path, documents, _main, _merged, _read = speed_merge_case()
+        main_speed = json.loads(json.dumps(documents[0]))
+        main_speed["populations"]["unit-suite"]["entries"]["unit::a"]["max"] \
+            = 9.5
         result, calls, _written, summary = self._drive(
-            ".github/size-baseline.json",
-            self._comparison({".github/size-baseline.json"}),
-            base_bytes=base_bytes, main_bytes=main_bytes)
+            record_path, self._comparison({record_path}),
+            documents=documents, main_bytes=canonical_document(main_speed))
         self._assert_delivery(result, calls, False)
         self.assertIn("the merge conflicts", result.stdout)
         self.assertIn("Dropped ratchet artifact", summary)
@@ -362,13 +310,12 @@ class TestRatchetPushDelivery(unittest.TestCase):
         """A clean line-merge producing unparseable JSON drops green:
         main broke a line the artifact never touched."""
 
-        base_bytes = size_document({"one.py": 42})
-        main_bytes = size_document({"one.py": 42}).replace(
+        record_path, documents, _main, _merged, _read = speed_merge_case()
+        main_bytes = canonical_document(documents[0]).replace(
             b'{\n', b'{\n  broken\n', 1)
         result, calls, _written, _summary = self._drive(
-            ".github/size-baseline.json",
-            self._comparison({".github/size-baseline.json"}),
-            base_bytes=base_bytes, main_bytes=main_bytes)
+            record_path, self._comparison({record_path}),
+            documents=documents, main_bytes=main_bytes)
         self._assert_delivery(result, calls, False)
         self.assertIn("does not parse as JSON", result.stdout)
 
@@ -389,8 +336,8 @@ class TestRatchetPushDelivery(unittest.TestCase):
         """No base copy of the record: drop green, name the reason."""
 
         result, calls, _written, summary = self._drive(
-            ".github/size-baseline.json",
-            self._comparison({".github/size-baseline.json"}),
+            "gate/speed-baseline.json",
+            self._comparison({"gate/speed-baseline.json"}),
             show_fail=True)
         self._assert_delivery(result, calls, False)
         self.assertIn("the measured base carries no copy", result.stdout)

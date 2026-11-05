@@ -1,9 +1,10 @@
 name: ratchet push
 
-# The privileged half of the coverage, speed and size ratchets:
-# gate/coverage-floor.json, gate/speed-baseline.json, .github/size-baseline.json.
-# comment-share.yml's action commits .github/comment-share.json itself; that
-# record still counts as data when judging an artifact's window.
+# The privileged half of the coverage and speed ratchets:
+# gate/coverage-floor.json, gate/speed-baseline.json.
+# The comment-share.yml and size-baseline.yml actions commit
+# .github/comment-share.json and .github/size-baseline.json themselves; those
+# records still count as data when judging an artifact's window.
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
@@ -25,7 +26,7 @@ name: ratchet push
 # the job token. It checks out no repository and runs no repository code.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    workflows: [tests, coverage-ratchet, size baseline]
+    workflows: [tests, coverage-ratchet]
     types: [completed]
 
 permissions: {}
@@ -128,13 +129,10 @@ jobs:
           names = {path.name for path in files}
           coverage = {"base.txt", "coverage-floor.json"}
           speed = {"base.txt", "speed-baseline.json"}
-          size = {"base.txt", "size-baseline.json"}
           if names == coverage:
               document = "coverage-floor.json"
           elif names == speed:
               document = "speed-baseline.json"
-          elif names == size:
-              document = "size-baseline.json"
           else:
               refuse("expected exactly base.txt and one known ratchet record")
           try:
@@ -150,9 +148,6 @@ jobs:
           )"
           base="$(cat "$data/base.txt")"
           record_path="gate/$document_name"
-          if [ "$document_name" = size-baseline.json ]; then
-            record_path=".github/$document_name"
-          fi
 
           eval "$(ssh-agent -s)" >/dev/null
           trap 'kill "$SSH_AGENT_PID" 2>/dev/null || true' EXIT
@@ -299,7 +294,7 @@ jobs:
           import json
           import math
           import sys
-          from pathlib import Path, PurePosixPath
+          from pathlib import Path
 
           def refuse(message):
               print(f"ratchet artifact: {message}", file=sys.stderr)
@@ -464,57 +459,6 @@ jobs:
                           lowered = lowered or new_entry["max"] < old_entry["max"]
               if not lowered:
                   refuse("speed baseline contains no strict maximum reduction")
-          elif names == {"base.txt", "size-baseline.json"}:
-              name = "size-baseline.json"
-              # The merged document, not the raw artifact: the
-              # validator judges what will actually be installed.
-              source = Path(sys.argv[3])
-              old_path = repo / ".github" / name
-              old = object_at(old_path) if old_path.exists() else {}
-              new = object_at(source)
-              if set(new) != {"schema_version", "baseline"}:
-                  refuse("size-baseline.json has an unexpected document key set")
-              if type(new["schema_version"]) is not int \
-                      or new["schema_version"] != 1:
-                  refuse("size-baseline.json has an unsupported schema_version")
-              baseline = new["baseline"]
-              if type(baseline) is not dict:
-                  refuse("size-baseline.json has a baseline that is not "
-                         "a JSON object")
-              expected = ("{\n  \"schema_version\": 1,\n  \"baseline\": "
-                          + json.dumps(baseline, indent=2, sort_keys=True)
-                          .replace("\n", "\n  ")
-                          + "\n}\n")
-              if source.read_bytes() != expected.encode("utf-8"):
-                  refuse("size-baseline.json does not use the action "
-                         "writer\u0027s serialization")
-              old_map = old.get("baseline")
-              if old_map is None:
-                  old_map = {}
-              if type(old_map) is not dict:
-                  refuse("the recorded baseline is not "
-                         "a JSON object")
-
-              def checked_map(mapping):
-                  for path, count in mapping.items():
-                      if not path or PurePosixPath(path).is_absolute() \
-                              or ".." in PurePosixPath(path).parts \
-                              or str(PurePosixPath(path)) != path \
-                              or "\\" in path \
-                              or any(ord(char) < 32 or ord(char) == 127
-                                     for char in path):
-                          refuse(f"{path!r}: expected a repository-relative path")
-                      if isinstance(count, bool) \
-                              or not isinstance(count, int) or count < 1:
-                          refuse(f"{path}: expected a positive line count")
-
-              checked_map(old_map)
-              checked_map(baseline)
-              for path, count in baseline.items():
-                  if path in old_map and count > old_map[path]:
-                      refuse(f"{path}: line count rose above fetched main")
-              # New paths and dropped paths are allowed: like the coverage
-              # counts, they come from our own successful main run.
           else:
               refuse("the artifact shape changed after its base check")
           print(name)
@@ -530,7 +474,6 @@ jobs:
           git -C "$repo" config user.name 'github-actions[bot]'
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           case "$record_path" in
-            .github/size-baseline.json) subject='chore(ratchet): tighten size records (automated)' ;;
             gate/coverage-floor.json) subject='chore(ratchet): raise the coverage floor (automated)' ;;
             gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;
             *) echo "no commit subject for $record_path" >&2; exit 1 ;;

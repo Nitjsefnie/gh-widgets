@@ -162,10 +162,11 @@ The other workflow files in `.github/workflows/` are:
   catches commits no workflow saw, and the aggregate check waits for its
   `gitleaks` job on the head SHA.
 - `size-baseline.yml` — gates per-file line counts against committed records;
-  the aggregate check waits for its `size-baseline` job on the head SHA.
+  its action commits tightened records on `main` pushes, and the aggregate
+  check waits for its `size-baseline` job on the head SHA.
 - `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
   higher floor for `ratchet-push.yml` after the successful run.
-- `ratchet-push.yml` — validates the coverage, speed and size artifacts as data,
+- `ratchet-push.yml` — validates the coverage and speed artifacts as data,
   then uses the protected `main-push` deploy key to commit a tightened record
   to `main`.
 - `comment-share.yml` — checks per-file comment shares; its action commits tightened
@@ -272,7 +273,7 @@ measured value strictly beats, and `ratchet-push.yml` validates and commits
 that data. The feature-gated unit-suite raise above remains the only route that
 moves speed maxima UP.
 
-All three staging steps skip a landed window that changed only
+Both staging steps skip a landed window that changed only
 `gate/coverage-floor.json`, `gate/speed-baseline.json`,
 `.github/comment-share.json` and/or `.github/size-baseline.json`. This ends
 the feedback after one follow-up run,
@@ -286,10 +287,11 @@ missing/new-branch before SHAs stage normally; the push still checks staleness.
 per-type ceiling. Pull requests compare every measured file's line count
 against the base record, so a recorded file may not grow and an unrecorded one
 may not exceed its ceiling; main pushes tighten `.github/size-baseline.json`,
-and the successful run stages changes for `ratchet-push.yml` to validate and
-land. A recorded number is never raised and no entry is ever added by hand:
-growth is answered by relocating code into a new file, or by shrinking the
-file. The records file itself is never measured. The size gate supersedes
+and the action commits the change itself as a fast-forward of `main`, using the
+`push-key` deploy key from the `main-push` environment that the job binds only
+on a `main` push. `ratchet-push.yml` does not carry this record. A recorded
+number is never raised and no entry is ever added by hand: growth is answered
+by relocating code into a new file, or by shrinking the file. The records file itself is never measured. The size gate supersedes
 pylint's `too-many-lines` (C0302), which is disabled in `.pylintrc` — a
 module-length question is a records question now, not a flat 1000-line cap.
 The reported check name is the job key `size-baseline`, which the required

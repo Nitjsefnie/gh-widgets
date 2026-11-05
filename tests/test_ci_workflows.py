@@ -1115,7 +1115,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_workflow_run_trigger_and_push_guard_are_exact(self):
         self.assertEqual(self.workflow[self.trigger_key]["workflow_run"], {
-            "workflows": ["tests", "coverage-ratchet", "size baseline"],
+            "workflows": ["tests", "coverage-ratchet"],
             "types": ["completed"],
         })
         self.assertRegex(
@@ -1263,40 +1263,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                 capture_output=True, text=True, check=False)
         self.assertEqual(refused.returncode, 1)
         self.assertIn("exactly base.txt", refused.stderr)
-
-    @REQUIRES_POSIX_SHELL
-    def test_preflight_names_the_size_document_and_maps_its_path(self):
-        script = self._artifact_preflight()
-        push = self._step("Validate and push the ratchet record")["run"]
-        start = push.index('base="$(cat "$data/base.txt")"')
-        end = push.index("eval \"$(ssh-agent -s)\"")
-        mapping = push[start:end]
-        with _ghw_temp.tempdir(prefix="ghw-ratchet-size-map-") as tmp:
-            data = Path(tmp) / "ratchet-data"
-            data.mkdir()
-            (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
-            (data / "size-baseline.json").write_text(
-                '{"schema_version": 1, "baseline": {}}', encoding="utf-8")
-            accepted = subprocess.run(
-                [sys.executable, "-c", script, str(data)],
-                capture_output=True, text=True, check=False)
-            self.assertEqual(accepted.returncode, 0,
-                             accepted.stdout + accepted.stderr)
-            self.assertEqual(accepted.stdout.strip(), "size-baseline.json")
-            for document_name, record_path in (
-                    ("size-baseline.json", ".github/size-baseline.json"),
-                    ("coverage-floor.json", "gate/coverage-floor.json"),
-            ):
-                with self.subTest(document=document_name):
-                    mapped = subprocess.run(
-                        ["bash", "-e", "-o", "pipefail", "-c",
-                         mapping + "\nprintf '%s\\n' \"$record_path\"\n"],
-                        cwd=tmp, env=dict(os.environ,
-                                          data=str(data),
-                                          document_name=document_name),
-                        capture_output=True, text=True, check=False)
-                    self.assertEqual(mapped.returncode, 0, mapped.stderr)
-                    self.assertEqual(mapped.stdout.strip(), record_path)
 
     def _run_rejected_push(self, remote_main):
         run = self._step("Validate and push the ratchet record")["run"]
@@ -1557,144 +1523,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self._speed_validator_case(script, data, repo, recorded, candidate,
                                    1, "must declare schema 5")
 
-    @staticmethod
-    def _size_document(baseline):
-        """The action writer's exact bytes for one baseline map.
-
-        The writer spells an absent file as schema_version first, then the
-        baseline map at indent 2 with sorted keys — NOT json.dumps of the
-        whole document, whose sort_keys would put baseline first.
-        """
-        return ('{\n  "schema_version": 1,\n  "baseline": '
-                + json.dumps(baseline, indent=2, sort_keys=True)
-                .replace("\n", "\n  ")
-                + "\n}\n").encode("utf-8")
-
-    def test_size_validator_accepts_a_tightened_candidate(self):
-        script = self._validator()
-        old = {"schema_version": 1, "baseline": {"same.py": 501,
-                                                 "down.py": 700}}
-        with _ghw_temp.tempdir() as tmp:
-            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
-            data.mkdir()
-            (repo / ".github").mkdir(parents=True)
-            (repo / ".github/size-baseline.json").write_text(json.dumps(old))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            path = data / "size-baseline.json"
-            baseline = dict(old["baseline"])
-            baseline["down.py"] = 640
-            baseline["new.py"] = 520
-            path.write_bytes(self._size_document(baseline))
-            accepted_run = self._run_validator(script, data, repo, "size-baseline.json")
-            self.assertEqual(accepted_run.returncode, 0, accepted_run.stderr)
-            equal = self._size_document(old["baseline"])
-            path.write_bytes(equal)
-            equal_run = self._run_validator(script, data, repo, "size-baseline.json")
-            self.assertEqual(equal_run.returncode, 0, equal_run.stderr)
-            self.assertEqual(equal_run.stdout.strip(), "size-baseline.json")
-
-    def test_size_validator_refuses_raises_and_bad_counts(self):
-        script = self._validator()
-        old = {"schema_version": 1, "baseline": {"same.py": 501,
-                                                 "down.py": 700}}
-        cases = (
-            ({"same.py": 502}, "rose above fetched main"),
-            ({"same.py": 501, "down.py": 701}, "rose above fetched main"),
-            # 0 and True each isolate one conjunct of the count check
-            # (count < 1, the bool rejection); a negative adds nothing.
-            ({"new.py": 0}, "positive line count"),
-            ({"new.py": True}, "positive line count"),
-        )
-        with _ghw_temp.tempdir() as tmp:
-            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
-            data.mkdir()
-            (repo / ".github").mkdir(parents=True)
-            (repo / ".github/size-baseline.json").write_text(json.dumps(old))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            path = data / "size-baseline.json"
-            for baseline, message in cases:
-                with self.subTest(baseline=baseline):
-                    path.write_bytes(self._size_document(baseline))
-                    result = self._run_validator(script, data, repo, "size-baseline.json")
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertIn(message, result.stderr)
-
-    def test_size_validator_refuses_bad_document_shapes_and_paths(self):
-        script = self._validator()
-        accepted = {"schema_version": 1, "baseline": {"a.py": 501}}
-        bad_baselines = (
-            {"/abs.py": 10}, {"../out.py": 10}, {"a\\b.py": 10}, {"": 10},
-            # Each of the next two is refused by exactly one conjunct limb:
-            # dropping the path-normalization limb or the control-character
-            # limb alone must fail this control, not a sibling's.
-            {"./a.py": 10}, {"\ta.py": 10},
-        )
-        bad_documents = (
-            # One shape per refused limb: a non-object baseline.
-            {"schema_version": 1, "baseline": []},
-        )
-        with _ghw_temp.tempdir() as tmp:
-            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
-            data.mkdir()
-            (repo / ".github").mkdir(parents=True)
-            (repo / ".github/size-baseline.json").write_text(
-                json.dumps(accepted))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            path = data / "size-baseline.json"
-            for changes, message in (
-                    ({"schema_version": 2}, "unsupported schema_version"),
-                    ({"schema_version": "1"}, "unsupported schema_version"),
-                    ({"extra": 1}, "unexpected document key set"),
-            ):
-                with self.subTest(changes=changes):
-                    document = dict(accepted)
-                    document.update(changes)
-                    path.write_bytes(json.dumps(document).encode("utf-8"))
-                    result = self._run_validator(script, data, repo, "size-baseline.json")
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertIn(message, result.stderr)
-            for baseline in bad_baselines:
-                with self.subTest(baseline=baseline):
-                    path.write_bytes(
-                        self._size_document(dict(baseline)))
-                    result = self._run_validator(script, data, repo, "size-baseline.json")
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertIn("repository-relative", result.stderr)
-            for document in bad_documents:
-                with self.subTest(baseline=document["baseline"]):
-                    path.write_bytes(json.dumps(document).encode("utf-8"))
-                    result = self._run_validator(script, data, repo, "size-baseline.json")
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertIn("not a JSON object", result.stderr)
-
-    def test_size_validator_demands_the_writer_serialization(self):
-        script = self._validator()
-        old = {"schema_version": 1, "baseline": {"a.py": 501}}
-        baseline = {"same.py": 501, "down.py": 700}
-        with _ghw_temp.tempdir() as tmp:
-            data, repo = Path(tmp) / "data", Path(tmp) / "repo"
-            data.mkdir()
-            (repo / ".github").mkdir(parents=True)
-            (repo / ".github/size-baseline.json").write_text(json.dumps(old))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            path = data / "size-baseline.json"
-            # One wrong spelling pins the byte-exact limb: the realistic
-            # near-miss, pretty-printed but with the top-level keys sorted.
-            for serialized in (
-                    json.dumps({"baseline": baseline, "schema_version": 1},
-                               sort_keys=True, indent=2) + "\n",
-            ):
-                path.write_bytes(serialized.encode("utf-8"))
-                result = self._run_validator(script, data, repo, "size-baseline.json")
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("serialization", result.stderr)
-            # A malformed recorded side fails closed before any comparison.
-            (repo / ".github/size-baseline.json").write_text(
-                json.dumps({"schema_version": 1, "baseline": ["no"]}))
-            path.write_bytes(self._size_document(baseline))
-            result = self._run_validator(script, data, repo, "size-baseline.json")
-            self.assertEqual(result.returncode, 1, result.stderr)
-            self.assertIn("not a JSON object", result.stderr)
 
 
 class TestActionFamiliesShareOneRef(unittest.TestCase):
