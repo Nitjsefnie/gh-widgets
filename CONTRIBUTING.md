@@ -291,9 +291,10 @@ and the action commits the change itself as a fast-forward of `main`, using the
 `push-key` deploy key from the `main-push` environment that the job binds only
 on a `main` push. `ratchet-push.yml` does not carry this record. A recorded
 number is never raised and no entry is ever added by hand: growth is answered
-by relocating code into a new file, or by shrinking the file. The records file itself is never measured. The size gate supersedes
-pylint's `too-many-lines` (C0302), which is disabled in `.pylintrc` — a
-module-length question is a records question now, not a flat 1000-line cap.
+by relocating code into a new file, or by shrinking the file. The records file
+itself is never measured. The size gate supersedes pylint's `too-many-lines`
+(C0302), which is disabled in `.pylintrc` — a module-length question is a
+records question now, not a flat 1000-line cap.
 The reported check name is the job key `size-baseline`, which the required
 `aggregate` check folds the same way it folds the `gitleaks` job.
 
