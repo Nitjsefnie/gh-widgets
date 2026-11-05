@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: comment-share-${{ github.ref }}
+  group: comment-share-${{ github.ref }}${{ github.event.head_commit.committer.email == '41898282+github-actions[bot]@users.noreply.github.com' && format('-ratchet-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 jobs:
   comment-share:

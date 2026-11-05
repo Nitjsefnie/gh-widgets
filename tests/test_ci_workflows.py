@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
-from tests import _ghw_temp
+from tests import _ghw_temp, test_ratchet_concurrency
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -335,9 +335,9 @@ class TestSecretsScanWorkflow(unittest.TestCase):
                          r"(?m)^permissions:\n  contents: read\n\n")
         self.assertRegex(
             self.secrets_text,
-            r"(?m)^concurrency:\n"
-            r"  group: secrets-\$\{\{ github\.ref \}\}\n"
-            r"  cancel-in-progress: true\n\n")
+            "(?m)^concurrency:\n  group: " + re.escape(
+                "secrets-${{ github.ref }}" + test_ratchet_concurrency.RATCHET_SUFFIX)
+            + r"\n  cancel-in-progress: true\n\n")
         self.assertRegex(self.gitleaks_job,
                          r"(?m)^    runs-on: ubuntu-latest$")
         self.assertRegex(self.gitleaks_job,

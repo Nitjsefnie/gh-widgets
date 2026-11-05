@@ -44,7 +44,7 @@ concurrency:
   # NOT cancel-in-progress, unlike every other workflow here. A superseded
   # test run tells you nothing and is worth cancelling; a superseded
   # release run may be halfway through creating a tag.
-  group: release
+  group: release${{ github.event.head_commit.committer.email == '41898282+github-actions[bot]@users.noreply.github.com' && format('-ratchet-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 jobs:

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.test_ratchet_concurrency import RATCHET_SUFFIX
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -17,7 +19,7 @@ class TestSizeBaselineWorkflow(unittest.TestCase):
                                    "push": {"branches": ["main"]}})
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertEqual(workflow["concurrency"], {
-            "group": "size-baseline-${{ github.ref }}",
+            "group": "size-baseline-${{ github.ref }}" + RATCHET_SUFFIX,
             "cancel-in-progress": True})
         self.assertEqual(set(workflow["jobs"]), {"size-baseline"})
         job = workflow["jobs"]["size-baseline"]
