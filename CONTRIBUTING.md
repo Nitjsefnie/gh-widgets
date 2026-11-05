@@ -180,7 +180,8 @@ The other workflow files in `.github/workflows/` are:
 A run of an automated ratchet commit (committer
 `41898282+github-actions[bot]@users.noreply.github.com`) gets a concurrency
 group of its own in every workflow a push triggers: its group ends in
-`-ratchet-<run id>`. A shared group would let it cancel the in-progress run of
+`-ratchet-<run id>`, or is the bare run id in `tests.yml`, which keys every push
+run that way. A shared group would let it cancel the in-progress run of
 the commit it follows, or evict that run while it is pending, since the default
 queue keeps only the newest pending run. Pushes by anyone else keep their
 workflow's group. `tests/test_ratchet_concurrency.py` evaluates the group of
