@@ -18,7 +18,6 @@ from tests import _ghw_temp
 ROOT = Path(__file__).resolve().parents[1]
 RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
            ".github/comment-share.json", ".github/size-baseline.json"}
-# The comment-ratchet action commits its own record; it stays data only.
 DELIVERED = RECORDS - {".github/comment-share.json"}
 BASE, TIP = "a" * 40, "b" * 40
 
