@@ -177,6 +177,15 @@ The other workflow files in `.github/workflows/` are:
 - `gitfame-resync-memory.yml` — resync memory measurements.
 - `gitfame-pool-probe.yml` — worker-pool measurements.
 
+A run of an automated ratchet commit (committer
+`41898282+github-actions[bot]@users.noreply.github.com`) gets a concurrency
+group of its own in every workflow a push triggers: its group ends in
+`-ratchet-<run id>`. A shared group would let it cancel the in-progress run of
+the commit it follows, or evict that run while it is pending, since the default
+queue keeps only the newest pending run. Pushes by anyone else keep their
+workflow's group. `tests/test_ratchet_concurrency.py` evaluates the group of
+every push-triggered workflow, so a new one cannot miss the rule.
+
 These checks can run locally — **on ONE platform, whatever platform that
 is**, and that is the whole of what they cover:
 
