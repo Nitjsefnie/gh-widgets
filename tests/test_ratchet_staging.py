@@ -22,7 +22,6 @@ WORKFLOWS = ROOT / ".github/workflows"
 PRODUCERS = {
     ("tests.yml", "speed", "Upload the tightened speed baseline"),
     ("coverage-ratchet.yml", "measure", "Upload the tightened coverage floor"),
-    ("comment-share.yml", "comment-share", "Upload the tightened comment shares"),
     ("size-baseline.yml", "size-baseline",
      "Upload the tightened size records"),
 }
@@ -143,8 +142,7 @@ class TestStagingCallers(unittest.TestCase):
         boundary = binary / "git"
         boundary.write_text("#!/bin/sh\n"
                             "case \"$*\" in\n"
-                            "  'diff --quiet HEAD -- .github/comment-share.json'"
-                            "|'diff --quiet HEAD -- .github/size-baseline.json')"
+                            "  'diff --quiet HEAD -- .github/size-baseline.json')"
                             " ;;\n"
                             "  *) exit 97 ;;\n"
                             "esac\n"

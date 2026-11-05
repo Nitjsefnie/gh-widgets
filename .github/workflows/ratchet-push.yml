@@ -1,8 +1,9 @@
 name: ratchet push
 
-# The privileged half of the coverage, speed, comment-share and size ratchets:
-# gate/coverage-floor.json, gate/speed-baseline.json, .github/comment-share.json,
-# .github/size-baseline.json.
+# The privileged half of the coverage, speed and size ratchets:
+# gate/coverage-floor.json, gate/speed-baseline.json, .github/size-baseline.json.
+# comment-share.yml's action commits .github/comment-share.json itself; that
+# record still counts as data when judging an artifact's window.
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
@@ -24,7 +25,7 @@ name: ratchet push
 # the job token. It checks out no repository and runs no repository code.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    workflows: [tests, coverage-ratchet, comment share, size baseline]
+    workflows: [tests, coverage-ratchet, size baseline]
     types: [completed]
 
 permissions: {}
@@ -132,8 +133,6 @@ jobs:
               document = "coverage-floor.json"
           elif names == speed:
               document = "speed-baseline.json"
-          elif names == {"base.txt", "comment-share.json"}:
-              document = "comment-share.json"
           elif names == size:
               document = "size-baseline.json"
           else:
@@ -151,8 +150,7 @@ jobs:
           )"
           base="$(cat "$data/base.txt")"
           record_path="gate/$document_name"
-          if [ "$document_name" = comment-share.json ] \
-              || [ "$document_name" = size-baseline.json ]; then
+          if [ "$document_name" = size-baseline.json ]; then
             record_path=".github/$document_name"
           fi
 
@@ -466,32 +464,6 @@ jobs:
                           lowered = lowered or new_entry["max"] < old_entry["max"]
               if not lowered:
                   refuse("speed baseline contains no strict maximum reduction")
-          elif names == {"base.txt", "comment-share.json"}:
-              name = "comment-share.json"
-              # The merged document, not the raw artifact: the
-              # validator judges what will actually be installed.
-              source = Path(sys.argv[3])
-              old_path = repo / ".github" / name
-              old = object_at(old_path) if old_path.exists() else {}
-              new = object_at(source)
-              if source.read_bytes() != (json.dumps(new, sort_keys=True,
-                                                    indent=2) + "\n").encode("utf-8"):
-                  refuse("comment-share.json does not use the action writer\u0027s serialization")
-              for path, pair in new.items():
-                  relative = PurePosixPath(path)
-                  if not path or relative.is_absolute() or ".." in relative.parts \
-                          or str(relative) != path or "\\" in path \
-                          or any(ord(char) < 32 or ord(char) == 127 for char in path):
-                      refuse(f"{path!r}: expected a repository-relative file path")
-                  if type(pair) is not list or len(pair) != 2 \
-                          or any(type(value) is not int or value < 0 for value in pair) \
-                          or pair[0] > pair[1] or pair[1] <= 0:
-                      refuse(f"{path}: expected non-negative [comments, total], comments <= total and total > 0")
-                  if path in old:
-                      comments, total = pair
-                      recorded_comments, recorded_total = old[path]
-                      if comments * recorded_total > recorded_comments * total:
-                          refuse(f"{path}: comment share rose above fetched main")
           elif names == {"base.txt", "size-baseline.json"}:
               name = "size-baseline.json"
               # The merged document, not the raw artifact: the
@@ -558,7 +530,6 @@ jobs:
           git -C "$repo" config user.name 'github-actions[bot]'
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           case "$record_path" in
-            .github/comment-share.json) subject='chore(ratchet): tighten comment-share records (automated)' ;;
             .github/size-baseline.json) subject='chore(ratchet): tighten size records (automated)' ;;
             gate/coverage-floor.json) subject='chore(ratchet): raise the coverage floor (automated)' ;;
             gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;

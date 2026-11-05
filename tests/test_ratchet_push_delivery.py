@@ -18,6 +18,8 @@ from tests import _ghw_temp
 ROOT = Path(__file__).resolve().parents[1]
 RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
            ".github/comment-share.json", ".github/size-baseline.json"}
+# The comment-ratchet action commits its own record; it stays data only.
+DELIVERED = RECORDS - {".github/comment-share.json"}
 BASE, TIP = "a" * 40, "b" * 40
 
 
@@ -55,8 +57,7 @@ def boundaries(root):
         " sys.exit(0)\n"
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
-        "subject = {'.github/comment-share.json': 'chore(ratchet): tighten comment-share records (automated)',\n"
-        " '.github/size-baseline.json': 'chore(ratchet): tighten size records (automated)',\n"
+        "subject = {'.github/size-baseline.json': 'chore(ratchet): tighten size records (automated)',\n"
         " 'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
         " 'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
@@ -104,8 +105,6 @@ def records(record_path):
         # A count moves DOWN only; never-raised is judged.
         old = {"schema_version": 1, "baseline": {"one.py": 42}}
         new = {"schema_version": 1, "baseline": {"one.py": 41}}
-    else:
-        old, new = {"one.py": [1, 2]}, {"one.py": [1, 3]}
     return old, new
 
 
@@ -251,7 +250,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
         The policy arms are record-independent; own-record movement is
         pinned by test_every_record_is_data... with its mutant.
         """
-        for own in RECORDS:
+        for own in DELIVERED:
             paths = RECORDS - {own}
             with self.subTest(record=own, changed=paths):
                 result, calls, written, summary = self._drive(
