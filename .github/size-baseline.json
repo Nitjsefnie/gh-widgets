@@ -22,7 +22,7 @@
     "tests/test_compare_counters.py": 566,
     "tests/test_counter.py": 732,
     "tests/test_coverage_ratchet.py": 774,
-    "tests/test_coverage_ratchet_ci.py": 968,
+    "tests/test_coverage_ratchet_ci.py": 961,
     "tests/test_data.py": 891,
     "tests/test_e2e_bench.py": 639,
     "tests/test_gate_base_freshness.py": 860,
