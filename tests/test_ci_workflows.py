@@ -1524,7 +1524,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                    1, "must declare schema 5")
 
 
-
 class TestActionFamiliesShareOneRef(unittest.TestCase):
     """One revision per action family across the workflows, derived from them.
 
