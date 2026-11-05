@@ -22,8 +22,6 @@ WORKFLOWS = ROOT / ".github/workflows"
 PRODUCERS = {
     ("tests.yml", "speed", "Upload the tightened speed baseline"),
     ("coverage-ratchet.yml", "measure", "Upload the tightened coverage floor"),
-    ("size-baseline.yml", "size-baseline",
-     "Upload the tightened size records"),
 }
 
 
@@ -121,7 +119,7 @@ class TestRatchetDataWindow(unittest.TestCase):
 
 
 class TestStagingCallers(unittest.TestCase):
-    """Execute all three decoded callers with their external boundaries recorded."""
+    """Execute both decoded callers with their external boundaries recorded."""
 
     def _assert_skipped(self, root, result, output):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -140,13 +138,7 @@ class TestStagingCallers(unittest.TestCase):
         boundary.write_text("#!/bin/sh\nprintf '%s' \"$COMPARE_RESPONSE\"\n", encoding="utf-8")
         boundary.chmod(0o755)
         boundary = binary / "git"
-        boundary.write_text("#!/bin/sh\n"
-                            "case \"$*\" in\n"
-                            "  'diff --quiet HEAD -- .github/size-baseline.json')"
-                            " ;;\n"
-                            "  *) exit 97 ;;\n"
-                            "esac\n"
-                            "exit \"$DIFF_STATUS\"\n", encoding="utf-8")
+        boundary.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
         boundary.chmod(0o755)
         # The speed writer is covered through its real CLI in test_speed_ratchet.
         # Here its process boundary returns a candidate so deleting the skip
@@ -167,7 +159,6 @@ class TestStagingCallers(unittest.TestCase):
             json.dumps({"floor": 80 if unchanged else 81}))
         (root / ".github").mkdir()
         (root / ".github/comment-share.json").write_text('{"x.py": [1, 5]}\n')
-        (root / ".github/size-baseline.json").write_text('{}\n')
         reports = root / "reports"
         reports.mkdir()
         (reports / "bench-head-1.xml").touch()
