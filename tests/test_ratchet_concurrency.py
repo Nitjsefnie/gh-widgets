@@ -75,8 +75,10 @@ def evaluate(text, context):
                 raise ValueError(f"unsupported function {value}")
             tokens.pop(0)
             args = [disjunction()]
-            while tokens.pop(0)[1] == ",":
+            while (separator := tokens.pop(0)[1]) == ",":
                 args.append(disjunction())
+            if separator != ")":
+                raise ValueError("unclosed format() call")
             return re.sub(r"\{(\d+)\}",
                           lambda m: str(args[int(m.group(1)) + 1]), args[0])
         if kind != "name":
@@ -124,8 +126,10 @@ def render(value, context):
                   flags=re.S)
 
 
-def push(run_id, email, username, ref="refs/heads/main"):
-    committer = {"email": email, "username": username, "name": username}
+def push(run_id, email, username=None, ref="refs/heads/main"):
+    committer = {"email": email, "name": username or "github-actions[bot]"}
+    if username:
+        committer["username"] = username
     return {"github": {
         "event_name": "push", "ref": ref, "ref_name": ref.split("/")[-1],
         "ref_type": "branch", "run_id": run_id, "sha": f"sha-{run_id}",
@@ -135,11 +139,12 @@ def push(run_id, email, username, ref="refs/heads/main"):
 
 
 # The push actor is the account in both cases (a deploy-key push), so only
-# the commit's committer tells a ratchet commit apart.
+# the commit's committer tells a ratchet commit apart. The ratchet contexts
+# carry no committer username: the payload does not promise one.
 HUMAN = push("101", "75166987+Nitjsefnie@users.noreply.github.com",
              "Nitjsefnie")
-RATCHET = push("102", BOT_EMAIL, "github-actions[bot]")
-NEXT_RATCHET = push("103", BOT_EMAIL, "github-actions[bot]")
+RATCHET = push("102", BOT_EMAIL)
+NEXT_RATCHET = push("103", BOT_EMAIL)
 NO_HEAD_COMMIT = {"github": dict(HUMAN["github"], run_id="104",
                                  event={"head_commit": None})}
 
@@ -148,7 +153,7 @@ def _rule_sections(text):
     """Parse only the top-level keys the rule reads; a full parse of every
     workflow costs the speed gate's unit-suite count millions of statements.
     A job-level concurrency key (none today) falls back to the full parse."""
-    if re.search(r"^[ \t]+concurrency:", text, re.M):
+    if re.search(r"^[ \t]+[\"']?concurrency[\"']?[ \t]*:", text, re.M):
         return yaml.safe_load(text)
     return yaml.safe_load("".join(
         chunk for chunk in re.split(r"(?m)^(?=[^\s#])", text)
@@ -225,7 +230,8 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
         self.assertIs(evaluate("github.n != 'x'", ctx), True)
         self.assertEqual(evaluate("format('{0}-{1}', 'a', 2)", ctx), "a-2")
         self.assertEqual(render("p-${{ github.a }}", ctx), "p-X")
-        for bad in ("contains(github.a, 'x')", "github.a[0]", "github.a =="):
+        for bad in ("contains(github.a, 'x')", "github.a[0]", "github.a ==",
+                    "format('{0}', 'a' 'b'"):
             with self.subTest(expression=bad), self.assertRaises(
                     (ValueError, IndexError)):
                 evaluate(bad, ctx)
