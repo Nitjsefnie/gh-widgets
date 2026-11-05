@@ -389,11 +389,11 @@ Check that your login actually appears among the assignees before starting.
 
 Small and single-purpose beats large and comprehensive. Fill in the pull
 request template: an automated gate checks the description against it and
-closes a pull request whose sections are missing, reordered or still carry
-the template's instruction comments. It reopens the pull request once the
-description is fixed; push once more after that reopen (an empty commit is
-enough) to get CI. The gate also requires the issue the pull request resolves
-to be assigned to you, so claim it first.
+fails its own check while sections are missing, reordered or still carry the
+template's instruction comments; editing the description re-runs it. It
+re-runs on every push too, and also fails when a commit subject is not a
+Conventional Commit. The gate also requires the issue the pull request
+resolves to be assigned to you, so claim it first.
 
 In Testing, include the output of the test run and — for anything that
 changes rendering — the before and after SVG, or a screenshot of both.
