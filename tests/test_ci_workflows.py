@@ -1264,6 +1264,29 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertIn("exactly base.txt", refused.stderr)
 
+    @REQUIRES_POSIX_SHELL
+    def test_each_document_maps_to_its_gate_record_path(self):
+        push = self._step("Validate and push the ratchet record")["run"]
+        start = push.index('base="$(cat "$data/base.txt")"')
+        end = push.index("eval \"$(ssh-agent -s)\"")
+        mapping = push[start:end]
+        with _ghw_temp.tempdir(prefix="ghw-ratchet-path-map-") as tmp:
+            data = Path(tmp) / "ratchet-data"
+            data.mkdir()
+            (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
+            for document_name in ("coverage-floor.json", "speed-baseline.json"):
+                with self.subTest(document=document_name):
+                    mapped = subprocess.run(
+                        ["bash", "-e", "-o", "pipefail", "-c",
+                         mapping + "\nprintf '%s\\n' \"$record_path\"\n"],
+                        cwd=tmp, env=dict(os.environ,
+                                          data=str(data),
+                                          document_name=document_name),
+                        capture_output=True, text=True, check=False)
+                    self.assertEqual(mapped.returncode, 0, mapped.stderr)
+                    self.assertEqual(mapped.stdout.strip(),
+                                     f"gate/{document_name}")
+
     def _run_rejected_push(self, remote_main):
         run = self._step("Validate and push the ratchet record")["run"]
         start = run.index(
