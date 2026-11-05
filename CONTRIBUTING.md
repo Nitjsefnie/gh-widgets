@@ -165,10 +165,11 @@ The other workflow files in `.github/workflows/` are:
   the aggregate check waits for its `size-baseline` job on the head SHA.
 - `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
   higher floor for `ratchet-push.yml` after the successful run.
-- `ratchet-push.yml` — validates the coverage, speed, comment-share and size artifacts as data,
+- `ratchet-push.yml` — validates the coverage, speed and size artifacts as data,
   then uses the protected `main-push` deploy key to commit a tightened record
   to `main`.
-- `comment-share.yml` — checks per-file comment shares and stages tightened records.
+- `comment-share.yml` — checks per-file comment shares; its action commits tightened
+  records on `main` pushes.
 - `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
 - `pr-gate.yml` — pull request policy checks.
 - `claim.yml` — issue assignment commands.
@@ -261,7 +262,7 @@ measured value strictly beats, and `ratchet-push.yml` validates and commits
 that data. The feature-gated unit-suite raise above remains the only route that
 moves speed maxima UP.
 
-All four staging steps skip a landed window that changed only
+All three staging steps skip a landed window that changed only
 `gate/coverage-floor.json`, `gate/speed-baseline.json`,
 `.github/comment-share.json` and/or `.github/size-baseline.json`. This ends
 the feedback after one follow-up run,
@@ -288,8 +289,10 @@ The reported check name is the job key `size-baseline`, which the required
 
 `comment-share.yml` runs the pinned comment-ratchet action at its default 15%
 target. Pull requests compare each tracked source file's exact comment byte
-share with the base record; main pushes tighten `.github/comment-share.json`.
-The successful run stages changes for `ratchet-push.yml` to validate and land.
+share with the base record; main pushes tighten `.github/comment-share.json`,
+and the action commits the change itself as a fast-forward of `main`, using the
+`push-key` deploy key from the `main-push` environment that the job binds only
+on a `main` push. `ratchet-push.yml` does not carry this record.
 For adoption, when the base has no record, the action checks the head seed
 against exactly what tighten-from-scratch writes. Generate that seed with the
 pinned action's tighten on the proposed tree; equivalent fractions, missing
