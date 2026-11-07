@@ -173,6 +173,8 @@ The other workflow files in `.github/workflows/` are:
   records on `main` pushes.
 - `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
 - `pr-gate.yml` — pull request policy checks.
+- `pin-guard.yml` — screens a pull request's test files for assertions that
+  pin a dependency and reports candidates as review comments; not a gate.
 - `claim.yml` — issue assignment commands.
 - `targeted-blame-audit.yml` — contribution-counting correctness audit.
 - `gitfame-resync-memory.yml` — resync memory measurements.
@@ -182,8 +184,9 @@ A run of an automated ratchet commit (committer
 `41898282+github-actions[bot]@users.noreply.github.com`) gets a concurrency
 group of its own in every workflow a push triggers: its group ends in
 `-ratchet-<run id>`, or is the bare run id in `tests.yml`, which keys every push
-run that way. A shared group would let it cancel the in-progress run of
-the commit it follows, or evict that run while it is pending, since the default
+run that way; `comment-share.yml` and `size-baseline.yml`, their actions'
+install blocks, key every push run by its branch and commit. A shared group
+would let it cancel the in-progress run of the commit it follows, or evict that run while it is pending, since the default
 queue keeps only the newest pending run. Pushes by anyone else keep their
 workflow's group. `tests/test_ratchet_concurrency.py` evaluates the group of
 every push-triggered workflow, so a new one cannot miss the rule.
