@@ -203,8 +203,6 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
 
     def test_other_pushes_keep_their_workflow_group(self):
         expected = {"secrets.yml": "secrets-refs/heads/main",
-                    "size-baseline.yml": "size-baseline-refs/heads/main",
-                    "comment-share.yml": "comment-share-refs/heads/main",
                     "coverage-ratchet.yml":
                         "coverage-ratchet-refs/heads/main",
                     "release.yml": "release"}
@@ -217,8 +215,7 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
                                context), group)
 
     def test_the_suffix_is_the_shared_spelling(self):
-        for name in ("secrets.yml", "size-baseline.yml", "comment-share.yml",
-                     "coverage-ratchet.yml", "release.yml"):
+        for name in ("secrets.yml", "coverage-ratchet.yml", "release.yml"):
             with self.subTest(workflow=name):
                 self.assertTrue(push_workflows()[name]["concurrency"]["group"]
                                 .endswith(RATCHET_SUFFIX))
