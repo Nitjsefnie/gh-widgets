@@ -79,7 +79,7 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
             'tests', 'claim', 'pr gate', 'pr-gate', 'secrets', 'release',
             'coverage comment', 'coverage-comment',
             'coverage-ratchet', 'audit', 'codeql', 'scorecard',
-            'ratchet push', 'ratchet-push',
+            'ratchet push', 'ratchet-push', 'pin test screen', 'pin-guard',
             'comment share', 'comment-share',
             'size baseline', 'size-baseline',
             'targeted-blame-audit',
