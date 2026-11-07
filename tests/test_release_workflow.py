@@ -1021,7 +1021,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
                     "gitfame-resync-memory.yml", "release.yml",
                     "scorecard.yml", "coverage-comment.yml",
-                    "ratchet-push.yml", "comment-share.yml"}
+                    "ratchet-push.yml", "comment-share.yml", "pin-guard.yml"}
 
         for name, workflow_file, job in entries:
             with self.subTest(gate=name):
