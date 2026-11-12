@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -1433,7 +1432,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     def test_inline_speed_validator_accepts_tightening_and_refuses_looseners(self):
         script = self._validator()
         data, repo = self._speed_validator_tree("ghw-speed-validator-")
-        self.addCleanup(shutil.rmtree, data.parent, True)
+        self.addCleanup(_ghw_temp.rmtree, data.parent)
         recorded, candidate = self._speed_documents()
         self._speed_validator_case(script, data, repo, recorded, candidate, 0, "")
         recorded_max = recorded["populations"]["unit-suite"]["entries"][
@@ -1524,7 +1523,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         seeded["populations"]["unit-suite"]["entries"][
             "counter::unit-suite"] = {"min": 9.0, "max": 9.0, "n": 2}
         data, repo = self._speed_validator_tree("ghw-speed-seed-validator-")
-        self.addCleanup(shutil.rmtree, data.parent, True)
+        self.addCleanup(_ghw_temp.rmtree, data.parent)
         accepted = self._speed_validator_case(
             script, data, repo, recorded, seeded, 0, "")
         self.assertEqual(accepted.stdout.strip(), "speed-baseline.json")
@@ -1542,7 +1541,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         recorded["populations"]["unit-suite"]["slopes"] = {
             "counter::unit-suite": 2.0}
         data, repo = self._speed_validator_tree("ghw-speed-schema-validator-")
-        self.addCleanup(shutil.rmtree, data.parent, True)
+        self.addCleanup(_ghw_temp.rmtree, data.parent)
         self._speed_validator_case(script, data, repo, recorded, candidate,
                                    1, "must declare schema 5")
 

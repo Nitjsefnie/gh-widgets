@@ -1,6 +1,7 @@
 """Owner-locked ghw-* dirs, run-start scavenged."""
 # pylint: disable=protected-access
 import atexit
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -53,6 +54,12 @@ def mkdtemp(prefix=None, directory=None):
     return path
 
 
+def rmtree(path):
+    """Remove the directory and its lock now, not at exit."""
+    shutil.rmtree(path, ignore_errors=True)
+    _discard(path)
+
+
 def abandon(path):
     """End a test's ownership: release, unlink, keep."""
     stream = _OWNED.pop(Path(path), None)
@@ -67,8 +74,15 @@ def abandon(path):
 
 def scavenge():
     active = set(_OWNED)
+    suffix = impact_clone._SCRATCH_OWNER_LOCK_SUFFIX
     for scratch in Path(tempfile.gettempdir()).glob(f"{_PREFIX}*"):
-        if scratch in active or scratch.is_symlink() or not scratch.is_dir():
+        if scratch.name.endswith(suffix) and not scratch.is_symlink():
+            scratch = scratch.with_name(scratch.name[:-len(suffix)])
+            if scratch.exists() or scratch.is_symlink():
+                continue
+        elif scratch.is_symlink() or not scratch.is_dir():
+            continue
+        if scratch in active:
             continue
         try:
             owner_lock = impact_clone._acquire_scratch_owner_lock(
