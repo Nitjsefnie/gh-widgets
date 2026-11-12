@@ -89,3 +89,23 @@ class GqlRetry(unittest.TestCase):
         self.assertEqual(result, {"answer": 42})
         self.assertEqual(requests.call_count, 2)
         self.assertEqual(sleeps, [5])
+
+    def test_transport_drop_or_stall_retries_after_one_backoff(self):
+        for error in (common.http.client.RemoteDisconnected("closed"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__), \
+                    self.patched_io([error, self.response()]) as (requests, sleeps):
+                self.assertEqual(common.gql("token", "query"), {"answer": 42})
+            self.assertEqual((requests.call_count, sleeps), (2, [5]))
+
+    def test_transport_drop_reraises_after_every_attempt(self):
+        errors = [common.http.client.RemoteDisconnected("closed") for _ in range(4)]
+        with self.patched_io(errors) as (requests, sleeps):
+            with self.assertRaises(common.http.client.RemoteDisconnected):
+                common.gql("token", "query")
+        self.assertEqual((requests.call_count, sleeps), (4, [5, 10, 15]))
+
+    def test_invalid_url_fails_without_retry(self):
+        with self.patched_io([common.http.client.InvalidURL("bad")] * 4) as (requests, sleeps):
+            with self.assertRaises(common.http.client.InvalidURL):
+                common.gql("token", "query")
+        self.assertEqual((requests.call_count, sleeps), (1, []))

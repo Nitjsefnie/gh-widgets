@@ -29,6 +29,7 @@ Zero external deps. Pure Python stdlib. Requires Python 3.9+.
 import importlib.util
 import contextlib
 import functools
+import http.client
 import json
 import os
 import re
@@ -411,13 +412,11 @@ def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=Non
                     urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
         except urllib.error.HTTPError as e:
-            if e.code < 500:
-                raise
-            if attempt == retries:
+            if e.code < 500 or attempt == retries:
                 raise
             timing_sleep(5 * (attempt + 1))
             continue
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError, http.client.IncompleteRead, http.client.BadStatusLine):
             if attempt == retries:
                 raise
             timing_sleep(5 * (attempt + 1))
