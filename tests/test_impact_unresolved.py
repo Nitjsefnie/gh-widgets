@@ -77,6 +77,12 @@ class GqlMissingAliases(unittest.TestCase):
             "repository b/private is private; dropped from the PR, issue and LOC sections",
             "repository c/gone did not resolve; dropped from the PR, issue and LOC sections"])
 
+    def test_a_repo_answered_without_is_private_raises(self):
+        body = {"data": {"a0": {k: v for k, v in LIVE.items() if k != "isPrivate"}}}
+        with mock.patch("urllib.request.urlopen", return_value=reply(body)), \
+                mock.patch.object(common, "timing_sleep"), self.assertRaises(KeyError):
+            impact.fetch_repo_totals("t", ["a/live"])
+
 
 class UnresolvedLoc(unittest.TestCase):
     def test_an_unresolved_repo_loses_its_count_and_an_empty_one_keeps_it(self):
@@ -168,14 +174,22 @@ class CachedRepoMadePrivateRun(unittest.TestCase):
     """main(): a PR cached while its repo was public no longer puts that repo on the card."""
 
     def test_the_card_and_the_written_cache_drop_the_now_private_repo(self):
+        for fresh in (False, True):
+            with self.subTest(fresh_private_node=fresh):
+                self.check_run(fresh)
+
+    def check_run(self, fresh):
         api = PrivateNowRepo()
-        # The live listings no longer return now/repo's PR; only the cache holds it, still public.
+        # Only the cache holds now/repo's PR, still public; or the newest-merged page returns it private.
         api.nodes = [item("Plive", "live")]
+        if fresh:
+            api.nodes.append(item("Pnow", "now"))
+            api.nodes[-1]["repository"]["isPrivate"] = True
         api.issues = [item("Ilive", "live", issue=True), item("Ilive2", "live", issue=True)]
         loc = {"ours": 10, "total": 100, "branch": "main", "head": "h1"}
         with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
-            cached_prs = {n["id"]: n for n in (item("Pnow", "now"), *api.nodes)}
+            cached_prs = {n["id"]: n for n in (*api.nodes, item("Pnow", "now"))}
             self.assertFalse(cached_prs["Pnow"]["repository"]["isPrivate"])
             cache_file.write_text(json.dumps({
                 "version": impact.CACHE_VERSION, "fetched_at": "2026-07-20T06:00:00+00:00",
@@ -194,8 +208,8 @@ class CachedRepoMadePrivateRun(unittest.TestCase):
             svg = (Path(td) / "impact.svg").read_text(encoding="utf-8")
             written = json.loads(cache_file.read_text(encoding="utf-8"))
         self.assertEqual(api.counts["totals"], 1)
-        self.assertIn("repository now/repo is private; dropped from the PR, issue and LOC sections",
-                      out.getvalue().splitlines())
+        self.assertEqual("repository now/repo is private; dropped from the PR, issue and LOC sections"
+                         in out.getvalue().splitlines(), not fresh)
         self.assertIn("(pr repos=1 issue repos=1 loc repos=1)", out.getvalue())
         self.assertFalse([line for line in out.getvalue().splitlines() if line.startswith("fetch failed")])
         self.assertNotIn("now/repo", svg)
