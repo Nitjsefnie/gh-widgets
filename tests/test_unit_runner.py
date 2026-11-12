@@ -43,7 +43,7 @@ sys.exit(7 if failed else 0)
 
 
 def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed',
-             python=sys.executable):
+             python: str | None = sys.executable):
     # pylint: disable=too-many-locals
     """Relocate deployed command paths only; execute the unit's actual argv."""
     starts = [line.split('=', 1)[1] for line in
@@ -86,7 +86,10 @@ def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed',
         elif token_name == 'empty-prefixed':
             env['GH_TOKEN_FILE'] = str(token)
             env['GH_WIDGETS_GH_TOKEN_FILE'] = ''
-        env.update({'GH_WIDGETS_OUT_DIR': directory, 'GH_WIDGETS_PYTHON': python,
+        env.pop('GH_WIDGETS_PYTHON', None)
+        if python is not None:
+            env['GH_WIDGETS_PYTHON'] = python
+        env.update({'GH_WIDGETS_OUT_DIR': directory,
                     'GH_WIDGETS_CACHE_FILE': str(root / 'profile-cache.json'),
                     'GH_WIDGETS_DEBUG_TIMING': timing,
                     'GH_WIDGETS_STUB_FAIL': fail,
@@ -230,3 +233,8 @@ class UnitSchedule(unittest.TestCase):
             result, _, files = run_unit(UNITS[0], python=str(Path(directory) / 'missing'))
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(files, {})
+        unset = subprocess.run(['python3', '-c', 'import sys; print(sys.executable)'],
+                               capture_output=True, text=True, check=True).stdout.strip()
+        result, _, files = run_unit(UNITS[0], python=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(files['impact.start'])['python'], unset)

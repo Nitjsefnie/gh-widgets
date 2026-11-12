@@ -7,6 +7,7 @@ from pathlib import Path
 from tests import _ghw_temp, test_install
 
 FAKE_PYTHON = """#!/bin/sh
+printf '%s\\n' "$*" >> "$GH_WIDGETS_FAKE_LOG"
 case "$2" in *sysconfig*) printf '%s\\n' "$GH_WIDGETS_FAKE_SCRIPTS"; exit 0 ;; esac
 exec {real} "$@"
 """
@@ -37,10 +38,16 @@ class TestUnitInterpreterGitFame(unittest.TestCase):
         python.chmod(0o755)
         fixture = self.make_fixture(temp / "root", {}, corrupt_unit=False,
                                     seed_units=False, python=str(python))
+        log = temp / "calls.log"
         fixture["env"].update({"GH_WIDGETS_FAKE_SCRIPTS": str(scripts),
-                               "PYTHONPATH": str(stub)})
+                               "GH_WIDGETS_FAKE_LOG": str(log), "PYTHONPATH": str(stub)})
         proc = self.run_fixture(fixture)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        calls = log.read_text(encoding="utf-8").splitlines()
+        for name in ("render-gh-widgets.py", "render-impact.py", "render-responsiveness.py",
+                     "render-stars.py", "render-popularity.py"):
+            self.assertEqual(calls.count(f"{fixture['renderer_dir'] / name} --help"), 2, calls)
+        self.assertEqual(sum("import ghwidgets_data" in call for call in calls), 2, calls)
         self.assertIn("verified: gh-widgets-resync.service starts every renderer", proc.stdout)
         return proc, python
 
