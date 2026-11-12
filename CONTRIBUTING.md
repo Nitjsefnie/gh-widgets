@@ -134,11 +134,12 @@ interpreter. The document's `interpreter` names the CPython `MAJOR.MINOR` its
 counts were measured on (one without it was measured on 3.13), and the ratchet
 step refuses a head document whose `interpreter` is not the one the job runs
 or that drops the base's. When the base and head interpreters differ, a raised
-renderer `entries` maximum is admitted for that window only, as the new
-interpreter's measurement of the same workload: the move is its only permitted
-reason, the increase is admitted once per move, and renderer `wall` maxima
-stay down-only. Record both interpreters' measurements, with their run ids, in
-`basis`. Seeding an absent seed-declared
+renderer `entries` maximum is admitted for that window only, once per move;
+renderer `wall` maxima stay down-only. The gate checks that the interpreter
+moved, not why a count rose, so the move must be the increase's only reason by
+construction: the moving change alters no measured workload, and `basis`
+records, with run ids, the old interpreter's measurement of the same tree
+fitting the previous ceiling beside the new interpreter's. Seeding an absent seed-declared
 entry stays allowed without a feature, population digest moves ride with the
 tests that cause them, and lowering a recorded maximum is always allowed.
 Keep measured provenance (n ≥ 2 envelopes and dispatch run ids in `basis`) in
