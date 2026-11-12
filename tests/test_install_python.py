@@ -8,6 +8,7 @@ from tests import _ghw_temp, test_install
 
 FAKE_PYTHON = """#!/bin/sh
 printf '%s\\n' "$*" >> "$GH_WIDGETS_FAKE_LOG"
+case "$2" in *ghwidgets_data*) [ -z "$GH_WIDGETS_FAKE_IMPORT_FAILS" ] || exit 1 ;; esac
 case "$2" in *sysconfig*) printf '%s\\n' "$GH_WIDGETS_FAKE_SCRIPTS"; exit 0 ;; esac
 exec {real} "$@"
 """
@@ -24,7 +25,7 @@ class TestUnitInterpreterGitFame(unittest.TestCase):
     make_fixture = _cases.make_fixture
     run_fixture = _cases.run_fixture
 
-    def install(self, help_text):
+    def install(self, help_text, status=0, **env):
         temp = Path(self.enterContext(_ghw_temp.tempdir(prefix="ghwidgets-fame-")))
         scripts, stub = temp / "scripts", temp / "stub"
         scripts.mkdir()
@@ -40,9 +41,12 @@ class TestUnitInterpreterGitFame(unittest.TestCase):
                                     seed_units=False, python=str(python))
         log = temp / "calls.log"
         fixture["env"].update({"GH_WIDGETS_FAKE_SCRIPTS": str(scripts),
-                               "GH_WIDGETS_FAKE_LOG": str(log), "PYTHONPATH": str(stub)})
+                               "GH_WIDGETS_FAKE_LOG": str(log), "PYTHONPATH": str(stub), **env})
         proc = self.run_fixture(fixture)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, status, proc.stdout + proc.stderr)
+        if status:
+            self.assertEqual(list(fixture["unit_dir"].iterdir()), [], "a failed install keeps no unit")
+            return proc, python
         calls = log.read_text(encoding="utf-8").splitlines()
         for name in ("render-gh-widgets.py", "render-impact.py", "render-responsiveness.py",
                      "render-stars.py", "render-popularity.py"):
@@ -59,3 +63,8 @@ class TestUnitInterpreterGitFame(unittest.TestCase):
         proc, python = self.install("usage: git-fame [--format F]")
         self.assertIn(f"WARNING - {python} has no git-fame with --jobs", proc.stderr)
         self.assertIn(f"{python} -m pip install --force-reinstall", proc.stderr)
+
+    def test_a_module_that_fails_to_import_on_the_unit_interpreter_rolls_back(self):
+        proc, python = self.install("usage: git-fame [--jobs N]", status=1,
+                                    GH_WIDGETS_FAKE_IMPORT_FAILS="1")
+        self.assertIn(f"a shared module failed to import on gh-widgets.service's {python}", proc.stderr)
