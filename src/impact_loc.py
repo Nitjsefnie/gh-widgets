@@ -339,10 +339,10 @@ def _run_bounded(cmd, *, cwd=None, timeout=600):
 
 
 def git_out(dest, *args):
-    """Run git in ``dest`` and return stdout, tolerating undecodable bytes."""
+    """Run git in ``dest``; fsdecode lets a non-UTF-8 path go back as argv."""
     cmd = ["git", "-C", str(dest), "-c", "core.quotePath=false", *args]
     result = _run_bounded(cmd, timeout=600)
-    stdout = result.stdout.decode("utf-8", errors="replace")
+    stdout = os.fsdecode(result.stdout)
     result.stdout = b""
     grep_no_matches = args and args[0] == "grep" and result.returncode == 1
     if result.returncode and not grep_no_matches:
