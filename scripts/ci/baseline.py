@@ -365,8 +365,8 @@ def raised_entries(old: dict, new: dict,
 
     A RAISE is permitted only for a slot the caller names in
     `allowed_raises`. The workflow derives unit-suite slots only when the
-    judged base..head window carries a commit subject starting `feat:` or
-    `feat(scope):`, and never names a renderer slot, so renderer ceilings
+    judged window has a subject starting `feat:` or
+    `feat(scope):`, `!` allowed, and never names a renderer slot, so renderer ceilings
     stay strictly down-only. A named slot is checked against the documents
     rather than trusted: one that has NOT gone up, or names no slot either
     document has, is refused.

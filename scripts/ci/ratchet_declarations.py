@@ -3,7 +3,8 @@
 
 Reads one thing from git: the folded subject (%s) of every commit in
 --base..--head. A raised unit-suite maximum is admitted only when some
-subject starts `feat:` or `feat(scope):`, case-sensitive; then each raised
+subject starts `feat:` or `feat(scope):`, either with the breaking `!`
+before its colon, case-sensitive; then each raised
 unit-suite slot prints, one per line, for compare_counters.py's
 --ratchet-allow-raise. A unit-suite entry the base never recorded is refused
 with exit 1. Any other unit-suite raise is refused with exit 1 and prints no
@@ -20,7 +21,7 @@ import sys
 from pathlib import Path
 
 DOCUMENT = "gate/speed-baseline.json"
-_FEATURE_SUBJECT = re.compile(r'^feat:|^feat\([^)]*\):')
+_FEATURE_SUBJECT = re.compile(r'^feat(\([^)]*\))?!?:')
 
 
 class DeclarationError(ValueError):
@@ -80,7 +81,8 @@ def derive_raises(old, new, subjects, window="the judged window"):
                            for slot, (was, now) in sorted(unit_raises.items()))
         raise DeclarationError(
             f"{DOCUMENT}: unit-suite raise refused: no commit subject in "
-            f"{window} starts with `feat:` or `feat(scope):`.\n{raised}\n"
+            f"{window} starts with `feat:` or `feat(scope):`, with or without "
+            f"the breaking `!`.\n{raised}\n"
             + _TRIM_REMEDY)
     allowed = sorted(unit_raises)
     # The comparator's own contradictory/unknown-slot checks still apply;

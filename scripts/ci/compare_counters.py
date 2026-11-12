@@ -722,7 +722,7 @@ def ratchet_check(old_path: Path, new_path: Path,
     lines.append("  Lowering is always allowed. A unit-suite rise is allowed "
                  "only through --ratchet-allow-raise, which the workflow "
                  "derives when the judged window carries a `feat:` or "
-                 "`feat(scope):` commit subject; renderer ceilings stay "
+                 "`feat(scope):` (or `!`) subject; renderer ceilings stay "
                  "strictly down-only. Any other change answers a breach by "
                  "trimming its own tests until the suite fits its envelope.")
     print("\n".join(lines), file=sys.stderr)
