@@ -27,6 +27,9 @@ Environment=GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow
 # Dropping this makes the blame pass under-count silently, and it bites
 # hardest here: --resync re-blames every repo at once.
 Environment=GH_WIDGETS_GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+# The interpreter every renderer and the pinned git-fame run on; the runner
+# puts its scripts directory first on PATH. /usr/local/bin/python3 stays 3.13.
+Environment=GH_WIDGETS_PYTHON=/usr/local/bin/python3.15
 Environment=GH_WIDGETS_CACHE_FILE=/var/lib/gh-widgets/cache.json
 Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
 # Same REST conditional-GET store as the hourly unit: an unchanged resource

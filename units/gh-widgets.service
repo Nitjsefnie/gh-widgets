@@ -35,6 +35,9 @@ Environment=GH_WIDGETS_GH_STAR_REPOS=Nitjsefnie/Overflow
 # blame pass silently under-counts. Profile fetches identity for the same-run
 # share that impact and responsiveness reuse; standalone runs fetch it live.
 Environment=GH_WIDGETS_GH_EXTRA_EMAILS=zmatek.peter@gmail.com
+# The interpreter every renderer and the pinned git-fame run on; the runner
+# puts its scripts directory first on PATH. /usr/local/bin/python3 stays 3.13.
+Environment=GH_WIDGETS_PYTHON=/usr/local/bin/python3.15
 Environment=GH_WIDGETS_CACHE_FILE=/var/lib/gh-widgets/cache.json
 Environment=GH_WIDGETS_SHARE_DIR=/var/lib/gh-widgets/share/%n
 # REST conditional-GET store: last ETag, body and Link per URL, so an

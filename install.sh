@@ -314,5 +314,30 @@ for u in $UNITS; do
     fi
 done
 echo "verified: units loaded; timers enabled"
+
+# Each service unit's GH_WIDGETS_PYTHON is the interpreter the runner starts
+# every renderer with (python3 when unset), and its scripts directory supplies
+# git-fame: prove both against the installed set before keeping it.
+for u in gh-widgets.service gh-widgets-resync.service; do
+    py=$(sed -n 's/^Environment=GH_WIDGETS_PYTHON=//p' "$UNIT_DIR/$u")
+    py=${py:-python3}
+    if ! version=$("$py" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null); then
+        echo "install.sh: $u selects $py, which does not run" >&2
+        exit 1
+    fi
+    for dst in render-gh-widgets.py render-impact.py render-responsiveness.py render-stars.py render-popularity.py; do
+        if ! PYTHONDONTWRITEBYTECODE=1 "$py" "$DEST/$dst" --help >/dev/null 2>&1; then
+            echo "install.sh: $DEST/$dst failed to start on $u's $py" >&2
+            exit 1
+        fi
+    done
+    scripts=$("$py" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')
+    if ! "$py" -c 'import gitfame' >/dev/null 2>&1 ||
+            ! "$scripts/git-fame" --help 2>/dev/null | grep -q -- '--jobs'; then
+        echo "install.sh: WARNING - $py has no git-fame with --jobs; install the" >&2
+        echo "                     CLAUDE.md pin with: $py -m pip install --force-reinstall <pin>" >&2
+    fi
+    echo "verified: $u starts every renderer on Python $version ($py)"
+done
 finish_install
 systemctl list-timers gh-widgets.timer gh-widgets-resync.timer --no-pager 2>/dev/null | head -4

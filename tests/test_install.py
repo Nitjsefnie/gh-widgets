@@ -6,6 +6,7 @@ host's service manager or system unit directory.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -205,10 +206,18 @@ class TestUnitInstallRollback(unittest.TestCase):
     """Unit installs verify scratch files and preserve timer enablement."""
 
     # pylint: disable=too-many-locals
-    def make_fixture(self, root, timer_states, corrupt_unit=True, seed_units=True):
+    def make_fixture(self, root, timer_states, corrupt_unit=True, seed_units=True,
+                     python=sys.executable):
         """Make an isolated unit installation and a stateful systemctl fake."""
         source_dir = root / "src"
         script = copy_installation(source_dir, with_units=True)
+        for name in ("gh-widgets.service", "gh-widgets-resync.service"):
+            unit = source_dir / "units" / name
+            text = unit.read_text(encoding="utf-8")
+            self.assertEqual(text.count("\nEnvironment=GH_WIDGETS_PYTHON="), 1)
+            unit.write_text(re.sub(r"(?m)^Environment=GH_WIDGETS_PYTHON=.*$",
+                                   f"Environment=GH_WIDGETS_PYTHON={python}", text),
+                            encoding="utf-8")
         unit_dir = root / "systemd"
         unit_dir.mkdir()
         renderer_dir = root / "bin"
@@ -449,6 +458,28 @@ class TestUnitInstallRollback(unittest.TestCase):
                 {"gh-widgets.timer": "enabled\n", "gh-widgets-resync.timer": "enabled\n"},
             )
             self.assertIn("verified: units loaded; timers enabled", proc.stdout)
+            for unit in ("gh-widgets.service", "gh-widgets-resync.service"):
+                self.assertIn(f"verified: {unit} starts every renderer on Python "
+                              f"{sys.version.split()[0]} ({sys.executable})", proc.stdout)
+            assert_no_transaction_files(self, fixture["unit_dir"])
+            assert_no_transaction_files(self, fixture["renderer_dir"])
+
+    def test_a_unit_interpreter_that_does_not_run_rolls_the_install_back(self):
+        with _ghw_temp.tempdir(prefix="ghwidgets-units-python-") as temp:
+            fixture = self.make_fixture(
+                Path(temp),
+                {"gh-widgets.timer": "enabled", "gh-widgets-resync.timer": "enabled"},
+                corrupt_unit=False, python=str(Path(temp) / "no-python"))
+
+            proc = self.run_fixture(fixture)
+
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("gh-widgets.service selects", proc.stderr)
+            self.assertEqual(read_files(fixture["unit_dir"], UNIT_NAMES), fixture["old_units"])
+            self.assertEqual(
+                read_files(fixture["renderer_dir"], fixture["old_renderers"]),
+                fixture["old_renderers"],
+            )
             assert_no_transaction_files(self, fixture["unit_dir"])
             assert_no_transaction_files(self, fixture["renderer_dir"])
 
