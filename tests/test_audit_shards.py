@@ -172,8 +172,11 @@ class AuditWorkflowSteps(unittest.TestCase):
         (root / "bin" / "python3").write_text(STUB, encoding="utf-8")
         (root / "bin" / "python3").chmod(0o755)
         (root / "log").write_text(log, encoding="utf-8")
+        # The resolver stub copies this to whatever its --out names; only the audit
+        # job, which downloads the pins job's manifest, starts with /tmp/pins.json.
         (root / "manifest.json").write_text(json.dumps(manifest or {}), encoding="utf-8")
-        shutil.copy(root / "manifest.json", root / "pins.json")
+        if job == "audit":
+            shutil.copy(root / "manifest.json", root / "pins.json")
         if audit_log is not None:
             (root / "audit.log").write_text(audit_log, encoding="utf-8")
         env = dict(os.environ, PATH=f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
