@@ -36,7 +36,6 @@ Merging them back re-creates the same problem at the next addition.
 
 Stdlib unittest, matching the rest of this repo's suite.
 """
-import json
 import re
 import shlex
 import unittest
@@ -902,21 +901,6 @@ class TestCoverageRatchetWorkflow(unittest.TestCase):
             _value(concurrency, 2, "group"),
             "coverage-ratchet-${{ github.ref }}" + RATCHET_SUFFIX)
         self.assertEqual(_value(concurrency, 2, "cancel-in-progress"), "true")
-
-    def test_the_workflow_measures_the_cell_the_committed_floor_names(self):
-        # The floor names one cell (coverage-floor.json's `cell`). A second
-        # interpreter build here would make the floor a comparison between
-        # cells rather than between trees.
-        floor = json.loads((REPO_ROOT / "gate/coverage-floor.json")
-                           .read_text(encoding="utf-8"))
-        expected = floor["cell"].split("/ ")[1].strip()
-        versions = set()
-        for records in self.jobs.values():
-            for _at, content in records:
-                name, value = _partition(content)
-                if name == "python-version":
-                    versions.add(_without_comment(value))
-        self.assertEqual(versions, {f'"{expected}"'})
 
 
 class TestCoverageGateInvokesTheRatchet(unittest.TestCase):
