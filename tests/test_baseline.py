@@ -567,14 +567,14 @@ class TestFeatureAdmittedRaises(unittest.TestCase):
             list(messages), **kwargs)
 
     def test_subjects_the_anchors_admit(self):
-        for subject in ("feat: grow the suite", "feat(speed): grow",
-                        "feat(): grow", "feat: grow\n\nfix: body text"):
+        for subject in ("feat: grow the suite", "feat(speed): grow", "feat!: grow", "feat(speed)!: grow",
+                        "feat(): grow", "feat()!: grow", "feat: grow\n\nfix: body text"):
             with self.subTest(subject=subject):
                 self.assertEqual(self.derive(subject), [self.SLOT])
 
     def test_near_miss_subjects_refuse(self):
-        for subject in ("feature: grow", "defeat: grow", "Feat: grow",
-                        " feat: grow", "feat(speed) grow", "feat(speed: grow",
+        for subject in ("feature: grow", "defeat: grow", "Feat: grow", "feat!!: grow", "feat !: grow",
+                        " feat: grow", "feat(speed) grow", "feat(speed: grow", "feat!(speed): grow", "feat(speed)!grow",
                         "fix: grow\nfeat: second line",
                         "fix: grow feat: second line", ""):
             with self.subTest(subject=subject):

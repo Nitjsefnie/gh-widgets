@@ -1418,9 +1418,9 @@ class TestFeatureRaiseCLI(unittest.TestCase):
         fixture.commit(fixture.MESSAGE, fixture.new)
         self.assert_admits(fixture.declarations(), [fixture.SLOT])
 
-    def test_a_scoped_feat_subject_on_any_window_commit_admits(self):
+    def test_a_scoped_breaking_feat_subject_on_any_window_commit_admits(self):
         fixture = self.fixture
-        fixture.commit("feat(speed): add the measured cases")
+        fixture.commit("feat(speed)!: add the measured cases")
         fixture.commit("fix: raise the envelope", fixture.new)
         self.assert_admits(fixture.declarations(), [fixture.SLOT])
 
