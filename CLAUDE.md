@@ -189,16 +189,16 @@ every run and has no `--resync` flag. Both units configure Overflow.
 >
 > ```
 > /usr/local/bin/python3.15 -m pip install --force-reinstall \
->   "git+https://github.com/Nitjsefnie-OSC/git-fame@6a3f07246d3ff4d57b54681076a4689fceee9031"
+>   "git+https://github.com/Nitjsefnie-OSC/git-fame@66f2f9b4c737961c14bae69a31aac148797b8c29"
 > ```
 >
 > `/opt/python/3.15.1/bin/git-fame --version` must print
-> **`3.1.4.dev13+g6a3f07246`**. The pinned commit is `perf-blame` at `d793b35`
+> **`3.1.4.dev14+g66f2f9b4c`**. The pinned commit is `perf-blame` at `d793b35`
 > (`65925d8` plus two CI-only commits) plus NUL-separated file listing and `--`
 > before each blamed path, so names starting with `-`, names starting or ending
 > with a space, and names holding a quote, a backslash or a control character
-> are blamed rather than dropped, plus those listings decoded with
-> `os.fsdecode`, so a name that is not valid UTF-8 is blamed under its real
+> are blamed rather than dropped, plus those listings decoded as UTF-8 with
+> `surrogateescape`, so a name that is not valid UTF-8 is blamed under its real
 > bytes. Install the SHA above, never a branch tip, since
 > the version line names that commit. A bare `pip install --upgrade git-fame`
 > **silently undoes this pin** — 4.0.0 is the higher version number and installs
