@@ -263,10 +263,11 @@ def phases(run):
     ph = [dict(re.findall(r"(\w+)\s+([\d.]+)s", line))
           for line in re.findall(r"^\s+timing \S+: .*$", run["text"], re.M)]
     if not ph:
-        return "NO TIMING LINES -- attribution is missing, not zero"
+        return "NO TIMING LINES -- attribution is missing, not zero (is GH_WIDGETS_DEBUG_TIMING set?)"
     clone, wait, fame = (sum(float(p[k]) for p in ph if k in p) for k in ("clone", "wait", "fame"))
     return (f"clone {clone:7.1f}s (waited {wait:6.1f}s, hidden {clone - wait:6.1f}s)  "
-            f"fame {fame:7.1f}s  wall {run['wall_s']:7.1f}s  unattributed {run['wall_s'] - wait - fame:6.1f}s")
+            f"fame {fame:7.1f}s  blocking {wait + fame:7.1f}s  wall {run['wall_s']:7.1f}s  "
+            f"unattributed {run['wall_s'] - wait - fame:6.1f}s")
 
 
 def summary(runs, pins):
@@ -291,6 +292,11 @@ def summary(runs, pins):
     print("\n--- phase attribution (GH_WIDGETS_DEBUG_TIMING) ---")
     for key, run in sorted(runs.items()):
         print(f"{run_label(*key)}: {phases(run)}")
+    print("\n--- targeted-vs-fame agreement ---")
+    for key, run in sorted(runs.items()):
+        agree = sum(verdict == "ok" for _repo, verdict in run["compares"])
+        print(f"{run_label(*key)}: " + (f"{agree}/{len(run['compares'])} repos agree" if run["compares"]
+                                        else "no comparison ran (GH_WIDGETS_BLAME_METHOD != both)"))
     print("\n--- largest repos blamed (drives the peak) ---")
     sizes = {repo: total for run in first.values() for repo, total in run["loc"]}
     for repo, loc in sorted(sizes.items(), key=lambda kv: -kv[1])[:10]:

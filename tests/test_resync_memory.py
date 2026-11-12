@@ -204,6 +204,7 @@ class Peaks(unittest.TestCase):
     def test_the_report_prints_the_max_row_and_fails_on_a_refusal(self):
         results = full_results(self, builds=("fork",), repeats=(1,))
         write_run(results, "fork-r1-s1", journal(["o/b", "o/c"]), cgroup=5 * 1024)
+        write_run(results, "fork-r1-s2", re.sub(r"(?m)^    compare .*\n", "", journal(["o/d"])))
         pins = scratch(self) / "pins.json"
         pins.write_text(json.dumps(PINS), encoding="utf-8")
         argv = ["report", "--results", str(results), "--pins", str(pins), "--builds", '["fork"]', "--repeats", "[1]"]
@@ -212,6 +213,13 @@ class Peaks(unittest.TestCase):
             self.assertEqual(rm.main(argv), 0)
         self.assertIn("fork  repeat 1: cgroup 5.0 MiB  sampler tree 2.0 MiB  git-fame proc 0.5 MiB", out.getvalue())
         self.assertIn("shard 1: 2 repos, 3,020 lines", out.getvalue())
+        lines = out.getvalue().splitlines()
+        self.assertIn("fork-r1-s0: clone     2.0s (waited    1.5s, hidden    0.5s)  fame     3.0s  "
+                      "blocking     4.5s  wall     9.5s  unattributed    5.0s", lines)
+        self.assertIn("fork-r1-s1: 2/2 repos agree", lines)
+        self.assertIn("fork-r1-s2: no comparison ran (GH_WIDGETS_BLAME_METHOD != both)", lines)
+        largest = lines[lines.index("--- largest repos blamed (drives the peak) ---") + 1:]
+        self.assertEqual(largest, [f"  {LINES[r]:>10,}  {r}  shard {PINS[r]['shard']}" for r in ("o/c", "o/a", "o/d", "o/b")] + ["all runs valid"])
         (results / "fork-r1-s2.json").unlink()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(rm.main(argv), 1)
