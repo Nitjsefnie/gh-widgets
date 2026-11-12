@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
@@ -131,7 +132,9 @@ class StepRunner:
         runner expands; here they stand for the tree's own paths, which is
         what makes these tests about the PATHS rather than about the shell.
         """
-        return {**os.environ,
+        # The step's `python3` is the suite's own interpreter, as setup-python makes it.
+        path = os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", "")
+        return {**os.environ, "PATH": path,
                 **{k: v for k, v in declared.items() if "${{" not in v},
                 "GH_WIDGETS_REPO": str(root / "head"),
                 "GH_WIDGETS_REPORTS": str(root / "reports"),
