@@ -68,6 +68,7 @@ def _dispatch_totals(compact, payload_dir):
         if repo in totals:
             total = totals[repo]
             data[match.group("alias")] = {
+                "isPrivate": False,
                 "defaultBranchRef": {
                     "name": total["branch"],
                     "target": {"oid": total["head"]},

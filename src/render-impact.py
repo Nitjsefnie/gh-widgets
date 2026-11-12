@@ -182,20 +182,21 @@ def fetch_repo_totals(token, repos):
     every run; the defaultBranchRef oid rides along in the same query so
     the LOC cache check is free. Returns
     {repo: {issues, merged_prs, branch, head}}; a repo GitHub answers
-    NOT_FOUND for (deleted or no longer visible to the token) is absent."""
+    NOT_FOUND for (deleted or invisible to the token) or private now is absent."""
     def group(chunk):
-        totals = {}
+        totals, dropped = {}, []
         parts = [
             f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
             f'name:{json.dumps(r.split("/", 1)[1])}){{ '
-            f'defaultBranchRef{{ name target{{ oid }} }} '
+            f'isPrivate defaultBranchRef{{ name target{{ oid }} }} '
             f'issues{{totalCount}} '
             f'pullRequests(states:MERGED){{totalCount}} }}'
             for j, r in enumerate(chunk)]
         d = gql(token, "query{ " + " ".join(parts) + " }", allow_missing_aliases=True)
         for j, r in enumerate(chunk):
             node = d.get(f"a{j}")
-            if not node:
+            if not node or node["isPrivate"]:
+                dropped.append(f"repository {r} {'is private' if node else 'did not resolve'}")
                 continue
             ref = node.get("defaultBranchRef") or {}
             totals[r] = {
@@ -204,7 +205,7 @@ def fetch_repo_totals(token, repos):
                 "branch": ref.get("name", ""),
                 "head": (ref.get("target") or {}).get("oid", ""),
             }
-        return totals
+        return totals, dropped
 
     totals = {}
     with ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
@@ -212,8 +213,9 @@ def fetch_repo_totals(token, repos):
         for i in range(0, len(repos), 15):
             groups.append(pool.submit(group, repos[i:i + 15]))
             common.timing_sleep(0.3, 'pacing')
-        for result in groups:
-            totals.update(result.result())
+        for part, dropped in (result.result() for result in groups):
+            totals.update(part)
+            print("".join(f"{why}; dropped from the PR, issue and LOC sections\n" for why in dropped), end="", flush=True)
     return totals
 
 
@@ -649,8 +651,6 @@ def fetch_all(token, user, cache, resync):  # pylint: disable=too-many-locals
                     if common.is_external(n, insiders)})
     with timed_phase("fetch_totals"), common.acquisition("fetch_repo_totals"):
         totals = fetch_repo_totals(token, repos)
-    for repo in sorted(set(repos) - totals.keys()):
-        print(f"repository {repo} did not resolve; dropped from the PR, issue and LOC sections", flush=True)
     with timed_phase("fetch_bots"), common.acquisition("fetch_bot_pr_counts"):
         if not count_bot_prs():
             fetch_bot_pr_counts(token, totals, {} if resync else cache.get("totals") or {})
