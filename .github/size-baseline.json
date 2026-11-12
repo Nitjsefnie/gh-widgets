@@ -11,7 +11,7 @@
     "scripts/ci/gate_base_freshness.py": 799,
     "src/ghwidgets_common.py": 995,
     "src/impact_loc.py": 633,
-    "src/render-impact.py": 775,
+    "src/render-impact.py": 755,
     "src/render-responsiveness.py": 594,
     "src/render.py": 1000,
     "tests/test_aggregate_gate.py": 1204,
