@@ -116,7 +116,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped when the interface changes so an older script would misbehave;
 # each script pins the version it expects.
-COMMON_VERSION = 19
+COMMON_VERSION = 20
 
 
 # One import-time switch, shared by all instrumentation in this renderer.

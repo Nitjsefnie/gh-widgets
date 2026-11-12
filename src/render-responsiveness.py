@@ -95,7 +95,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 19
+REQUIRED_COMMON = 20
 common.check_version(REQUIRED_COMMON)
 
 # The cache is shared with render-impact.py; this is the schema version THAT
@@ -446,8 +446,7 @@ def read_impact_cache(path, user):
         return None
     insiders = (frozenset(cache["insiders"]) if cache.get("insiders")
                 else common.insider_set(user, []))
-    return (list(cache["prs"].values()), insiders,
-            cache.get("prs_fetched_at") or cache.get("fetched_at"))
+    return list(cache["prs"].values()), insiders, cache.get("prs_fetched_at") or cache.get("fetched_at")
 
 
 def update_pr_cache(path, insiders, prs_by_id):
@@ -463,8 +462,7 @@ def update_pr_cache(path, insiders, prs_by_id):
     make a stale `ourloc` look fresh. The PR half gets its own stamp.
     """
     return common.merge_cache(path, IMPACT_CACHE_VERSION, {
-        "prs_fetched_at": datetime.now(timezone.utc).isoformat(
-            timespec="seconds"),
+        "prs_fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "insiders": sorted(insiders),
         "prs": prs_by_id,
     })
@@ -515,8 +513,11 @@ def load_inputs(args, token):
     """
     cache = common.load_cache(args.cache_file, IMPACT_CACHE_VERSION)
     try:
-        insiders, prs, prs_by_id = fetch_prs(token, args.user,
-                                             cache.get("prs") or None)
+        insiders, prs, prs_by_id = fetch_prs(token, args.user, cache.get("prs") or None)
+        with common.acquisition("fetch_public_repos"):  # a cached node's isPrivate can be stale
+            public = common.share.public_now(token, sorted({n["repository"]["nameWithOwner"] for n in prs if common.is_external(n, insiders)}),
+                                             gql, common.timing_sleep, dropped_from="the responsiveness card")
+        prs = [n for n in prs if n["repository"]["nameWithOwner"] in public]
     except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
         # the cache and exits 0 — but only with a usable cache. Without one,
@@ -532,8 +533,7 @@ def load_inputs(args, token):
         # fetch_prs is two acquisitions; the label the failing one left behind
         # names it. `fetch_prs` itself is the honest name when the failure
         # came from outside both (issue #55).
-        fallback = common.CacheFallback(
-            stale, common.take_last_acquisition() or "fetch_prs", exc)
+        fallback = common.CacheFallback(stale, common.take_last_acquisition() or "fetch_prs", exc)
     else:
         update_pr_cache(args.cache_file, insiders, prs_by_id)
         fallback = None
