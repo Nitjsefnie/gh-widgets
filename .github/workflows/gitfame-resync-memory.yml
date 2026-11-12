@@ -19,7 +19,10 @@ name: gitfame-resync-memory
 # One full resync both ways outlasts a job, so each matrix job is ONE run: one
 # arm, one repeat, one of six shards of the pinned repos, on its own runner and
 # cgroup. The report proves every shard ran once and states a repeat's
-# full-resync peak as the max over its shards.
+# full-resync peak as the max over its shards: the peak is set by the largest
+# single repo, which one shard blames whole. Limit, not measured: memory.peak
+# counts page cache, and a shard's cgroup no longer carries page cache from
+# the other shards' repos, so it may read below an unsharded run's.
 #
 # This workflow is measurement-only. It never writes to the repo, never
 # publishes an SVG anywhere, and reads only public GitHub data.
