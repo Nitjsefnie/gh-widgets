@@ -94,6 +94,23 @@ class AcquisitionOverlap(unittest.TestCase):
         assert concurrent is not None
         self.assertGreater(float(concurrent[1]), 0, observed)
 
+    def test_profile_org_and_repo_walks_are_in_flight_together(self):
+        # Driven alone, because in the full profile run above the authored fetch
+        # holds the second request slot when the walks start, so the org and repo
+        # walks run apart there even when they are submitted together.
+        api = DelayedAPI()
+        with mock.patch.dict(os.environ, {"GH_WIDGETS_GH_EXTRA_ORGS": ""}), \
+                mock.patch("urllib.request.urlopen", api):
+            profile.fetch("t", "me", cached_days={})
+        observed = api.report("profile.fetch")
+        orgs = [(start, end) for query, start, end in api.spans if query == profile.ORG_QUERY]
+        repos = [(start, end) for query, start, end in api.spans if query == profile.REPO_QUERY]
+        # Two walk requests and the one trailing calendar window.
+        self.assertEqual((len(orgs), len(repos), len(api.spans)), (1, 1, 3), observed)
+        self.assertTrue(any(start < other_end and other_start < end
+                            for start, end in orgs for other_start, other_end in repos),
+                        f"the organizations and repositories walks ran one at a time: {observed}")
+
     def test_totals_groups_overlap_keep_union_count_and_pacing(self):
         repos = [f"other/r{i}" for i in range(31)]
         api = DelayedAPI()
