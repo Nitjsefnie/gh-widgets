@@ -155,9 +155,10 @@ def compared(*repos):
 class AuditWorkflowSteps(unittest.TestCase):
     """The decoded run: scalars of targeted-blame-audit.yml, run as the runner runs them.
 
-    Each step runs with the environment GitHub composes for it (job env, then
-    step env, `matrix.shard` substituted) and its /tmp/ paths moved into a
-    scratch directory; python3 is stubbed only for the resolver and renderer.
+    Each step runs with only the environment the workflow composes for it (job
+    env, then step env, `matrix.shard` substituted) plus what bash and the stub
+    need, and its /tmp/ paths moved into a scratch directory; python3 is
+    stubbed only for the resolver and renderer.
     """
 
     jobs = yaml.safe_load((Path(__file__).resolve().parents[1]
@@ -179,7 +180,10 @@ class AuditWorkflowSteps(unittest.TestCase):
             shutil.copy(root / "manifest.json", root / "pins.json")
         if audit_log is not None:
             (root / "audit.log").write_text(audit_log, encoding="utf-8")
-        env = dict(os.environ, PATH=f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        # An allowlist, never os.environ: a GH_WIDGETS_* export in the calling shell
+        # would stand in for a variable the workflow itself failed to set.
+        env = {key: os.environ[key] for key in ("HOME", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
+        env.update(PATH=f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
                    GITHUB_OUTPUT=str(root / "output"), RECORD=str(root / "record"),
                    STUB_MANIFEST=str(root / "manifest.json"), STUB_LOG=str(root / "log"), STUB_RC=str(rc))
         for key, value in {**self.jobs[job].get("env", {}), **step.get("env", {})}.items():
