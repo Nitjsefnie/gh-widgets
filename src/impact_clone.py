@@ -190,17 +190,18 @@ def load_repo_pins():
 def selected_shard(pins):
     """The audit shard ``GH_WIDGETS_IMPACT_SHARD`` names; None when it is unset.
 
-    A shard is a subset of the manifest, so naming one without a manifest
-    whose every pin carries a ``shard`` is fatal rather than a guessed subset.
+    A shard is a subset of the manifest, so naming one that no pin carries, or
+    any shard while some pin carries none, is fatal rather than a guessed subset.
     """
     raw = os.environ.get("GH_WIDGETS_IMPACT_SHARD", "").strip()
     if not raw:
         return None
     if not (raw.isascii() and raw.isdigit()):
         raise SystemExit(f"error: GH_WIDGETS_IMPACT_SHARD={raw!r} is not a non-negative integer")
-    if not pins or any("shard" not in pin for pin in pins.values()):
-        raise SystemExit("error: GH_WIDGETS_IMPACT_SHARD needs a GH_WIDGETS_IMPACT_REPO_PINS "
-                         "manifest that gives every repo a shard")
+    shards = {pin.get("shard") for pin in pins.values()}
+    if None in shards or int(raw) not in shards:
+        raise SystemExit(f"error: GH_WIDGETS_IMPACT_SHARD={raw} needs a GH_WIDGETS_IMPACT_REPO_PINS "
+                         "manifest that gives every repo a shard and this shard at least one")
     return int(raw)
 
 

@@ -121,6 +121,7 @@ class ShardedRun(unittest.TestCase):
             "a pin without a shard": ({"GH_WIDGETS_IMPACT_SHARD": "0"}, {**sharded, "o/b": {"head": "x"}}),
             "an unpinned candidate": ({"GH_WIDGETS_IMPACT_SHARD": "0"}, {"o/a": sharded["o/a"]}),
             "a shard that is not a number": ({"GH_WIDGETS_IMPACT_SHARD": "-1"}, sharded),
+            "a shard no pin carries": ({"GH_WIDGETS_IMPACT_SHARD": "1"}, sharded),
         }
         for name, (env, pins) in cases.items():
             with self.subTest(name), self.assertRaises(SystemExit):
