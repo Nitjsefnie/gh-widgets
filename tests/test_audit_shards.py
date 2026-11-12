@@ -1,4 +1,4 @@
-"""Splitting the targeted-blame audit: the resolver's shards and the renderer's filter.
+"""Splitting the targeted-blame audit: the resolver's shards, the renderer's filter, the workflow.
 
     python3 -m unittest discover -v
 """
@@ -6,13 +6,19 @@ import contextlib
 import io
 import json
 import os
+import re
+import shlex
 import shutil
+import subprocess
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import yaml
+
+from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from tests import _ghw_temp
 from tests.test_pins import impact_loc, resolve_pins
 
@@ -126,6 +132,97 @@ class ShardedRun(unittest.TestCase):
         for name, (env, pins) in cases.items():
             with self.subTest(name), self.assertRaises(SystemExit):
                 self.blamed(env, pins)
+
+
+# A python3 on PATH that answers for the resolver and the renderer and runs the
+# real interpreter for everything else (the steps' inline `python3 -c` / `-`).
+STUB = f"""#!/bin/sh
+case "$1" in
+  scripts/resolve-repo-pins.py) while [ $# -gt 0 ]; do [ "$1" = --out ] && cp "$STUB_MANIFEST" "$2"; shift; done; exit 0 ;;
+  src/render-impact.py) shift
+    printf '%s\\n' "shard=$GH_WIDGETS_IMPACT_SHARD method=$GH_WIDGETS_BLAME_METHOD bots=$GH_WIDGETS_IMPACT_COUNT_BOT_PRS pins=$GH_WIDGETS_IMPACT_REPO_PINS args=$*" > "$RECORD"
+    cat "$STUB_LOG"; exit "$STUB_RC" ;;
+esac
+exec {shlex.quote(sys.executable)} "$@"
+"""
+HEAD = "blame-method: both\ngit-fame: 3.1.4 with --jobs\n"
+
+
+def compared(*repos):
+    return "".join(f"    compare {r}: fame (1, 2) vs targeted (1, 2) ok in 0.1s\n" for r in repos)
+
+
+class AuditWorkflowSteps(unittest.TestCase):
+    """The decoded run: scalars of targeted-blame-audit.yml, executed under bash.
+
+    Each step runs with the environment GitHub composes for it (job env, then
+    step env, `matrix.shard` substituted) and its /tmp/ paths moved into a
+    scratch directory; python3 is stubbed only for the resolver and renderer.
+    """
+
+    jobs = yaml.safe_load((Path(__file__).resolve().parents[1]
+                           / ".github/workflows/targeted-blame-audit.yml").read_text(encoding="utf-8"))["jobs"]
+
+    def run_step(self, job, name, shard="0", manifest=None, log="", rc=0, audit_log=None):
+        step = next(s for s in self.jobs[job]["steps"] if s.get("name") == name)
+        scratch = _ghw_temp.tempdir(prefix="ghw-audit-steps-")
+        self.addCleanup(scratch.cleanup)
+        root = Path(scratch.name)
+        (root / "bin").mkdir()
+        (root / "bin" / "python3").write_text(STUB, encoding="utf-8")
+        (root / "bin" / "python3").chmod(0o755)
+        (root / "log").write_text(log, encoding="utf-8")
+        (root / "manifest.json").write_text(json.dumps(manifest or {}), encoding="utf-8")
+        shutil.copy(root / "manifest.json", root / "pins.json")
+        if audit_log is not None:
+            (root / "audit.log").write_text(audit_log, encoding="utf-8")
+        env = dict(os.environ, PATH=f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                   GITHUB_OUTPUT=str(root / "output"), RECORD=str(root / "record"),
+                   STUB_MANIFEST=str(root / "manifest.json"), STUB_LOG=str(root / "log"), STUB_RC=str(rc))
+        for key, value in {**self.jobs[job].get("env", {}), **step.get("env", {})}.items():
+            value = re.sub(r"\$\{\{\s*matrix\.shard\s*\}\}", shard, str(value))
+            env[key] = re.sub(r"\$\{\{.*?\}\}", "x", value).replace("/tmp/", f"{root}/")
+        done = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                               step["run"].replace("/tmp/", f"{root}/")],
+                              cwd=root, env=env, capture_output=True, text=True, check=False)
+        return done, root
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_pins_job_outputs_every_shard_the_manifest_uses(self):
+        manifest = {r: {**PINS[r], "shard": k} for r, k in (("o/a", 2), ("o/b", 0), ("o/c", 2), ("o/d", 1))}
+        done, root = self.run_step("pins", "Resolve one commit per repo and split the repos into shards",
+                                   manifest=manifest)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((root / "output").read_text(encoding="utf-8"), "shards=[0, 1, 2]\n")
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_render_step_blames_its_shard_both_ways_and_keeps_the_verdict(self):
+        name = "Blame this shard's repos both ways, at the pinned commits"
+        done, root = self.run_step("audit", name, shard="3", log=HEAD + compared("o/a"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((root / "record").read_text(encoding="utf-8").split(),
+                         ["shard=3", "method=both", "bots=1", f"pins={root}/pins.json",
+                          "args=--resync", "--cache-file", f"{root}/impact-cache.json"])
+        self.assertEqual((root / "audit.log").read_text(encoding="utf-8"), HEAD + compared("o/a"))
+        done, _root = self.run_step("audit", name, shard="3", log="error: disagreed\n", rc=2)
+        self.assertNotEqual(done.returncode, 0, "tee must not swallow the renderer's exit code")
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_proof_step_requires_exactly_the_shards_repos(self):
+        manifest = {r: {**PINS[r], "shard": k} for r, k in (("o/a", 0), ("o/b", 1), ("o/c", 0))}
+        cases = {
+            "exactly the shard, in any order": (HEAD + compared("o/c", "o/a"), 0),
+            "a repo missing": (HEAD + compared("o/a"), 1),
+            "another shard's repo as well": (HEAD + compared("o/a", "o/c", "o/b"), 1),
+            "nothing compared": (HEAD, 1),
+            "no blame-method line": ("git-fame: x\n" + compared("o/a", "o/c"), 1),
+            "no git-fame line": ("blame-method: both\n" + compared("o/a", "o/c"), 1),
+        }
+        for case, (log, expected) in cases.items():
+            with self.subTest(case):
+                done, _root = self.run_step("audit", "Prove the shard compared exactly its repos",
+                                            manifest=manifest, audit_log=log)
+                self.assertEqual(done.returncode, expected, done.stdout + done.stderr)
 
 
 if __name__ == "__main__":
