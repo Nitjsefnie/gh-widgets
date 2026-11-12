@@ -285,8 +285,8 @@ class Acquisition(unittest.TestCase):
                 popularity.rest_pages('t', '/user/orgs?per_page=100')
 
     def test_rest_retry_shape_and_nontransient_errors(self):
-        for error in (urllib.error.HTTPError('url', 503, 'down', Message(), None),
-                      urllib.error.URLError('down')):
+        for error in (urllib.error.HTTPError('url', 503, 'down', Message(), None), urllib.error.URLError('down'),
+                      popularity.http.client.RemoteDisconnected('closed'), TimeoutError('timed out')):
             with mock.patch.object(popularity.urllib.request, 'urlopen',
                                    side_effect=[error, response(USER)]), \
                     mock.patch.object(popularity.time, 'sleep') as sleep:
@@ -295,13 +295,13 @@ class Acquisition(unittest.TestCase):
             sleep.assert_called_once_with(5)
             with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error), \
                     mock.patch.object(popularity.time, 'sleep'):
-                with self.assertRaises(urllib.error.URLError):
+                with self.assertRaises(type(error)):
                     popularity.rest('t', '/user', retries=1)
-        for status in (403, 404):
-            error = urllib.error.HTTPError('url', status, 'denied', Message(), None)
-            with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error):
-                with self.assertRaises(urllib.error.HTTPError):
+        for error in (*(urllib.error.HTTPError('url', s, 'denied', Message(), None) for s in (403, 404)), popularity.http.client.InvalidURL('bad')):
+            with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error) as urlopen:
+                with self.assertRaises(type(error)):
                     popularity.rest('t', '/user')
+            self.assertEqual(urlopen.call_count, 1)
         for status in (202, 204):
             with mock.patch.object(popularity.urllib.request, 'urlopen',
                                    return_value=response({}, status=status)):

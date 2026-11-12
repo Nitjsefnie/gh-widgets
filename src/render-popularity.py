@@ -8,6 +8,7 @@ GitHub does not charge against the primary rate limit. Without the store
 configured the render fetches everything, as before.
 """
 import argparse
+import http.client
 import importlib.util
 import json
 import os
@@ -69,7 +70,7 @@ def rest(token, path, retries=3, timeout=20, store=None):
         except urllib.error.HTTPError as exc:
             if exc.code < 500 or attempt == retries:
                 raise
-        except urllib.error.URLError:
+        except (urllib.error.URLError, ConnectionError, TimeoutError, http.client.IncompleteRead, http.client.BadStatusLine):
             if attempt == retries:
                 raise
         common.timing_sleep(5 * (attempt + 1))
