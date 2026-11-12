@@ -331,9 +331,10 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > **There is deliberately no pin-expiry check in CI, and none should be
 > added.** `pin-still-needed.yml` was deleted and stays deleted. Its question —
 > has upstream shipped `--jobs` yet — is answered permanently and was never the
-> reason for the pin. The live reason is a memory property that no `--help`
-> probe can see, and it does not decay on a schedule, so a recurring check
-> would only ever produce false "you can unpin now" pressure. If you want to
+> reason for the pin. The live reasons are a memory property that no `--help`
+> probe can see and the NUL-separated listing and `--` that 4.0.0 lacks; neither
+> decays on a schedule, so a recurring check would only ever produce false
+> "you can unpin now" pressure. If you want to
 > re-test the gap, re-run the measurement workflow, on a runner.
 >
 > The measurement is now recorded upstream, on
