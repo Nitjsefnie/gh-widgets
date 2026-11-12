@@ -286,7 +286,7 @@ class Acquisition(unittest.TestCase):
 
     def test_rest_retry_shape_and_nontransient_errors(self):
         for error in (urllib.error.HTTPError('url', 503, 'down', Message(), None), urllib.error.URLError('down'),
-                      popularity.http.client.RemoteDisconnected('closed'), TimeoutError('timed out')):
+                      popularity.http.client.RemoteDisconnected('closed'), TimeoutError('timed out'), ConnectionResetError('reset'), popularity.http.client.BadStatusLine('x'), popularity.http.client.IncompleteRead(b'')):
             with mock.patch.object(popularity.urllib.request, 'urlopen',
                                    side_effect=[error, response(USER)]), \
                     mock.patch.object(popularity.time, 'sleep') as sleep:
@@ -298,7 +298,7 @@ class Acquisition(unittest.TestCase):
                 with self.assertRaises(type(error)):
                     popularity.rest('t', '/user', retries=1)
         for error in (*(urllib.error.HTTPError('url', s, 'denied', Message(), None) for s in (403, 404)), popularity.http.client.InvalidURL('bad')):
-            with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error) as urlopen:
+            with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=error) as urlopen, mock.patch.object(popularity.time, 'sleep'):
                 with self.assertRaises(type(error)):
                     popularity.rest('t', '/user')
             self.assertEqual(urlopen.call_count, 1)
