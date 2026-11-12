@@ -29,8 +29,9 @@ Render the SVGs yourself instead:
 - **No JS, no fonts loaded by the SVG.** Uses `JetBrains Mono, monospace`
   with system fallback so embedding into a GitHub README looks right
   without pulling Google Fonts.
-- **Pure Python stdlib.** `urllib` + `json` + `argparse`. Python 3.9+.
-  No `pip install` needed.
+- **Pure Python stdlib.** `urllib` + `json` + `argparse`. CI tests
+  Python 3.14 and 3.15; that does not establish compatibility with untested
+  future releases. No `pip install` needed.
 
 ## Install
 

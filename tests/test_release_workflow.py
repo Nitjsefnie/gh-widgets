@@ -85,12 +85,12 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         ("completed", "success", "speed"),
         ("completed", "success", "pip-audit"),
         ("completed", "success", "analyze (python)"),
-        ("completed", "success", "unittest (ubuntu-latest, 3.10)"),
-        ("completed", "success", "unittest (ubuntu-latest, 3.13)"),
-        ("completed", "success", "unittest (macos-latest, 3.10)"),
-        ("completed", "success", "unittest (macos-latest, 3.13)"),
-        ("completed", "success", "unittest (windows-latest, 3.10)"),
-        ("completed", "success", "unittest (windows-latest, 3.13)"),
+        ("completed", "success", "unittest (ubuntu-latest, 3.14)"),
+        ("completed", "success", "unittest (ubuntu-latest, 3.15)"),
+        ("completed", "success", "unittest (macos-latest, 3.14)"),
+        ("completed", "success", "unittest (macos-latest, 3.15)"),
+        ("completed", "success", "unittest (windows-latest, 3.14)"),
+        ("completed", "success", "unittest (windows-latest, 3.15)"),
         # One leg, because the job renames ITSELF to `coverage-ratchet`; the
         # manifest entry is written against that string, not the job key.
         ("completed", "success", "coverage-ratchet"),
@@ -655,10 +655,10 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_decorated_check_run_name_still_matches_its_entry(self):
         # The manifest says `unittest`; the check runs say
-        # `unittest (ubuntu-latest, 3.10)`. Matching has to bridge that,
+        # `unittest (ubuntu-latest, 3.14)`. Matching has to bridge that,
         # and codeql renames its job to `analyze (python)` the same way.
         # A job that reports its bare id must match too.
-        for entry, name in (("unittest", "unittest (ubuntu-latest, 3.10)"),
+        for entry, name in (("unittest", "unittest (ubuntu-latest, 3.14)"),
                             ("unittest", "unittest"),
                             ("analyze", "analyze (python)"),
                             ("analyze", "analyze")):
@@ -699,8 +699,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_still_running_gate_is_waited_for_until_it_passes(self):
         self._write_runs(
-            [("in_progress", "", "unittest (ubuntu-latest, 3.10)")]
-            + self._without("unittest (ubuntu-latest, 3.10)"),
+            [("in_progress", "", "unittest (ubuntu-latest, 3.14)")]
+            + self._without("unittest (ubuntu-latest, 3.14)"),
             **{"polls-remaining": "2",
                "check-runs-after": self._check_runs(self.ALL_GREEN)})
         done = self._execute("Wait for the other gates on this commit",
@@ -708,7 +708,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("still running", done.stdout)
-        self.assertIn("unittest (ubuntu-latest, 3.10)", done.stdout)
+        self.assertIn("unittest (ubuntu-latest, 3.14)", done.stdout)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -806,7 +806,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # Two red legs, not one, so a scan that reads only the first bad
         # leg is caught too — and it should be: an operator looking at a
         # six-leg matrix needs to know which of them to look at.
-        red = ("unittest (ubuntu-latest, 3.10)", "unittest (windows-latest, 3.13)")
+        red = ("unittest (ubuntu-latest, 3.14)", "unittest (windows-latest, 3.15)")
         runs = [("completed", "failure", name) for name in red] + [
             (status, conclusion, name)
             for status, conclusion, name in self.ALL_GREEN
@@ -818,7 +818,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         for name in red:
             self.assertIn(name, done.stderr)
         # A green leg is never named as a problem.
-        self.assertNotIn("unittest (macos-latest, 3.10)", done.stderr)
+        self.assertNotIn("unittest (macos-latest, 3.14)", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -958,8 +958,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_giving_up_names_the_gate_that_never_reported(self):
         self._write_runs(
-            [("in_progress", "", "unittest (ubuntu-latest, 3.10)")]
-            + self._without("speed", "unittest (ubuntu-latest, 3.10)"),
+            [("in_progress", "", "unittest (ubuntu-latest, 3.14)")]
+            + self._without("speed", "unittest (ubuntu-latest, 3.14)"),
             **{"polls-remaining": "1"})
         done = self._execute("Wait for the other gates on this commit",
                              **self.NO_WAIT)

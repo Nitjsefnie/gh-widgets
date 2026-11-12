@@ -97,7 +97,7 @@ jobs:
           # percentage is only comparable within one interpreter build; a
           # ratchet calibrated on a different cell measures the difference
           # between the cells.
-          python-version: "3.13"
+          python-version: "3.15"
 
       - name: Install the test toolchain
         run: |

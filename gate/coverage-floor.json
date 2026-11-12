@@ -5,7 +5,7 @@
     "--source=.",
     "--omit=tests/*"
   ],
-  "cell": "ubuntu-latest / 3.13",
+  "cell": "ubuntu-latest / 3.15",
   "measured": 88.8,
   "floor": 86.7,
   "measured_commit": "d178c2205021c4700dc33a7cff9d037ad35c36e6",

@@ -274,7 +274,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         document = {
             "schema": 4,
             "basis": "fixture baseline for the workflow tests",
-            "cell": "ubuntu-latest / 3.13",
+            "cell": "ubuntu-latest / 3.15",
             "measured_commit": "0" * 40,
             "measured_at": "2026-10-01T00:00:00Z",
             "populations": {

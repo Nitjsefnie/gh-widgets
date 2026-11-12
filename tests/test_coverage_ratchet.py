@@ -77,7 +77,7 @@ def _document(floor=71.9, drop=(), **overrides):
         "basis": "the population is every shipped source family; "
                  "the floor sits under the measurement on purpose",
         "population": ["--source=.", "--omit=test_*.py"],
-        "cell": "ubuntu-latest / 3.13",
+        "cell": "ubuntu-latest / 3.15",
         "measured": 71.9,
         "floor": floor,
         "measured_commit": SHA,
