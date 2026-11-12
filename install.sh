@@ -331,6 +331,12 @@ for u in gh-widgets.service gh-widgets-resync.service; do
             exit 1
         fi
     done
+    if ! PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$DEST${PYTHONPATH:+:$PYTHONPATH}" \
+            "$py" -c 'import ghwidgets_data, ghwidgets_cache, ghwidgets_journal, ghwidgets_share, impact_clone' \
+            >/dev/null 2>&1; then
+        echo "install.sh: a shared module failed to import on $u's $py" >&2
+        exit 1
+    fi
     scripts=$("$py" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')
     if ! "$py" -c 'import gitfame' >/dev/null 2>&1 ||
             ! "$scripts/git-fame" --help 2>/dev/null | grep -q -- '--jobs'; then
