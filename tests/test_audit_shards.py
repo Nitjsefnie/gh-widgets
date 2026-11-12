@@ -153,7 +153,7 @@ def compared(*repos):
 
 
 class AuditWorkflowSteps(unittest.TestCase):
-    """The decoded run: scalars of targeted-blame-audit.yml, executed under bash.
+    """The decoded run: scalars of targeted-blame-audit.yml, run as the runner runs them.
 
     Each step runs with the environment GitHub composes for it (job env, then
     step env, `matrix.shard` substituted) and its /tmp/ paths moved into a
@@ -182,8 +182,9 @@ class AuditWorkflowSteps(unittest.TestCase):
         for key, value in {**self.jobs[job].get("env", {}), **step.get("env", {})}.items():
             value = re.sub(r"\$\{\{\s*matrix\.shard\s*\}\}", shard, str(value))
             env[key] = re.sub(r"\$\{\{.*?\}\}", "x", value).replace("/tmp/", f"{root}/")
-        done = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
-                               step["run"].replace("/tmp/", f"{root}/")],
+        (root / "step.sh").write_text(step["run"].replace("/tmp/", f"{root}/"), encoding="utf-8")
+        # A run: step with no `shell:` runs as `bash -e {0}`; pipefail is only what the script sets.
+        done = subprocess.run(["bash", "--noprofile", "--norc", "-e", str(root / "step.sh")],
                               cwd=root, env=env, capture_output=True, text=True, check=False)
         return done, root
 
