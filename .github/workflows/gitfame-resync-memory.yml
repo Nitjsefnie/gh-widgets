@@ -16,6 +16,11 @@ name: gitfame-resync-memory
 # re-blames every repo), so it is exactly the condition under which a dropped
 # work window would show.
 #
+# One full resync both ways outlasts a job, so each matrix job is ONE run: one
+# arm, one repeat, one of six shards of the pinned repos, on its own runner and
+# cgroup. The report proves every shard ran once and states a repeat's
+# full-resync peak as the max over its shards.
+#
 # This workflow is measurement-only. It never writes to the repo, never
 # publishes an SVG anywhere, and reads only public GitHub data.
 
@@ -42,7 +47,7 @@ on:
         description: >-
           Space-separated arms to run: fork (the pinned baseline), up (PyPI
           4.0.0), new (whatever `new_ref` names). One arm and repeats=1 is an
-          attribution run (~11 min) rather than a comparison.
+          attribution run rather than a comparison.
         required: false
         default: "fork up"
       new_ref:
@@ -84,9 +89,14 @@ concurrency:
   queue: max
 
 jobs:
-  measure:
+  pins:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 15
+
+    outputs:
+      builds: ${{ steps.axes.outputs.builds }}
+      repeats: ${{ steps.axes.outputs.repeats }}
+      shards: ${{ steps.axes.outputs.shards }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,16 +109,6 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.15"
-
-      - name: Environment facts
-        run: |
-          set -euo pipefail
-          echo "nproc=$(nproc)"
-          echo "kernel=$(uname -r)"
-          echo "cgroup version: $(stat -fc %T /sys/fs/cgroup)"
-          free -m
-          df -h / | tail -1
-          git --version
 
       - name: Preflight — can this token read the public identity?
         env:
@@ -136,180 +136,91 @@ jobs:
                 f"orgs={[o['login'] for o in u['organizations']['nodes']]}")
           PYEOF
 
-      - name: Build a virtualenv per requested arm
-        env:
-          GH_WIDGETS_BUILDS: ${{ inputs.builds || 'new' }}
-          GH_WIDGETS_NEW_REF: ${{ inputs.new_ref || 'perf-blame' }}
-        run: |
-          set -euo pipefail
-          # One venv per arm, built only for the arms actually requested, so a
-          # single-arm attribution run does not pay for the others.
-          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@66f2f9b4c737961c14bae69a31aac148797b8c29"
-          for build in $GH_WIDGETS_BUILDS; do
-            case "$build" in
-              fork) spec="git-fame @ $FORK_PIN" ;;
-              up)   spec="git-fame==4.0.0" ;;
-              new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GH_WIDGETS_NEW_REF" ;;
-              *)    echo "FATAL: unknown build arm '$build'"; exit 1 ;;
-            esac
-            python3 -m venv "/tmp/venv-$build"
-            "/tmp/venv-$build/bin/pip" install -q --upgrade pip
-            "/tmp/venv-$build/bin/pip" install -q "$spec"
-            echo "--- $build ---"
-            "/tmp/venv-$build/bin/git-fame" --version
-            # Every arm must genuinely have --jobs, or the comparison is
-            # meaningless: a serial-blame build would be a different workload.
-            "/tmp/venv-$build/bin/git-fame" --help | grep -q -- '--jobs'
-          done
-
-      - name: Install the measurement harness
-        run: |
-          set -euo pipefail
-          cat > /tmp/measure.py <<'PYEOF'
-          #!/usr/bin/env python3
-          """Run a command and report the peak memory of the WHOLE process tree.
-
-          Two independent instruments, because neither is sufficient alone and
-          they have opposite biases:
-
-          * cgroup v2 `memory.peak` on a dedicated cgroup. Exact kernel
-            high-water mark for the whole tree (children are auto-inherited),
-            no sampling error. Counts shared pages ONCE, and includes page
-            cache and kernel memory charged to the cgroup -- so it is an
-            over-count relative to "sum of anonymous RSS" and cannot be
-            attributed to an individual process.
-          * a sampler that reads the cgroup's `cgroup.procs` and sums each
-            member's RSS from /proc/<pid>/statm. Attributable per process (so
-            the `git-fame` child can be isolated, which is the whole point),
-            but DOUBLE-COUNTS pages shared between the concurrent `git blame`
-            children, and misses any spike shorter than the sample interval.
-
-          Both are reported. Neither is silently preferred.
-          """
-          import argparse
-          import json
-          import os
-          import subprocess
-          import sys
-          import threading
-          import time
-
-          PAGE = os.sysconf("SC_PAGE_SIZE")
-
-
-          def read_rss_kb(pid):
-              try:
-                  with open(f"/proc/{pid}/statm") as f:
-                      return int(f.read().split()[1]) * PAGE // 1024
-              except (OSError, IndexError, ValueError):
-                  return 0
-
-
-          def read_cmd(pid):
-              try:
-                  with open(f"/proc/{pid}/cmdline", "rb") as f:
-                      return f.read().replace(b"\0", b" ").decode(errors="replace").strip()[:120]
-              except OSError:
-                  return "?"
-
-
-          def main():
-              ap = argparse.ArgumentParser()
-              ap.add_argument("--cgroup", required=True)
-              ap.add_argument("--json", required=True)
-              ap.add_argument("--label", required=True)
-              ap.add_argument("--stdout", required=True)
-              ap.add_argument("--stderr", required=True)
-              ap.add_argument("--interval", type=float, default=0.02)
-              ap.add_argument("cmd", nargs=argparse.REMAINDER)
-              a = ap.parse_args()
-              cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
-              cg = a.cgroup
-              procs = os.path.join(cg, "cgroup.procs")
-
-              tree_peak_kb = [0]
-              per_pid_peak = {}
-              samples = [0]
-              stop = threading.Event()
-
-              def sample():
-                  while not stop.is_set():
-                      try:
-                          with open(procs) as f:
-                              pids = [int(x) for x in f.read().split()]
-                      except OSError:
-                          pids = []
-                      total = 0
-                      for pid in pids:
-                          rss = read_rss_kb(pid)
-                          total += rss
-                          prev = per_pid_peak.get(pid)
-                          if prev is None or rss > prev[0]:
-                              per_pid_peak[pid] = (rss, read_cmd(pid))
-                      if total > tree_peak_kb[0]:
-                          tree_peak_kb[0] = total
-                      samples[0] += 1
-                      time.sleep(a.interval)
-
-              # `sh` puts ITSELF into the cgroup and then execs the target, so
-              # the target and every descendant it spawns are inside from the
-              # first instruction. Writing the pid after Popen would race.
-              shim = 'echo $$ > "$1"/cgroup.procs; shift; exec "$@"'
-              full = ["sh", "-c", shim, "sh", cg] + cmd
-
-              t0 = time.monotonic()
-              with open(a.stdout, "wb") as fo, open(a.stderr, "wb") as fe:
-                  p = subprocess.Popen(full, stdout=fo, stderr=fe)
-                  th = threading.Thread(target=sample, daemon=True)
-                  th.start()
-                  rc = p.wait()
-              stop.set()
-              th.join(timeout=2)
-              wall = time.monotonic() - t0
-
-              cgroup_peak_kb = None
-              try:
-                  with open(os.path.join(cg, "memory.peak")) as f:
-                      cgroup_peak_kb = int(f.read().strip()) // 1024
-              except (OSError, ValueError):
-                  pass
-
-              top = sorted(per_pid_peak.items(), key=lambda kv: -kv[1][0])[:12]
-              out = {
-                  "label": a.label,
-                  "rc": rc,
-                  "wall_s": round(wall, 1),
-                  "cgroup_memory_peak_kb": cgroup_peak_kb,
-                  "sampler_tree_peak_kb": tree_peak_kb[0],
-                  "sampler_samples": samples[0],
-                  "sampler_interval_s": a.interval,
-                  "top_processes_by_peak_rss_kb": [
-                      {"pid": pid, "peak_rss_kb": rss, "cmd": cmd_} for pid, (rss, cmd_) in top
-                  ],
-              }
-              with open(a.json, "w") as f:
-                  json.dump(out, f, indent=2)
-              print(json.dumps(out, indent=2))
-              return 0 if rc == 0 else 1
-
-
-          if __name__ == "__main__":
-              sys.exit(main())
-          PYEOF
-          python3 -c "import ast,sys; ast.parse(open('/tmp/measure.py').read())"
-          echo "measure.py parses"
-
-      - name: Resolve one commit per repo
+      - name: Resolve one commit per repo, split the repos into shards, emit the matrix
+        id: axes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+          GH_WIDGETS_BUILDS: ${{ inputs.builds || 'new' }}
+          GH_WIDGETS_REPEATS: ${{ inputs.repeats || '1' }}
         run: |
           set -euo pipefail
-          # Every arm blames the same trees. Without this, the arms clone
-          # minutes apart and a repo that moves in between is measured at two
-          # different sizes -- which is indistinguishable, in the peak-memory
-          # number, from the difference this workflow exists to measure.
-          python3 scripts/resolve-repo-pins.py --out /tmp/pins.json
+          # Every run blames the same trees, or a repo that moves between
+          # clones reads as the memory difference this workflow measures.
+          # The shards are the targeted-blame-audit's, from the same helper.
+          python3 scripts/resolve-repo-pins.py --shards 6 --out /tmp/pins.json
+          python3 scripts/resync-memory.py axes --pins /tmp/pins.json \
+            --builds "$GH_WIDGETS_BUILDS" --repeats "$GH_WIDGETS_REPEATS" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitfame-resync-memory-pins
+          path: /tmp/pins.json
+          if-no-files-found: error
+
+  measure:
+    needs: pins
+    runs-on: ubuntu-latest
+    # One shard's resync both ways, the targeted-blame-audit's 40-minute job,
+    # plus one venv build; a fresh runner per job, so no arm shares a cgroup.
+    timeout-minutes: 40
+    strategy:
+      # Each run's numbers stand alone; a red one must not cancel the rest.
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.pins.outputs.builds) }}
+        repeat: ${{ fromJSON(needs.pins.outputs.repeats) }}
+        shard: ${{ fromJSON(needs.pins.outputs.shards) }}
+
+    env:
+      GH_WIDGETS_BUILD: ${{ matrix.build }}
+      GH_WIDGETS_IMPACT_SHARD: ${{ matrix.shard }}
+      GH_WIDGETS_RUN_LABEL: ${{ matrix.build }}-r${{ matrix.repeat }}-s${{ matrix.shard }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - name: Environment facts
+        run: |
+          set -euo pipefail
+          echo "nproc=$(nproc)"
+          echo "kernel=$(uname -r)"
+          echo "cgroup version: $(stat -fc %T /sys/fs/cgroup)"
+          free -m
+          df -h / | tail -1
+          git --version
+
+      - name: Build this arm's virtualenv
+        env:
+          GH_WIDGETS_NEW_REF: ${{ inputs.new_ref || 'perf-blame' }}
+        run: |
+          set -euo pipefail
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@66f2f9b4c737961c14bae69a31aac148797b8c29"
+          case "$GH_WIDGETS_BUILD" in
+            fork) spec="git-fame @ $FORK_PIN" ;;
+            up)   spec="git-fame==4.0.0" ;;
+            new)  spec="git-fame @ git+https://github.com/Nitjsefnie-OSC/git-fame@$GH_WIDGETS_NEW_REF" ;;
+            *)    echo "FATAL: unknown build arm '$GH_WIDGETS_BUILD'"; exit 1 ;;
+          esac
+          python3 -m venv "/tmp/venv-$GH_WIDGETS_BUILD"
+          "/tmp/venv-$GH_WIDGETS_BUILD/bin/pip" install -q --upgrade pip
+          "/tmp/venv-$GH_WIDGETS_BUILD/bin/pip" install -q "$spec"
+          "/tmp/venv-$GH_WIDGETS_BUILD/bin/git-fame" --version
+          # Every arm must genuinely have --jobs, or the comparison is
+          # meaningless: a serial-blame build would be a different workload.
+          "/tmp/venv-$GH_WIDGETS_BUILD/bin/git-fame" --help | grep -q -- '--jobs'
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gitfame-resync-memory-pins
+          path: /tmp
 
       - name: Prepare the cgroup
         run: |
@@ -325,11 +236,6 @@ jobs:
           fi
           echo "root subtree_control after: $(cat /sys/fs/cgroup/cgroup.subtree_control)"
           sudo mkdir -p /sys/fs/cgroup/gfbench
-          # Tested directly rather than `ls | grep`: the grep matched two
-          # exact filenames, so a test for those files says the same thing
-          # without the pipeline (shellcheck SC2010) — and this version
-          # actually prints what IS there when the check fails, which the
-          # original discarded.
           if [ ! -e /sys/fs/cgroup/gfbench/memory.peak ] && \
              [ ! -e /sys/fs/cgroup/gfbench/memory.current ]; then
             echo "FATAL: memory controller not delegated to the test cgroup" >&2
@@ -338,218 +244,83 @@ jobs:
             exit 1
           fi
 
-      - name: Measure
+      - name: Measure one resync of this shard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
-          GH_WIDGETS_REPEATS: ${{ inputs.repeats || '1' }}
-          GH_WIDGETS_BUILDS: ${{ inputs.builds || 'new' }}
           GH_WIDGETS_CLONE_LOOKAHEAD: ${{ inputs.clone_lookahead || '3' }}
           GH_WIDGETS_BLAME_METHOD: ${{ inputs.blame_method || 'both' }}
           GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
         run: |
           set -euo pipefail
-          echo "GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD"
+          echo "$GH_WIDGETS_RUN_LABEL: GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD"
           echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS"
-          mkdir -p /tmp/results
-          # Interleave the builds (fork, up, fork, up) rather than grouping
-          # them, so any drift in the runner or in upstream repo state is
-          # spread across both arms instead of loading one of them.
-          for rep in $(seq 1 "$GH_WIDGETS_REPEATS"); do
-            for build in $GH_WIDGETS_BUILDS; do
-              LABEL="$build-$rep"
-              echo "::group::$LABEL"
-              # A fresh cgroup per run: memory.peak is a high-water mark and
-              # would otherwise carry the previous run's maximum forward --
-              # which would inflate every run after the first and manufacture
-              # exactly the difference this workflow is trying to measure.
-              # So this is asserted, not assumed.
-              sudo rmdir /sys/fs/cgroup/gfbench 2>/dev/null || true
-              sudo mkdir -p /sys/fs/cgroup/gfbench
-              echo 0 | sudo tee /sys/fs/cgroup/gfbench/memory.peak >/dev/null 2>&1 || true
-              stale=$(cat /sys/fs/cgroup/gfbench/memory.peak)
-              resident=$(wc -w < /sys/fs/cgroup/gfbench/cgroup.procs)
-              echo "cgroup starts at memory.peak=${stale}B with ${resident} procs"
-              if [ "$stale" -gt 52428800 ] || [ "$resident" -ne 0 ]; then
-                echo "FATAL: cgroup not fresh (peak=${stale}B procs=${resident}) —"
-                echo "       a carried-over high-water mark would corrupt this run"
-                exit 1
-              fi
-              rm -rf "/tmp/out-$LABEL" "/tmp/cache-$LABEL.json"
-              mkdir -p "/tmp/out-$LABEL"
-              sudo -E python3 /tmp/measure.py \
-                --cgroup /sys/fs/cgroup/gfbench \
-                --json "/tmp/results/$LABEL.json" \
-                --label "$LABEL" \
-                --stdout "/tmp/results/$LABEL.out" \
-                --stderr "/tmp/results/$LABEL.err" \
-                -- env \
-                  "PATH=/tmp/venv-$build/bin:$PATH" \
-                  "GH_WIDGETS_GH_USER=$GH_WIDGETS_GH_USER" \
-                  "GH_TOKEN=$GH_TOKEN" \
-                  "GH_WIDGETS_OUT_DIR=/tmp/out-$LABEL" \
-                  "GH_WIDGETS_CACHE_FILE=/tmp/cache-$LABEL.json" \
-                  "GH_WIDGETS_DEBUG_TIMING=1" \
-                  "GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD" \
-                  "GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD" \
-                  "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS" \
-                  "GH_WIDGETS_IMPACT_REPO_PINS=/tmp/pins.json" \
-                  python3 "$GITHUB_WORKSPACE/src/render-impact.py" --resync
-              echo "--- which method and build actually ran ---"
-              # Every run identifies its method; only the methods that USE
-              # git-fame can be expected to identify a git-fame build. Demanding
-              # the git-fame line unconditionally fails every `targeted` run.
-              grep -m1 '^blame-method:' "/tmp/results/$LABEL.out" || \
-                { echo "FATAL: no blame-method line — the run is unidentified"; exit 1; }
-              if [ "$GH_WIDGETS_BLAME_METHOD" != "targeted" ]; then
-                grep -m1 '^git-fame:' "/tmp/results/$LABEL.out" || \
-                  { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
-              fi
-              echo "--- repos blamed ---"
-              grep -c '^loc \[' "/tmp/results/$LABEL.out" || true
-              echo "::endgroup::"
-            done
-          done
+          mkdir -p /tmp/results /tmp/out
+          # Bot counts never touch blame or its memory, and every run spends
+          # the job token's 1,000 GraphQL points per hour for this repository.
+          sudo -E python3 scripts/resync-memory.py measure \
+            --cgroup /sys/fs/cgroup/gfbench \
+            --json "/tmp/results/$GH_WIDGETS_RUN_LABEL.json" \
+            --label "$GH_WIDGETS_RUN_LABEL" \
+            --stdout "/tmp/results/$GH_WIDGETS_RUN_LABEL.out" \
+            --stderr "/tmp/results/$GH_WIDGETS_RUN_LABEL.err" \
+            -- env \
+              "PATH=/tmp/venv-$GH_WIDGETS_BUILD/bin:$PATH" \
+              "GH_WIDGETS_GH_USER=$GH_WIDGETS_GH_USER" \
+              "GH_TOKEN=$GH_TOKEN" \
+              "GH_WIDGETS_OUT_DIR=/tmp/out" \
+              "GH_WIDGETS_CACHE_FILE=/tmp/cache.json" \
+              "GH_WIDGETS_DEBUG_TIMING=1" \
+              "GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD" \
+              "GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD" \
+              "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS" \
+              "GH_WIDGETS_IMPACT_REPO_PINS=/tmp/pins.json" \
+              "GH_WIDGETS_IMPACT_SHARD=$GH_WIDGETS_IMPACT_SHARD" \
+              "GH_WIDGETS_IMPACT_COUNT_BOT_PRS=1" \
+              python3 "$GITHUB_WORKSPACE/src/render-impact.py" --resync
 
-      - name: Validate every run before any number is believed
+      - name: Validate the run before any number is believed
         run: |
-          set -euo pipefail
-          # A crashed run allocates little and would otherwise read as the
-          # winner. Nothing here is accepted without rc=0, a written SVG, and
-          # a blame manifest.
-          python3 - <<'PYEOF'
-          import glob, json, os, re, sys
-          bad = []
-          for f in sorted(glob.glob("/tmp/results/*.json")):
-              d = json.load(open(f))
-              label = d["label"]
-              out = f"/tmp/results/{label}.out"
-              txt = open(out, errors="replace").read()
-              svg = f"/tmp/out-{label}/impact.svg"
-              size = os.path.getsize(svg) if os.path.exists(svg) else 0
-              blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+([\d,]+) /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
-              guard = re.search(r"^git-fame: (.+)$", txt, re.M)
-              method = re.search(r"^blame-method: (.+)$", txt, re.M)
-              if d["rc"] != 0:
-                  bad.append(f"{label}: rc={d['rc']}")
-              if size == 0:
-                  bad.append(f"{label}: impact.svg missing or empty")
-              if not blamed:
-                  bad.append(f"{label}: blamed ZERO repos — not a max-blame workload")
-              if not method:
-                  bad.append(f"{label}: no blame-method line")
-              if not guard and (method.group(1) if method else "") != "targeted":
-                  bad.append(f"{label}: no git-fame identification line")
-              print(f"{label}: rc={d['rc']} svg={size}B repos_blamed={len(blamed)} "
-                    f"method={method.group(1) if method else 'NONE'} "
-                    f"guard={guard.group(1) if guard else 'n/a'}")
-          if bad:
-              sys.exit("VALIDATION FAILED:\n  " + "\n  ".join(bad))
-          print("all runs valid")
-          PYEOF
+          python3 scripts/resync-memory.py validate --label "$GH_WIDGETS_RUN_LABEL" \
+            --results /tmp/results --svg /tmp/out/impact.svg
 
-      - name: Summary
-        run: |
-          set -euo pipefail
-          python3 - <<'PYEOF'
-          import glob, json, re, sys
-          rows, manifests = [], {}
-          for f in sorted(glob.glob("/tmp/results/*.json")):
-              d = json.load(open(f))
-              label = d["label"]
-              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
-              blamed = re.findall(r"^loc \[\d+/\d+\] ours\s+[\d,]+ /\s+([\d,]+) \(.*?\)\s+(\S+)$", txt, re.M)
-              manifests[label] = {repo: int(tot.replace(",", "")) for tot, repo in blamed}
-              gf = re.search(r"^blame-method: (.+)$", txt, re.M)
-              gfp = max(((p["peak_rss_kb"], p["cmd"]) for p in d["top_processes_by_peak_rss_kb"]
-                         if "git-fame" in p["cmd"] or "git fame" in p["cmd"]), default=(0, "-"))
-              rows.append((label, d["rc"], d["wall_s"], d["cgroup_memory_peak_kb"],
-                           d["sampler_tree_peak_kb"], gfp[0], len(blamed),
-                           gf.group(1) if gf else "?"))
-          print(f"{'run':10} {'rc':>3} {'wall_s':>8} {'cgroup_peak_MB':>15} "
-                f"{'sampler_tree_MB':>16} {'git-fame_proc_MB':>17} {'repos':>6}  build")
-          for r in rows:
-              cg = f"{r[3]/1024:.1f}" if r[3] is not None else "n/a"
-              print(f"{r[0]:10} {r[1]:>3} {r[2]:>8} {cg:>15} "
-                    f"{r[4]/1024:>16.1f} {r[5]/1024:>17.1f} {r[6]:>6}  {r[7]}")
-
-          # Where the wall time actually goes. `git clone` is network-bound and
-          # `git fame` is CPU-bound, so a single wall number cannot say which
-          # arm's change mattered -- and a clone-dominated total would mean the
-          # blame build is not the thing worth optimising at all.
-          # Match the renderer's opt-in journal instrumentation.
-          print("\n--- phase attribution (GH_WIDGETS_DEBUG_TIMING) ---")
-          for f in sorted(glob.glob("/tmp/results/*.json")):
-              label = json.load(open(f))["label"]
-              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
-              # Tolerant of new fields: match each `name value` pair rather
-              # than a fixed field ORDER. The first version of this pattern
-              # hardcoded `clone ... fame ...`, so adding a `wait` field
-              # between them silently reported every run as uninstrumented --
-              # the numbers were in the artifact the whole time.
-              ph = [dict(re.findall(r"(\w+)\s+([\d.]+)s", line))
-                    for line in re.findall(r"^\s+timing \S+: .*$", txt, re.M)]
-              if not ph:
-                  print(f"{label}: NO TIMING LINES -- attribution is missing, "
-                        f"not zero (is GH_WIDGETS_DEBUG_TIMING set?)")
-                  continue
-              def col(key):
-                  return sum(float(p[key]) for p in ph if key in p)
-              clone, wait, fame = col("clone"), col("wait"), col("fame")
-              wall = json.load(open(f))["wall_s"]
-              print(f"{label}: clone {clone:7.1f}s (waited {wait:6.1f}s, "
-                    f"hidden {clone-wait:6.1f}s)  fame {fame:7.1f}s  "
-                    f"blocking {wait+fame:7.1f}s  wall {wall:7.1f}s  "
-                    f"unattributed {wall-wait-fame:6.1f}s")
-
-          # A disagreement between the two counting methods is a correctness
-          # failure, and the fast one under-reports SILENTLY, so surface it
-          # here rather than leaving it in a per-run log nobody opens.
-          print("\n--- targeted-vs-fame agreement ---")
-          disagreed = []
-          for f in sorted(glob.glob("/tmp/results/*.json")):
-              label = json.load(open(f))["label"]
-              txt = open(f"/tmp/results/{label}.out", errors="replace").read()
-              cmps = re.findall(r"^\s+compare (\S+): .*?(ok|MISMATCH)", txt, re.M)
-              if not cmps:
-                  print(f"{label}: no comparison ran (GH_WIDGETS_BLAME_METHOD != both)")
-                  continue
-              bad = [r for r, v in cmps if v == "MISMATCH"]
-              print(f"{label}: {len(cmps) - len(bad)}/{len(cmps)} repos agree"
-                    + (f" -- MISMATCH on {bad}" if bad else ""))
-              if bad:
-                  disagreed.extend(bad)
-
-          # A disagreement is a correctness failure of the shipped default, so
-          # it fails the run. Reporting it into a log that nobody opens would
-          # make this audit indistinguishable from not running one.
-          if disagreed:
-              sys.exit(f"TARGETED DISAGREES WITH git-fame on {sorted(set(disagreed))}")
-
-          # The comparison is only fair if both arms blamed the same repos.
-          print("\n--- work-equality check (same repos, same surviving LOC?) ---")
-          keys = sorted(manifests)
-          base = manifests[keys[0]]
-          for k in keys[1:]:
-              m = manifests[k]
-              only_a = set(base) - set(m)
-              only_b = set(m) - set(base)
-              moved = {r for r in set(base) & set(m) if base[r] != m[r]}
-              print(f"{keys[0]} vs {k}: repos_only_in_first={len(only_a)} "
-                    f"repos_only_in_second={len(only_b)} loc_changed={len(moved)}")
-              for r in sorted(moved)[:10]:
-                  print(f"    {r}: {base[r]} -> {m[r]}")
-
-          print("\n--- largest repos blamed (drives the peak) ---")
-          for repo, loc in sorted(base.items(), key=lambda kv: -kv[1])[:10]:
-              print(f"  {loc:>10,}  {repo}")
-          PYEOF
-
-      - name: Upload raw results
+      - name: Upload the run's results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gitfame-resync-memory
-          path: |
-            /tmp/results/
+          name: gitfame-resync-memory-run-${{ matrix.build }}-r${{ matrix.repeat }}-s${{ matrix.shard }}
+          path: /tmp/results/
           retention-days: 14
+
+  report:
+    needs: [pins, measure]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gitfame-resync-memory-pins
+          path: /tmp
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gitfame-resync-memory-run-*
+          merge-multiple: true
+          path: /tmp/results
+
+      - name: Prove every shard ran once, then summarise
+        env:
+          GH_WIDGETS_BUILDS: ${{ needs.pins.outputs.builds }}
+          GH_WIDGETS_REPEATS: ${{ needs.pins.outputs.repeats }}
+        run: |
+          python3 scripts/resync-memory.py report --results /tmp/results --pins /tmp/pins.json \
+            --builds "$GH_WIDGETS_BUILDS" --repeats "$GH_WIDGETS_REPEATS"
