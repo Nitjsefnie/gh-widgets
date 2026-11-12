@@ -120,6 +120,7 @@ class FreshCgroup(unittest.TestCase):
 
 
 class Measure(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the sampler reads /proc and the shim is sh")
     def test_the_harness_records_the_command_and_its_tree(self):
         root = scratch(self)
         (root / "cg").mkdir()
@@ -128,12 +129,16 @@ class Measure(unittest.TestCase):
             (root / "cg" / "cgroup.procs").write_text("", encoding="ascii")  # the kernel empties it on exit
             argv = ["measure", "--cgroup", str(root / "cg"), "--json", str(root / "r.json"),
                     "--label", "fork-r1-s0", "--stdout", str(root / "o"), "--stderr", str(root / "e"),
-                    "--", sys.executable, "-c", f"print('hi'); raise SystemExit({code})"]
+                    "--", sys.executable, "-c", f"import time; print('hi'); time.sleep(0.3); raise SystemExit({code})"]
             with self.subTest(code=code), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(rm.main(argv), expected)
             run = json.loads((root / "r.json").read_text(encoding="utf-8"))
             self.assertEqual((run["label"], run["rc"], run["cgroup_memory_peak_kb"]), ("fork-r1-s0", code, 0))
             self.assertEqual((root / "o").read_text(encoding="utf-8"), "hi\n")
+            # The sampler found the child through the cgroup's procs file and read its RSS.
+            self.assertGreater(run["sampler_tree_peak_kb"], 0)
+            self.assertIn("time.sleep(0.3)", run["top_processes_by_peak_rss_kb"][0]["cmd"])
+        self.assertEqual((rm.read_rss_kb(-1), rm.read_cmd(-1)), (0, "?"))
 
 
 class Validate(unittest.TestCase):
