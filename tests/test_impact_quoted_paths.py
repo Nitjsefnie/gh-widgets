@@ -95,5 +95,16 @@ class TestTargetedNonUtf8Names(unittest.TestCase):
         self.assertEqual(impact_loc.targeted_counts(tmp, {"us@example.com"}), (2, 5))
 
 
+class TestGitOutputBytes(unittest.TestCase):
+    """Any platform: bytes that are not UTF-8 survive decoding and re-encode exactly."""
+
+    def test_non_utf8_bytes_round_trip(self):
+        raw = b"x\xff.txt\0author Jos\xe9\n"
+        done = subprocess.CompletedProcess(["git"], 0, raw)
+        with mock.patch.object(impact_loc, "_run_bounded", return_value=done):
+            out = impact_loc.git_out(Path("."), "ls-files", "-z")
+        self.assertEqual(out.encode("utf-8", "surrogateescape"), raw)
+
+
 if __name__ == "__main__":
     unittest.main()
