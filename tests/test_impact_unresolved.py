@@ -241,15 +241,14 @@ class CachedRepoMadePrivateResponsiveness(unittest.TestCase):
         self.assertIn("live/repo", svg)
         return api.counts["totals"], out.getvalue().splitlines()
 
-    def test_without_impact_totals_it_asks_github(self):
-        queries, lines = self.run_card()
-        self.assertEqual(queries, 1)
-        self.assertIn("repository now/repo is private; dropped from the responsiveness card", lines)
-
-    def test_the_impact_runs_totals_are_the_public_set(self):
-        # Impact runs first in the unit; its totals hold only repos public at that run.
-        totals = {"live/repo": {"issues": 4, "merged_prs": 3, "branch": "main", "head": "h1"}}
-        self.assertEqual(self.run_card(totals=totals)[0], 0)
+    def test_it_asks_github_even_when_impact_totals_say_public(self):
+        # Totals the impact card wrote before the repo went private must not stand in for the check.
+        stale = {r: {"issues": 4, "merged_prs": 3, "branch": "main", "head": "h1"} for r in ("now/repo", "live/repo")}
+        for cache in ({}, {"totals": stale}):
+            with self.subTest(totals=bool(cache)):
+                queries, lines = self.run_card(**cache)
+                self.assertEqual(queries, 1)
+                self.assertIn("repository now/repo is private; dropped from the responsiveness card", lines)
 
 
 if __name__ == "__main__":
