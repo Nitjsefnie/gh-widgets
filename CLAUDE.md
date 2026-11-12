@@ -296,7 +296,7 @@ every run and has no `--resync` flag. Both units configure Overflow.
 >
 > **So the pin went back to the fork on 2026-08-10 (operator instruction),
 > after a brief move to 4.0.0.** Paying 2.2× peak memory for byte-identical
-> output is the whole argument, and it stands on the memory columns alone;
+> output was the whole argument then, and it stood on the memory columns alone;
 > the earlier decision to move had been taken on a *wall-time* cost
 > structure, before anyone had measured memory. The peak scales with the
 > largest single repo blamed (`Nitjsefnie-OSC/codex`, 1.65 M LOC), not with the
