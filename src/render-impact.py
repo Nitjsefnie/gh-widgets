@@ -180,8 +180,7 @@ def fetch_repo_totals(token, repos):
     15 repos. The issue/merged-PR totals are live counts and are refetched
     every run; the defaultBranchRef oid rides along in the same query so
     the LOC cache check is free. Returns
-    {repo: {issues, merged_prs, branch, head}}; a repo GitHub answers
-    NOT_FOUND for, or one private now, is absent."""
+    {repo: {issues, merged_prs, branch, head}} for public_now's repos."""
     nodes = common.share.public_now(
         token, repos, gql, common.timing_sleep,
         "defaultBranchRef{ name target{ oid } } issues{totalCount} pullRequests(states:MERGED){totalCount}",
@@ -640,6 +639,8 @@ def fetch_all(token, user, cache, resync):  # pylint: disable=too-many-locals
         ourloc = update_loc(merged_repos, totals,
                             {} if resync else cache.get("ourloc") or {},
                             resync, me.emails)
+    # update_loc keeps cached counts; none outside the totals.
+    ourloc = {repo: entry for repo, entry in ourloc.items() if repo in totals}
     return insiders, prs, prs_by_id, issues, totals, ourloc
 
 
