@@ -527,11 +527,16 @@ GH_WIDGETS_IMPACT_REPO_PINS=pins.json GH_WIDGETS_BLAME_METHOD=both python3 src/r
 ```
 
 The manifest is `{repo: {branch, head}}`, resolved from the same query the
-renderer uses. With it set, every clone is detached to its pinned commit; a
+renderer uses, with an integer `shard` per repo under `--shards N`. With it set, every clone is detached to its pinned commit; a
 pin that cannot be honoured, an unreadable manifest, or a blamed repo the
 manifest does not mention ends the run rather than falling back to a live
 branch tip. Unset, clones follow the default branch as before — which is what
 production does.
+
+`--shards N` balances the repos' GitHub disk usage across shards `0` to `N-1`,
+and `GH_WIDGETS_IMPACT_SHARD=K` then blames only shard `K`'s repos, so the
+weekly audit runs its shards as parallel jobs. Naming a shard without a
+manifest whose every repo carries one ends the run.
 
 ## Security
 

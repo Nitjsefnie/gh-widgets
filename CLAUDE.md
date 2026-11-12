@@ -382,7 +382,11 @@ everything, so it takes far longer than an incremental run.
 > That fix is verified, not proven: the ground truth is blame's own rename
 > detection and it is not reconstructible from `git log`. What makes shipping
 > it reasonable is the audit — **`targeted-blame-audit.yml`** runs `both` every
-> Monday 05:23 UTC. The verdict is the renderer's own exit code: under `both`
+> Monday 05:23 UTC, split into parallel jobs: its `pins` job resolves the
+> manifest with `--shards 6`, giving each repo a shard balanced on its GitHub
+> `diskUsage`, and each `audit` job blames one shard (`GH_WIDGETS_IMPACT_SHARD`)
+> and proves its `compare` lines name exactly that shard's manifest repos.
+> The verdict is the renderer's own exit code: under `both`
 > it exits non-zero on any disagreement, so nothing has to re-parse a log.
 > **It must carry the production address set**: the earlier 59/59 that briefly
 > justified enabling `targeted` was measured on the derived noreply addresses
@@ -399,7 +403,8 @@ everything, so it takes far longer than an incremental run.
 > or the two git-fame builds — clone minutes apart and a repo that moves in
 > between is measured at two different sizes. Under a manifest, an unhonourable
 > pin or an unpinned candidate ends the run; there is deliberately no fallback
-> to the live branch tip.
+> to the live branch tip. So does `GH_WIDGETS_IMPACT_SHARD` without a manifest
+> whose every pin carries a `shard`.
 >
 > Two more ways to get a silent zero, both now regression-tested, both hit
 > while writing this: a GitHub noreply address like

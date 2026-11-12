@@ -179,8 +179,29 @@ def load_repo_pins():
         if not isinstance(branch, str):
             raise SystemExit(
                 f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: {repo} has a non-string branch")
-        pins[repo] = {"branch": branch, "head": head}
+        shard = entry.get("shard", 0)
+        if isinstance(shard, bool) or not isinstance(shard, int) or shard < 0:
+            raise SystemExit(f"error: GH_WIDGETS_IMPACT_REPO_PINS={path}: "
+                             f"{repo} has a shard that is not a non-negative integer")
+        pins[repo] = {"branch": branch, "head": head, **({"shard": shard} if "shard" in entry else {})}
     return pins
+
+
+def selected_shard(pins):
+    """The audit shard ``GH_WIDGETS_IMPACT_SHARD`` names; None when it is unset.
+
+    A shard is a subset of the manifest, so naming one without a manifest
+    whose every pin carries a ``shard`` is fatal rather than a guessed subset.
+    """
+    raw = os.environ.get("GH_WIDGETS_IMPACT_SHARD", "").strip()
+    if not raw:
+        return None
+    if not (raw.isascii() and raw.isdigit()):
+        raise SystemExit(f"error: GH_WIDGETS_IMPACT_SHARD={raw!r} is not a non-negative integer")
+    if not pins or any("shard" not in pin for pin in pins.values()):
+        raise SystemExit("error: GH_WIDGETS_IMPACT_SHARD needs a GH_WIDGETS_IMPACT_REPO_PINS "
+                         "manifest that gives every repo a shard")
+    return int(raw)
 
 
 def checkout_pin(dest, head):

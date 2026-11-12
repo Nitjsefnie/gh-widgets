@@ -12,9 +12,11 @@ name: targeted-blame-audit
 # repo; the renderer exits non-zero on any disagreement, which is what fails
 # this workflow.
 #
-# Every repo is pinned to one commit, resolved before the run, so the two
+# Every repo is pinned to one commit, resolved once by the pins job, so the two
 # methods provably blame the same tree rather than whatever each clone happened
-# to fetch.
+# to fetch. The pins job also splits the repos into shards balanced on their
+# GitHub disk usage, and each audit job blames one shard
+# (GH_WIDGETS_IMPACT_SHARD), so the shards run in parallel.
 #
 # This is the correctness half of what used to live inside
 # gitfame-resync-memory.yml, whose name described only its other half. That
@@ -54,11 +56,9 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  pins:
     runs-on: ubuntu-latest
-    # A full re-blame of every external repo, twice over (git-fame and
-    # targeted), with no cache to fall back on.
-    timeout-minutes: 90
+    timeout-minutes: 15
 
     env:
       # A schedule event carries NO inputs, so every `inputs.x` resolves
@@ -66,8 +66,9 @@ jobs:
       # empty identity and pass by measuring the wrong thing.
       GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
-      GH_WIDGETS_GITFAME_REF: ${{ inputs.gitfame_ref || 'e0db2cbae79c8cedd6b04181bd86fd5521c9822b' }}
+
+    outputs:
+      shards: ${{ steps.resolve.outputs.shards }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,6 +76,48 @@ jobs:
           # Nothing in this workflow pushes. Leaving the job token in
           # .git/config lets any later step — or anything a dependency
           # pulls in — reuse it.
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - name: Resolve one commit per repo and split the repos into shards
+        id: resolve
+        run: |
+          set -euo pipefail
+          python3 scripts/resolve-repo-pins.py --shards 6 --out /tmp/pins.json
+          python3 -c "import json; print('shards=' + json.dumps(sorted({p['shard'] for p in json.load(open('/tmp/pins.json')).values()})))" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: targeted-blame-audit-pins
+          path: /tmp/pins.json
+          if-no-files-found: error
+
+  audit:
+    needs: pins
+    runs-on: ubuntu-latest
+    # A full re-blame of one shard's repos, twice over (git-fame and
+    # targeted), with no cache to fall back on.
+    timeout-minutes: 40
+    strategy:
+      # Each shard's verdict stands alone; a red one must not cancel the rest.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.pins.outputs.shards) }}
+
+    env:
+      GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
+      GH_WIDGETS_GITFAME_REF: ${{ inputs.gitfame_ref || 'e0db2cbae79c8cedd6b04181bd86fd5521c9822b' }}
+      GH_WIDGETS_IMPACT_SHARD: ${{ matrix.shard }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -91,48 +134,55 @@ jobs:
           # it honestly.
           git-fame --help | grep -q -- '--jobs'
 
-      - name: Resolve one commit per repo
-        run: |
-          set -euo pipefail
-          python3 scripts/resolve-repo-pins.py --out /tmp/pins.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: targeted-blame-audit-pins
+          path: /tmp
 
-      - name: Blame every repo both ways, at the pinned commits
+      - name: Blame this shard's repos both ways, at the pinned commits
         env:
           GH_WIDGETS_BLAME_METHOD: both
           GH_WIDGETS_IMPACT_REPO_PINS: /tmp/pins.json
+          # Bot counts never touch the line counts audited here, and six
+          # shards would each repeat the bot-PR walk against the job token's
+          # API budget.
+          GH_WIDGETS_IMPACT_COUNT_BOT_PRS: "1"
           GH_WIDGETS_OUT_DIR: /tmp/out
         run: |
           set -euo pipefail
           mkdir -p /tmp/out
-          echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS"
+          echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS shard=$GH_WIDGETS_IMPACT_SHARD"
           # pipefail is load-bearing: the renderer's exit code IS the verdict,
           # and tee would otherwise report the pipeline as successful.
           python3 src/render-impact.py --resync \
             --cache-file /tmp/impact-cache.json 2>&1 | tee /tmp/audit.log
 
-      - name: Prove the audit actually compared something
+      - name: Prove the shard compared exactly its repos
         run: |
           set -euo pipefail
-          # A run that compared nothing exits 0 and reads exactly like a clean
-          # audit, so the count is asserted rather than assumed.
+          # A run that compared nothing, or another shard's repos, exits 0
+          # and reads exactly like a clean audit, so the set is asserted.
           grep -m1 '^blame-method: both$' /tmp/audit.log \
             || { echo "FATAL: the run did not identify itself as both"; exit 1; }
           grep -m1 '^git-fame:' /tmp/audit.log \
             || { echo "FATAL: no git-fame guard line — the build is unidentified"; exit 1; }
-          compared=$(grep -c '^    compare ' /tmp/audit.log) || compared=0
-          pinned=$(python3 -c "import json;print(len(json.load(open('/tmp/pins.json'))))")
-          echo "compared $compared repo(s) against $pinned pinned repo(s)"
-          if [ "$compared" -lt 1 ]; then
-            echo "FATAL: no repo was compared — the audit proved nothing"
-            exit 1
-          fi
+          python3 - <<'EOF'
+          import json, os, re, sys
+          shard = int(os.environ["GH_WIDGETS_IMPACT_SHARD"])
+          pins = json.load(open("/tmp/pins.json"))
+          expected = {repo for repo, pin in pins.items() if pin["shard"] == shard}
+          compared = re.findall(r"^    compare (\S+): ", open("/tmp/audit.log").read(), re.M)
+          print(f"shard {shard}: compared {len(compared)} repo(s) against {len(expected)} pinned")
+          if not expected or set(compared) != expected:
+              print(f"FATAL: missing {sorted(expected - set(compared))}, "
+                    f"extra {sorted(set(compared) - expected)}, compared {len(compared)}")
+              sys.exit(1)
+          EOF
 
-      - name: Upload the manifest and the log
+      - name: Upload the shard's log
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: targeted-blame-audit
-          path: |
-            /tmp/pins.json
-            /tmp/audit.log
+          name: targeted-blame-audit-shard-${{ matrix.shard }}
+          path: /tmp/audit.log
           if-no-files-found: warn

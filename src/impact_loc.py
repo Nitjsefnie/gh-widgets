@@ -565,6 +565,7 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
         blame_fn = blame_moved
     ourloc = dict(cached_ourloc)
     pins = load_repo_pins()
+    shard = impact_clone.selected_shard(pins)
     moved = []
     for repo in sorted(candidate_repos):
         t = totals.get(repo)
@@ -580,6 +581,8 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
             if not pin:
                 raise SystemExit(f"error: {repo} is blamed but absent from "
                                  f"GH_WIDGETS_IMPACT_REPO_PINS")
+            if shard is not None and pin["shard"] != shard:
+                continue  # another audit shard blames this repo
             t = {**t, "head": pin["head"],
                  "branch": pin["branch"] or t["branch"]}
         entry = ourloc.get(repo) or {}
