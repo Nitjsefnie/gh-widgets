@@ -82,7 +82,7 @@ class CountingAPI(test_render.FakeAPI):
             data = {"repository": {"pullRequests": self.page([])}}
         elif "a0: repository" in query:
             kind = "totals"
-            data = {alias: {"defaultBranchRef": None,
+            data = {alias: {"isPrivate": False, "defaultBranchRef": None,
                             "issues": {"totalCount": 10},
                             "pullRequests": {"totalCount": 10}}
                     for alias in re.findall(r"(a\d+): repository", query)}

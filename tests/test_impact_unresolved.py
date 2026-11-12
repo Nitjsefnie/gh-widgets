@@ -1,4 +1,4 @@
-"""A repository GitHub no longer resolves leaves the impact card; the rest renders fresh.
+"""A repository GitHub no longer resolves, or that is private now, leaves the impact card.
 
 Stdlib only; the GraphQL client runs for real against a stub transport.
 """
@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -16,7 +17,7 @@ from tests.test_share import CountingAPI, impact, item
 
 common = impact.common
 NOT_FOUND = {"type": "NOT_FOUND", "message": "Could not resolve to a Repository."}
-LIVE = {"defaultBranchRef": {"name": "main", "target": {"oid": "h1"}},
+LIVE = {"isPrivate": False, "defaultBranchRef": {"name": "main", "target": {"oid": "h1"}},
         "issues": {"totalCount": 4}, "pullRequests": {"totalCount": 3}}
 
 
@@ -63,6 +64,18 @@ class GqlMissingAliases(unittest.TestCase):
             totals = impact.fetch_repo_totals("t", ["a/live", "b/gone", "c/live"])
         fresh = {"issues": 4, "merged_prs": 3, "branch": "main", "head": "h1"}
         self.assertEqual(totals, {"a/live": fresh, "c/live": fresh})
+
+    def test_a_repo_answered_private_is_dropped_and_named(self):
+        body = {"data": {"a0": LIVE, "a1": {**LIVE, "isPrivate": True}, "a2": None},
+                "errors": [{**NOT_FOUND, "path": ["a2"]}]}
+        out = io.StringIO()
+        with mock.patch("urllib.request.urlopen", return_value=reply(body)), \
+                mock.patch.object(common, "timing_sleep"), contextlib.redirect_stdout(out):
+            totals = impact.fetch_repo_totals("t", ["a/live", "b/private", "c/gone"])
+        self.assertEqual(set(totals), {"a/live"})
+        self.assertEqual([line for line in out.getvalue().splitlines() if "dropped" in line], [
+            "repository b/private is private; dropped from the PR, issue and LOC sections",
+            "repository c/gone did not resolve; dropped from the PR, issue and LOC sections"])
 
 
 class UnresolvedLoc(unittest.TestCase):
@@ -135,6 +148,58 @@ class UnresolvedRepoRun(unittest.TestCase):
         if resync:
             blame.assert_called_once()
             self.assertEqual([repo for repo, _t in blame.call_args.args[0]], ["live/repo"])
+
+
+class PrivateNowRepo(CountingAPI):
+    """Answers the totals batch with now/repo private and every other repo public."""
+
+    def __call__(self, request, **kwargs):
+        query = json.loads(request.data)["query"]
+        if "a0: repository" not in query:
+            return super().__call__(request, **kwargs)
+        self.counts["totals"] += 1
+        return reply({"data": {a: {**LIVE, "isPrivate": owner == "now"}
+                               for a, owner in re.findall(r'(a\d+): repository\(owner:"([^"]+)"', query)}})
+
+
+class CachedRepoMadePrivateRun(unittest.TestCase):
+    """main(): a PR cached while its repo was public no longer puts that repo on the card."""
+
+    def test_the_card_and_the_written_cache_drop_the_now_private_repo(self):
+        api = PrivateNowRepo()
+        # The live listings no longer return now/repo's PR; only the cache holds it, still public.
+        api.nodes = [item("Plive", "live")]
+        api.issues = [item("Ilive", "live", issue=True), item("Ilive2", "live", issue=True)]
+        loc = {"ours": 10, "total": 100, "branch": "main", "head": "h1"}
+        with _ghw_temp.tempdir() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cached_prs = {n["id"]: n for n in (item("Pnow", "now"), *api.nodes)}
+            self.assertFalse(cached_prs["Pnow"]["repository"]["isPrivate"])
+            cache_file.write_text(json.dumps({
+                "version": impact.CACHE_VERSION, "fetched_at": "2026-07-20T06:00:00+00:00",
+                "insiders": ["me"], "prs": cached_prs, "issues": api.issues,
+                "totals": {r: {"issues": 4, "merged_prs": 3, "branch": "main", "head": "h1"}
+                           for r in ("now/repo", "live/repo")},
+                "ourloc": {"now/repo": {**loc, "ours": 90}, "live/repo": loc}}), encoding="utf-8")
+            argv = ["render-impact.py", "--user", "me", "--token", "t", "--out-dir", td,
+                    "--cache-file", str(cache_file)]
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": "", "GH_WIDGETS_IMPACT_COUNT_BOT_PRS": "1"}), \
+                    mock.patch.object(sys, "argv", argv), mock.patch("urllib.request.urlopen", api), \
+                    mock.patch.object(common, "timing_sleep"), mock.patch.object(impact, "blame_moved"), \
+                    contextlib.redirect_stdout(out):
+                impact.main()
+            svg = (Path(td) / "impact.svg").read_text(encoding="utf-8")
+            written = json.loads(cache_file.read_text(encoding="utf-8"))
+        self.assertEqual(api.counts["totals"], 1)
+        self.assertIn("repository now/repo is private; dropped from the PR, issue and LOC sections",
+                      out.getvalue().splitlines())
+        self.assertIn("(pr repos=1 issue repos=1 loc repos=1)", out.getvalue())
+        self.assertFalse([line for line in out.getvalue().splitlines() if line.startswith("fetch failed")])
+        self.assertNotIn("now/repo", svg)
+        self.assertEqual(svg.count("live/repo"), 4, svg)
+        # The fallback renders from this cache, so the repo must be out of it too.
+        self.assertEqual((set(written["totals"]), set(written["ourloc"])), ({"live/repo"}, {"live/repo"}))
 
 
 if __name__ == "__main__":
