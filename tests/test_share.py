@@ -156,9 +156,8 @@ class UnitSharing(unittest.TestCase):
                 self.assertEqual(sum(n for (_, kind, cursor), n in counts.items()
                                      if kind == "prs" and cursor is None), 1)
                 self.assertEqual(counts[profile.__name__, "sweep", None], 0 if resync else 1)
-                # Only the visibility batch: a shared node's isPrivate can be stale.
-                self.assertEqual({key: n for key, n in counts.items() if key[0] == resp.__name__ and n},
-                                 {(resp.__name__, "totals", None): 1})
+                self.assertEqual(sum(n for (renderer, _, _), n in counts.items()
+                                     if renderer == resp.__name__), 0)
                 self.assertEqual(sum(n for (_, kind, _), n in counts.items()
                                      if kind == "identity"), 2)
                 for path in (self.profile_cache, self.impact_cache):
@@ -172,7 +171,7 @@ class UnitSharing(unittest.TestCase):
                 self.assertNotIn("Added/repo", svg)
                 self.assertNotIn("private/repo", svg)
                 text = self.output.getvalue().split("=== render-responsiveness timing ===")[-1]
-                self.assertIn("graphql: count=1 ", text)
+                self.assertIn("graphql: count=0 blocked=0.000s", text)
 
     def test_standalone_renderers_still_fetch_live(self):
         self.environment["GH_WIDGETS_SHARE_DIR"] = ""

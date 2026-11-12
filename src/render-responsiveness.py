@@ -514,9 +514,9 @@ def load_inputs(args, token):
     cache = common.load_cache(args.cache_file, IMPACT_CACHE_VERSION)
     try:
         insiders, prs, prs_by_id = fetch_prs(token, args.user, cache.get("prs") or None)
-        with common.acquisition("fetch_public_repos"):  # a cached node's isPrivate can be stale
-            public = common.share.public_now(token, sorted({n["repository"]["nameWithOwner"] for n in prs if common.is_external(n, insiders)}),
-                                             gql, common.timing_sleep, dropped_from="the responsiveness card")
+        with common.acquisition("fetch_public_repos"):  # a cached isPrivate can be stale; impact's run just checked
+            public = cache.get("totals") or common.share.public_now(token, sorted({n["repository"]["nameWithOwner"] for n in prs if common.is_external(n, insiders)}),
+                                                                    gql, common.timing_sleep, dropped_from="the responsiveness card")
         prs = [n for n in prs if n["repository"]["nameWithOwner"] in public]
     except Exception as exc:
         # Durability layer: a failed fetch (after gql's retries) renders from
