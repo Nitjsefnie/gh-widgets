@@ -182,7 +182,7 @@ def fetch_repo_totals(token, repos):
     every run; the defaultBranchRef oid rides along in the same query so
     the LOC cache check is free. Returns
     {repo: {issues, merged_prs, branch, head}}; a repo GitHub answers
-    NOT_FOUND for (deleted, renamed or made private) is simply absent."""
+    NOT_FOUND for (deleted or no longer visible to the token) is absent."""
     def group(chunk):
         totals = {}
         parts = [
