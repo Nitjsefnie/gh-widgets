@@ -8,7 +8,7 @@
     "scripts/ci/compare_counters.py": 991,
     "scripts/ci/counter.py": 781,
     "scripts/ci/gate_base_freshness.py": 799,
-    "src/ghwidgets_common.py": 995,
+    "src/ghwidgets_common.py": 994,
     "src/impact_loc.py": 633,
     "src/render-impact.py": 755,
     "src/render-responsiveness.py": 594,
