@@ -141,7 +141,7 @@ jobs:
       - name: Install the pinned git-fame
         if: matrix.measured == true
         run: |
-          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@e0db2cbae79c8cedd6b04181bd86fd5521c9822b"
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@258dbd8f63a075710eb8ddbca6c1f90eb9ab20c9"
           python -m pip install "$FORK_PIN"
 
       - name: Run tests
