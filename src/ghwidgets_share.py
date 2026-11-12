@@ -28,10 +28,7 @@ def limited_request(request):
 
 
 def public_now(token, repos, gql_fn, pace_fn, fields="", dropped_from="the card"):
-    """{repo: node with `fields`} for repos public now; a cached PR's isPrivate can be stale."""
-    # Lazy: the import costs renderers that never call this.
-    from concurrent.futures import ThreadPoolExecutor  # pylint: disable=import-outside-toplevel
-
+    """{repo: node with `fields`} for repos public now; cached isPrivate can be stale."""
     def group(chunk):
         parts = [f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
                  f'name:{json.dumps(r.split("/", 1)[1])}){{ isPrivate {fields} }}'
@@ -39,20 +36,28 @@ def public_now(token, repos, gql_fn, pace_fn, fields="", dropped_from="the card"
         data = gql_fn(token, "query{ " + " ".join(parts) + " }", allow_missing_aliases=True)
         return [(r, data.get(f"a{j}")) for j, r in enumerate(chunk)]
 
+    chunks = [repos[i:i + 15] for i in range(0, len(repos), 15)]
+    # One batch inline: no pool import, no pacing.
+    batches = [group(chunk) for chunk in chunks] if len(chunks) < 2 else _pooled(group, chunks, pace_fn)
     public = {}
-    with ThreadPoolExecutor(MAX_IN_FLIGHT) as pool:
-        groups = []
-        for i in range(0, len(repos), 15):
-            groups.append(pool.submit(group, repos[i:i + 15]))
-            pace_fn(0.3, 'pacing')
-        for result in groups:
-            for repo, node in result.result():
-                if node and not node["isPrivate"]:
-                    public[repo] = node
-                else:
-                    print(f"repository {repo} {'is private' if node else 'did not resolve'}; "
-                          f"dropped from {dropped_from}", flush=True)
+    for repo, node in (pair for batch in batches for pair in batch):
+        if node and not node["isPrivate"]:
+            public[repo] = node
+        else:
+            print(f"repository {repo} {'is private' if node else 'did not resolve'}; "
+                  f"dropped from {dropped_from}", flush=True)
     return public
+
+
+def _pooled(group, chunks, pace_fn):
+    """Pool ``group`` over ``chunks``, pacing submissions."""
+    from concurrent.futures import ThreadPoolExecutor  # pylint: disable=import-outside-toplevel
+    with ThreadPoolExecutor(MAX_IN_FLIGHT) as pool:
+        futures = []
+        for chunk in chunks:
+            futures.append(pool.submit(group, chunk))
+            pace_fn(0.3, 'pacing')
+        return [future.result() for future in futures]
 
 
 def _keys(value, required, optional=()):

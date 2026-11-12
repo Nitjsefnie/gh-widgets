@@ -482,12 +482,12 @@ class RendererTiming(unittest.TestCase):
                 renderer = test_impact_loc.render_impact
                 with mock.patch.object(renderer, 'gql', return_value={}), \
                         mock.patch.object(shared.time, 'sleep'):
-                    self.assertEqual(renderer.fetch_repo_totals('t', ['a/b']), {})
+                    self.assertEqual(renderer.fetch_repo_totals('t', [f'a/b{i}' for i in range(16)]), {})
             self.assertEqual(sum(v[0] for (kind, _), v in recorder.totals.items()
                                  if kind == 'process'), 5)
             self.assertEqual(recorder.totals[('process', 'git-fame')][0], 2)
             self.assertNotIn(('process', 'missing'), recorder.totals)
-            self.assertEqual(recorder.totals[('pacing', '')][0], 1)
+            self.assertEqual(recorder.totals[('pacing', '')][0], 2)  # two pooled batches
             python_row = recorder.totals[('process', Path(sys.executable).name)]
             self.assertEqual(python_row[0], 2)
             self.assertGreater(python_row[1], 0)
