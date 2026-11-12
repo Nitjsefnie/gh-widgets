@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Admit unit-suite raises only from a feature commit in the judged window.
+"""Admit unit-suite raises from a feature commit, renderer ones from a move.
 
-Reads one thing from git: the folded subject (%s) of every commit in
---base..--head. A raised unit-suite maximum is admitted only when some
-subject starts `feat:` or `feat(scope):`, either with the breaking `!`
-before its colon, case-sensitive; then each raised
-unit-suite slot prints, one per line, for compare_counters.py's
---ratchet-allow-raise. A unit-suite entry the base never recorded is refused
-with exit 1. Any other unit-suite raise is refused with exit 1 and prints no
-slot. Shallow, missing or unreadable history, or an unreadable document,
-exits 2.
+Reads the folded subject (%s) of every commit in --base..--head. A raised
+unit-suite maximum needs a subject starting `feat` with an optional
+`(scope)` and `!` before its colon, case-sensitive; a raised renderer
+`entries` maximum needs the documents' `interpreter` to differ. Each admitted
+slot prints for compare_counters.py's --ratchet-allow-raise. A unit-suite
+entry the base never recorded, or a featureless unit-suite raise, exits 1.
+A head interpreter other than the running one, a dropped one, or unreadable
+history or documents exit 2.
 """
 from __future__ import annotations
 
@@ -22,6 +21,7 @@ from pathlib import Path
 
 DOCUMENT = "gate/speed-baseline.json"
 _FEATURE_SUBJECT = re.compile(r'^feat(\([^)]*\))?!?:')
+LEGACY_INTERPRETER = "3.13"
 
 
 class DeclarationError(ValueError):
@@ -46,11 +46,28 @@ _TRIM_REMEDY = (
     "own tests until the suite fits its envelope: drop redundant cases, "
     "merge parametrisations, delete tests that repeat another test's "
     "assertions. Lowering a maximum is always allowed; renderer ceilings "
-    "stay strictly down-only.")
+    "stay strictly down-only except across an interpreter move.")
 
 
-def derive_raises(old, new, subjects, window="the judged window"):
-    """Return raised unit-suite slots, admitted only by a feat: subject."""
+def interpreter_move(old, new, running=None):
+    """Return (from, to) when the head moved the interpreter, else None."""
+    if "interpreter" not in new:
+        if "interpreter" in old:
+            raise RuntimeError(f"{DOCUMENT} drops the base's `interpreter`")
+        return None
+    running = running or f"{sys.version_info[0]}.{sys.version_info[1]}"
+    if new["interpreter"] != running:
+        raise RuntimeError(
+            f"{DOCUMENT} records interpreter {new['interpreter']} but this "
+            f"job measures on {running}: re-measure on the recorded one")
+    before = old.get("interpreter", LEGACY_INTERPRETER)
+    return None if before == running else (before, running)
+
+
+def derive_raises(old, new, subjects, window="the judged window",
+                  running=None):
+    """Return the raised slots a subject or an interpreter move admits."""
+    move = interpreter_move(old, new, running)
     moved = baseline.raised_entries(old, new)
     # A None `was` is an entry the base never recorded, which no subject
     # admits; the seed shape never reaches here.
@@ -73,10 +90,18 @@ def derive_raises(old, new, subjects, window="the judged window"):
         if slot.startswith('unit-suite:') and values[0] is not None
         and values[1] is not None
     }
-    if not unit_raises:
-        return []
+    renderer_raises = {
+        slot: values for slot, values in moved.items()
+        if move and slot.startswith('renderer-workloads:entries:')
+        and None not in values
+    }
+    if move:
+        for slot, (was, now) in sorted(renderer_raises.items()):
+            print(f"{slot}: {was} on {move[0]} -> {now} on {move[1]}, "
+                  "admitted by the interpreter move", file=sys.stderr)
     # Git separates subjects with LF; other separators can be subject content.
-    if not any(_FEATURE_SUBJECT.match(subject) for subject in subjects):
+    if unit_raises and not any(_FEATURE_SUBJECT.match(subject)
+                               for subject in subjects):
         raised = '\n'.join(f"- {slot}: {was} -> {now}"
                            for slot, (was, now) in sorted(unit_raises.items()))
         raise DeclarationError(
@@ -84,9 +109,8 @@ def derive_raises(old, new, subjects, window="the judged window"):
             f"{window} starts with `feat:` or `feat(scope):`, with or without "
             f"the breaking `!`.\n{raised}\n"
             + _TRIM_REMEDY)
-    allowed = sorted(unit_raises)
-    # The comparator's own contradictory/unknown-slot checks still apply;
-    # renderer raises stay undeclared for the ratchet comparison to refuse.
+    allowed = sorted(unit_raises) + sorted(renderer_raises)
+    # The comparator's own contradictory/unknown-slot checks still apply.
     baseline.raised_entries(old, new, allowed_raises=allowed)
     return allowed
 

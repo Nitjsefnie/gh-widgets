@@ -126,7 +126,7 @@ def speed_merge_case():
                               "unit::b": {"min": 4.0, "max": 8.0, "n": 6}},
                   "seeds": ["unit::a", "unit::b"],
                   "wall": {}}
-    old_speed = {"schema": 5, "basis": "fixture", "cell": "fixture",
+    old_speed = {"schema": 5, "basis": "fixture", "cell": "fixture", "interpreter": "3.15",
                  "measured_commit": BASE, "measured_at": "2026-10-24",
                  "populations": {"unit-suite": population}}
     new_speed = json.loads(json.dumps(old_speed))

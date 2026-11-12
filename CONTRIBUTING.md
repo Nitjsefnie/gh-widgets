@@ -129,7 +129,16 @@ the merge checkout's first parent..HEAD; on a main push it is
 starts `feat:`. Shallow or unreadable history refuses: the step fails closed.
 Any other unit-suite raise is refused with the remedy: a non-feature change
 trims its own tests until the suite fits its envelope. Renderer ceilings
-remain strictly down-only, feature or not. Seeding an absent seed-declared
+remain down-only, feature or not, with one exception: moving the speed job's
+interpreter. The document's `interpreter` names the CPython `MAJOR.MINOR` its
+counts were measured on (one without it was measured on 3.13), and the ratchet
+step refuses a head document whose `interpreter` is not the one the job runs
+or that drops the base's. When the base and head interpreters differ, a raised
+renderer `entries` maximum is admitted for that window only, as the new
+interpreter's measurement of the same workload: the move is its only permitted
+reason, the increase is admitted once per move, and renderer `wall` maxima
+stay down-only. Record both interpreters' measurements, with their run ids, in
+`basis`. Seeding an absent seed-declared
 entry stays allowed without a feature, population digest moves ride with the
 tests that cause them, and lowering a recorded maximum is always allowed.
 Keep measured provenance (n ≥ 2 envelopes and dispatch run ids in `basis`) in
@@ -257,8 +266,8 @@ has no JS; weekly cron, because a query published today would otherwise
 only ever run against files touched after it shipped), `speed` (counts the
 work this commit does in deterministic statement counts — per renderer
 workload and for the unit suite, on pinned offline fixtures — and fails
-when a committed baseline is exceeded, with renderer ceilings strictly
-down-only and unit-suite raises requiring a `feat:` subject in the judged
+when a committed baseline is exceeded, with renderer ceilings
+down-only outside an interpreter move and unit-suite raises requiring a `feat:` subject in the judged
 range; with no
 baseline committed it reports what
 it measured and exits 0, because no data is not a regression; elapsed time
@@ -273,8 +282,8 @@ measurement workflows that were already here.
 
 A successful main `tests` run also stages any entry or wall maximum that its
 measured value strictly beats, and `ratchet-push.yml` validates and commits
-that data. The feature-gated unit-suite raise above remains the only route that
-moves speed maxima UP.
+that data. The feature-gated unit-suite raise and the interpreter-move renderer
+raise above remain the only routes that move speed maxima UP.
 
 Both staging steps skip a landed window that changed only
 `gate/coverage-floor.json`, `gate/speed-baseline.json`,
