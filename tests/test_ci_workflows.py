@@ -1393,7 +1393,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
                                                           "n": 6}},
                       "seeds": ["counter::unit-suite"],
                       "wall": {}}
-        recorded = {"schema": 5, "basis": "fixture", "cell": "fixture",
+        recorded = {"schema": 5, "basis": "fixture", "cell": "fixture", "interpreter": "3.15",
                     "measured_commit": "a" * 40, "measured_at": "2026-10-24",
                     "populations": {"unit-suite": population}}
         candidate = json.loads(json.dumps(recorded))

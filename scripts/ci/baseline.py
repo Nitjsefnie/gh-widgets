@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import re
 from pathlib import Path
 
 
@@ -123,6 +124,12 @@ def read_baseline(path: Path) -> dict:
         if not isinstance(value, str) or not value.strip():
             raise ComparisonError(
                 f"{path} {key}={value!r} is not a non-empty string")
+    interpreter = document.get("interpreter", "3.13")
+    if not isinstance(interpreter, str) or not re.fullmatch(
+            r"[0-9]+\.[0-9]+", interpreter):
+        raise ComparisonError(
+            f"{path} interpreter={interpreter!r} is not a MAJOR.MINOR "
+            "version string")
     populations = document["populations"]
     if not isinstance(populations, dict) or not populations:
         raise ComparisonError(
@@ -366,8 +373,8 @@ def raised_entries(old: dict, new: dict,
     A RAISE is permitted only for a slot the caller names in
     `allowed_raises`. The workflow derives unit-suite slots only when the
     judged window has a subject starting `feat:` or
-    `feat(scope):`, `!` allowed, and never names a renderer slot, so renderer ceilings
-    stay strictly down-only. A named slot is checked against the documents
+    `feat(scope):`, `!` allowed, and renderer `entries` slots only when the
+    documents' `interpreter` moved. A named slot is checked against the documents
     rather than trusted: one that has NOT gone up, or names no slot either
     document has, is refused.
     """

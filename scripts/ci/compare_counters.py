@@ -722,8 +722,8 @@ def ratchet_check(old_path: Path, new_path: Path,
     lines.append("  Lowering is always allowed. A unit-suite rise is allowed "
                  "only through --ratchet-allow-raise, which the workflow "
                  "derives when the judged window carries a `feat:` or "
-                 "`feat(scope):` (or `!`) subject; renderer ceilings stay "
-                 "strictly down-only. Any other change answers a breach by "
+                 "`feat(scope):` (or `!`) subject; a renderer rise only "
+                 "across an interpreter move. Any other change answers by "
                  "trimming its own tests until the suite fits its envelope.")
     print("\n".join(lines), file=sys.stderr)
     return 1
@@ -805,8 +805,8 @@ def main(argv: list | None = None) -> int:
                         default=[], metavar="POP:KEY:NODE",
                         help="a `population:key:node` slot whose recorded "
                              "maximum went UP; the workflow derives "
-                             "unit-suite slots when the judged window "
-                             "carries a `feat:` commit subject. "
+                             "unit-suite slots from a `feat:` subject and "
+                             "renderer entries from an interpreter move. "
                              "A declaration that contradicts the documents "
                              "is refused")
     args = parser.parse_args(argv)

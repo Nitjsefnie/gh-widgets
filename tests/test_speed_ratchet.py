@@ -63,7 +63,7 @@ def document(*, impact=1.3514, wall=0.085, drop_impact=False):
     return {
         "schema": 4,
         "basis": "fixture document for the ratchet tests",
-        "cell": "fixture",
+        "cell": "fixture", "interpreter": f"{sys.version_info[0]}.{sys.version_info[1]}",
         "measured_commit": "0" * 40,
         "measured_at": "2026-10-01T00:00:00Z",
         "populations": {
@@ -901,7 +901,7 @@ class TestSpeedRatchetTightening(unittest.TestCase):
     def test_authored_metadata_is_carried_unchanged(self):
         self._write_reports()
         authored = ("schema", "basis", "cell", "measured_commit",
-                    "measured_at")
+                    "measured_at", "interpreter")
 
         result = self._run()
 

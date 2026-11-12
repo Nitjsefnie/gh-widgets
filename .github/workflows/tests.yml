@@ -1109,9 +1109,9 @@ jobs:
               | sed 's/^/  /;s/\t/:entries:/'
           fi
 
-          # DECLARED RAISES, FROM FEATURE COMMIT SUBJECTS, UNIT SUITE ONLY.
-          # The entry point emits the raised unit-suite slots when a subject
-          # in base_tip..HEAD starts feat[(scope)][!]:, and refuses (exit
+          # DECLARED RAISES: unit suite by feat subject, renderer by a move.
+          # It emits raised unit-suite slots when a subject in base_tip..HEAD
+          # starts feat[(scope)][!]:, renderer ones on a move; refuses (exit
           # 1) otherwise. Its exit, 2 for unreadable history included, fails
           # this step inside the $(...) under GitHub's default bash -e.
           raise_slots="$(python3 scripts/ci/ratchet_declarations.py \
