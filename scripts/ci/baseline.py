@@ -42,6 +42,8 @@ counter = _load_counter()
 
 
 SUPPORTED_SCHEMA = (3, 4, 5)
+# The speed job's interpreter before documents recorded one.
+LEGACY_INTERPRETER = "3.13"
 
 
 class ComparisonError(RuntimeError):
@@ -124,7 +126,7 @@ def read_baseline(path: Path) -> dict:
         if not isinstance(value, str) or not value.strip():
             raise ComparisonError(
                 f"{path} {key}={value!r} is not a non-empty string")
-    interpreter = document.get("interpreter", "3.13")
+    interpreter = document.get("interpreter", LEGACY_INTERPRETER)
     if not isinstance(interpreter, str) or not re.fullmatch(
             r"[0-9]+\.[0-9]+", interpreter):
         raise ComparisonError(
