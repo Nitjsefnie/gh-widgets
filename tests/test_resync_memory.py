@@ -257,6 +257,9 @@ class WorkflowSteps(unittest.TestCase):
 
         def decode(text):
             text = re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", lambda m: self.matrix[m.group(1)], str(text))
+            # needs.pins.outputs.* are what an earlier pins step in this root wrote to GITHUB_OUTPUT.
+            text = re.sub(r"\$\{\{\s*needs\.pins\.outputs\.(\w+)\s*\}\}", lambda m: dict(
+                line.split("=", 1) for line in (root / "output").read_text(encoding="utf-8").splitlines())[m.group(1)], text)
             text = re.sub(r"\$\{\{.*?\}\}", "x", text).replace("/tmp/", f"{root}/")
             return text.replace("/sys/fs/cgroup/", f"{root}/cgroup/")
 
@@ -328,8 +331,12 @@ class WorkflowSteps(unittest.TestCase):
         cg.mkdir(parents=True)
         (cg / "memory.peak").write_text("0", encoding="ascii")
         (cg / "cgroup.procs").write_text("", encoding="ascii")
-        (root / "pins.json").write_text(json.dumps(PINS), encoding="utf-8")
+        (root / "manifest.json").write_text(json.dumps(PINS), encoding="utf-8")
         (root / "log").write_text(journal(["o/b", "o/c"]), encoding="utf-8")
+        axes = {"GH_WIDGETS_BUILDS": "fork", "GH_WIDGETS_REPEATS": "2"}
+        done, _ = self.run_step("pins", "Resolve one commit per repo, split the repos into shards, emit the matrix",
+                                root, axes)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         env = {"GH_WIDGETS_BLAME_METHOD": "both"}
         done, _ = self.run_step("measure", "Measure one resync of this shard", root, env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -342,12 +349,13 @@ class WorkflowSteps(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         (root / "out" / "impact.svg").write_text("", encoding="utf-8")
         self.assertEqual(self.run_step("measure", "Validate the run before any number is believed", root)[0].returncode, 1)
-        report = {"GH_WIDGETS_BUILDS": '["fork"]', "GH_WIDGETS_REPEATS": "[2]"}
-        done, _ = self.run_step("report", "Prove every shard ran once, then summarise", root, report)
-        self.assertEqual(done.returncode, 1, "shards 0 and 2 never ran")
-        for shard, repos in ((0, ["o/a"]), (2, ["o/d"])):
-            write_run(root / "results", rm.run_label("fork", 2, shard), journal(repos))
-        done, _ = self.run_step("report", "Prove every shard ran once, then summarise", root, report)
+        # The report reads the pins job's axes: repeat 1 and shards 0 and 2 have not run yet.
+        done, _ = self.run_step("report", "Prove every shard ran once, then summarise", root)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        for (repeat, shard), repos in {(1, 0): ["o/a"], (1, 1): ["o/b", "o/c"], (1, 2): ["o/d"],
+                                       (2, 0): ["o/a"], (2, 2): ["o/d"]}.items():
+            write_run(root / "results", rm.run_label("fork", repeat, shard), journal(repos))
+        done, _ = self.run_step("report", "Prove every shard ran once, then summarise", root)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
