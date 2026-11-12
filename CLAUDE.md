@@ -181,21 +181,27 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > blame pass runs `git fame` per repo, and stock git-fame before 4.0.0 spawned
 > one serial `git blame` subprocess per file. Both our fork and PyPI 4.0.0 have
 > `--jobs`; we run the fork because upstream's version costs ~2.2× peak memory
-> for byte-identical output (measured — see below; the memory columns carry
-> that argument, the wall columns in those tables do not).
+> (measured — see below; the memory columns carry that argument, the wall
+> columns in those tables do not), and because 4.0.0 lacks the NUL-separated
+> file listing and the `--` before each blamed path that the pin adds, so it
+> drops the file names listed below. The two builds' output was byte-identical
+> when the memory was measured, before that change.
 >
 > ```
 > /usr/local/bin/python3.15 -m pip install --force-reinstall \
 >   "git+https://github.com/Nitjsefnie-OSC/git-fame@258dbd8f63a075710eb8ddbca6c1f90eb9ab20c9"
 > ```
 >
-> `/opt/python/3.15.1/bin/git-fame --version` must print **`3.1.4.dev11+g258dbd8f6`**. The pinned
-> commit is `perf-blame` at `d793b35` (`65925d8` plus two CI-only commits) plus
-> NUL-separated file listing and
-> `--` before each blamed path, so names starting with `-`, starting or ending
-> with a space, or that Git C-quotes are blamed rather than dropped; install the
-> SHA above, never a branch tip, since the version line names that commit. A bare `pip install --upgrade git-fame` **silently undoes this
-> pin** — 4.0.0 is the higher version number and installs cleanly.
+> `/opt/python/3.15.1/bin/git-fame --version` must print
+> **`3.1.4.dev11+g258dbd8f6`**. The pinned commit is `perf-blame` at `d793b35`
+> (`65925d8` plus two CI-only commits) plus NUL-separated file listing and `--`
+> before each blamed path, so names starting with `-`, names starting or ending
+> with a space, and names holding a quote, a backslash or a control character
+> are blamed rather than dropped. Names that are not valid UTF-8 still make the
+> two methods disagree (#352). Install the SHA above, never a branch tip, since
+> the version line names that commit. A bare `pip install --upgrade git-fame`
+> **silently undoes this pin** — 4.0.0 is the higher version number and installs
+> cleanly — and brings the dropped names back.
 >
 > **Wall time is not a magnitude on this box or on a CI runner.** Both are
 > multi-tenant, with steal time, CPU model and thermal state nobody owns, so
