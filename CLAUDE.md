@@ -331,7 +331,8 @@ every run and has no `--resync` flag. Both units configure Overflow.
 >
 > **Re-measured on the audit-set workload (run `43241335728`, fork `258dbd8`
 > against upstream 4.0.0, two runs per build, all valid):** the fork still
-> uses about 2.4× less cgroup peak memory. That workload is much larger than
+> uses about 2.4× less cgroup peak memory; the current pin adds only UTF-8
+> path commits to that build. That workload is much larger than
 > the 58-repo cell above, so its absolute numbers are not comparable with that
 > table; compare the two builds within one table only. In the fork arm the
 > largest processes are `git grep -I` (about 585 MiB each, from the targeted
