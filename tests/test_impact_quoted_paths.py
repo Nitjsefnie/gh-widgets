@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""git-fame and targeted counting agree on names Git C-quotes."""
+"""git-fame and targeted counting agree on names Git quotes or argv misreads."""
 import importlib.util
 import os
 import shutil
@@ -18,7 +18,6 @@ if spec is None or spec.loader is None:
 render_impact = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_impact)
 impact_loc = getattr(render_impact, "_LOC_MODULE")
-countable = getattr(impact_loc, "_countable_path")
 
 
 def git(*args, cwd):
@@ -40,10 +39,14 @@ class TestQuotedNamesAgree(unittest.TestCase):
         git("config", "user.name", "Us", cwd=cls.tmp)
         git("config", "user.email", "us@example.com", cwd=cls.tmp)
         git("config", "core.quotePath", "true", cwd=cls.tmp)
-        # Both skip `"`, `\` and control bytes, quoted under any setting.
-        names = ["plain.txt", "sp ace.txt", "α.txt"]
+        # Git C-quotes `"`, `\` and control bytes under any setting, a
+        # newline-split listing trims the outer spaces, and `blame` reads a
+        # leading `-` as an option; both methods must count every one.
+        names = ["plain.txt", "sp ace.txt", "α.txt", "-dash.txt"]
         if os.name == "posix":
-            names += ['a"b.txt', "a\\b.txt", "tab\tx.txt"]
+            names += ['a"b.txt', "a\\b.txt", "tab\tx.txt",
+                      " leading.txt", "trailing.txt ", "line\nbreak.txt"]
+        cls.lines = 2 * len(names)
         for name in names:
             (cls.tmp / name).write_text("one\ntwo\n", encoding="utf-8")
         git("add", "--all", cwd=cls.tmp)
@@ -61,18 +64,9 @@ class TestQuotedNamesAgree(unittest.TestCase):
                 mock.patch.object(shared, "timing", recorder):
             fame = impact_loc.blame_repo("outside/quoted", self.tmp, emails)
         targeted = impact_loc.targeted_counts(self.tmp, emails)
-        self.assertEqual((fame, targeted), ((6, 6), (6, 6)))
+        self.assertEqual((fame, targeted),
+                         ((self.lines,) * 2, (self.lines,) * 2))
         self.assertEqual(recorder.totals[("process", "git-fame")][0], 1)
-
-
-class TestCountablePath(unittest.TestCase):
-    def test_names_git_always_quotes_are_rejected(self):
-        for name in ('a"b.txt', "a\\b.txt", "tab\tx.txt", "del\x7f.txt"):
-            self.assertFalse(countable(name), name)
-
-    def test_names_git_leaves_unquoted_are_kept(self):
-        for name in ("plain.txt", "sp ace.txt", "α.txt", "café.py"):
-            self.assertTrue(countable(name), name)
 
 
 if __name__ == "__main__":

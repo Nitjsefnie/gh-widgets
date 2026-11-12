@@ -114,34 +114,27 @@ class TestCQuotedPaths(unittest.TestCase):
         self.assertEqual(
             impact_loc.targeted_counts(self.tmp, {"us@example.com"}), (2, 2))
 
-    @unittest.skipUnless(os.name == "posix",
-                         "Windows does not permit newline in file names")
-    def test_control_byte_paths_are_excluded_from_both_counts(self):
-        (self.tmp / "safe.py").write_text("one\ntwo\n", encoding="utf-8")
-        (self.tmp / "line\nbreak.py").write_text(
-            "three\nfour\nfive\n", encoding="utf-8")
-        git("add", "--all", cwd=self.tmp)
-        git("commit", "-qm", "safe and unparseable paths", cwd=self.tmp)
+    def test_control_paths_survive_nul_parsers_portably(self):
+        names = ["safe.py", "line\nbreak.py", "escape\x1b.py"]
+        paths = "".join(f"{name}\0" for name in names)
+        counts = "".join(f"HEAD:{name}\0 {lines}\n"
+                         for name, lines in zip(names, (2, 3, 4)))
 
-        touched = impact_loc.our_touched_files(self.tmp, {"us@example.com"})
-        self.assertEqual(touched, {"safe.py"})
-        self.assertEqual(
-            impact_loc.targeted_counts(self.tmp, {"us@example.com"}), (2, 2))
+        def git_output(_dest, *args):
+            if args[0] == "blame":
+                lines = {"safe.py": 2, "line\nbreak.py": 3}.get(args[-1], 0)
+                return ("a" * 40 + f" 1 1 {lines}\n"
+                        "author-mail <us@example.com>\nfilename x\n")
+            return counts if "-c" in args else paths
 
-    def test_control_paths_are_filtered_by_nul_parsers_portably(self):
-        paths = "safe.py\0line\nbreak.py\0escape\x1b.py\0"
-        counts = ("HEAD:safe.py\0 2\n"
-                  "HEAD:line\nbreak.py\0 3\n"
-                  "HEAD:escape\x1b.py\0 4\n")
-        blame = ("a" * 40 + " 1 1 2\n"
-                 "author-mail <us@example.com>\nfilename safe.py\n")
-        with mock.patch.object(impact_loc, "git_out", side_effect=[
-                paths, counts, paths, blame]) as git_output:
+        with mock.patch.object(impact_loc, "git_out",
+                               side_effect=git_output) as calls:
             self.assertEqual(
                 impact_loc.targeted_counts(self.tmp, {"us@example.com"}),
-                (2, 2))
-        self.assertEqual(git_output.call_count, 4)
-        self.assertEqual(git_output.call_args_list[-1].args[-1], "safe.py")
+                (5, 9))
+        self.assertEqual(
+            sorted(call.args[-1] for call in calls.call_args_list
+                   if call.args[1] == "blame"), sorted(names))
 
     def test_git_grep_no_matches_is_a_valid_empty_result(self):
         (self.tmp / "tracked.txt").write_text("present\n", encoding="utf-8")

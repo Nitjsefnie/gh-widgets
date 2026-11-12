@@ -350,19 +350,13 @@ def git_out(dest, *args):
     return stdout
 
 
-def _countable_path(path):
-    """Whether line-based consumers can safely identify this Git path."""
-    # Git quotes these even under core.quotePath=false; git-fame cannot blame them.
-    return not any(ord(c) < 32 or ord(c) == 127 or c in '"\\' for c in path)
-
-
 def _without_head_prefix(path):
     """Remove git-grep's tree prefix from a path, when present."""
     return path[len("HEAD:"):] if path.startswith("HEAD:") else path
 
 
 def _text_line_total(dest, texts):
-    """Sum grep counts for the text paths retained by the shared path filter."""
+    """Sum grep counts over the text paths in ``texts``."""
     counts = git_out(dest, "grep", "-I", "-c", "-z", "", "HEAD")
     total = 0
     cursor = 0
@@ -375,7 +369,7 @@ def _text_line_total(dest, texts):
             break
         path = _without_head_prefix(counts[cursor:path_end])
         count = counts[path_end + 1:count_end]
-        if path in texts and _countable_path(path) and count:
+        if path in texts and count:
             total += int(count)
         cursor = count_end + 1
     return total
@@ -388,8 +382,7 @@ def our_touched_files(dest, emails):
         out = git_out(dest, "log", "HEAD", "--fixed-strings",
                       "--regexp-ignore-case", f"--author={email}",
                       "--name-only", "-z", "--pretty=format:", "-M")
-        files.update(f for f in out.split("\0")
-                     if f and _countable_path(f))
+        files.update(f for f in out.split("\0") if f)
     return files
 
 
@@ -421,8 +414,7 @@ def rename_closure(dest, paths, since=None):
     index = 0
     while index + 2 < len(fields):
         status, old, new = fields[index:index + 3]
-        if status.startswith("R") and _countable_path(old) \
-                and _countable_path(new):
+        if status.startswith("R"):
             events.append((old, new))
         index += 3
     reachable = set(paths)
@@ -447,7 +439,7 @@ def targeted_counts(dest, emails):
     texts = {_without_head_prefix(path)
              for path in git_out(dest, "grep", "-I", "--name-only", "-z",
                                  ".", "HEAD").split("\0")
-             if path and _countable_path(_without_head_prefix(path))}
+             if path}
     total = _text_line_total(dest, texts)
     touched = our_touched_files(dest, emails)
     # Only pay for recovery scans when a path we touched vanished from the

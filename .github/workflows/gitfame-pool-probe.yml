@@ -74,7 +74,7 @@ jobs:
           GH_WIDGETS_NEW_REF: ${{ inputs.new_ref }}
         run: |
           set -euo pipefail
-          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
+          FORK_PIN="git+https://github.com/Nitjsefnie-OSC/git-fame@e0db2cbae79c8cedd6b04181bd86fd5521c9822b"
           for arm in $GH_WIDGETS_ARMS; do
             build="${arm%%:*}"
             # `[ -d x ] && continue` would be the natural spelling and is a
