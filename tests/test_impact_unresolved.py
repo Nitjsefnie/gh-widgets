@@ -1,4 +1,4 @@
-"""A repository GitHub no longer resolves, or that is private now, leaves the impact card.
+"""A repository GitHub no longer resolves, or that is private now, leaves the public cards.
 
 Stdlib only; the GraphQL client runs for real against a stub transport.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import _ghw_temp
-from tests.test_share import CountingAPI, impact, item
+from tests.test_share import CountingAPI, impact, item, resp
 
 common = impact.common
 NOT_FOUND = {"type": "NOT_FOUND", "message": "Could not resolve to a Repository."}
@@ -202,6 +202,32 @@ class CachedRepoMadePrivateRun(unittest.TestCase):
         self.assertEqual(svg.count("live/repo"), 4, svg)
         # The fallback renders from this cache, so the repo must be out of it too.
         self.assertEqual((set(written["totals"]), set(written["ourloc"])), ({"live/repo"}, {"live/repo"}))
+
+
+class CachedRepoMadePrivateResponsiveness(unittest.TestCase):
+    """The responsiveness card drops a repo made private after its PR was cached."""
+
+    def test_the_card_drops_the_now_private_repo(self):
+        api = PrivateNowRepo()
+        api.nodes = [item("Plive", "live")]
+        with _ghw_temp.tempdir() as td:
+            cache_file = Path(td) / "impact-cache.json"
+            cache_file.write_text(json.dumps({
+                "version": impact.CACHE_VERSION, "insiders": ["me"],
+                "prs": {n["id"]: n for n in (item("Pnow", "now"), *api.nodes)}}), encoding="utf-8")
+            argv = ["render-responsiveness.py", "--user", "me", "--token", "t", "--out-dir", td,
+                    "--cache-file", str(cache_file)]
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"GH_WIDGETS_SHARE_DIR": "", "GH_WIDGETS_RESP_MIN_PRS": "1"}), \
+                    mock.patch.object(sys, "argv", argv), mock.patch("urllib.request.urlopen", api), \
+                    mock.patch.object(common, "timing_sleep"), contextlib.redirect_stdout(out):
+                resp.main()
+            svg = (Path(td) / "responsiveness.svg").read_text(encoding="utf-8")
+        self.assertEqual(api.counts["totals"], 1)
+        self.assertIn("repository now/repo is private; dropped from the responsiveness card",
+                      out.getvalue().splitlines())
+        self.assertNotIn("now/repo", svg)
+        self.assertIn("live/repo", svg)
 
 
 if __name__ == "__main__":

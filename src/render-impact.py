@@ -70,7 +70,6 @@ Deps: Python stdlib + the `git` CLI + git-fame (pip) for the blame pass. Require
 """
 import argparse
 import importlib.util
-import json
 import math
 import os
 import sys
@@ -98,7 +97,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 19
+REQUIRED_COMMON = 20
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -182,40 +181,20 @@ def fetch_repo_totals(token, repos):
     every run; the defaultBranchRef oid rides along in the same query so
     the LOC cache check is free. Returns
     {repo: {issues, merged_prs, branch, head}}; a repo GitHub answers
-    NOT_FOUND for (deleted or invisible to the token) or private now is absent."""
-    def group(chunk):
-        totals, dropped = {}, []
-        parts = [
-            f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
-            f'name:{json.dumps(r.split("/", 1)[1])}){{ '
-            f'isPrivate defaultBranchRef{{ name target{{ oid }} }} '
-            f'issues{{totalCount}} '
-            f'pullRequests(states:MERGED){{totalCount}} }}'
-            for j, r in enumerate(chunk)]
-        d = gql(token, "query{ " + " ".join(parts) + " }", allow_missing_aliases=True)
-        for j, r in enumerate(chunk):
-            node = d.get(f"a{j}")
-            if not node or node["isPrivate"]:
-                dropped.append(f"repository {r} {'is private' if node else 'did not resolve'}")
-                continue
-            ref = node.get("defaultBranchRef") or {}
-            totals[r] = {
-                "issues": node["issues"]["totalCount"],
-                "merged_prs": node["pullRequests"]["totalCount"],
-                "branch": ref.get("name", ""),
-                "head": (ref.get("target") or {}).get("oid", ""),
-            }
-        return totals, dropped
-
+    NOT_FOUND for, or one private now, is absent."""
+    nodes = common.share.public_now(
+        token, repos, gql, common.timing_sleep,
+        "defaultBranchRef{ name target{ oid } } issues{totalCount} pullRequests(states:MERGED){totalCount}",
+        "the PR, issue and LOC sections")
     totals = {}
-    with ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
-        groups = []
-        for i in range(0, len(repos), 15):
-            groups.append(pool.submit(group, repos[i:i + 15]))
-            common.timing_sleep(0.3, 'pacing')
-        for part, dropped in (result.result() for result in groups):
-            totals.update(part)
-            print("".join(f"{why}; dropped from the PR, issue and LOC sections\n" for why in dropped), end="", flush=True)
+    for r, node in nodes.items():
+        ref = node.get("defaultBranchRef") or {}
+        totals[r] = {
+            "issues": node["issues"]["totalCount"],
+            "merged_prs": node["pullRequests"]["totalCount"],
+            "branch": ref.get("name", ""),
+            "head": (ref.get("target") or {}).get("oid", ""),
+        }
     return totals
 
 

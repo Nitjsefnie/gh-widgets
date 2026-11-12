@@ -315,11 +315,11 @@ def fake_gql(nodes=(), orgs=("myorg",), error=None):
         if error is not None:
             raise error
         if "organizations" in query:
-            return {"user": {"login": "me", "databaseId": 1,
-                             "organizations": {
-                                 "pageInfo": {"hasNextPage": False,
-                                              "endCursor": None},
-                                 "nodes": [{"login": o, "viewerCanAdminister": True} for o in orgs]}}}
+            return {"user": {"login": "me", "databaseId": 1, "organizations": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{"login": o, "viewerCanAdminister": True} for o in orgs]}}}
+        if "a0: repository" in query:
+            return {a: {"isPrivate": False} for a in re.findall(r"(a\d+): repository", query)}
         return {"user": {"pullRequests": {
             "pageInfo": {"hasNextPage": False, "endCursor": None},
             "nodes": list(nodes)}}}

@@ -36,7 +36,7 @@ def _load_common():
 common = _load_common()
 # Clock alias kept for tests and callers.
 time = common.time
-REQUIRED_COMMON = 19
+REQUIRED_COMMON = 20
 common.check_version(REQUIRED_COMMON)
 THEMES = common.THEMES
 API = 'https://api.github.com'

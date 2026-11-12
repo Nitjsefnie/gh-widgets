@@ -8,6 +8,7 @@ import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,31 @@ def limited_request(request):
         with _REQUEST_SLOTS:
             return request(*args, **kwargs)
     return run
+
+
+def public_now(token, repos, gql_fn, pace_fn, fields="", dropped_from="the card"):
+    """{repo: node with `fields`} for repos public now; a cached PR's isPrivate can be stale."""
+    def group(chunk):
+        parts = [f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
+                 f'name:{json.dumps(r.split("/", 1)[1])}){{ isPrivate {fields} }}'
+                 for j, r in enumerate(chunk)]
+        data = gql_fn(token, "query{ " + " ".join(parts) + " }", allow_missing_aliases=True)
+        return [(r, data.get(f"a{j}")) for j, r in enumerate(chunk)]
+
+    public = {}
+    with ThreadPoolExecutor(MAX_IN_FLIGHT) as pool:
+        groups = []
+        for i in range(0, len(repos), 15):
+            groups.append(pool.submit(group, repos[i:i + 15]))
+            pace_fn(0.3, 'pacing')
+        for result in groups:
+            for repo, node in result.result():
+                if node and not node["isPrivate"]:
+                    public[repo] = node
+                else:
+                    why = "is private" if node else "did not resolve"
+                    print(f"repository {repo} {why}; dropped from {dropped_from}", flush=True)
+    return public
 
 
 def _keys(value, required, optional=()):
