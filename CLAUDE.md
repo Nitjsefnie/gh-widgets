@@ -344,6 +344,22 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > | fork `258dbd8` | 2451 / 2433 MiB | 670 / 644 MiB |
 > | upstream 4.0.0 | 5857 / 5871 MiB | 10447 / 7813 MiB |
 >
+> **First sharded measurement (run `43298406369`, the current pin `66f2f9b4c`
+> against upstream 4.0.0, two repeats per build, six shards per repeat, all 24
+> shard jobs valid; the one job that failed in transport on its first attempt
+> was re-run and passed validation):** the fork uses about 2.3× less cgroup
+> peak memory. Each shard job blames one shard of the manifest on its own
+> runner, so every figure below is the largest single-shard peak of that
+> repeat, not the peak of one whole resync; its absolute numbers are not
+> comparable with any table above.
+> The fork's `git fame` process never enters the sampler's top-12 list, so
+> that column reads 0 for it: below every listed process, not unmeasured.
+>
+> | build | cgroup peak | sampler tree peak | `git fame` proc peak |
+> |---|---|---|---|
+> | fork `66f2f9b4c` | 2660.8 / 2650.4 MiB | 794.4 / 778.2 MiB | 0 / 0 MiB |
+> | upstream 4.0.0 | 6087.6 / 6075.6 MiB | 10673.6 / 17287.9 MiB | 3717.3 / 3720.8 MiB |
+>
 > **There is deliberately no pin-expiry check in CI, and none should be
 > added.** `pin-still-needed.yml` was deleted and stays deleted. Its question —
 > has upstream shipped `--jobs` yet — is answered permanently and was never the
