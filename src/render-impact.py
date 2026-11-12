@@ -98,7 +98,7 @@ def _load_common():
 
 common = _load_common()
 
-REQUIRED_COMMON = 18
+REQUIRED_COMMON = 19
 common.check_version(REQUIRED_COMMON)
 
 CACHE_VERSION = 1
@@ -181,8 +181,8 @@ def fetch_repo_totals(token, repos):
     15 repos. The issue/merged-PR totals are live counts and are refetched
     every run; the defaultBranchRef oid rides along in the same query so
     the LOC cache check is free. Returns
-    {repo: {issues, merged_prs, branch, head}}; missing/renamed repos are
-    simply absent."""
+    {repo: {issues, merged_prs, branch, head}}; a repo GitHub answers
+    NOT_FOUND for (deleted, renamed or made private) is simply absent."""
     def group(chunk):
         totals = {}
         parts = [
@@ -192,7 +192,7 @@ def fetch_repo_totals(token, repos):
             f'issues{{totalCount}} '
             f'pullRequests(states:MERGED){{totalCount}} }}'
             for j, r in enumerate(chunk)]
-        d = gql(token, "query{ " + " ".join(parts) + " }")
+        d = gql(token, "query{ " + " ".join(parts) + " }", allow_missing_aliases=True)
         for j, r in enumerate(chunk):
             node = d.get(f"a{j}")
             if not node:
@@ -551,15 +551,12 @@ def render_impact(C, pr_rows, issue_rows, loc_rows, top_n=TOP_N):
     shown_repos = {row.repo for section in (pr_rows, issue_rows, loc_rows)
                    for row in section[:top_n]}
     if not shown_repos:
-        return base_card(C, CARD_W, y + 10, body, card="impact",
-                         title="External impact",
+        return base_card(C, CARD_W, y + 10, body, card="impact", title="External impact",
                          desc="No external contributions to show.")
     if not loc_rows[:top_n]:
         return base_card(
-            C, CARD_W, y + 10, body, card="impact",
-            title="External impact",
-            desc=f"Shown external repos: {len(shown_repos)}. "
-                 "No live-code rows.")
+            C, CARD_W, y + 10, body, card="impact", title="External impact",
+            desc=f"Shown external repos: {len(shown_repos)}. No live-code rows.")
     return base_card(
         C, CARD_W, y + 10, body, card="impact", title="External impact",
         desc=(f"Shown external repos: {len(shown_repos)}. Top live-code repo "
@@ -617,7 +614,7 @@ def parse_args():
     return args, token
 
 
-def fetch_all(token, user, cache, resync):
+def fetch_all(token, user, cache, resync):  # pylint: disable=too-many-locals
     """Fetch every input the impact card needs. Returns
     (insiders, prs, prs_by_id, issues, totals, ourloc).
 
@@ -652,6 +649,8 @@ def fetch_all(token, user, cache, resync):
                     if common.is_external(n, insiders)})
     with timed_phase("fetch_totals"), common.acquisition("fetch_repo_totals"):
         totals = fetch_repo_totals(token, repos)
+    for repo in sorted(set(repos) - totals.keys()):
+        print(f"repository {repo} did not resolve; dropped from the PR, issue and LOC sections", flush=True)
     with timed_phase("fetch_bots"), common.acquisition("fetch_bot_pr_counts"):
         if not count_bot_prs():
             fetch_bot_pr_counts(token, totals, {} if resync else cache.get("totals") or {})

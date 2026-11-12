@@ -568,8 +568,10 @@ def update_loc(candidate_repos, totals, cached_ourloc, resync, emails,
     moved = []
     for repo in sorted(candidate_repos):
         t = totals.get(repo)
+        if not t:  # did not resolve (deleted, renamed or private): drop its count
+            ourloc.pop(repo, None)
         if not t or not t["head"]:
-            continue  # repo gone/renamed: keep any cached entry, skip
+            continue  # resolved with no default-branch head: keep any cached entry
         if pins:
             # Blaming an unpinned repo would put one repo's counts on a moving
             # target while every other repo is fixed, so refuse the whole run

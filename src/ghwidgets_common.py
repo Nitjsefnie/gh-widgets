@@ -116,7 +116,7 @@ take_last_acquisition = ghwidgets_journal.take_last_acquisition
 
 # Bumped when the interface changes so an older script would misbehave;
 # each script pins the version it expects.
-COMMON_VERSION = 18
+COMMON_VERSION = 19
 
 
 # One import-time switch, shared by all instrumentation in this renderer.
@@ -385,14 +385,15 @@ def env_float(name, default):
 # ------------------------------------------------------------------- GraphQL
 
 @share.limited_request
-def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=None):
+def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=None, allow_missing_aliases=False):
     """POST a GraphQL query, retrying transient server-side conditions.
 
     GitHub intermittently answers with RESOURCE_LIMITS_EXCEEDED under load.
-    Transient conditions get a few retries; real errors fail fast. With
-    ``allow_errors_in`` as a path prefix, a response carrying data and at
-    least one error, every error strictly inside that subtree, is accepted,
-    each error printed with its path; the default keeps raise-on-any-error.
+    Transient conditions get a few retries; real errors fail fast. A response
+    carrying data and at least one error is accepted, each error printed with
+    its path, only when every error is strictly inside the ``allow_errors_in``
+    path prefix or, under ``allow_missing_aliases``, a NOT_FOUND naming one
+    whole top-level alias whose data is null; the default raises on any error.
     """
     req = urllib.request.Request(
         "https://api.github.com/graphql",
@@ -429,15 +430,14 @@ def gql(token, query, variables=None, retries=3, timeout=20, allow_errors_in=Non
             if transient and attempt < retries:
                 timing_sleep(5 * (attempt + 1))
                 continue
-            tolerated = False
-            if allow_errors_in is not None:
-                prefix = list(allow_errors_in)
-                tolerated = (body.get("data") is not None
-                             and bool(body["errors"])
-                             and all(isinstance(e.get("path"), list)
-                                     and e["path"][:len(prefix)] == prefix
-                                     and len(e["path"]) > len(prefix)
-                                     for e in body["errors"]))
+            prefix = list(allow_errors_in or ())
+            tolerated = body.get("data") is not None and bool(body["errors"]) and all(
+                isinstance(e.get("path"), list) and (
+                    allow_errors_in is not None and e["path"][:len(prefix)] == prefix
+                    and len(e["path"]) > len(prefix)
+                    or allow_missing_aliases and e.get("type") == "NOT_FOUND"
+                    and len(e["path"]) == 1 and body["data"].get(e["path"][0], 0) is None)
+                for e in body["errors"])
             if not tolerated:
                 raise RuntimeError(f"GraphQL errors: {body['errors']}")
             for e in body["errors"]:
