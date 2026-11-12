@@ -16,13 +16,15 @@ name: gitfame-resync-memory
 # re-blames every repo), so it is exactly the condition under which a dropped
 # work window would show.
 #
-# One full resync both ways outlasts a job, so each matrix job is ONE run: one
-# arm, one repeat, one of six shards of the pinned repos, on its own runner and
-# cgroup. The report proves every shard ran once and states a repeat's
-# full-resync peak as the max over its shards: the peak is set by the largest
-# single repo, which one shard blames whole. Limit, not measured: memory.peak
-# counts page cache, and a shard's cgroup no longer carries page cache from
-# the other shards' repos, so it may read below an unsharded run's.
+# One full resync both ways ran 30-40 minutes (an indicative wall), past a
+# 20-minute measure job, so each matrix job is ONE run: one arm, one repeat,
+# one of six shards of the pinned repos, on its own runner and cgroup. The
+# report proves every shard ran once and states a repeat's full-resync peak as
+# the max over its shards: the largest single repo sets it, and one shard
+# blames that repo whole. Limits, not measured: memory.peak counts page cache,
+# which a shard's cgroup no longer shares with other shards' repos; and the
+# clone lookahead (default 3) overlaps that repo's blame with its neighbours
+# in the shard, not the ones a full run clones beside it.
 #
 # This workflow is measurement-only. It never writes to the repo, never
 # publishes an SVG anywhere, and reads only public GitHub data.
@@ -150,7 +152,7 @@ jobs:
           set -euo pipefail
           # Every run blames the same trees, or a repo that moves between
           # clones reads as the memory difference this workflow measures.
-          # The shards are the targeted-blame-audit's, from the same helper.
+          # The shards are the targeted-blame-audit's own.
           python3 scripts/resolve-repo-pins.py --shards 6 --out /tmp/pins.json
           python3 scripts/resync-memory.py axes --pins /tmp/pins.json \
             --builds "$GH_WIDGETS_BUILDS" --repeats "$GH_WIDGETS_REPEATS" >> "$GITHUB_OUTPUT"
@@ -165,8 +167,7 @@ jobs:
   measure:
     needs: pins
     runs-on: ubuntu-latest
-    # One shard's resync both ways, the targeted-blame-audit's 40-minute job,
-    # plus one venv build; a fresh runner per job, so no arm shares a cgroup.
+    # The targeted-blame-audit's bound for one shard both ways, plus a venv.
     timeout-minutes: 40
     strategy:
       # Each run's numbers stand alone; a red one must not cancel the rest.
@@ -259,8 +260,8 @@ jobs:
           echo "$GH_WIDGETS_RUN_LABEL: GH_WIDGETS_CLONE_LOOKAHEAD=$GH_WIDGETS_CLONE_LOOKAHEAD GH_WIDGETS_BLAME_METHOD=$GH_WIDGETS_BLAME_METHOD"
           echo "GH_WIDGETS_GH_EXTRA_EMAILS=$GH_WIDGETS_GH_EXTRA_EMAILS"
           mkdir -p /tmp/results /tmp/out
-          # Bot counts never touch blame or its memory, and every run spends
-          # the job token's 1,000 GraphQL points per hour for this repository.
+          # Bot counts never touch blame or its memory, and every run shares
+          # the job token's one budget of 1,000 GraphQL points per hour.
           sudo -E python3 scripts/resync-memory.py measure \
             --cgroup /sys/fs/cgroup/gfbench \
             --json "/tmp/results/$GH_WIDGETS_RUN_LABEL.json" \
