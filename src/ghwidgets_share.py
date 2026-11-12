@@ -8,7 +8,6 @@ import json
 import os
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +29,9 @@ def limited_request(request):
 
 def public_now(token, repos, gql_fn, pace_fn, fields="", dropped_from="the card"):
     """{repo: node with `fields`} for repos public now; a cached PR's isPrivate can be stale."""
+    # Lazy: the import costs renderers that never call this.
+    from concurrent.futures import ThreadPoolExecutor  # pylint: disable=import-outside-toplevel
+
     def group(chunk):
         parts = [f'a{j}: repository(owner:{json.dumps(r.split("/")[0])},'
                  f'name:{json.dumps(r.split("/", 1)[1])}){{ isPrivate {fields} }}'
@@ -48,8 +50,8 @@ def public_now(token, repos, gql_fn, pace_fn, fields="", dropped_from="the card"
                 if node and not node["isPrivate"]:
                     public[repo] = node
                 else:
-                    why = "is private" if node else "did not resolve"
-                    print(f"repository {repo} {why}; dropped from {dropped_from}", flush=True)
+                    print(f"repository {repo} {'is private' if node else 'did not resolve'}; "
+                          f"dropped from {dropped_from}", flush=True)
     return public
 
 

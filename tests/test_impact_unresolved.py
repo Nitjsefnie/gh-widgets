@@ -207,14 +207,14 @@ class CachedRepoMadePrivateRun(unittest.TestCase):
 class CachedRepoMadePrivateResponsiveness(unittest.TestCase):
     """The responsiveness card drops a repo made private after its PR was cached."""
 
-    def test_the_card_drops_the_now_private_repo(self):
+    def run_card(self, **cache):
         api = PrivateNowRepo()
         api.nodes = [item("Plive", "live")]
         with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             cache_file.write_text(json.dumps({
                 "version": impact.CACHE_VERSION, "insiders": ["me"],
-                "prs": {n["id"]: n for n in (item("Pnow", "now"), *api.nodes)}}), encoding="utf-8")
+                "prs": {n["id"]: n for n in (item("Pnow", "now"), *api.nodes)}, **cache}), encoding="utf-8")
             argv = ["render-responsiveness.py", "--user", "me", "--token", "t", "--out-dir", td,
                     "--cache-file", str(cache_file)]
             out = io.StringIO()
@@ -223,11 +223,19 @@ class CachedRepoMadePrivateResponsiveness(unittest.TestCase):
                     mock.patch.object(common, "timing_sleep"), contextlib.redirect_stdout(out):
                 resp.main()
             svg = (Path(td) / "responsiveness.svg").read_text(encoding="utf-8")
-        self.assertEqual(api.counts["totals"], 1)
-        self.assertIn("repository now/repo is private; dropped from the responsiveness card",
-                      out.getvalue().splitlines())
         self.assertNotIn("now/repo", svg)
         self.assertIn("live/repo", svg)
+        return api.counts["totals"], out.getvalue().splitlines()
+
+    def test_without_impact_totals_it_asks_github(self):
+        queries, lines = self.run_card()
+        self.assertEqual(queries, 1)
+        self.assertIn("repository now/repo is private; dropped from the responsiveness card", lines)
+
+    def test_the_impact_runs_totals_are_the_public_set(self):
+        # Impact runs first in the unit; its totals hold only repos public at that run.
+        totals = {"live/repo": {"issues": 4, "merged_prs": 3, "branch": "main", "head": "h1"}}
+        self.assertEqual(self.run_card(totals=totals)[0], 0)
 
 
 if __name__ == "__main__":
