@@ -9,6 +9,13 @@ case "${1:-}" in
     *) echo 'usage: run-gh-widgets.sh normal|resync' >&2; exit 2 ;;
 esac
 
+# Every renderer runs on GH_WIDGETS_PYTHON (the units set it), and that
+# interpreter's scripts directory leads PATH so `git fame` is its own build.
+python=${GH_WIDGETS_PYTHON:-python3}
+scripts=$("$python" -c 'import sysconfig; print(sysconfig.get_path("scripts"))') || exit 1
+export PATH="$scripts:$PATH"
+"$python" -c 'import sys; print("python:", sys.version.split()[0], sys.executable)' || exit 1
+
 run_step() {
     local name=$1 status
     shift
@@ -44,26 +51,26 @@ graphql_chain() {
         skipped profile impact responsiveness stars
         return 1
     fi
-    if ! run_step profile /usr/local/bin/render-gh-widgets.py "${resync[@]}"; then
+    if ! run_step profile "$python" /usr/local/bin/render-gh-widgets.py "${resync[@]}"; then
         skipped impact responsiveness stars
         return 1
     fi
-    if ! run_step impact /usr/local/bin/render-impact.py "${resync[@]}" --cache-file /var/lib/gh-widgets/impact-cache.json; then
+    if ! run_step impact "$python" /usr/local/bin/render-impact.py "${resync[@]}" --cache-file /var/lib/gh-widgets/impact-cache.json; then
         skipped responsiveness stars
         return 1
     fi
-    if ! run_step responsiveness /usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json; then
+    if ! run_step responsiveness "$python" /usr/local/bin/render-responsiveness.py --cache-file /var/lib/gh-widgets/impact-cache.json; then
         skipped stars
         return 1
     fi
-    run_step stars /usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
+    run_step stars "$python" /usr/local/bin/render-stars.py --cache-file /var/lib/gh-widgets/stars-cache.json
 }
 
 # Only this chain runs GraphQL renderers: their per-process cap of 2 is also
 # the unit-wide cap. Stars runs last to keep the shared-data chain together.
 graphql_chain &
 chain_pid=$!
-run_step popularity /usr/local/bin/render-popularity.py &
+run_step popularity "$python" /usr/local/bin/render-popularity.py &
 popularity_pid=$!
 
 status=0

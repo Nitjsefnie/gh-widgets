@@ -39,6 +39,16 @@ additionally installs `units/`, reloads systemd, enables both timers and proves
 them load. Everything it installs is a *copy*, so `diff` against the repo before
 and after touching either side.
 
+**The deploy interpreter is CPython 3.15.** Both service units set
+`GH_WIDGETS_PYTHON=/usr/local/bin/python3.15`; `/usr/local/bin/python3` stays
+3.13 for the box's other tools. `run-gh-widgets.sh` starts every renderer with
+that interpreter, prints `python: <version> <path>` as its first journal line
+on every run, and puts the interpreter's scripts directory
+(`/opt/python/3.15.1/bin`) first on PATH, so `git fame` resolves to the
+git-fame build installed for it. `install.sh --units` starts every installed
+renderer on each unit's interpreter, rolling back if one cannot, and warns when
+that interpreter has no git-fame with `--jobs`.
+
 **Public snapshot consumers.** `ghwidgets_data.py` is the supported public
 boundary for ghpulse, currently schema version `1`. Its snapshot is an
 acquisition/interchange contract, not an input format for renderer-private
@@ -175,11 +185,11 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > that argument, the wall columns in those tables do not).
 >
 > ```
-> pip install --force-reinstall \
+> /usr/local/bin/python3.15 -m pip install --force-reinstall \
 >   "git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
 > ```
 >
-> `git-fame --version` must print **`3.1.4.dev8+g65925d826`**. A local checkout
+> `/opt/python/3.15.1/bin/git-fame --version` must print **`3.1.4.dev8+g65925d826`**. A local checkout
 > is at `/root/git-fame` on branch `perf-blame`; `pip install .` from there
 > is equivalent. A bare `pip install --upgrade git-fame` **silently undoes this
 > pin** — 4.0.0 is the higher version number and installs cleanly.

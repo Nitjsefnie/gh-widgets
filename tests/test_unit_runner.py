@@ -1,6 +1,7 @@
 """Execute the deployed schedules with offline, delayed renderer commands."""
 import json
 import os
+import platform
 import shlex
 import subprocess
 import sys
@@ -23,7 +24,8 @@ step = sys.argv[1]
 (root / (step + '.start')).write_text(json.dumps({
     'time': time.monotonic(), 'args': sys.argv[2:],
     'orgs': os.environ.get('GH_WIDGETS_GH_EXTRA_ORGS'),
-    'cache': os.environ.get('GH_WIDGETS_CACHE_FILE')}))
+    'cache': os.environ.get('GH_WIDGETS_CACHE_FILE'),
+    'python': sys.executable, 'path': os.environ['PATH'].split(os.pathsep)[0]}))
 time.sleep(json.loads(os.environ['GH_WIDGETS_STUB_DELAYS']).get(step, 0))
 failed = os.environ.get('GH_WIDGETS_STUB_FAIL') == step
 if step == 'lookup':
@@ -40,7 +42,8 @@ sys.exit(7 if failed else 0)
 '''
 
 
-def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed'):
+def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed',
+             python=sys.executable):
     # pylint: disable=too-many-locals
     """Relocate deployed command paths only; execute the unit's actual argv."""
     starts = [line.split('=', 1)[1] for line in
@@ -55,11 +58,16 @@ def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed'):
         stub = root / 'stub.py'
         stub.write_text(STUB, encoding='utf-8')
         text = (ROOT / 'scripts/run-gh-widgets.sh').read_text(encoding='utf-8')
-        functions = []
-        for step, command in zip(STEPS, COMMANDS):
-            functions.append(f'fake_{step}() {{ {shlex.quote(sys.executable)} '
-                             f'{shlex.quote(str(stub))} {step} "$@"; }}\n')
-            text = text.replace('/usr/local/bin/' + command, 'fake_' + step)
+        # gh runs as a shell function; each renderer is a stub file the
+        # runner hands to its selected interpreter.
+        functions = [f'fake_lookup() {{ {shlex.quote(sys.executable)} '
+                     f'{shlex.quote(str(stub))} lookup "$@"; }}\n']
+        text = text.replace('/usr/local/bin/gh', 'fake_lookup')
+        for step, command in zip(STEPS[1:], COMMANDS[1:]):
+            (root / command).write_text(
+                f'import sys\nsys.argv.insert(1, {step!r})\n' + STUB,
+                encoding='utf-8')
+            text = text.replace('/usr/local/bin/' + command, str(root / command))
         runner = root / 'runner.sh'
         runner.write_text(''.join(functions) + text, encoding='utf-8')
         argv = [str(runner) if arg == '/usr/local/bin/run-gh-widgets.sh' else arg
@@ -78,7 +86,7 @@ def run_unit(unit, fail='', delays=None, timing='', token_name='prefixed'):
         elif token_name == 'empty-prefixed':
             env['GH_TOKEN_FILE'] = str(token)
             env['GH_WIDGETS_GH_TOKEN_FILE'] = ''
-        env.update({'GH_WIDGETS_OUT_DIR': directory,
+        env.update({'GH_WIDGETS_OUT_DIR': directory, 'GH_WIDGETS_PYTHON': python,
                     'GH_WIDGETS_CACHE_FILE': str(root / 'profile-cache.json'),
                     'GH_WIDGETS_DEBUG_TIMING': timing,
                     'GH_WIDGETS_STUB_FAIL': fail,
@@ -174,10 +182,11 @@ class UnitSchedule(unittest.TestCase):
                     result, _, _ = run_unit(unit, timing=timing)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stderr, '')
+                    lines = result.stdout.splitlines()
+                    self.assertRegex(lines[0], r'^python: \S+ \S+$')
                     if timing:
-                        self.assertRegex(result.stdout, r'^orgs-lookup: \d+\.\d+s\n$')
-                    else:
-                        self.assertEqual(result.stdout, '')
+                        self.assertRegex(lines[1], r'^orgs-lookup: \d+\.\d+s$')
+                    self.assertEqual(len(lines), 2 if timing else 1)
                     result, _, files = run_unit(unit, fail='lookup', timing=timing)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn('profile.start', files)
@@ -202,3 +211,22 @@ class UnitSchedule(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn('lookup failed', result.stderr)
                         self.assertNotIn('profile.start', files)
+
+    def test_every_renderer_runs_on_the_selected_interpreter_and_its_scripts(self):
+        with _ghw_temp.tempdir(prefix='ghwidgets-python-') as directory:
+            selected = Path(directory) / 'python-selected'
+            selected.symlink_to(sys.executable)
+            scripts = subprocess.run(
+                [str(selected), '-c', 'import sysconfig; print(sysconfig.get_path("scripts"))'],
+                capture_output=True, text=True, check=True).stdout.strip()
+            for unit in UNITS:
+                with self.subTest(unit=unit):
+                    result, _, files = run_unit(unit, python=str(selected))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, f'python: {platform.python_version()} {selected}\n')
+                    for step in STEPS[1:]:
+                        start = json.loads(files[step + '.start'])
+                        self.assertEqual((start['python'], start['path']), (str(selected), scripts))
+            result, _, files = run_unit(UNITS[0], python=str(Path(directory) / 'missing'))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(files, {})
