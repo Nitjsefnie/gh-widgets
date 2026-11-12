@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import statistics
 import threading
 import time
 import unittest
@@ -25,7 +24,7 @@ class DelayedAPI(CountingAPI):
         super().__init__()
         self.lock = threading.Lock()
         self.active = self.peak = 0
-        self.durations = []
+        self.spans = []
 
     def __call__(self, request, **kwargs):
         start = time.monotonic()
@@ -38,7 +37,24 @@ class DelayedAPI(CountingAPI):
         finally:
             with self.lock:
                 self.active -= 1
-                self.durations.append((json.loads(request.data)['query'], time.monotonic() - start))
+                self.spans.append((json.loads(request.data)['query'], start, time.monotonic()))
+
+    @property
+    def durations(self):
+        return [(query, end - start) for query, start, end in self.spans]
+
+    def report(self, timing):
+        """Every request's kind, start offset and duration, for a failure message."""
+        origin = min((start for _, start, _ in self.spans), default=0)
+        rows = [f"{_profile_kind(query)} +{start - origin:.3f}s {end - start:.3f}s"
+                for query, start, end in sorted(self.spans, key=lambda span: span[1])]
+        return f"peak={self.peak}; {timing}; " + ", ".join(rows)
+
+
+def _profile_kind(query):
+    if 'contributionCalendar' in query:
+        return 'calendar'
+    return 'walk' if 'organizations' in query or 'repositories' in query else 'authored'
 
 
 class AcquisitionOverlap(unittest.TestCase):
@@ -51,34 +67,32 @@ class AcquisitionOverlap(unittest.TestCase):
                 mock.patch.object(profile.common, "DEBUG_TIMING", True):
             recorder = profile.common.TimingRecorder()
             with mock.patch.object(profile.common, "timing", recorder):
-                start = time.monotonic()
                 user, prs, issues, fallback = profile.load_inputs(
                     SimpleNamespace(user="me", resync=False), "t", Path(td) / "cache.json")
-                elapsed = time.monotonic() - start
             text = io.StringIO()
             with contextlib.redirect_stdout(text):
                 recorder.report("profile")
+        line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
+        observed = api.report(line.strip())
         # 2 profile requests + 12 sequential calendar windows + 2 PR + 2 issue pages.
-        self.assertEqual(sum(api.counts.values()), 18)
+        self.assertEqual(sum(api.counts.values()), 18, observed)
         self.assertEqual(len(prs), 4)
         self.assertEqual(len(issues), 2)
         self.assertEqual(user["login"], "me")
         self.assertIsNone(fallback)
-        self.assertEqual(api.peak, 2)
-        # Use observed stub latency: sleep(.08) can overshoot on hosted runners.
-        # Calendar's 12 windows follow the parallel profile walks; four typical
-        # requests allow for cap contention, still rejecting sequential acquisition.
-        calendar = sum(duration for query, duration in api.durations
-                       if 'contributionCalendar' in query)
-        profile_walk = max(duration for query, duration in api.durations
-                           if 'organizations' in query or 'repositories' in query)
-        self.assertLess(elapsed, calendar + profile_walk
-                        + 4 * statistics.median(duration for _, duration in api.durations))
-        line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
+        self.assertEqual(api.peak, 2, observed)
+        # Overlap is read off the stub's own request intervals, never a wall-clock
+        # sum: a runner stall delays both sides alike, while sequential
+        # acquisition leaves no authored request inside a walk or calendar one.
+        own = [(start, end) for query, start, end in api.spans if _profile_kind(query) != 'authored']
+        overlapping = [(start, end) for query, start, end in api.spans
+                       if _profile_kind(query) == 'authored'
+                       and any(start < other_end and other_start < end for other_start, other_end in own)]
+        self.assertTrue(overlapping, f"no authored request overlapped the profile walks: {observed}")
         self.assertIn('count=18', line)
         concurrent = re.search(r'concurrent=([\d.]+)s', line)
         assert concurrent is not None
-        self.assertGreater(float(concurrent[1]), 0)
+        self.assertGreater(float(concurrent[1]), 0, observed)
 
     def test_totals_groups_overlap_keep_union_count_and_pacing(self):
         repos = [f"other/r{i}" for i in range(31)]
