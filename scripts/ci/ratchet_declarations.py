@@ -21,7 +21,6 @@ from pathlib import Path
 
 DOCUMENT = "gate/speed-baseline.json"
 _FEATURE_SUBJECT = re.compile(r'^feat(\([^)]*\))?!?:')
-LEGACY_INTERPRETER = "3.13"
 
 
 class DeclarationError(ValueError):
@@ -60,7 +59,7 @@ def interpreter_move(old, new, running=None):
         raise RuntimeError(
             f"{DOCUMENT} records interpreter {new['interpreter']} but this "
             f"job measures on {running}: re-measure on the recorded one")
-    before = old.get("interpreter", LEGACY_INTERPRETER)
+    before = old.get("interpreter", baseline.LEGACY_INTERPRETER)
     return None if before == running else (before, running)
 
 
