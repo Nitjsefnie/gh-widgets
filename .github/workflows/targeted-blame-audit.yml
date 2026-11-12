@@ -44,7 +44,7 @@ on:
       gitfame_ref:
         description: "git-fame ref to audit against (the production pin)"
         required: false
-        default: "65925d8263576dc02510f06aadbcf0386d4edada"
+        default: "e0db2cbae79c8cedd6b04181bd86fd5521c9822b"
 
 concurrency:
   group: targeted-blame-audit-${{ github.ref }}
@@ -67,7 +67,7 @@ jobs:
       GH_WIDGETS_GH_USER: ${{ inputs.user || 'Nitjsefnie' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_WIDGETS_GH_EXTRA_EMAILS: ${{ inputs.extra_emails || 'zmatek.peter@gmail.com' }}
-      GH_WIDGETS_GITFAME_REF: ${{ inputs.gitfame_ref || '65925d8263576dc02510f06aadbcf0386d4edada' }}
+      GH_WIDGETS_GITFAME_REF: ${{ inputs.gitfame_ref || 'e0db2cbae79c8cedd6b04181bd86fd5521c9822b' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

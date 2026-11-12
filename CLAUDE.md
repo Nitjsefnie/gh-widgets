@@ -186,12 +186,14 @@ every run and has no `--resync` flag. Both units configure Overflow.
 >
 > ```
 > /usr/local/bin/python3.15 -m pip install --force-reinstall \
->   "git+https://github.com/Nitjsefnie-OSC/git-fame@65925d8263576dc02510f06aadbcf0386d4edada"
+>   "git+https://github.com/Nitjsefnie-OSC/git-fame@e0db2cbae79c8cedd6b04181bd86fd5521c9822b"
 > ```
 >
-> `/opt/python/3.15.1/bin/git-fame --version` must print **`3.1.4.dev8+g65925d826`**. A local checkout
-> is at `/root/git-fame` on branch `perf-blame`; `pip install .` from there
-> is equivalent. A bare `pip install --upgrade git-fame` **silently undoes this
+> `/opt/python/3.15.1/bin/git-fame --version` must print **`3.1.4.dev9+ge0db2cbae`**. The pinned
+> commit is `65925d8` (branch `perf-blame`) plus NUL-separated file listing and
+> `--` before each blamed path, so names starting with `-`, starting or ending
+> with a space, or that Git C-quotes are blamed rather than dropped; install the
+> SHA above, never a branch tip, since the version line names that commit. A bare `pip install --upgrade git-fame` **silently undoes this
 > pin** — 4.0.0 is the higher version number and installs cleanly.
 >
 > **Wall time is not a magnitude on this box or on a CI runner.** Both are
@@ -293,7 +295,7 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > largest single repo blamed (`Nitjsefnie-OSC/codex`, 1.65 M LOC), not with the
 > repo count, so it grows as that repo does.
 >
-> **Re-measured 2026-09-30 against the CURRENT pin (`65925d8`, perf-blame):
+> **Re-measured 2026-09-30 against the pin of that date (`65925d8`, perf-blame):
 > the fork now wins on cgroup peak memory by roughly 2×, and on wall time
 > too.**
 > The memory half is the load-bearing one and is what the pin rests on; the
