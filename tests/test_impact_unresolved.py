@@ -158,7 +158,9 @@ class PrivateNowRepo(CountingAPI):
         if "a0: repository" not in query:
             return super().__call__(request, **kwargs)
         self.counts["totals"] += 1
-        return reply({"data": {a: {**LIVE, "isPrivate": owner == "now"}
+        # Like GitHub, answer isPrivate only when the query selects it.
+        return reply({"data": {a: {k: v for k, v in {**LIVE, "isPrivate": owner == "now"}.items()
+                                   if k != "isPrivate" or "isPrivate" in query}
                                for a, owner in re.findall(r'(a\d+): repository\(owner:"([^"]+)"', query)}})
 
 
