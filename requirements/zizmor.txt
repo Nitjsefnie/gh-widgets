@@ -5,11 +5,12 @@
 # run. PyYAML is a separately pinned toolchain package carried beside zizmor;
 # it is used by the claim repo's YAML-consuming lint step, not required at
 # runtime by zizmor. 6.0.3 ships no CPython 3.15 wheel, so the workflow installs
-# with --only-binary=:all: --no-binary=PyYAML: every package is a hash-checked
-# wheel except PyYAML, built from the hash-checked sdist below. The other
-# PyYAML hash is the CPython 3.13 x86_64 manylinux wheel, kept for a
-# wheel-accepting install; drop the sdist hash and the exception together once
-# a pinned release ships cp315 wheels.
+# with --only-binary=:all: --no-binary=PyYAML: every listed package is a
+# hash-checked wheel except PyYAML, built from the hash-checked sdist below.
+# That build's own isolated requirements (setuptools, Cython) are wheels pip
+# fetches without hash checking. The other PyYAML hash is the CPython 3.13
+# x86_64 manylinux wheel, kept for a wheel-accepting install; drop the sdist
+# hash and the exception together once a pinned release ships cp315 wheels.
 #
 # Dependabot's pip entry (directory: "/requirements" in .github/dependabot.yml) watches
 # requirements/*.txt, so a bump arrives as a pull request rewriting the
