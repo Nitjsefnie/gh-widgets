@@ -137,13 +137,16 @@ or that drops the base's. When the base and head interpreters differ, a raised
 renderer `entries` maximum is admitted for that window only, once per move;
 renderer `wall` maxima stay down-only. The gate checks that the interpreter
 moved, not why a count rose, so the move must be the increase's only reason by
-construction: the moving change alters no measured workload, and `basis`
-records, with run ids, the old interpreter's measurement of the same tree
-fitting the previous ceiling beside the new interpreter's. Seeding an absent seed-declared
+construction: the moving change alters no measured workload, and the raising
+commit message records, with run ids, the old interpreter's measurement of the
+same tree fitting the previous ceiling beside the new interpreter's. Seeding an absent seed-declared
 entry stays allowed without a feature, population digest moves ride with the
 tests that cause them, and lowering a recorded maximum is always allowed.
-Keep measured provenance (n ≥ 2 envelopes and dispatch run ids in `basis`) in
-the baseline for any raise.
+Any raise keeps n ≥ 2 envelopes in the baseline and its measured provenance
+(the measurements and their run ids) in the raising commit message. A record's
+`basis` states only why its numbers sit where they do (population, instrument,
+the rule that sets the threshold), names ratchet-written values by field name,
+and is replaced, never appended to, when a record is re-derived by hand.
 
 The statement count is runner-invariant by construction — the same code with
 the same collected population executes the same lines — so neither load nor
