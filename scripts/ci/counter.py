@@ -41,7 +41,7 @@ workload's. No scalar calibration cancels a heterogeneous runner pool: the
 net value still scales with the machine factor whenever the slope is not
 exactly the local ratio (d(raw)/d(calibration) measured ~30.1 between two
 #269 runs against the committed 21.3716). It was retired by #269; issue
-#269 and the baseline's `basis` carry the account. CALIBRATED_METRIC stays
+#269 carries the account. CALIBRATED_METRIC stays
 declared in METRICS so schema 3/4 baseline documents still validate against
 `metric in counter.METRICS`, and nothing produces it any more.
 

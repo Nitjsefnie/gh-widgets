@@ -13,8 +13,8 @@ is: scripts/ci holds standalone CI entry points and deliberately has no
 __init__.py.
 
 Modelled on gate/coverage-floor.json: committed data rather than a literal in a
-workflow, a REQUIRED `basis` so the reason a number sits where it does lives
-at the number, a provenance pair, and a validator that refuses rather than
+workflow, a REQUIRED `basis` stating the current reason a number sits where
+it does (its history stays in git), a provenance pair, and a validator that refuses rather than
 degrades.
 """
 from __future__ import annotations

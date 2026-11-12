@@ -36,10 +36,10 @@ cannot see that. That refusal is exit 2, not exit 0-with-no-write: a moved
 population is something a human has to record, not something to shrug at.
 
 WHY `basis` IS A REQUIRED KEY. This file can prove that the numbers agree with
-each other. It cannot prove that a movement was justified — the reason a floor
-moved has to be written where the number is, in repo-visible terms, because the
-pull request that explains it is not there when someone reads this file two
-months later. So a committed file with no basis is an error, not a default.
+each other, not why the floor sits where it does: `basis` states that reason
+(population, instrument, the rule that moves the floor) beside the numbers,
+naming them by field so an automated raise leaves it true; how they moved
+stays in git history. So a committed file with no basis is an error.
 
 Exit codes: 0 in bounds (or nothing to raise), 1 gate below the floor with
 matching file counts, 2 invalid or unreadable input, or a file-count mismatch.

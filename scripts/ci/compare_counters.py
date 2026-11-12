@@ -11,14 +11,13 @@ duration, and none of that is the code being measured. The maintainer ruling
 behind issue #81 is that paired wall-clock A/B is not a valid magnitude
 ANYWHERE — not on a shared box, and not in one job on a CI runner. The scale
 of that movement is not asserted from memory here: it is measured, and the
-figures are in the speed job's header in tests.yml and in the committed
-baseline's `basis`.
+figures are in the speed job's header in tests.yml.
 So the quantity compared here is one runner load cannot move, and elapsed
 time survives only as a gross smoke check reported as a verdict with no
 number attached. That ruling is also why there is no base checkout any more:
 the committed baseline IS the comparison point.
 
-Each population declares its own tolerance in the baseline's basis.
+Each population declares its own `tolerance` in the baseline.
 
 WHY MINIMUM ACROSS ROUNDS. Each round is a whole run of the same pinned
 offline inputs, and the minimum across them is the least-noisy observation of

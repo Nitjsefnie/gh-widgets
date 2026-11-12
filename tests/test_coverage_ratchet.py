@@ -12,8 +12,8 @@ empty measurement that reads exactly like a clean one.
 
 What these tests deliberately cannot check is whether a movement was
 JUSTIFIED — that a gate's own suite can only ever prove its numbers agree
-with each other. That is what `basis` is for, and it is required rather than
-optional because the reason has to live at the numbers.
+with each other. `basis` states why the floor sits where it does; the commit
+that moved it says why it moved.
 """
 import contextlib
 import importlib.util
