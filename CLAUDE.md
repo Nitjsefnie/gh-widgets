@@ -329,6 +329,20 @@ every run and has no `--resync` flag. Both units configure Overflow.
 > top-12 list, so that
 > column reads 0 for it: it is below every listed process, not unmeasured.
 >
+> **Re-measured on the audit-set workload (run `43241335728`, fork `258dbd8`
+> against upstream 4.0.0, two runs per build, all valid):** the fork still
+> uses about 2.4× less cgroup peak memory. That workload is much larger than
+> the 58-repo cell above, so its absolute numbers are not comparable with that
+> table; compare the two builds within one table only. In the fork arm the
+> largest processes are `git grep -I` (about 585 MiB each, from the targeted
+> counting) and a clone, not git-fame; in the upstream arm they are git-fame
+> processes at about 3.7 GiB each.
+>
+> | build | cgroup peak | sampler tree peak |
+> |---|---|---|
+> | fork `258dbd8` | 2451 / 2433 MiB | 670 / 644 MiB |
+> | upstream 4.0.0 | 5857 / 5871 MiB | 10447 / 7813 MiB |
+>
 > **There is deliberately no pin-expiry check in CI, and none should be
 > added.** `pin-still-needed.yml` was deleted and stays deleted. Its question —
 > has upstream shipped `--jobs` yet — is answered permanently and was never the
