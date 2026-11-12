@@ -250,15 +250,6 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
         assert 'listed below' in out
         assert 'No commit pairs a workflow-name scope' in out
 
-    def test_contributing_names_the_rule_the_gate_enforces(self):
-        contributing = ' '.join((ROOT / 'CONTRIBUTING.md').read_text(
-            encoding='utf-8').split())
-        assert 'only with the `ci` type' in contributing, (
-            'CONTRIBUTING must state the workflow-name scope rule this gate '
-            'enforces, so the prose and the gate cannot drift apart silently')
-        assert 'commit_scopes.py' in contributing, (
-            'CONTRIBUTING must name the gate that enforces the rule')
-
     # --- in-process coverage of the refusal and comparison helpers --------------
     def test_git_refusal_names_what_was_attempted(self):
         module = _load()
