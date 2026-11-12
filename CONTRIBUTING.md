@@ -218,7 +218,7 @@ actionlint .github/workflows/*.yml && zizmor .github/workflows/  # actionlint
 
 **THOSE COMMANDS ARE NOT WHAT DECIDES WHETHER A CHANGE IS MERGEABLE.**
 `tests.yml` runs the suite across an OS × Python matrix —
-windows-latest, macos-latest and ubuntu-latest on 3.10 and 3.13 — and a
+windows-latest, macos-latest and ubuntu-latest on 3.14 and 3.15 — and a
 green run of everything above on one machine says nothing about the other
 five. A POSIX-only import, a `/proc` read, a path separator, a `case` in a
 shell script: all four shipped past a fully green local checklist in this
@@ -324,7 +324,7 @@ pinned action's tighten on the proposed tree; equivalent fractions, missing
 entries and extra entries fail the fallback. After adoption the base record
 binds every check. The reported check name is the job key `comment-share`.
 
-The measured Ubuntu/Python 3.13 cell in `tests.yml` installs the pinned
+The measured Ubuntu/Python 3.15 cell in `tests.yml` installs the pinned
 Nitjsefnie-OSC/git-fame build and requires its pin checks; if the binary is
 missing, those checks fail instead of skipping. Other matrix cells skip those
 environment-conditional checks when git-fame is absent.

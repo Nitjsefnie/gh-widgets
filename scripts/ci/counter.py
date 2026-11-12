@@ -10,7 +10,7 @@ quantity gated here is not an elapsed time.
 
 THE INSTRUMENT IS A DETERMINISTIC STATEMENT COUNT. It counts
 `sys.monitoring` LINE events in the measured Python child (Python 3.12+;
-the speed job pins 3.13): every executed line of the child's own code fires
+the speed job pins 3.15): every executed line of the child's own code fires
 one event, so the same code with the same population executes the same lines
 and returns the same count, on any runner, under any load. Measured on the
 box that shipped this change (2026-10-26, this tree at 5c3b9d6, env pinned
@@ -536,7 +536,7 @@ def measure_statement(command: Sequence[str], cwd=None, env=None,
         raise CounterError(
             "measure_statement counts sys.monitoring LINE events, which "
             f"{sys.version_info[0]}.{sys.version_info[1]} does not have; "
-            "they exist from Python 3.12, and the speed job pins 3.13")
+            "they exist from Python 3.12, and the speed job pins 3.15")
     if not command or not _is_python_interpreter(command[0]):
         raise CounterError(
             f"measure_statement counts the Python child's executed lines, "

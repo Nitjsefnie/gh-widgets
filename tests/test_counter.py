@@ -422,7 +422,7 @@ class TestMeasure(unittest.TestCase):
 REQUIRES_STATEMENT = unittest.skipUnless(
     sys.version_info >= (3, 12),
     "measure_statement counts sys.monitoring LINE events, which exist "
-    "from Python 3.12; the speed job pins 3.13")
+    "from Python 3.12; the speed job pins 3.15")
 
 
 class TestStatementInstrument(unittest.TestCase):
