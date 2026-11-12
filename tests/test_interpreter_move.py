@@ -89,6 +89,11 @@ class TestInterpreterMoveRoute(unittest.TestCase):
                                                           renderer=120.0),
                                      "feat: move to 3.15"), [UNIT, RENDERER])
 
+    def test_a_move_admits_no_renderer_entry_the_base_never_recorded(self):
+        new = document("3.15")
+        new["populations"]["renderer-workloads"]["entries"]["e2e::bench.new"] = envelope(5.0)
+        self.assertEqual(self.derive(document(), new), [])
+
     def test_a_lowered_renderer_entry_needs_no_declaration(self):
         self.assertEqual(self.derive(document(), document("3.15", renderer=90.0)), [])
 
