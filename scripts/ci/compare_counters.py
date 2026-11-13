@@ -402,8 +402,8 @@ def verify_unit_population(expected_digest, population_file,
             "baseline was measured over, so the two counters are not "
             f"comparable:\n  baseline: {expected_digest}\n"
             f"  this run: {actual}\n  Re-derive the baseline "
-            "(see `basis` in it) if the suite's membership genuinely "
-            "changed. Note the two sides were not asked the same question."
+            "(the unit suite's with `scripts/ci/population_digest.py --write`, any other per `basis` in it) "
+            "if the membership genuinely changed. Note the two sides were not asked the same question."
         )
 
 
