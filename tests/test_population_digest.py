@@ -66,16 +66,20 @@ class PopulationDigestTest(unittest.TestCase):
 
     def test_write_replaces_only_the_unit_suite_digest(self):
         before = self.baseline.read_bytes()
-        os.chmod(self.baseline, 0o640)
         code, out, err = self.run_main("--write")
         self.assertEqual((code, out), (0, _digest(IDS) + "\n"))
         self.assertIn(f"{self.recorded} -> {_digest(IDS)}", err)
         self.assertEqual(self.baseline.read_bytes(), before.replace(
             self.recorded.encode(), _digest(IDS).encode()))
-        self.assertEqual(self.baseline.stat().st_mode & 0o777, 0o640)
         inode = self.baseline.stat().st_ino
         self.assertEqual(self.run_main("--write")[0], 0)
         self.assertEqual(self.baseline.stat().st_ino, inode)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission modes only")
+    def test_write_keeps_the_file_mode(self):
+        os.chmod(self.baseline, 0o700)
+        self.assertEqual(self.run_main("--write")[0], 0)
+        self.assertEqual(self.baseline.stat().st_mode & 0o777, 0o700)
 
     def test_a_failed_import_is_refused_by_name_and_writes_nothing(self):
         self.assertEqual(self.run_main("--write")[0], 0)
