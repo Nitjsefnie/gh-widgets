@@ -6,11 +6,11 @@
     "--omit=tests/*"
   ],
   "cell": "ubuntu-latest / 3.15",
-  "measured": 89.2,
+  "measured": 89.3,
   "floor": 86.7,
-  "measured_commit": "a01bb1b9adec38598dd5e8d8e85f572992e8d4cd",
-  "measured_at": "2026-11-12T17:33:44Z",
-  "statements": 6806,
-  "missing": 732,
-  "files": 31
+  "measured_commit": "aca48790615eff78f16fed2af036305a929cb28e",
+  "measured_at": "2026-11-13T03:35:41Z",
+  "statements": 6885,
+  "missing": 734,
+  "files": 32
 }
