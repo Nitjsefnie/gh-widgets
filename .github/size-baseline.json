@@ -3,7 +3,7 @@
   "baseline": {
     ".github/workflows/ratchet-push.yml": 502,
     ".github/workflows/release.yml": 524,
-    ".github/workflows/tests.yml": 1456,
+    ".github/workflows/tests.yml": 1455,
     "scripts/ci/aggregate_gate.py": 770,
     "scripts/ci/compare_counters.py": 991,
     "scripts/ci/counter.py": 781,
