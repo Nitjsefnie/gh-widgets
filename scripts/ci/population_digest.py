@@ -81,7 +81,6 @@ def rewrite(path: Path, digest: str) -> str:
     try:
         with os.fdopen(handle_fd, "wb") as handle:
             handle.write(candidate)
-        compare.read_baseline(Path(temp_name))
         os.chmod(temp_name, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(temp_name, path)
     finally:
@@ -104,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         digest = compare.counter.population_digest(collect(checkout))
         if args.write:
             old = rewrite(checkout / BASELINE, digest)
-            print(f"{BASELINE}: {old} -> {digest}", file=sys.stderr)
+            change = "unchanged" if old == digest else f"{old} ->"
+            print(f"{BASELINE}: {change} {digest}", file=sys.stderr)
     except (DigestError, compare.ComparisonError) as exc:
         print(f"population_digest: {exc}", file=sys.stderr)
         return 2

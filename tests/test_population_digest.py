@@ -7,6 +7,7 @@ import os
 import shutil
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests import _ghw_temp
 
@@ -66,14 +67,40 @@ class PopulationDigestTest(unittest.TestCase):
 
     def test_write_replaces_only_the_unit_suite_digest(self):
         before = self.baseline.read_bytes()
+        replaced = self.baseline.stat().st_ino
         code, out, err = self.run_main("--write")
         self.assertEqual((code, out), (0, _digest(IDS) + "\n"))
         self.assertIn(f"{self.recorded} -> {_digest(IDS)}", err)
         self.assertEqual(self.baseline.read_bytes(), before.replace(
             self.recorded.encode(), _digest(IDS).encode()))
         inode = self.baseline.stat().st_ino
-        self.assertEqual(self.run_main("--write")[0], 0)
+        self.assertNotEqual(inode, replaced)
+        code, _, err = self.run_main("--write")
+        self.assertEqual((code, err.split(": ", 1)[1]),
+                         (0, f"unchanged {_digest(IDS)}\n"))
         self.assertEqual(self.baseline.stat().st_ino, inode)
+
+    def test_a_failed_replace_leaves_no_temporary_file(self):
+        before = sorted(os.listdir(self.baseline.parent))
+        with mock.patch.object(population_digest.os, "replace",
+                               side_effect=OSError("replace refused")):
+            with self.assertRaisesRegex(OSError, "replace refused"):
+                self.run_main("--write")
+        self.assertEqual(sorted(os.listdir(self.baseline.parent)), before)
+
+    def test_a_missing_baseline_is_refused(self):
+        self.baseline.unlink()
+        code, out, err = self.run_main("--write")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("no baseline at", err)
+
+    def test_the_default_checkout_is_this_repository(self):
+        seen = []
+        with mock.patch.object(population_digest, "collect",
+                               side_effect=lambda c: seen.append(c) or IDS), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(population_digest.main([]), 0)
+        self.assertEqual(seen, [REPO_ROOT])
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission modes only")
     def test_write_keeps_the_file_mode(self):
@@ -84,12 +111,13 @@ class PopulationDigestTest(unittest.TestCase):
     def test_a_failed_import_is_refused_by_name_and_writes_nothing(self):
         self.assertEqual(self.run_main("--write")[0], 0)
         written = self.baseline.read_bytes()
-        (self.root / "tests" / "test_broken.py").write_text(
-            "import ghw_no_such_module\n", "utf-8")
+        for name in ("test_broken", "test_bust"):
+            (self.root / "tests" / f"{name}.py").write_text(
+                "import ghw_no_such_module\n", "utf-8")
         code, out, err = self.run_main("--write")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("failed to import", err)
-        self.assertIn(": tests.test_broken.", err)
+        self.assertIn(": tests.test_broken, tests.test_bust.", err)
         self.assertEqual(self.baseline.read_bytes(), written)
 
     def test_a_collection_failure_is_refused(self):
