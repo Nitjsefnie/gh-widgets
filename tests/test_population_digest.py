@@ -95,6 +95,8 @@ class PopulationDigestTest(unittest.TestCase):
         self.assertIn("no baseline at", err)
 
     def test_the_default_checkout_is_this_repository(self):
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.root)
         seen = []
         with mock.patch.object(population_digest, "collect",
                                side_effect=lambda c: seen.append(c) or IDS), \
