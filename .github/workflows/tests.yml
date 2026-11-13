@@ -502,8 +502,8 @@ jobs:
     #
     # The population digests DO describe this tree, and this job checks them
     # (`--population-file`): a commit that adds or removes a test re-derives
-    # the unit-suite digest (`compare_counters.py --print-population tests`)
-    # in the same change.
+    # the unit-suite digest in the same change, with
+    # `scripts/ci/population_digest.py --write`.
     #
     # The document's measured_commit is the REMOTE head the dispatches resolved
     # `--ref issue-81-82` against, which is not this branch's current head. That
@@ -670,9 +670,9 @@ jobs:
         # A collection pass, not a test run: discovery imports the test
         # modules and builds the suite without executing it. The comparator
         # digests these node ids and refuses if the population is not the
-        # one the baseline was measured over — a counter total over a
-        # different set of tests is not a regression, and it is not a pass
-        # either.
+        # one the baseline was measured over (a total over other tests is
+        # neither a regression nor a pass). A membership change re-derives it
+        # with `scripts/ci/population_digest.py --write`.
         working-directory: head
         run: |
           mkdir -p "$GH_WIDGETS_REPORTS"
