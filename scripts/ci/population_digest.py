@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
-"""Print, or rewrite, the unit-suite population digest of a checkout.
+"""Print the speed job's unit-suite population digest; --write records it.
 
-`gate/speed-baseline.json` pins `populations.unit-suite.population`: the
-digest the speed job takes over `compare_counters.py --print-population
-tests`. A change that adds or removes a unit test moves it in the same change,
-and this command re-derives it through that same collection and digest.
-
-`--print-population` exits 0 when a test module fails to import, listing
-`unittest.loader._FailedTest.<module>` in place of its tests. A digest over
-that listing describes a suite nobody runs, so any such id is a refusal
-(exit 2) that names the modules and writes nothing.
-
-    population_digest.py [--write] [CHECKOUT]
+`--print-population` exits 0 on a failed import, listing
+`unittest.loader._FailedTest.<module>`; any such id is refused (exit 2).
 """
 from __future__ import annotations
 
@@ -32,7 +23,6 @@ FAILED_IMPORT = "unittest.loader._FailedTest."
 
 
 def _load_comparator():
-    """Import compare_counters.py by path: scripts/ci is not a package."""
     path = HERE / "compare_counters.py"
     spec = importlib.util.spec_from_file_location("ghw_compare_digest", path)
     if spec is None or spec.loader is None:
@@ -46,12 +36,11 @@ compare = _load_comparator()
 
 
 class DigestError(RuntimeError):
-    """No digest this command is willing to print or write."""
+    pass
 
 
 def collect(checkout: Path) -> list:
-    # A child process, as the speed job runs it: discovery imports every
-    # test module, and this process must not keep the checkout's `tests`.
+    # A child, as in the speed job: this process must not import `tests`.
     result = subprocess.run(
         [sys.executable, str(HERE / "compare_counters.py"),
          "--print-population", str(checkout / "tests")],
@@ -72,7 +61,6 @@ def collect(checkout: Path) -> list:
 
 
 def rewrite(path: Path, digest: str) -> str:
-    """Replace the unit-suite digest in place; return the old one."""
     old = compare.read_population(compare.read_baseline(path),
                                   POPULATION)["population"]
     raw = path.read_bytes()
@@ -103,7 +91,7 @@ def rewrite(path: Path, digest: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description="Print the unit-suite population digest.")
     parser.add_argument("checkout", nargs="?", type=Path,
                         default=HERE.parent.parent,
                         help="the checkout to collect (default: this one)")
