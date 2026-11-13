@@ -5,7 +5,6 @@ import importlib.util
 import io
 import os
 import shutil
-import sys
 import unittest
 from pathlib import Path
 
@@ -118,11 +117,11 @@ class PopulationDigestTest(unittest.TestCase):
         renderer = population_digest.compare.read_population(
             population_digest.compare.read_baseline(RECORDED),
             "renderer-workloads")["population"]
-        escaped = "\\u%04x" % ord(self.recorded[0]) + self.recorded[1:]
+        escaped = f"\\u{ord(self.recorded[0]):04x}{self.recorded[1:]}"
         text = text.replace(self.recorded, escaped).replace(
             renderer, self.recorded)
         self.refuse_rewrite(text, "would change another value")
 
 
 if __name__ == "__main__":
-    sys.exit(unittest.main())
+    unittest.main()
