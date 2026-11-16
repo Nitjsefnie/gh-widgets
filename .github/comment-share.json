@@ -1,15 +1,15 @@
 {
   ".github/dependabot.yml": [
-    1353,
-    1857
+    1325,
+    1856
   ],
   ".github/workflows/audit.yml": [
     2402,
     4218
   ],
   ".github/workflows/claim.yml": [
-    1399,
-    1955
+    1387,
+    1943
   ],
   ".github/workflows/codeql.yml": [
     2049,
@@ -20,8 +20,8 @@
     8095
   ],
   ".github/workflows/coverage-ratchet.yml": [
-    4840,
-    8247
+    4814,
+    8221
   ],
   ".github/workflows/gitfame-pool-probe.yml": [
     1580,
@@ -64,8 +64,8 @@
     8889
   ],
   "scripts/bench/bench_platform.py": [
-    1408,
-    2121
+    1393,
+    2106
   ],
   "scripts/bench/e2e_bench.py": [
     3980,
@@ -116,12 +116,12 @@
     8396
   ],
   "scripts/ci/speed_workflow_steps.py": [
-    2664,
-    5671
+    2652,
+    5786
   ],
   "scripts/format.sh": [
-    321,
-    537
+    308,
+    524
   ],
   "scripts/install-hooks.sh": [
     85,
@@ -156,32 +156,32 @@
     13488
   ],
   "src/impact_loc.py": [
-    5483,
-    19549
+    5447,
+    19513
   ],
   "src/render-impact.py": [
     7208,
     20998
   ],
   "src/render-responsiveness.py": [
-    10574,
-    19536
+    10511,
+    19877
   ],
   "src/render.py": [
-    10487,
-    32076
+    10486,
+    33410
   ],
   "tests/__init__.py": [
     47,
     186
   ],
   "tests/test_baseline.py": [
-    5074,
-    30865
+    4712,
+    30617
   ],
   "tests/test_compare_counters.py": [
-    3030,
-    19107
+    2990,
+    19067
   ],
   "tests/test_counter.py": [
     9735,
@@ -192,8 +192,8 @@
     26724
   ],
   "tests/test_coverage_ratchet_ci.py": [
-    8492,
-    29777
+    8192,
+    28808
   ],
   "tests/test_impact.py": [
     5834,
@@ -228,8 +228,8 @@
     2490
   ],
   "tests/test_speed_workflow.py": [
-    13553,
-    51829
+    13364,
+    54307
   ],
   "tests/test_version.py": [
     2200,
