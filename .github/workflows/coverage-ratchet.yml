@@ -5,15 +5,15 @@ name: coverage-ratchet
 # whose floor keeps a fixed 1.5-point gap below that new measurement. Making
 # the automated floor equal measured would turn a 0.1-point dip red.
 # ratchet-push.yml lands only a strictly higher floor after this run succeeds.
-# The old hand-edited fail-under literal in tests.yml rotted until it was
-# deleted or ignored; this workflow keeps the comparison tied to committed data.
+# A hand-edited fail-under literal rots until it is deleted or ignored; this
+# workflow keeps the comparison tied to committed data.
 #
 # WHY THIS IS A SEPARATE WORKFLOW. tests.yml runs a matrix and a whole test
 # suite; this workflow measures the release branch on the same cell named by
 # the floor and stages a candidate artifact for the separate data-only push job.
 #
 # WHY IT IS A RELEASE GATE. release.yml's manifest lists this workflow, so a
-# release waits for it. The floor is committed DATA now, and a release must
+# release waits for it. The floor is committed DATA, and a release must
 # not ship a tree that is below its own committed floor — a coverage floor
 # that only guards the branch between pushes guards nothing about the artefact
 # people install. The other manifest gates say the same thing about their own
@@ -111,7 +111,7 @@ jobs:
         # number: the suite stays green while the three statements covering
         # impact_loc.check_git_fame()'s success path go unexecuted, moving the
         # reading 903 -> 906 missing and 83.2 -> 83.1 against an unchanged
-        # 5385-statement floor — the red of run 37203738774. A floor is only
+        # 5385-statement floor, which turns this job red. A floor is only
         # comparable within one program-environment, not just one interpreter
         # build; this step is what makes this job's program the one the floor
         # was measured over. GH_WIDGETS_REQUIRE_GIT_FAME on the Measure step

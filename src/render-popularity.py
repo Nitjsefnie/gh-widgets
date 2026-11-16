@@ -5,7 +5,7 @@ Every run clones each default branch and reads live traffic. REST reads go
 through a conditional-GET ETag store (GH_WIDGETS_REST_CACHE): an unchanged
 resource comes back 304 Not Modified and reuses the stored body, which
 GitHub does not charge against the primary rate limit. Without the store
-configured the render fetches everything, as before.
+configured the render fetches everything.
 """
 import argparse
 import http.client

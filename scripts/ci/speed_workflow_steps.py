@@ -1,9 +1,9 @@
 """Running a workflow step's `run:` body the way the job runs it.
 
-Speed.yml's defects on this branch were all one path resolved against the
-wrong root, and a text assertion cannot fail on any of them. So the controls
-that catch them have to EXECUTE a step: with the step's environment merged
-and its `working-directory` applied as the cwd, against a synthetic tree.
+A text assertion cannot fail on a path resolved against the wrong root, so
+the controls that catch that defect have to EXECUTE a step: with the step's
+environment merged and its `working-directory` applied as the cwd, against a
+synthetic tree.
 
 These helpers are shared by the two test modules that need that, and are not
 a test module themselves — `unittest discover` collects `test_*.py` only.
@@ -28,8 +28,7 @@ def shell_is_posix() -> bool:
     so a control that slices one out and executes it needs bash, and on
     Windows `bash` resolves to the WSL shim, which exits 1 having printed
     "Windows Subsystem for Linux has no installed distributions" in
-    UTF-16LE. Four Windows failures in a row were that message wearing a
-    costume.
+    UTF-16LE.
 
     Folding the two together would widen a guard that currently means one
     precise thing, and the control asserting `bench_is_runnable()` is TRUE

@@ -11,9 +11,9 @@ calendar, every authored PR, and every authored issue. GitHub now rejects the
 calendar query with `RESOURCE_LIMITS_EXCEEDED` on most runs, so the widgets
 survive on intermittent luck.
 
-Commit `5d66691` already split the calendar into its own request and added
-transient retries; the retries are exhausting. The calendar-only query alone now
-exceeds the node limit, so splitting further is not a fix.
+The calendar query already runs as its own request with transient retries;
+the retries are exhausting. The calendar-only query alone now exceeds the node
+limit, so splitting further is not a fix.
 
 ## Decision
 
@@ -61,15 +61,14 @@ values before this change.
 3. **`render.py` — `fetch()`.** Calendar via `contributionsCollection(from:, to:)`
    for the trailing 7 days, merged onto cached days keyed by date.
 
-3b. **`render.py` — cold-start backfill (amendment, 2026-07-21).** A cold cache
-   has no history to merge, so the run must fetch a full year — which is the
-   query that exceeds the node limit. Bootstrapping by luck is not acceptable,
-   and every `--resync` re-enters the cold state. **On a cold cache, fetch the
-   year in sequential `contributionsCollection(from:, to:)` monthly windows**
-   rather than one full-year request, and merge them into the day map. Each
-   window is far below the node limit, making bootstrap deterministic. The 7-day
-   warm path is unchanged. Surfaced by the implementer during the first dispatch;
-   the original spec omitted the bootstrap path entirely.
+3b. **`render.py` — cold-start backfill.** A cold cache has no history to merge,
+   so the run must fetch a full year — which is the query that exceeds the node
+   limit. Bootstrapping by luck is not acceptable, and every `--resync` re-enters
+   the cold state. **On a cold cache, fetch the year in sequential
+   `contributionsCollection(from:, to:)` monthly windows** rather than one
+   full-year request, and merge them into the day map. Each window is far below
+   the node limit, making bootstrap deterministic. The 7-day warm path is
+   unchanged.
 4. **`render.py` — `fetch_pull_requests()`.** Query `states:[OPEN, CLOSED]` live
    each run and union with the cached `MERGED` set. A PR entering `MERGED`
    appears in the live half until first seen merged, then moves to cache.
@@ -89,15 +88,14 @@ values before this change.
 - [ ] Invalid token → exits 0, renders from cache, card shows cache age
 - [ ] Calendar request covers 7 days; no `RESOURCE_LIMITS_EXCEEDED`
 - [ ] `install -m 755 render.py /usr/local/bin/render-gh-widgets.py`, then `diff`
-      the two (deploy is a copied file under a different name; they have drifted
-      silently before)
+      the two (deploy is a copied file under a different name, so they can drift silently)
 - [ ] Two consecutive scheduled runs green in `journalctl -u render-gh-widgets.service`
 
 ## Risks
 
 | Risk | Sev | Mitigation |
 |---|---|---|
-| Cold cache cannot bootstrap — the full-year calendar query is the failing one | HIGH | **Amended:** monthly windowed backfill on cold start (change 3b). Was unmitigated in v1 |
+| Cold cache cannot bootstrap — the full-year calendar query is the failing one | HIGH | Monthly windowed backfill on cold start (change 3b) |
 | `MERGED` not actually one-way (unverified — two doc pages failed to confirm) | MED | Weekly `--resync` bounds drift to 7 days; design does not depend on it |
 | Vanished-from-OPEN/CLOSED treated as merged; a deleted PR or repo-gone-private misclassifies | LOW | Weekly `--resync` rebuilds the set; same bound as the `MERGED` assumption |
 | Durability masks a permanently broken fetch | MED | Cache timestamp rendered on the card |

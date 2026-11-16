@@ -34,8 +34,8 @@ class TestSpeedSeeding(unittest.TestCase):
         self.fixture._write_reports(unit_wall=20, renderer_wall=0.085)
         self.fixture.baseline["schema"] = 5
         for name, population in self.fixture.baseline["populations"].items():
-            # Post-#269 shape: schema 5, no entries, seeds naming every id
-            # the first passing push will seed.
+            # Shape right after the instrument reset: schema 5, no entries,
+            # seeds naming every id the first passing push will seed.
             population["metric"] = "cpu_time"
             population["seeds"] = sorted(population["entries"])
             population["entries"] = {}

@@ -6,9 +6,9 @@
 A clone or blame failure caches an `{"error", head}` entry. That entry
 carries no `ours`/`total`, so it contributes no row to the card, and if
 `update_loc` also SKIPS it at an unchanged head the repo stays frozen out
-until its HEAD moves or the weekly --resync re-blamed everything. These
-tests pin the skip to a real count, and the behaviour the fix must not
-break while doing so.
+until its HEAD moves or the weekly --resync re-blames everything. These
+tests pin the skip to a real count, and the behaviour that must keep
+working alongside it.
 """
 import importlib.util
 import os

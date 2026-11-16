@@ -77,12 +77,12 @@ class TestDiffCoverageCli(unittest.TestCase):
         coverage.py's no-disk data still opens a shared-cache sqlite
         connection, and `SqliteDb.close(force=False)` deliberately
         leaves no-disk connections open; an analyzer abandoned without
-        `CoverageData.close(force=True)` leaked one unclosed connection
-        per run, printed as a ResourceWarning at interpreter shutdown
-        (issue 147). Registry emptiness is only a proxy —
-        `close(force=False)` empties `_dbs` too while keeping the
-        connection usable — so the control retains the database objects
-        before cleanup and asserts the underlying connection closed.
+        `CoverageData.close(force=True)` keeps one connection unclosed,
+        printed as a ResourceWarning at interpreter shutdown. Registry
+        emptiness is only a proxy — `close(force=False)` empties `_dbs` too
+        while keeping the connection usable — so the control retains the
+        database objects before cleanup and asserts the underlying connection
+        closed.
         """
         created = []
         retained = []

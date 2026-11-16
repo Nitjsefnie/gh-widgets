@@ -43,7 +43,7 @@ GH_EXTRA_* vars can only ADD to the derived sets — an override would let a
 stale value silently reintroduce the drift that derivation removes. Line
 ownership is an EXACT match against the account's noreply addresses: in a
 third-party repo the commit-author email is attacker-controllable, so a
-substring test there was wrong in kind.
+substring test there would be wrong in kind.
 
   --resync    discard the cache and refetch/re-blame everything (wired to run
               weekly, so no correctness claim rests permanently on MERGED
@@ -301,8 +301,8 @@ _LOC_MODULE = _load_loc_module()
 _LOC_MODULE.configure(common)
 
 # Compatibility exports: the public renderer module keeps the live-code names
-# at their original import path. The small wrappers pass the entry-point
-# aliases through so existing tests and callers can patch them as before.
+# importable from it. The small wrappers pass the entry-point aliases through
+# so tests and callers can patch them.
 DEBUG_TIMING = _LOC_MODULE.DEBUG_TIMING
 _TIMINGS = getattr(_LOC_MODULE, "_TIMINGS")
 _PHASES = getattr(_LOC_MODULE, "_PHASES")
@@ -310,8 +310,8 @@ _T0 = getattr(_LOC_MODULE, "_T0")
 BLAME_METHOD = _LOC_MODULE.BLAME_METHOD
 _DISAGREEMENTS = getattr(_LOC_MODULE, "_DISAGREEMENTS")
 
-# Keep the incidental module exports that existed before the split as well;
-# callers should not need to know which implementation module owns them.
+# Keep the incidental module exports as well; callers should not need to
+# know which implementation module owns them.
 contextlib = _LOC_MODULE.contextlib
 shutil = _LOC_MODULE.shutil
 subprocess = _LOC_MODULE.subprocess
@@ -664,9 +664,8 @@ def write_card(C, out, prs, issues, totals, ourloc, insiders, stale,
 def print_summary(out, rows, fallback):
     """The run's one-line summary: what was rendered, and from where.
 
-    `rows` is write_card's (pr_rows, issue_rows, loc_rows). Split out of main()
-    so the orchestration function holds the run's data rather than the run's
-    wording.
+    `rows` is write_card's (pr_rows, issue_rows, loc_rows). The wording lives
+    here, so main() holds the run's data rather than its wording.
     """
     if fallback:
         print(f"fetch failed at {fallback.phase}: {fallback.message}; rendered "
@@ -683,8 +682,8 @@ def print_summary(out, rows, fallback):
 def main():
     args, token = parse_args()
     count_bot_prs()
-    # Say which method ran, every run. The git-fame guard line was the health
-    # check while git-fame did the counting; under `targeted` it never runs,
+    # Say which method ran, every run. The git-fame guard line is the health
+    # check while git-fame does the counting; under `targeted` it never runs,
     # so its absence has to mean "not used" rather than "guard broken".
     print(f"blame-method: {BLAME_METHOD}", flush=True)
     if BLAME_METHOD in ("fame", "both"):
@@ -710,7 +709,7 @@ def main():
             raise
         # fetch_all is six acquisitions; the label the failing one left
         # behind names it. `fetch_all` itself is the honest name when the
-        # failure came from outside all six (issue #55).
+        # failure came from outside all six.
         fallback = common.CacheFallback(
             cache["fetched_at"], common.take_last_acquisition() or "fetch_all", exc)
         prs = list(cache["prs"].values())

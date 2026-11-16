@@ -18,9 +18,8 @@ name: targeted-blame-audit
 # GitHub disk usage, and each audit job blames one shard
 # (GH_WIDGETS_IMPACT_SHARD), so the shards run in parallel.
 #
-# This is the correctness half of what used to live inside
-# gitfame-resync-memory.yml, whose name described only its other half. That
-# workflow is now dispatch-only measurement.
+# This workflow is the correctness check; gitfame-resync-memory.yml is
+# dispatch-only measurement.
 #
 # Read-only: it renders into a temporary directory, publishes nothing, and
 # touches only public GitHub data.

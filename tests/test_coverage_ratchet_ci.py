@@ -26,12 +26,12 @@ substitutions are OUT OF SCOPE.
 
 
 WHY IT IS A SEPARATE MODULE, and why not to merge it back. `test_ci_workflows.py`
-holds the invariants that predate this file and was already the largest module in
-the suite; this is a different workflow with a different trust question, and it
-grew on top of an unrelated ceiling until the two were one file and that file was
-over the limit. The split is by SURFACE, not by convenience: `test_ci_workflows.py`
-keeps what was always there, and everything about this one workflow is here.
-Merging them back re-creates the same problem at the next addition.
+holds the other invariants and is already the largest module in the suite; this
+is a different workflow with a different trust question, and the two together
+would put one file over the size limit. The split is by SURFACE, not by
+convenience: `test_ci_workflows.py` keeps its own invariants, and everything
+about this one workflow is here. Merging them back puts one file over the
+size limit again.
 
 
 Stdlib unittest, matching the rest of this repo's suite.
@@ -499,8 +499,8 @@ def _assert_no_step_gh_words(text):
 class TestTheWorkflowReader(unittest.TestCase):
     """The reader itself, on the shapes it is known to reshape.
 
-    Each case below exists because the thing it pins was a demonstrated false
-    green in this file, not because the reader is interesting.
+    Each case below exists because the shape it pins has been shown to
+    produce a false green in this file, not because the reader is interesting.
     """
 
     def test_a_line_continued_command_normalises_to_single_spaces(self):
@@ -920,9 +920,8 @@ class TestCoverageGateInvokesTheRatchet(unittest.TestCase):
             "--coverage-json coverage.json")
 
     def test_no_fail_under_literal_is_left_anywhere(self):
-        # The hand-edited literal is what this replaced. An unused second
-        # floor left in the file is worse than none: it reads like the gate
-        # and raises nothing, and the flag literal cannot be prose.
+        # An unused second floor left in the file is worse than none: it reads
+        # like the gate and raises nothing, and the flag literal cannot be prose.
         self.assertNotIn("--fail-under", self.text)
 
     def test_the_measured_population_keeps_scripts_in_it(self):

@@ -227,9 +227,8 @@ class OurEmails(unittest.TestCase):
             self.assertIn("x@y.z", common.our_emails("Octocat", 1))
 
     def test_lookalike_address_is_NOT_ours(self):
-        # The bug this replaced: a substring test counted any address
-        # containing the login. Commit-author email is attacker-controllable
-        # in a third-party repo, so this must be an exact match.
+        # Commit-author email is attacker-controllable in a third-party repo, so
+        # the match must be exact.
         e = common.our_emails("Octocat", 12345, extra=[])
         self.assertNotIn("octocat-fan@evil.example", e)
         self.assertNotIn("notoctocat@users.noreply.github.com", e)
@@ -446,8 +445,8 @@ class FetchPullRequests(unittest.TestCase):
         return _gql
 
     def test_warm_cache_discovers_pr_seen_only_in_merged_sweep(self):
-        # Issue #3: a PR opened and merged between two renders never enters
-        # the [OPEN, CLOSED] live set, so without the sweep it is lost.
+        # A PR opened and merged between two renders never enters the
+        # [OPEN, CLOSED] live set, so without the sweep it is lost.
         sweep_only = {"id": "PR_sweep", "merged": True,
                       **repo("stranger", "blazedb")}
         g = self.fake_gql(live_nodes=[], merged_nodes=[sweep_only])
@@ -603,7 +602,7 @@ class FetchPullRequests(unittest.TestCase):
         self.assertIn("same", str(raised.exception))
 
     def test_unresolved_node_warm_run_keeps_cached_state(self):
-        """A null node must not mark the missing cached PR merged (#243).
+        """A null node must not mark the missing cached PR merged.
 
         The cached CLOSED, unmerged PR is absent from the live set exactly
         because its node is the one GitHub answered null; its absence is not
@@ -633,7 +632,7 @@ class FetchPullRequests(unittest.TestCase):
             "both fetch calls must tolerate node-confined errors")
 
     def test_unresolved_node_cold_run_returns_resolved_nodes(self):
-        """A null node on a cold rebuild is dropped, not fatal (#243)."""
+        """A null node on a cold rebuild is dropped, not fatal."""
         g = self.fake_gql(
             live_nodes=[{"id": "PR_a", "merged": False, **repo("me")},
                         None,
@@ -650,7 +649,7 @@ class FetchPullRequests(unittest.TestCase):
 
         The cached entry is an incomplete merge, so repair_ids fires and the
         run recurses with cached_prs=None; that inner page also carries the
-        null node (#243).
+        null node.
         """
         cached = {
             "PR_unreadable": {
@@ -669,7 +668,7 @@ class FetchPullRequests(unittest.TestCase):
                          "the warm half sweeps once; the cold repair does not")
 
     def test_unresolved_sweep_node_keeps_cached_state(self):
-        """A null node in the MERGED sweep raises the same skip (#243).
+        """A null node in the MERGED sweep raises the same skip.
 
         The cached CLOSED, unmerged PR is confirmed by nothing this run, so
         the sweep's unreadable node must not let the absence inference run.
@@ -698,7 +697,7 @@ class FetchPullRequests(unittest.TestCase):
 
 
 class GqlPartialResponse(unittest.TestCase):
-    """gql accepts a partial response only under ``allow_errors_in`` (#243).
+    """gql accepts a partial response only under ``allow_errors_in``.
 
     The default ``None`` keeps the strict behavior: any ``errors`` key
     raises, which is what protects render-impact's plain-gql BOT_PR walk
@@ -812,7 +811,7 @@ class EnvKnobs(unittest.TestCase):
         with mock.patch.dict(os.environ, {"X": " a , ,b,"}):
             self.assertEqual(common.env_list("X"), ["a", "b"])
 
-    # The prefixed name is the interface; the bare name is the pre-#217
+    # The prefixed name is the interface; the bare name is the unprefixed
     # spelling every test below keeps working. Callers pass the prefixed name.
     def test_prefixed_name_is_read(self):
         with mock.patch.dict(os.environ, {"GH_WIDGETS_THEME": "dark"}):
@@ -1052,7 +1051,7 @@ class FetchIssues(unittest.TestCase):
     def test_repages_every_run_rather_than_caching(self):
         # The docstring says issues are re-paged each run because they can be
         # REOPENED — there is no cached_* parameter and no module state that
-        # lets a second run skip the fetch. Nothing checked that until now.
+        # lets a second run skip the fetch.
         page = [{"pageInfo": {"hasNextPage": False, "endCursor": None},
                  "nodes": [{"id": "I_1"}]}]
         g = self.paged_gql(page)

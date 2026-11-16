@@ -6,14 +6,12 @@ Not assertions about the workflow's TEXT: each control runs a step's `run:`
 body the way the job runs it — merged environment, `working-directory` as cwd
 — against a synthetic tree whose only repository is at `head/`.
 
-That distinction is not pedantry. Three defects in this branch were all one
-path resolved against the wrong root, and all three shipped because a text
-assertion cannot fail on them: the unit suite measured 0.05 CPU seconds
-because discovery ran one level above the checkout; the ratchet step could
-not execute for the same reason; and `--baseline` named a
-repository-relative file that a workspace-rooted step resolved against the
-workspace, so four dispatch runs reported success while a baseline sat
-unread in the tree. Each of those is now a test that EXECUTES the step.
+That distinction is not pedantry: a path resolved against the wrong root is a
+defect a text assertion cannot fail on — unit-suite discovery run one level
+above the checkout, a ratchet step that cannot execute for the same reason, a
+repository-relative `--baseline` that a workspace-rooted step resolves against
+the workspace and leaves unread while the run reports success. Each control
+EXECUTES its step.
 """
 # Executed-step controls and guard tripwires cohere here; precedent: test_release_workflow.py.
 import contextlib
@@ -41,15 +39,13 @@ STEP_EXEC_SENTINEL = "GHW_SPEED_UNIT_STEP_EXEC_ACTIVE"
 def _arm_step_exec_env(env):
     """Arm the measured suite environment and refuse recursive step-exec.
 
-    Before 2298013, the fixture copied the full repository into ``head/``.
-    Its inner ``unittest discover`` then ran the real suite, including this
-    module's step-exec test, which built another checkout and recursively
-    launched the suite. 2298013 closed that route as a side effect of a cost
-    fix; this guard keeps re-entry loud if the fixture grows back into a full
-    copy. It is separate from ``REQUIRES_BENCH``: that decorator is a platform
-    guard for the CPU measurement facility, while this prevents recursive
-    test execution. The refusal unit tripwire below checks the re-entry
-    predicate directly.
+    A fixture that copied the full repository into ``head/`` would run its inner
+    ``unittest discover`` over the real suite, including this module's step-exec
+    test, which builds another checkout and recursively launches the suite. This
+    guard keeps re-entry loud if the fixture ever becomes a full copy. It is
+    separate from ``REQUIRES_BENCH``: that decorator is a platform guard for the
+    CPU measurement facility, while this prevents recursive test execution. The
+    refusal unit tripwire below checks the re-entry predicate directly.
     """
     if STEP_EXEC_SENTINEL in os.environ:
         raise AssertionError(
@@ -187,8 +183,8 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         """Two rounds of both report families, as the speed job produces them.
 
         `omit_renderer` drops one workload from the renderer reports, which is
-        the shape issue #36 is about: a gate that keeps measuring one fewer
-        shipped renderer and still reports a pass.
+        the shape the renderer gate must catch: a gate that keeps measuring one
+        fewer shipped renderer and still reports a pass.
         """
         counts = workload_counter or {}
         cases = [(name, counts.get(name, value))
@@ -301,8 +297,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
             },
         }
         # Inside the checkout, which is where the job's convention puts every
-        # repository file. It used to be written one level up, beside `head/`,
-        # which is exactly the mistake the workflow just made.
+        # repository file.
         (root / "head" / "gate/speed-baseline.json").write_text(
             json.dumps(document, indent=2), encoding="utf-8")
         return document
@@ -524,13 +519,12 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
                          lowered.stdout + lowered.stderr)
 
     def test_the_baseline_ratchet_honours_a_declared_raise(self):
-        # The green route for a documented re-derivation (issue #133): the
-        # suite grew past its recorded envelope, so every observation of
-        # the new program lands above the old maximum and the strict
-        # down-only rule refused the very change the baseline's HOW TO
-        # RE-DERIVE prescribes. A raise is allowed only when declared per
-        # slot; the declaration is checked against the documents, not
-        # trusted.
+        # The green route for a documented re-derivation: when the suite grows
+        # past its recorded envelope, every observation of the new program
+        # lands above the old maximum, and a strict down-only rule would refuse
+        # the very change the baseline's HOW TO RE-DERIVE prescribes. A raise
+        # is allowed only when declared per slot; the declaration is checked
+        # against the documents, not trusted.
         root = self._temp_root("ghw-speed-raise-")
         self._write_tree(root, baseline=True)
         comparator = root / "head" / "scripts" / "ci" / "compare_counters.py"
@@ -678,15 +672,14 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
         shape can hold: the scripts the step invokes and one trivial test
         module. What this control is about is WHERE the step writes, and the
         size of the population does not bear on that. Running the whole suite
-        here instead would have made the control the most expensive thing in
-        the suite, on a box where a leaked run can outlive its own test.
-        Before 2298013 this fixture copied the full repository, so the
-        measured inner discover ran the real suite including this module's
-        step-exec test, which built another checkout and recursively ran the
-        suite. 2298013 closed that route as a side effect of a cost fix. The
-        population pin below catches a test module leaking back into `head/`;
-        the environment re-entry guard is separate from `REQUIRES_BENCH`,
-        which only guards whether the platform supports CPU measurement.
+        here instead would make the control the most expensive thing in the
+        suite, on a box where a leaked run can outlive its own test. A full
+        copy of the repository would make the measured inner discover run the
+        real suite, including this module's step-exec test, which builds
+        another checkout and recursively runs the suite. The population pin
+        below catches a test module leaking into `head/`; the environment
+        re-entry guard is separate from `REQUIRES_BENCH`, which only guards
+        whether the platform supports CPU measurement.
         """
         head = root / "head"
         head.mkdir(parents=True, exist_ok=True)
@@ -747,14 +740,12 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_every_repository_step_declares_the_working_directory(self):
         """Every repository-touching step, checked by NAME.
 
-        Four defects on this branch were a path resolved against the wrong
-        root, and this control is the one that has to catch the next. An
-        earlier version classified steps by the literal substring
-        ``python3 scripts/``, which a reviewer's mutation defeated: removing a
-        step's `working-directory` AND rewriting its invocation as
-        `python3 ./scripts/...` left it green, because the substring no longer
-        matched and the count floor still held. A predicate that can be
-        defeated by rewriting the invocation is not a predicate.
+        A path resolved against the wrong root is the defect class this control
+        exists to catch. A predicate that can be defeated by rewriting the
+        invocation is not a predicate: a substring match on ``python3 scripts/``
+        stays green when a step drops its `working-directory` and rewrites its
+        invocation as `python3 ./scripts/...`, because the substring stops
+        matching and the count floor still holds.
 
         So the SET is compared against a named list, and the list is checked
         for completeness: a step that stops running, or starts running without
@@ -842,12 +833,11 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_the_unit_suite_step_WRITES_where_the_next_step_READS(self):
         """The step executed, and its output proved to land where it must.
 
-        The push that introduced the path convention failed here: the step
-        declared the convention's `working-directory` on five steps and left
-        it off the sixth, so discovery ran one level above the checkout, found
-        no tests, and the counter measured interpreter startup. Text could not
-        have caught it — only running the step and finding its JUnit where the
-        next step looks for it.
+        A step list that declares the convention's `working-directory` on five
+        steps and leaves it off the sixth runs discovery one level above the
+        checkout, finds no tests, and the counter measures interpreter startup.
+        Text cannot catch that — only running the step and finding its JUnit
+        where the next step looks for it.
         """
         root = self._temp_root("ghw-speed-unit-step-exec-")
         self._small_checkout(root)
@@ -953,11 +943,10 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     @REQUIRES_BENCH
     def test_a_missing_baseline_with_a_failed_suite_is_still_clean(self):
-        """The combination that produced the original traceback.
+        """No baseline AND a suite that did not pass.
 
-        No baseline AND a suite that did not pass. `_no_baseline` reads the
-        head reports to know what it measured, and that read can fail in its
-        own right — which is what used to escape as a traceback and land on
+        `_no_baseline` reads the head reports to know what it measured, and that
+        read can fail in its own right; escaping as a traceback would land on
         exit 1 by accident. It is a problem with the HEAD, so it reports as
         one: exit 2 with the reason.
         """
@@ -1014,9 +1003,9 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
     def test_workload_listing_that_fails_stops_the_compare_step(self):
         """A producer that dies must not silently empty the required list.
 
-        bash -e cannot see a process substitution's exit status, so a broken
-        listing used to leave no --require-test at all — which is issue 36's
-        own false green, reached through a different door.
+        bash -e cannot see a process substitution's exit status, so an unguarded
+        broken listing would leave no --require-test at all, and the run would
+        report green.
         """
         root = self._run_with_tree("ghw-speed-compare-broken-listing-")
         self._edit_harness(root, 'if "--list-workloads" in argv:',
@@ -1087,7 +1076,7 @@ class TestSpeedWorkflowRendererGate(unittest.TestCase):
 
     @REQUIRES_BENCH
     def test_missing_renderer_workload_fails_the_compare_step(self):
-        """Issue #36: a shipped renderer that stops being measured is red."""
+        """A shipped renderer that stops being measured is red."""
         root = self._run_with_tree("ghw-speed-compare-missing-renderer-",
                                    omit_renderer="bench.render-impact")
         completed, summary = self._execute_compare(root)

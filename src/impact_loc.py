@@ -164,10 +164,9 @@ _T0 = time.monotonic()
 def timed_phase(name):
     """Attribute a non-blame phase.
 
-    Everything outside the blame pass used to land in one unattributed
-    remainder -- a stable ~36s of a ~600s run, which is too big to leave
-    unnamed: an unmeasured phase cannot be optimised and cannot be shown to be
-    irrelevant either.
+    Everything outside the blame pass is a stable ~36s of a ~600s run,
+    which is too big to leave unnamed: an unmeasured phase cannot be
+    optimised and cannot be shown to be irrelevant either.
     """
     if not DEBUG_TIMING:
         yield

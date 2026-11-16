@@ -243,11 +243,11 @@ class TestScratchLifecycle(unittest.TestCase):
     def make_paused_clone_renderer(self):
         """Build a renderer with a release-gated, deadline-bounded clone.
 
-        An interrupted run on 2026-10-01 left its fake git shim sleeping for
-        about 27 hours after the worktree seat ended, so its test-finally
-        cleanup died with the seat. The 600-second shim deadline is the
-        last-resort defense when the harness itself is SIGKILLed; in-process
-        cleanup cannot run in that case.
+        An interrupted run can leave its fake git shim sleeping long after
+        the harness is gone, beyond the reach of its test-finally cleanup.
+        The 600-second shim deadline is the last-resort defense when the
+        harness itself is SIGKILLed; in-process cleanup cannot run in that
+        case.
         """
         paths = {
             "scratch_root": self.tmp / "scratch",

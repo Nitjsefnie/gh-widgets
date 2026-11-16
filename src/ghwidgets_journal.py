@@ -20,9 +20,8 @@ class CacheFallback(namedtuple("CacheFallback", "fetched_at phase error")):
     """A run drawing from cache because an acquisition failed.
 
     Every renderer's fallback prints one line, and that line is all an
-    operator has to go on. It used to name neither the phase nor the cause
-    (issue #55): three different failures with three different causes printed
-    byte-identical output.
+    operator has to go on, so it names both the phase and the cause:
+    without them, different failures print byte-identical output.
 
     ``fetched_at`` is the cache timestamp the cards are drawn from and are
     stamped with; ``phase`` names the acquisition function that raised, the

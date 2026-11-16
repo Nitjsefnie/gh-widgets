@@ -380,7 +380,7 @@ class TestHarness(unittest.TestCase):
                             for case in cases.values()))
         self.assertTrue(all(case.find("failure") is None
                             for case in cases.values()))
-        # `time` is the COUNTER now, not a duration, so what is pinned is
+        # `time` is a counter, not a duration, so what is pinned is
         # that it is present and numeric — and that the suite says which
         # instrument it is. Its magnitude is not a test-harness property.
         self.assertTrue(all(_number(case, "time") > 0
@@ -529,9 +529,8 @@ class TestHarness(unittest.TestCase):
     def test_missing_renderer_fails_on_the_head_side(self):
         """A shipped renderer that is not in the head checkout is a failure.
 
-        It used to be a skip, and a skip is dropped from the comparator's
-        intersection — so the speed gate went on measuring one fewer program
-        and reported the result as a pass (issue #36).
+        A skip is dropped from the comparator's intersection, which would let
+        the speed gate go on measuring one fewer program and report a pass.
         """
         self.write_stubs()
         old_checkout = self.root / "old-checkout"
@@ -563,9 +562,8 @@ class TestHarness(unittest.TestCase):
         self.assertIn("render-impact.py is missing from the head checkout",
                       result.stderr)
         # The status line carries the counter and the instrument that
-        # measured it. The `s` that used to sit there is gone: the number is
-        # not seconds, and printing a counter with a seconds suffix is the
-        # exact confusion this change exists to remove.
+        # measured it. The number is not seconds, so printing it with a
+        # seconds suffix is the exact confusion to avoid.
         self.assertIn("bench.render-impact (head round 1): 0.000 unmeasured "
                       "failed", result.stdout)
 

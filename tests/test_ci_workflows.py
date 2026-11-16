@@ -215,8 +215,8 @@ class TestCoverageRatchetCellParity(unittest.TestCase):
     skip when the tool is absent and GH_WIDGETS_REQUIRE_GIT_FAME is unset —
     a green suite whose three check_git_fame() success-path statements go
     unexecuted, moving the reading 903 -> 906 missing and 83.2 -> 83.1
-    against an unchanged 5385-statement floor. That reading is what made
-    run 37203738774 red on main, not a real coverage change on the tree.
+    against an unchanged 5385-statement floor. That reading turns the
+    ratchet red with no real coverage change on the tree.
     """
 
     @REQUIRES_POSIX_SHELL
@@ -1384,7 +1384,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         Built here rather than read from the committed baseline: the gate
         must keep its verdict for ANY population shape it accepts, and the
         committed record legitimately carries empty `entries` while its
-        seeds await the first post-merge measurement (issue #269).
+        seeds await the first post-merge measurement.
         """
         population = {"metric": "cpu_time_ratio", "tolerance": 0.45,
                       "population": "a" * 64,
@@ -1449,8 +1449,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
         Every case must refuse, naming why. The first one rewrites the
         recorded side too — with no seeds list anywhere, the same addition
-        is refused exactly as before seeds existed, which is the property
-        that keeps the allowance closed for everything it does not name.
+        is refused, which is the property that keeps the allowance closed
+        for everything it does not name.
         """
         no_seeds = json.loads(json.dumps(recorded))
         no_seeds["populations"]["unit-suite"].pop("seeds")
@@ -1508,7 +1508,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
     def test_inline_speed_validator_judges_seeds_and_their_loopholes(self):
         """A seed lands only seed-declared, seed-shaped, entries-only.
 
-        Issue #269's post-merge state: main records no entries and the first
+        The post-merge state: main records no entries and the first
         measurement seeds them. The validator must accept exactly the seeded
         artifact and refuse every route around the shape — an undeclared
         addition, a non-degenerate range, a wall addition, a changed or

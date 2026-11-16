@@ -2,10 +2,10 @@
 """
 gh-widgets — code shared by render.py and render-impact.py.
 
-This module exists because the two renderers were carrying byte-identical
-code (theme table, GraphQL client, PR/issue paging, cache helpers, SVG chrome)
-that drifted independently. It also owns the identity model both scripts need:
-who counts as an insider, and which commit-author addresses count as ours.
+This module holds the code both renderers share (theme table, GraphQL
+client, PR/issue paging, cache helpers, SVG chrome), so the two cannot drift
+apart. It also owns the identity model both scripts need: who counts as an
+insider, and which commit-author addresses count as ours.
 
 Identity is DERIVED, not configured. `fetch_identity` asks the API who the
 token's account is and which orgs it administers; the environment can only ADD
@@ -744,7 +744,7 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages: Optional[int] 
 
     The live set alone permanently misses a PR that is opened AND merged
     between two renders: it never appears in [OPEN, CLOSED], so nothing ever
-    discovers it (issue #3). A warm run therefore also fetches ONE page of
+    discovers it. A warm run therefore also fetches ONE page of
     the most recent MERGED PRs and unions it into the same keyed map. The
     sweep is deliberately a single page, never paginated: PR_QUERY orders by
     CREATED_AT DESC, so 100 PRs covers everything authored since the last
@@ -899,7 +899,7 @@ def render_score_table(C, y, rows, columns, *, score_label, accent, empty, top_n
     """Draw the family's headers, supporting cells and ten-point score bars.
 
     Columns are (x, heading, color); TableRow.values are display text.
-    Cells pass through xml_escape: the legacy responsiveness "<1 min" label
+    Cells pass through xml_escape: the responsiveness "<1 min" label
     lands as "&lt;1 min", still readable as "under 1 min" in the rendered card.
     Relative scores anchor to every input row, before the optional top-N cut.
     Already-scaled scores retain their exact value for display.

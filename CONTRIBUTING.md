@@ -9,7 +9,7 @@ response" is the most valuable thing you can send.
 
 You may use an LLM or a coding agent to write your contribution. There is
 no penalty, no separate review queue, and no expectation that you rewrite
-its output by hand. Much of this repo was built that way.
+its output by hand. Much of this repo is written that way.
 
 Two conditions, and they are about honesty rather than provenance:
 
@@ -45,8 +45,8 @@ was. That is fine in both directions.
   and whose lines count as ours, come from the token's own account via
   `fetch_identity`. `GH_WIDGETS_GH_EXTRA_INSIDERS` / `GH_WIDGETS_GH_EXTRA_EMAILS` may only *add*
   to that set. A patch that lets configuration *replace* the fetched set
-  will be declined: it reintroduces the staleness this design removed, just
-  in a new location.
+  will be declined: a configured set goes stale, the failure deriving the
+  identity avoids.
 - **Ownership matching is exact.** Commit-author email in a third-party repo
   is attacker-controllable, so it is matched by exact set membership. Do not
   reintroduce a substring, prefix, or regex test.
@@ -99,14 +99,12 @@ the test or its `setUp`/`tearDown` is named by its unittest id; a later one
 120 in the `unittest` and `speed` jobs; unset, it is off.
 
 **`unittest discover` is the runner and stays the runner**, and pytest has
-nothing left to do here. It was the `speed` job in `tests.yml`, collecting
-these same TestCases and emitting `--junitxml`, which stdlib unittest cannot;
-that job now counts deterministic statement counts with `scripts/ci/counter.py`
-and writes its own JUnit. It was also imported by `tests/test_compare_counters.py`, which
-`unittest discover` had to be able to import in order to collect the suite;
-that file is now stdlib unittest like everything else. `requirements/test.txt`
-still pins it for optional local `pytest` runs. CI installs that toolchain in
-the `unittest` and `speed` jobs but continues to use `unittest` rather than
+nothing left to do here. The `speed` job in `tests.yml` counts deterministic
+statement counts with `scripts/ci/counter.py` and writes its own JUnit, since
+stdlib unittest cannot emit `--junitxml`. Every test file is stdlib unittest,
+so `unittest discover` imports the whole suite.
+`requirements/test.txt` still pins pytest for optional local `pytest` runs. CI installs that toolchain in
+the `unittest` and `speed` jobs but uses `unittest` rather than
 invoking pytest. Do not write a test against pytest fixtures or
 `assert`-rewriting — it would run in CI and then not run for anyone using
 the documented command.
@@ -161,7 +159,7 @@ an observed **range** per entry rather than a single number, because the
 raw CPU fallback path is not deterministic and a budget wide enough to cover
 its spread would be a gate that cannot fire.
 The aggregate job in `tests.yml` reports on every pull request and push to
-`main`, regardless of changed paths (issue #89); branch protection requires
+`main`, regardless of changed paths; branch protection requires
 it instead of the path-filtered gates. The `changes` job decides which gates
 apply to each change, and the aggregate also folds two cross-workflow
 verdicts waited for on the head SHA: the `gitleaks` job of `secrets.yml` and
@@ -242,7 +240,7 @@ is the only instruction here that has no local substitute.
 `pip install -r requirements/dev.txt -r requirements/test.txt` gets the
 pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
-workflows, so leaving them out reported coverage for a smaller program than
+workflows, so leaving them out would report coverage for a smaller program than
 the one that ships. The floor lives in `gate/coverage-floor.json` as committed data.
 The recorded `measured` is the last measurement that raised or re-derived the
 record. `raise` writes only when a new measurement beats recorded `measured`
@@ -282,7 +280,7 @@ schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
 has both *reported* and passed; a gate that never reports stops the release
 rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
-measurement workflows that were already here.
+measurement workflows.
 
 A successful main `tests` run also stages any entry or wall maximum that its
 measured value strictly beats, and `ratchet-push.yml` validates and commits
@@ -310,7 +308,7 @@ number is never raised and no entry is ever added by hand: growth is answered
 by relocating code into a new file, or by shrinking the file. The records file
 itself is never measured. The size gate supersedes pylint's `too-many-lines`
 (C0302), which is disabled in `.pylintrc` — a module-length question is a
-records question now, not a flat 1000-line cap.
+records question, not a flat 1000-line cap.
 The reported check name is the job key `size-baseline`, which the required
 `aggregate` check folds the same way it folds the `gitleaks` job.
 

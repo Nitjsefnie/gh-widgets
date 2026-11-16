@@ -32,7 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _set_raw_parts(report: Path, raw="8", calibration="2") -> None:
-    """Set the net-folding raw parts on the case, as the #240 producers did."""
+    """Set the net-folding raw parts on the case, the attributes the slope comparison reads."""
     tree = ET.parse(report)
     case = next(tree.iter("testcase"), None)
     assert case is not None
@@ -374,8 +374,8 @@ class TestComparator(unittest.TestCase):
                     self.assertIn(str(path), errors.getvalue())
 
 
-# The closed-population gate (issue #36): permissive mode is what this tool
-# has always done and several of the tests above pin it. These pin the other
+# The closed-population gate: permissive mode is this tool's default
+# behaviour and several of the tests above pin it. These pin the other
 # mode, where the population is declared, so measuring fewer things than
 # declared is a failure rather than a quiet, green, one-program-shorter
 # comparison.
@@ -420,7 +420,7 @@ class TestVerifyPopulation(unittest.TestCase):
         self.tmp_path = Path(stack.enter_context(_ghw_temp.tempdir()))
 
     def test_no_flags_leaves_removals_permissive(self):
-        """The unit-suite comparison must keep behaving exactly as before."""
+        """With no flags the unit-suite comparison stays permissive about removals."""
         scans = [cd.scan_junit(write_junit(
             self.tmp_path / "h.xml", {"m::a": 1.0, "m::gone": 9.0}))]
 
@@ -461,10 +461,9 @@ class TestVerifyPopulation(unittest.TestCase):
     def test_required_name_missing_from_one_round_only_names_that_round(self):
         """The mixed branch: absent somewhere, not-passing somewhere else.
 
-        A required name present-and-passing in round 1 and absent from round 2 is
-        a real failure, and the sentence must not also claim round 1 failed —
-        that was a false observation about a passing round, which is exactly the
-        kind of thing a gate message must not say.
+        A required name present-and-passing in round 1 and absent from round 2
+        is a real failure, and the sentence must not also claim round 1 failed:
+        a gate message must not misreport a passing round.
         """
         base = write_junit(self.tmp_path / "base.xml", {"e2e::a": 1.0})
         r1 = write_junit(self.tmp_path / "r1.xml", {"e2e::a": 1.0, "e2e::b": 2.0})

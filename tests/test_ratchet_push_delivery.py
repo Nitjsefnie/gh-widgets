@@ -265,11 +265,11 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_every_record_is_data_but_a_source_change_still_drops(self):
         """Every records file may move under a reusable artifact.
 
-        The dropped exception the subtraction used to carve (an artifact's
-        own record moving in the window) is gone: apply-time validation
-        still judges the candidate against fetched main, so the own record
-        moving is exactly as reusable as a sibling's. The mutant restores
-        the old subtraction and must drop green again.
+        An artifact's own record moving in the window is no exception:
+        apply-time validation still judges the candidate against fetched
+        main, so the own record moving is exactly as reusable as a
+        sibling's. The mutant subtracts the artifact's own record from
+        the records set and must drop green again.
         """
         response = self._comparison(["gate/speed-baseline.json"])
         result, calls, _written, _summary = self._drive(
