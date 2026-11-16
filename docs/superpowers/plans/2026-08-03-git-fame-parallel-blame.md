@@ -693,13 +693,11 @@ Add the issue and PR URLs to the `CLAUDE.md` note from Task 4 Step 7 so the pin 
 
 ## Self-Review
 
-**Amendment (2026-08-03, after Task 1):** Task 4 gained Steps 5 and 6 — a
-`check_git_fame()` runtime guard in `render-impact.py` and a test that it is
-noisy on success — and Steps 5–9 renumbered to 7–11. Adopted from
-`Consultest-CZ/kvalita` (`2bca15f` → `e29fc78` → `f30eed6`), where an
-install-time-only guard and a silent-on-success guard each needed their own
-follow-up commit. The version-collision half of that pattern is *not* copied:
-git-fame's `setuptools_scm` version already distinguishes the fork build.
+Task 4 Steps 5 and 6 add a `check_git_fame()` runtime guard in
+`render-impact.py` and a test that it is noisy on success, following the
+`Consultest-CZ/kvalita` guard pattern. The version-collision half of that
+pattern is *not* copied: git-fame's `setuptools_scm` version already
+distinguishes the fork build.
 
 **Spec coverage:** every row of the spec's change inventory maps to a task — `_gitfame.py` docstring/`_get_auth_stats`/`run` → Task 2; `tests/test_gitfame.py` → Task 2; `git-fame_completion.bash` + `git-fame.1` → Task 3; `test_impact.py` + `CLAUDE.md`/`install.sh` → Task 4; issue + PR → Task 5. The spec's `imap_bounded` requirement (bounded window) is Task 1. The spec verification items appear as steps: byte-identical output (T2 S10), upstream suite green (T2 S9), fails-on-stock (T4 S3), deployed copies match (T4 S8). The "end-to-end unchanged" verification is covered by T4 S8 plus the byte-identical check; a full `render-impact.py` run is not scripted here because it mutates the production cache — run it manually against a copied `CACHE_FILE` if desired.
 

@@ -43,8 +43,7 @@ jobs:
     # there is no contents: read and no checkout: the job talks to the API only.
     # `pull-requests: write` exists for the decline reply: the action never
     # assigns a pull request; it answers a PR command by posting that it has
-    # no effect there. Without the grant, the reply fails with HTTP 403
-    # (claim#153).
+    # no effect there. Without the grant, the reply fails with HTTP 403.
     permissions:
       issues: write
       pull-requests: write

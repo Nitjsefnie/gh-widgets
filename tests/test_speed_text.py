@@ -52,9 +52,8 @@ class TestTheWorkflowText(unittest.TestCase):
         self.assertIn("--repo-root .", block)
         self.assertIn('if [ "$round" -eq "$GH_WIDGETS_ROUNDS" ]; then', block)
         self.assertIn("selfcheck=(--selfcheck)", block)
-        # Head only: there is no base checkout any more. A leftover --side
-        # loop would measure nothing, because there is nothing to measure it
-        # against.
+        # Head only: there is no base checkout. A --side loop would
+        # measure nothing, because there is nothing to measure it against.
         self.assertIn("--side head", block)
         self.assertNotIn("--side base", block)
 
@@ -71,7 +70,7 @@ class TestTheWorkflowText(unittest.TestCase):
     def test_the_ratchet_step_declares_seed_redefined_removals(self):
         """The instrument reset's removals must stay declared by the step.
 
-        Issue #269 removes the four retired-instrument envelopes while the
+        The reset removes the four retired-instrument envelopes while the
         same document declares each node's id in `seeds`; without the
         derivation the ratchet refuses the reset commit, and once main
         records the seeded entries the loop stays silent again. Both
@@ -95,9 +94,8 @@ class TestTheWorkflowText(unittest.TestCase):
                            "loop's window wrote; it must run after it")
 
     def test_no_workflow_still_looks_up_a_release_for_the_speed_gate(self):
-        # The whole point of issue #81: the comparison point is committed
-        # data now, so a tag lookup here would be a leftover argument for a
-        # method this gate no longer uses.
+        # The comparison point is committed data, so a tag lookup here
+        # would be an argument for a method this gate does not use.
         text = StepRunner.job_text()
         self.assertNotIn("releases/latest", text)
         self.assertNotIn("--base-label \"$BASE_TAG\"", text)
@@ -139,10 +137,10 @@ class TestTheComparatorBlindWindow(unittest.TestCase):
         self.summary_path = self.tmp_path / "summary.md"
 
     def test_a_schema_five_blind_window_passes_with_the_seed_note(self):
-        # The committed shape after the #269 reset: `entries` is empty and
-        # the population's seeds declare what awaits its first measurement.
-        # The compare passes and reports the seed note, and the metric note
-        # names the statement instrument and its blind spot.
+        # The committed shape right after the instrument reset: `entries` is
+        # empty and the population's seeds declare what awaits its first
+        # measurement. The compare passes and reports the seed note, and the
+        # metric note names the statement instrument and its blind spot.
         report_path = write_junit(self.tmp_path / "a.xml",
                                   {self.UNIT_NODE: 99_000_000})
         payload = document()

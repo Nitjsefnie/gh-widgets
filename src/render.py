@@ -30,8 +30,8 @@ The SVGs are static files — serve them from any web server with
 
 Designed to fail gracefully. Settled calendar days and MERGED PRs are
 immutable, so they are cached and only the mutable slice (the trailing 7
-days, OPEN/CLOSED PRs, issues) is refetched each run — the full-year
-calendar query was getting killed with RESOURCE_LIMITS_EXCEEDED, so a
+days, OPEN/CLOSED PRs, issues) is refetched each run. The full-year
+calendar query exceeds GitHub's node limit (RESOURCE_LIMITS_EXCEEDED), so a
 cold cache backfills the year in 12 monthly windowed queries instead.
 A run whose fetches still fail renders from the cache, stamps the cache
 timestamp on every card, names the acquisition that failed, and exits 0;
@@ -208,8 +208,8 @@ query($login: String!, $cursor: String, $self: Boolean = false) {
 """
 
 # The repos×languages half, paged for the same reason. The filters are
-# unchanged and load-bearing: owned-only, non-fork, public — they keep
-# private repository names out of a public SVG.
+# load-bearing: owned-only, non-fork, public — they keep private
+# repository names out of a public SVG.
 REPO_QUERY = """
 query($login: String!, $cursor: String) {
   user(login: $login) {
@@ -298,7 +298,7 @@ def page_profile_connection(token, query, field, login, max_pages):
     A missing ``pageInfo``, a ``hasNextPage`` without an ``endCursor``, and
     a cursor that repeats an earlier one all raise ``PaginationLimitError``:
     each means the walk cannot prove it reached the end, and returning what
-    did arrive is precisely the silent truncation this replaces.
+    did arrive would be a silent truncation.
     """
     nodes = []
     head = None
@@ -404,26 +404,24 @@ def fetch_extra_org_stats(token, org_logins,
 
 def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # The repos×languages core and the contribution calendar are fetched
-    # separately: GitHub's GraphQL node-limit estimator started rejecting
-    # the combined query with RESOURCE_LIMITS_EXCEEDED. Splitting the calendar into its
-    # own request was not enough — the full-year calendar query alone now
-    # trips the limit — so the calendar is always fetched windowed and
-    # merged into a date -> count map: with a warm cache, a single
-    # trailing 7-day window (the only days that can still move) merged
-    # onto the cached history; on a cold cache (or --resync), 12
-    # sequential monthly windows backfilling the whole year, each far
-    # below the node limit, so bootstrap is deterministic instead of
-    # lucky. The merged structure keeps the exact shape the renderers
-    # already consume. Returns (user, days); `days` is the merged
-    # date -> count map to persist in the cache.
+    # separately: GitHub's GraphQL node-limit estimator rejects the combined
+    # query with RESOURCE_LIMITS_EXCEEDED, and the full-year calendar query
+    # alone exceeds the limit as well. So the calendar is always fetched
+    # windowed and merged into a date -> count map: with a warm cache, a
+    # single trailing 7-day window (the only days that can still move) merged
+    # onto the cached history; on a cold cache (or --resync), 12 sequential
+    # monthly windows backfilling the whole year, each far below the node
+    # limit, so bootstrap is deterministic. The merged structure keeps the
+    # exact shape the renderers already consume. Returns (user, days); `days`
+    # is the merged date -> count map to persist in the cache.
     #
     # The profile is two paginated connections rather than one query, because
-    # each is walked to its own end (issue #51) and a combined query would
-    # re-send the whole of one connection on every page of the other.
-    # The helper returns the `user` payload with the connection it walked
-    # already merged into it, so organizations is in place; ORG_QUERY's payload
-    # carries no repositories key at all, which is why the second walk's
-    # result is grafted on rather than merely read.
+    # each is walked to its own end, and a combined query would re-send the
+    # whole of one connection on every page of the other. The helper returns
+    # the `user` payload with the connection it walked already merged into it,
+    # so organizations is in place; ORG_QUERY's payload carries no repositories
+    # key at all, which is why the second walk's result is grafted on rather
+    # than merely read.
     with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
         tasks = [pool.submit(page_profile_connection,
                              token, ORG_QUERY, "organizations", login, max_pages),

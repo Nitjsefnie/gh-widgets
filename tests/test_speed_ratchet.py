@@ -148,11 +148,11 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
     # -- both maps are governed ---------------------------------------------
 
     def test_the_wall_ceilings_are_governed_too(self):
-        """Half the document used to be ungoverned.
+        """The raised-entries check covers the whole document, `wall` included.
 
-        `raised_entries` iterated `entries` and never `wall`, so the smoke
-        ceiling could go from 0.085 s to 99 s in the same push and the step
-        whose whole reason for existing reported success.
+        `raised_entries` must iterate `wall` as well as `entries`, or the smoke
+        ceiling could rise from 0.085 s to 99 s in one push while the step
+        reports success.
         """
         raised = self.run_ratchet(document(wall=0.085), document(wall=99.0))
         self.assertEqual(raised.returncode, 1, raised.stdout + raised.stderr)
@@ -169,14 +169,13 @@ class TestTheDownOnlyRatchet(unittest.TestCase):
 
     @REQUIRES_POSIX_SHELL
     def test_the_ratchet_step_declares_every_retired_workload(self):
-        """N3's workflow half, which was broken for a whole review round.
+        """The workflow half: every retired workload is declared.
 
-        The step used `case "$listing" in *"$node"*`, and
-        `e2e::bench.render` is a PREFIX of the other two, so a retired
-        bench.render read as still present and was never declared — leaving
-        one of three workloads with no green route to retirement while a
-        shipped test asserted the route worked. All three cases, each with
-        the other two still listed.
+        `e2e::bench.render` is a PREFIX of the other two, so a step matching
+        with `case "$listing" in *"$node"*` would read a retired bench.render
+        as still present and never declare it, leaving one of three workloads
+        with no green route to retirement. All three cases, each with the
+        other two still listed.
         """
         for retired, still_listed in (
                 ("e2e::bench.render",

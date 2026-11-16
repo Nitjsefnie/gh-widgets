@@ -49,11 +49,10 @@ updates:
     # github/codeql-action/init and .../analyze are separate dependencies to
     # Dependabot, so ungrouped it files ONE HALF-BUMP PR PER PIN, and a tree
     # whose init and analyze pins disagree fails every CodeQL run with a
-    # configuration error (#22/#23 both went red that way). Each group applies
-    # only to its named update kind: the version-update group keeps every
-    # action version bump in one atomic PR, and the security-update group does
-    # the same for every action security bump. The in-tree tripwire is
-    # test_ci_workflows.py.
+    # configuration error. Each group applies only to its named update kind:
+    # the version-update group keeps every action version bump in one atomic PR,
+    # and the security-update group does the same for every action security
+    # bump. The in-tree tripwire is test_ci_workflows.py.
     groups:
       actions:
         applies-to: version-updates

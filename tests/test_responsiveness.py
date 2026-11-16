@@ -3,7 +3,7 @@
 
     python3 -m unittest discover -v
 
-No network at all: the renderer now fetches its own PRs, so every end-to-end
+No network at all: the renderer fetches its own PRs, so every end-to-end
 case drives a fake `gql` (see fake_gql) and, where the cache matters, a
 hand-built cache payload.
 """
@@ -394,8 +394,8 @@ class RenderCard(unittest.TestCase):
 
 class CacheContract(unittest.TestCase):
     def test_a_missing_cache_is_not_an_error_when_the_fetch_works(self):
-        # This script no longer depends on someone else having written a
-        # cache: a cold start fetches everything and creates one.
+        # This script does not depend on someone else having written a cache:
+        # a cold start fetches everything and creates one.
         with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "nope.json"
             out = Path(td) / "out"
@@ -404,9 +404,8 @@ class CacheContract(unittest.TestCase):
             self.assertEqual(len(json.loads(cache_file.read_text())["prs"]), 3)
 
     def test_a_cache_without_insiders_is_usable(self):
-        # It used to be a hard error, because the cached set was the only way
-        # to know who is an insider. Identity now comes from the token, so the
-        # cached set is not consulted at all on the fetch path.
+        # Identity comes from the token, so the cached set is never consulted on
+        # the fetch path; it is not needed to know who is an insider.
         with _ghw_temp.tempdir() as td:
             cache_file = Path(td) / "impact-cache.json"
             payload = cache_payload(prs("a/x", [1.0] * 3))
@@ -541,7 +540,7 @@ class AtomicWrite(unittest.TestCase):
 
         def fail_cache_write(path, payload):
             # Limit the injected fdopen failure to the cache writer. The SVG
-            # publication path also writes through fdopen now.
+            # publication path also writes through fdopen.
             with mock.patch.object(os, "fdopen", half_written):
                 return real_write_cache(path, payload)
 
@@ -582,7 +581,7 @@ class AtomicWrite(unittest.TestCase):
 
 class EnvDefaults(unittest.TestCase):
     """The argparse defaults read the env through common.env: the prefixed
-    name wins, and the bare pre-#217 spelling still feeds the default."""
+    name wins, and the bare unprefixed spelling still feeds the default."""
 
     CASES = (
         ("user", "GH_USER", "bare", "prefixed", ("--token", "t")),
@@ -722,8 +721,8 @@ class DegradedPath(unittest.TestCase):
 
     def test_the_fallback_line_names_the_acquisition_and_the_error(self):
         # The line is the operator's only account of what broke, so it has to
-        # say which call failed and why (issue #55). A transport failure lands
-        # inside whichever acquisition was running — here the first one.
+        # say which call failed and why. A transport failure lands inside
+        # whichever acquisition was running — here the first one.
         line = self.fallback_line(self.degraded_run(error=self.BOOM))
         self.assertIn("fetch_identity", line)
         self.assertIn("SERVICE_UNAVAILABLE", line)
@@ -753,7 +752,7 @@ class DegradedPath(unittest.TestCase):
 
     def test_each_inner_acquisition_is_named_in_its_own_line(self):
         # fetch_prs is two acquisitions, not one: naming only the entry point
-        # is issue #55's defect at half scale.
+        # leaves the failing acquisition unnamed.
         lines = set()
         for phase in ("fetch_identity", "fetch_pull_requests"):
             with self.subTest(phase=phase):

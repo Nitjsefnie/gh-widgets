@@ -2,18 +2,15 @@
 
 Moved out of `/root/CLAUDE.md` so it loads only when working in this repo.
 
-**The units live in this repo now, in `units/`.** They used to be hand-maintained
-in `/etc/systemd/system` and tracked nowhere, which is the same drift trap the
-renderers themselves have. There are **four** files, and they replaced **ten**:
+**The units live in this repo, in `units/`.** There are **four** files:
 
 | unit | when | what |
 |---|---|---|
 | `gh-widgets.service` + `.timer` | hourly | five renderers in two concurrent branches |
 | `gh-widgets-resync.service` + `.timer` | Sun 04:17 UTC | same branches; `--resync` is passed to `render-gh-widgets.py` and `render-impact.py` only |
 
-The five old `render-*` service/timer pairs are **gone**; ordering that used to
-be expressed with `After=` chains between separate units now lives in
-`scripts/run-gh-widgets.sh`, invoked by each unit's single `ExecStart`.
+Ordering of the renderers lives in `scripts/run-gh-widgets.sh`, invoked by each
+unit's single `ExecStart`.
 Lookup → profile → impact → responsiveness → stars is serial for the acquisition
 share, impact cache and GraphQL request cap; popularity runs alongside it.
 Every branch is waited for, and any failure fails the unit and skips its dependents.
@@ -411,15 +408,15 @@ everything, so it takes far longer than an incremental run.
 >
 > **Why the weekly `both` audit exists.** `targeted` selects candidate files
 > from our own history, so a rename made by somebody ELSE after our commit
-> used to move our lines to a path that history never mentions — measured
-> under-counts of up to 99% (warior456/Sculk-Depths 313 -> 4, and four more).
-> `rename_closure()` now resolves our touched paths forward through the rename
+> moves our lines to a path that history never mentions; left unresolved,
+> that under-counts by up to 99% (warior456/Sculk-Depths 313 -> 4, and four more).
+> `rename_closure()` resolves our touched paths forward through the rename
 > chain (`git log --diff-filter=R --name-status`, including
 > `--diff-merges=first-parent`, because a rename performed in a merge is
-> otherwise invisible). `total` was exact throughout; the error was purely in
-> candidate-file selection.
+> otherwise invisible). `total` is exact either way; such an error lies purely
+> in candidate-file selection.
 >
-> That fix is verified, not proven: the ground truth is blame's own rename
+> `rename_closure()` is verified, not proven: the ground truth is blame's own rename
 > detection and it is not reconstructible from `git log`. What makes shipping
 > it reasonable is the audit — **`targeted-blame-audit.yml`** runs `both` every
 > Monday 05:23 UTC, split into parallel jobs: its `pins` job resolves the
@@ -428,15 +425,13 @@ everything, so it takes far longer than an incremental run.
 > and proves its `compare` lines name exactly that shard's manifest repos.
 > The verdict is the renderer's own exit code: under `both`
 > it exits non-zero on any disagreement, so nothing has to re-parse a log.
-> **It must carry the production address set**: the earlier 59/59 that briefly
-> justified enabling `targeted` was measured on the derived noreply addresses
-> alone, and auditing a different identity than the one that renders the card
-> is not an audit. The workflow passes `GH_WIDGETS_GH_EXTRA_EMAILS` for exactly that
+> **It must carry the production address set**: a check measured on the
+> derived noreply addresses alone is not evidence for `targeted`, and
+> auditing a different identity than the one that renders the card is not an
+> audit. The workflow passes `GH_WIDGETS_GH_EXTRA_EMAILS` for exactly that
 > reason.
 >
-> The audit lived inside `gitfame-resync-memory.yml` until 2026-08-19, under a
-> name that described only that workflow's other half. That one is now
-> dispatch-only memory measurement and carries no schedule.
+> `gitfame-resync-memory.yml` is dispatch-only memory measurement and carries no schedule.
 >
 > Both workflows resolve `GH_WIDGETS_IMPACT_REPO_PINS` first (`scripts/resolve-repo-pins.py`):
 > one commit per repo, fixed before any arm runs. Without it the two methods —
@@ -446,8 +441,7 @@ everything, so it takes far longer than an incremental run.
 > to the live branch tip. So does `GH_WIDGETS_IMPACT_SHARD` without a manifest
 > whose every pin carries a `shard`.
 >
-> Two more ways to get a silent zero, both now regression-tested, both hit
-> while writing this: a GitHub noreply address like
+> Two more ways to get a silent zero, both regression-tested: a GitHub noreply address like
 > `75166987+user@users.noreply.github.com` is a **regex** to `git log
 > --author`, where `+` quantifies the preceding character and matches nothing;
 > and the addresses are lower-cased for comparison while `--author` matching
@@ -467,14 +461,14 @@ everything, so it takes far longer than an incremental run.
 
 > **`GH_WIDGETS_CLONE_LOOKAHEAD` (default 3)** — how many repos are cloned ahead of the
 > blame consuming them. Clone waits on the network, blame saturates the CPUs,
-> so the overlap is close to free: those runs measured 125.4s of 159.0s
-> clone hidden against 60s hidden at depth 1, an indicative wall observation
+> so the overlap is close to free: measured runs hide 125.4s of 159.0s
+> clone against 60s hidden at depth 1, an indicative wall observation
 > on a runner this variable. What the setting actually trades is load-invariant
 > — extra checkouts on disk and that many concurrent transfers, which is why
 > it is bounded — and the wall figure only agrees with that.
 >
-> **Depth 8 read as a memory regression, but read the two instruments before
-> believing that.** Its cgroup peak went 554.6MB -> 769.3MB against the
+> **Depth 8 can read as a memory regression; read the two instruments before
+> believing that.** Its cgroup peak goes 554.6MB -> 769.3MB against the
 > 624.6MB baseline, while the sampler's RSS sum only moves 221MB -> 327MB —
 > far under the 894MB baseline on that same instrument. (Depth 8's wall,
 > 101.6s -> 79.3s, is an indicative observation and is not part of this
@@ -482,13 +476,13 @@ everything, so it takes far longer than an incremental run.
 > cgroup `memory.peak` **counts page cache**,
 > and eight concurrent clones write much more file data, so most of that
 > "regression" is reclaimable cache rather than process memory. Capping
-> index-pack (`GH_WIDGETS_CLONE_PACK_THREADS`, `GH_WIDGETS_CLONE_WINDOW_MB`) confirmed it: 769MB ->
-> 761MB, i.e. allocation was never the driver.
+> index-pack (`GH_WIDGETS_CLONE_PACK_THREADS`, `GH_WIDGETS_CLONE_WINDOW_MB`) confirms it: 769MB ->
+> 761MB, so allocation is not the driver.
 >
-> The real cost of depth 8 is reliability: one of two runs lost a repo to
-> `clone_failed` under eight concurrent transfers. The failure contract kept
-> its old count and its stale oid forces a retry, so nothing was lost, but
-> that is the thing to weigh — not the cgroup number.
+> The real cost of depth 8 is reliability: in one of two measured runs a repo
+> was lost to `clone_failed` under eight concurrent transfers. The failure
+> contract keeps its old count and its stale oid forces a retry, so nothing is
+> lost, but that is the thing to weigh — not the cgroup number.
 
 > **`GH_WIDGETS_DEBUG_TIMING=1`** — full-run wall/CPU, API attempts by kind and
 > endpoint shape, child counts by program with blocked/concurrent seconds,
@@ -496,10 +490,10 @@ everything, so it takes far longer than an incremental run.
 > also print `orgs-lookup` seconds before the profile renderer starts.
 > The impact renderer keeps its per-repo clone/wait/fame seconds and summary
 > that closes named phases against real elapsed time. The residual is the
-> point: before the fetch phases were wrapped a stable ~36s of each run was
-> unattributed, and is now ~2s — indicative wall observations, and the
-> diagnostic they evidence is that nothing is left unaccounted for, not how
-> long any part takes. A growing residual means an unmeasured phase, not a
+> point: with the fetch phases wrapped, about ~2s of each run is
+> unattributed — an indicative wall observation, and the diagnostic it
+> evidences is that nothing is left unaccounted for, not how long any part
+> takes. A growing residual means an unmeasured phase, not a
 > fast run.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,

@@ -42,7 +42,7 @@ subprocesses are the bottleneck even when the actual blame work is small.
 | `/root/gh-widgets/render-impact.py` | `check_git_fame()`, called from `main()` after `parse_args()`: prints the installed git-fame version on every render, warns loudly on stock, never fatal. |
 | `/root/gh-widgets/CLAUDE.md`, `install.sh` | Record the fork pin, the version marker that distinguishes it, why it exists, and how to re-pin once the upstream PR merges. |
 
-### Amendment (2026-08-03) — guard at run time, not just install time
+### Guard at run time, not just install time
 
 Adopted from `Consultest-CZ/kvalita`, which hit both failure modes after
 patching a dependency the same way (`2bca15f` → `e29fc78` → `f30eed6`):
@@ -66,10 +66,8 @@ degrades to "slow" rather than "every repo errors" — and an erroring repo cach
 an `{"error", head}` entry, from which it contributes no table row until a
 retry succeeds.
 
-*(Amended 2026-09-30, issue #33: at the time of writing `update_loc` also SKIPPED
-such an entry until HEAD moved, so a single failure froze the repo out of the
-table until the weekly resync. The skip is now conditioned on a real count, so
-an `{"error", head}` entry is retried on the next ordinary render. The
+*(`update_loc` skips an entry until HEAD moves only when it holds a real count,
+so an `{"error", head}` entry is retried on the next ordinary render. The
 conclusion above stands — a stock build still fails every repo rather than
 degrading to slow.)*
 

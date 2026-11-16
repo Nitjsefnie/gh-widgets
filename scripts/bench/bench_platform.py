@@ -8,9 +8,9 @@ file, written now or later — consults the SAME predicate, which lives beside
 the instrument's own refusal in `scripts/ci/counter.py` rather than being
 restated per test file.
 
-Three Windows rounds failed on one cause and each was fixed by guarding
-whichever files were in that round's log. The predicate is what stops the
-fourth: a test that drives the harness inherits the answer.
+Guarding only the files a failing Windows run's log names leaves the next
+test that drives the harness unguarded. With the predicate, a test that
+drives the harness inherits the answer.
 """
 import unittest
 

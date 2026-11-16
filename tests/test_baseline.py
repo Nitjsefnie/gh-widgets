@@ -243,7 +243,7 @@ class TestSchemaFive(TestValidation):
 
 
 class TestEnvelopes(unittest.TestCase):
-    """The shape this schema was changed to, and the ways it is not one."""
+    """The shape this schema requires, and the ways a document is not one."""
 
     def setUp(self):
         stack = contextlib.ExitStack()
@@ -505,7 +505,7 @@ class TestDeclaredRaises(unittest.TestCase):
     def test_a_new_entry_is_a_declared_raise_too(self):
         # A population the base never had is a raise by definition; the
         # declaration is what allows it through, by the same trade the
-        # removal path introduced.
+        # removal path makes.
         old = self.population(1.0)
         del old["populations"]["unit-suite"]["entries"]
         moved = baseline.raised_entries(
@@ -737,10 +737,7 @@ class TestTheSmokeGate(ReadsTheCommittedBaseline):
 class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     """The file in the repository, if there is one, is valid and current.
 
-    There IS one. It was absent for a single commit — its envelopes had
-    been measured at d051020, against a `ghwidgets_common.py` the module
-    split removed, and re-derive-never-carry sometimes means deleting a
-    document that describes a program this tree is not.
+    There IS one.
 
     The cases below skip while it is absent and come back the moment it
     returns, because that is the property worth keeping: a control that
@@ -782,11 +779,9 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def ceilings(self, loaded):
         """{node: max x (1 + tolerance)} per population, COMPUTED.
 
-        The prose beside the doubling claim used to TRANSCRIBE these, and
-        two of three were wrong — which turned a verdict that survived by
-        0.52% into one that looked comfortable. A ceiling that is computed
-        from the document it belongs to cannot be wrong; a ceiling written
-        out beside it can, and did.
+        A ceiling computed from the document it belongs to cannot be wrong; a
+        ceiling written out beside it can, so these are never transcribed into
+        prose.
         """
         return {name: {node: envelope["max"] * (1 + population["tolerance"])
                        for node, envelope in population["entries"].items()}
@@ -818,9 +813,9 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
     def test_the_smoke_ceilings_are_computed_not_transcribed(self):
         """The wall ceilings, against the constant the gate really uses.
 
-        An earlier version carried its own literal `3.0` and stayed green when
-        `SMOKE_FACTOR` changed to 1.0. So the factor comes from
-        `compare_counters.SMOKE_FACTOR`, and every ceiling must leave headroom.
+        A literal factor here would stay green when `SMOKE_FACTOR` changes,
+        so the factor comes from `compare_counters.SMOKE_FACTOR`, and every
+        ceiling must leave headroom.
         """
         loaded = self._load()
         factor = cd.SMOKE_FACTOR
@@ -864,8 +859,8 @@ class TestTheCommittedBaseline(ReadsTheCommittedBaseline):
 
     def test_the_stated_ceilings_are_not_transcribed_anywhere(self):
         """No hard-coded ceiling figures in the prose. The suite's own entry is
-        named only while the population records entries at all: the #269 reset
-        empties `entries` for the blind window; main's ratchet re-seeds it.
+        named only while the population records entries at all: a reset empties
+        `entries` for the blind window, and main's ratchet re-seeds it.
         """
         loaded = self._load()
         ceilings = self.ceilings(loaded)

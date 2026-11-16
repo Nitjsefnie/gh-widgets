@@ -228,8 +228,7 @@ fi
 
 # ---- systemd units -------------------------------------------------------
 # One hourly unit renders every SVG through the runner; one weekly unit reruns the
-# same five renderers, passing --resync only to the two that accept it. These
-# replaced five service/timer pairs whose ordering lived in `After=` chains.
+# same five renderers, passing --resync only to the two that accept it.
 if [ "$(id -u)" -ne 0 ]; then
     echo "install.sh: --units needs root to write $UNIT_DIR" >&2
     exit 1

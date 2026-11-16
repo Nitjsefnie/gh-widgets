@@ -797,7 +797,7 @@ class TestTopRowsArgument(unittest.TestCase):
 
 class EnvDefaults(unittest.TestCase):
     """The argparse defaults read the env through common.env: the prefixed
-    name wins, and the bare pre-#217 spelling still feeds the default."""
+    name wins, and the bare unprefixed spelling still feeds the default."""
 
     CASES = (
         ("user", "GH_USER", "bare", "prefixed", ("--token", "t")),
@@ -998,9 +998,9 @@ class TestCheckoutPin(unittest.TestCase):
 class TestMethodAgreementGate(unittest.TestCase):
     """Under `both`, a disagreement has to end the run non-zero.
 
-    The comparison used to print and return None, so the only thing that
-    could fail on it was a caller grepping the log — and a log nobody parses
-    makes the audit indistinguishable from not running one.
+    Printing the comparison is not enough: a caller that can only grep the log
+    has nothing to fail on, and a log nobody parses makes the audit
+    indistinguishable from not running one.
     """
 
     loc = getattr(render_impact, "_LOC_MODULE")

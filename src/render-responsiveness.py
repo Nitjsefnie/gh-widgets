@@ -53,8 +53,8 @@ Configuration (env vars or CLI flags, in that order of precedence):
 
 Who counts as external is DERIVED from the token's own account (login + orgs +
 GH_WIDGETS_GH_EXTRA_INSIDERS) via common.fetch_identity, exactly as
-render-impact.py derives it — so a cache carrying no insider set is no longer
-a hard error, it is simply not consulted. Only the degraded path below still
+render-impact.py derives it — so a cache carrying no insider set is not a
+hard error, it is simply not consulted. Only the degraded path below still
 reads the cached set. GH_WIDGETS_GH_EXTRA_INSIDERS must match
 render-impact.py's, and both write the derived set into the same cache key.
 
@@ -374,8 +374,7 @@ def render_responsiveness(C, scored):
   <line x1="20" y1="64" x2="{CARD_W - 20}" y2="64" stroke="{C['border']}"/>"""
     parts, y = render_rows(C, y, scored)
     body += "\n  " + "\n  ".join(parts)
-    # No closing rule: the card ends on its last row, like impact.svg. A rule
-    # here separated the rows from a footer that no longer exists.
+    # No closing rule: the card ends on its last row, like impact.svg.
     if scored:
         measured_prs = sum(row.n for row in scored)
         median_wait = statistics.median(row.hours for row in scored)
@@ -433,13 +432,11 @@ def read_impact_cache(path, user):
     instead of burying it under a complaint about the cache. Exiting non-zero
     leaves the last good SVG in place, same contract as the other renderers.
 
-    A cache with no insider set is usable, though it once was not. That was
-    fatal back when the cached set was the ONLY way this script could know who
-    is an insider; identity now comes from live or unit-shared data on each
-    run, and a fetch failure is not a reason to refuse to render. It degrades
-    to the account itself for one render — which can over-report externals
-    until the next successful run repairs it — exactly as render-impact.py
-    does on the same path.
+    A cache with no insider set is usable: identity comes from live or
+    unit-shared data on each run, and a fetch failure is not a reason to
+    refuse to render. It degrades to the account itself for one render —
+    which can over-report externals until the next successful run repairs
+    it — exactly as render-impact.py does on the same path.
     """
     cache = common.load_cache(path, IMPACT_CACHE_VERSION)
     if not cache or not cache.get("prs"):
@@ -472,9 +469,9 @@ def cache_is_stale(fetched_at, now=None):
     """True when the cache is old enough that the card should say so.
 
     Reached only on the degraded path, where the card is drawn from the last
-    cached fetch. The PR data refreshes hourly now, so a cache past a day
-    means roughly a day of consecutive failed runs — a real outage rather than
-    the single blip a stamp would only add noise to.
+    cached fetch. The PR data refreshes hourly, so a cache past a day means
+    roughly a day of consecutive failed runs — a real outage rather than the
+    single blip a stamp would only add noise to.
 
     A stamp ahead of now — a backward clock correction — is stale at once:
     negative age is not freshness, and the overshoot would otherwise hold the
@@ -532,7 +529,7 @@ def load_inputs(args, token):
         prs, insiders, stale = cached
         # fetch_prs is two acquisitions; the label the failing one left behind
         # names it. `fetch_prs` itself is the honest name when the failure
-        # came from outside both (issue #55).
+        # came from outside both.
         fallback = common.CacheFallback(stale, common.take_last_acquisition() or "fetch_prs", exc)
     else:
         update_pr_cache(args.cache_file, insiders, prs_by_id)

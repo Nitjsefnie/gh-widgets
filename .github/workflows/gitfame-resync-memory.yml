@@ -6,8 +6,8 @@ name: gitfame-resync-memory
 # Why this exists. Upstream git-fame 4.0.0 runs the per-file `git blame` calls
 # through `tqdm.contrib.concurrent.thread_map`, which is `list(ex.map(...))`:
 # every file is submitted to the pool up front and every file's blame output is
-# retained until the whole repo is done. The Nitjsefnie-OSC fork used a bounded
-# window (`imap_bounded`, at most min(2*jobs, jobs+4) outstanding) and consumed
+# retained until the whole repo is done. The Nitjsefnie-OSC fork uses a bounded
+# window (`imap_bounded`, at most min(2*jobs, jobs+4) outstanding) and consumes
 # results as a generator. Both run the same number of blames concurrently, so
 # this is a memory question, not a throughput one.
 #
@@ -16,13 +16,13 @@ name: gitfame-resync-memory
 # re-blames every repo), so it is exactly the condition under which a dropped
 # work window would show.
 #
-# One full resync both ways ran 30-40 minutes (an indicative wall), past a
+# One full resync both ways runs 30-40 minutes (an indicative wall), past a
 # 20-minute measure job, so each matrix job is ONE run: one arm, one repeat,
 # one of six shards of the pinned repos, on its own runner and cgroup. The
 # report proves every shard ran once and states a repeat's full-resync peak as
 # the max over its shards: the largest single repo sets it, and one shard
 # blames that repo whole. Limits, not measured: memory.peak counts page cache,
-# which a shard's cgroup no longer shares with other shards' repos; and the
+# which a shard's cgroup does not share with other shards' repos; and the
 # clone lookahead (default 3) overlaps that repo's blame with its neighbours
 # in the shard, not the ones a full run clones beside it.
 #
@@ -30,14 +30,12 @@ name: gitfame-resync-memory
 # publishes an SVG anywhere, and reads only public GitHub data.
 
 on:
-  # Dispatch only. This used to carry the weekly targeted-vs-git-fame drift
-  # audit as well, which had nothing to do with measuring memory and was
-  # undiscoverable under this name; it now lives in targeted-blame-audit.yml
-  # and runs on that schedule. What remains here is a measurement you ask for
-  # when you want it.
+  # Dispatch only. The weekly targeted-vs-git-fame drift audit lives in
+  # targeted-blame-audit.yml, not here. What remains here is a measurement you
+  # ask for when you want it.
   #
-  # The `inputs.x || <default>` spellings below are kept: they cost nothing and
-  # they are what let a non-dispatch trigger work at all, should one return.
+  # The `inputs.x || <default>` spellings below cost nothing and are what let a
+  # non-dispatch trigger work at all, should one return.
   workflow_dispatch:
     inputs:
       repeats:

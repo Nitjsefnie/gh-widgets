@@ -267,7 +267,7 @@ renderer caches the data that cannot change and refetches only what can.
   limit; each run prints `rest-cache: requests=N not-modified=M`. Each save
   rewrites the file with just the URLs that run used, so idle URLs drop out.
   Missing or corrupt stores degrade to a full fetch; unset, the renderer
-  fetches everything as before.
+  fetches everything.
 - `cache.json` and `impact-cache.json` are private renderer implementation
   details. Do not use either cache as an interchange format for another
   process; use the versioned `ghwidgets_data` API instead.
@@ -481,11 +481,10 @@ around the file and write it via a temp file plus `os.replace`, so the two can
 overlap without either observing or leaving a half-written cache. A failed
 fetch renders from the cache and says so, exactly like the other two.
 
-Upgrading from a cache written before those timestamps existed: merged PRs are
-frozen in that cache, so their timestamps only arrive on a
-`render-impact.py --resync` (the weekly timer does one). Until then the card
-counts what it can and says how many PRs it had to leave out — run the resync
-once after installing if you don't want to wait.
+Merged PRs recorded in a cache without timestamps stay frozen there, so their
+timestamps only arrive on a `render-impact.py --resync` (the weekly timer does
+one). Until then the card counts what it can and says how many PRs it had to
+leave out — run the resync once after installing if you don't want to wait.
 
 ## Caveats
 
@@ -530,7 +529,7 @@ The manifest is `{repo: {branch, head}}`, resolved from the same query the
 renderer uses, with an integer `shard` per repo under `--shards N`. With it set, every clone is detached to its pinned commit; a
 pin that cannot be honoured, an unreadable manifest, or a blamed repo the
 manifest does not mention ends the run rather than falling back to a live
-branch tip. Unset, clones follow the default branch as before — which is what
+branch tip. Unset, clones follow the default branch, which is what
 production does.
 
 `--shards N` balances the repos' GitHub disk usage across shards `0` to `N-1`,
