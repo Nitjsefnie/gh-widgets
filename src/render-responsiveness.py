@@ -135,7 +135,7 @@ def metric_knobs():
     }
 
 
-def fetch_pull_requests(token, login, cached_prs=None, max_pages=50):
+def fetch_pull_requests(token, login, cached_prs=None, max_pages=1000):
     """Thin wrapper over the shared implementation, passing THIS module's
     `gql` so a test patch of it still intercepts the calls."""
     return common.fetch_pull_requests(token, login, cached_prs, max_pages,
