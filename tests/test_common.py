@@ -1079,18 +1079,18 @@ class FetchIssues(unittest.TestCase):
         self.assertIn("issues", str(raised.exception))
         self.assertIn("c3", str(raised.exception))
 
-    def test_no_limit_pages_until_has_next_page(self):
+    def test_default_pages_past_fifty_until_has_next_page(self):
+        # An account past 5,000 authored issues (50 pages of 100) is fetched
+        # whole, and the walk still stops at hasNextPage: false.
         pages = iter([
-            {"pageInfo": {"hasNextPage": True, "endCursor": "c1"},
-             "nodes": [{"id": "I1"}]},
-            {"pageInfo": {"hasNextPage": False, "endCursor": None},
-             "nodes": [{"id": "I2"}]},
+            {"pageInfo": {"hasNextPage": n < 50, "endCursor": f"c{n}"},
+             "nodes": [{"id": f"I{n}"}]}
+            for n in range(51)
         ])
         nodes = common.fetch_issues(
-            "t", "me", max_pages=None,
-            gql_fn=lambda *_args, **_kwargs: {
+            "t", "me", gql_fn=lambda *_args, **_kwargs: {
                 "user": {"issues": next(pages)}})
-        self.assertEqual([node["id"] for node in nodes], ["I1", "I2"])
+        self.assertEqual([node["id"] for node in nodes], [f"I{n}" for n in range(51)])
 
     def test_missing_next_cursor_raises_without_limit(self):
         def gql_fn(*_args, **_kwargs):

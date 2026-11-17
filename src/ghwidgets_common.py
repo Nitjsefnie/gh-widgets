@@ -727,7 +727,7 @@ query($login: String!, $cursor: String) {
 # The live/cached/sweep reconciliation is intentionally one function so its
 # state transitions remain atomic and easy to audit.
 # pylint: disable=too-many-locals,too-many-branches
-def fetch_pull_requests(token, login, cached_prs=None, max_pages: Optional[int] = 50, gql_fn=None):
+def fetch_pull_requests(token, login, cached_prs=None, max_pages: Optional[int] = 1000, gql_fn=None):
     """Fetch the user's authored PRs and merge with the cached set.
 
     MERGED is the only one-way PR state, so with a warm cache the live query
@@ -823,7 +823,7 @@ def fetch_pull_requests(token, login, cached_prs=None, max_pages: Optional[int] 
 # pylint: enable=too-many-locals,too-many-branches
 
 
-def fetch_issues(token, login, max_pages: Optional[int] = 50, gql_fn=None):
+def fetch_issues(token, login, max_pages: Optional[int] = 1000, gql_fn=None):
     """Page through every ISSUE the user has authored, every run.
 
     Issues can be REOPENED, so unlike PRs there is no immutable slice to
