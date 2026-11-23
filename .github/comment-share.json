@@ -44,8 +44,8 @@
     4050
   ],
   ".github/workflows/tests.yml": [
-    29757,
-    51143
+    27481,
+    48229
   ],
   "ghwidgets_data.py": [
     2108,
@@ -184,8 +184,8 @@
     3425
   ],
   "tests/test_release_workflow.py": [
-    11544,
-    34664
+    11400,
+    43298
   ],
   "tests/test_render.py": [
     6730,
