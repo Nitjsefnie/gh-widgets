@@ -355,10 +355,12 @@
         0.06
       ],
       "tests/test_ci_workflows.py": [
-        2.49
+        2.49,
+        3.74
       ],
       "tests/test_commit_scopes.py": [
-        3.55
+        3.55,
+        4.84
       ],
       "tests/test_common.py": [
         0.22
@@ -376,13 +378,15 @@
         0.42
       ],
       "tests/test_e2e_bench.py": [
-        8.26
+        8.26,
+        11.64
       ],
       "tests/test_extra_orgs.py": [
         0.03
       ],
       "tests/test_gate_base_freshness.py": [
-        7.56
+        7.56,
+        10.1
       ],
       "tests/test_gql_retry.py": [
         0.01
@@ -412,7 +416,8 @@
         0.04
       ],
       "tests/test_install.py": [
-        4.18
+        4.18,
+        5.4
       ],
       "tests/test_install_python.py": [
         0.0
@@ -433,7 +438,8 @@
         0.03
       ],
       "tests/test_ratchet_push_delivery.py": [
-        11.33
+        11.33,
+        16.69
       ],
       "tests/test_ratchet_staging.py": [
         1.41
@@ -463,7 +469,8 @@
         0.13
       ],
       "tests/test_speed_ratchet.py": [
-        6.58
+        6.58,
+        10.27
       ],
       "tests/test_speed_seeding.py": [
         2.21
@@ -472,7 +479,8 @@
         0.01
       ],
       "tests/test_speed_workflow.py": [
-        22.12
+        22.12,
+        31.99
       ],
       "tests/test_stars.py": [
         0.32
@@ -487,7 +495,8 @@
         0.82
       ],
       "tests/test_unit_runner.py": [
-        33.59
+        33.59,
+        45.88
       ],
       "tests/test_version.py": [
         0.03
@@ -519,10 +528,12 @@
         0.06
       ],
       "tests/test_ci_workflows.py": [
-        1.99
+        1.99,
+        3.7
       ],
       "tests/test_commit_scopes.py": [
-        2.99
+        2.99,
+        5.25
       ],
       "tests/test_common.py": [
         0.17
@@ -531,7 +542,8 @@
         0.04
       ],
       "tests/test_counter.py": [
-        2.77
+        2.77,
+        4.19
       ],
       "tests/test_counter_timeout.py": [
         6.26
@@ -540,19 +552,22 @@
         0.4
       ],
       "tests/test_e2e_bench.py": [
-        6.98
+        6.98,
+        12.09
       ],
       "tests/test_extra_orgs.py": [
         0.03
       ],
       "tests/test_gate_base_freshness.py": [
-        6.0
+        6.0,
+        10.07
       ],
       "tests/test_gql_retry.py": [
         0.01
       ],
       "tests/test_impact.py": [
-        1.85
+        1.85,
+        2.87
       ],
       "tests/test_impact_bots.py": [
         0.06
@@ -564,7 +579,8 @@
         3.39
       ],
       "tests/test_impact_loc_coverage.py": [
-        7.18
+        7.18,
+        9.7
       ],
       "tests/test_impact_quoted_paths.py": [
         0.24
@@ -576,7 +592,8 @@
         0.03
       ],
       "tests/test_install.py": [
-        3.76
+        3.76,
+        5.87
       ],
       "tests/test_install_python.py": [
         0.0
@@ -597,7 +614,8 @@
         0.03
       ],
       "tests/test_ratchet_push_delivery.py": [
-        9.97
+        9.97,
+        16.65
       ],
       "tests/test_ratchet_staging.py": [
         1.44
@@ -627,16 +645,19 @@
         0.11
       ],
       "tests/test_speed_ratchet.py": [
-        6.74
+        6.74,
+        10.4
       ],
       "tests/test_speed_seeding.py": [
-        2.03
+        2.03,
+        3.25
       ],
       "tests/test_speed_text.py": [
         0.01
       ],
       "tests/test_speed_workflow.py": [
-        19.41
+        19.41,
+        32.53
       ],
       "tests/test_stars.py": [
         0.33
@@ -651,7 +672,8 @@
         0.63
       ],
       "tests/test_unit_runner.py": [
-        29.65
+        29.65,
+        40.33
       ],
       "tests/test_version.py": [
         0.04
@@ -847,10 +869,12 @@
         0.12
       ],
       "tests/test_ci_workflows.py": [
-        4.15
+        4.15,
+        2.26
       ],
       "tests/test_commit_scopes.py": [
-        37.39
+        37.39,
+        25.79
       ],
       "tests/test_common.py": [
         0.57
@@ -859,7 +883,8 @@
         0.25
       ],
       "tests/test_counter.py": [
-        3.42
+        3.42,
+        1.87
       ],
       "tests/test_counter_timeout.py": [
         0.0
@@ -874,13 +899,15 @@
         0.1
       ],
       "tests/test_gate_base_freshness.py": [
-        120.78
+        120.78,
+        82.67
       ],
       "tests/test_gql_retry.py": [
         0.01
       ],
       "tests/test_impact.py": [
-        13.21
+        13.21,
+        8.67
       ],
       "tests/test_impact_bots.py": [
         0.21
@@ -892,7 +919,8 @@
         10.87
       ],
       "tests/test_impact_loc_coverage.py": [
-        11.4
+        11.4,
+        7.75
       ],
       "tests/test_impact_quoted_paths.py": [
         0.01
@@ -919,7 +947,8 @@
         5.68
       ],
       "tests/test_population_digest.py": [
-        4.0
+        4.0,
+        2.44
       ],
       "tests/test_ratchet_concurrency.py": [
         0.04
@@ -955,7 +984,8 @@
         0.92
       ],
       "tests/test_speed_ratchet.py": [
-        3.62
+        3.62,
+        2.28
       ],
       "tests/test_speed_seeding.py": [
         0.31
@@ -964,7 +994,8 @@
         0.03
       ],
       "tests/test_speed_workflow.py": [
-        28.4
+        28.4,
+        20.67
       ],
       "tests/test_stars.py": [
         0.77
