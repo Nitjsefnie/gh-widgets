@@ -253,7 +253,7 @@ of every cell: when the figure exceeds the recorded `measured` by more than the
 1.5-point hysteresis, `measured` becomes the figure and `floor` becomes the
 figure minus the 1.5-point gap, rounded down to one decimal, unless the old
 floor is higher. `report` commits the thresholds and times files as one commit,
-`chore(ratchet): update the test-ratchet records (automated)`, with the
+`chore(ratchet): update the test-ratchet records`, with the
 `main-push` deploy key. Raise coverage by writing tests; never edit a floor to
 fit a result.
 
