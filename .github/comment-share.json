@@ -15,14 +15,6 @@
     2049,
     2855
   ],
-  ".github/workflows/coverage-comment.yml": [
-    2998,
-    8095
-  ],
-  ".github/workflows/coverage-ratchet.yml": [
-    4814,
-    8221
-  ],
   ".github/workflows/gitfame-pool-probe.yml": [
     1580,
     5228
@@ -94,14 +86,6 @@
   "scripts/ci/counter_platform.py": [
     363,
     859
-  ],
-  "scripts/ci/coverage_ratchet.py": [
-    6027,
-    13675
-  ],
-  "scripts/ci/diff_coverage.py": [
-    4405,
-    11806
   ],
   "scripts/ci/gate_base_freshness.py": [
     11894,
@@ -186,14 +170,6 @@
   "tests/test_counter.py": [
     9735,
     31594
-  ],
-  "tests/test_coverage_ratchet.py": [
-    6537,
-    26724
-  ],
-  "tests/test_coverage_ratchet_ci.py": [
-    8192,
-    28808
   ],
   "tests/test_impact.py": [
     5834,
