@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 PRODUCERS = {
     ("tests.yml", "speed", "Upload the tightened speed baseline"),
-    ("coverage-ratchet.yml", "measure", "Upload the tightened coverage floor"),
 }
 
 
@@ -69,8 +68,9 @@ class TestUploadNamespaces(unittest.TestCase):
 
 class TestRatchetDataWindow(unittest.TestCase):
     def test_only_complete_data_windows_skip_and_name_the_compared_shas(self):
-        records = {"gate/coverage-floor.json", "gate/speed-baseline.json",
-                   ".github/comment-share.json", ".github/size-baseline.json"}
+        records = {"gate/speed-baseline.json", ".github/comment-share.json",
+                   ".github/size-baseline.json", ".github/ci-thresholds.json",
+                   ".github/test-times.json"}
         self.assertEqual(cd.RATCHET_DATA, records)
         environment = {"GITHUB_REPOSITORY": "owner/repo",
                        "GITHUB_SHA": "b" * 40,
@@ -154,9 +154,6 @@ class TestStagingCallers(unittest.TestCase):
             "    target.write_text('{}\\n')\n", encoding="utf-8")
         boundary.chmod(0o755)
         (root / "gate").mkdir()
-        (root / "gate/coverage-floor.json").write_text('{"floor": 80}')
-        (root / "candidate-coverage-floor.json").write_text(
-            json.dumps({"floor": 80 if unchanged else 81}))
         (root / ".github").mkdir()
         (root / ".github/comment-share.json").write_text('{"x.py": [1, 5]}\n')
         reports = root / "reports"
@@ -186,7 +183,6 @@ class TestStagingCallers(unittest.TestCase):
         return result, output.read_text() if output.exists() else ""
 
     @REQUIRES_POSIX_SHELL
-    @unittest.skipUnless(shutil.which("jq"), "coverage staging uses jq")
     def test_each_caller_stages_changes_skips_data_windows_and_ends_the_cascade(self):
         for filename, job_id, _ in PRODUCERS:
             steps = workflows()[filename]["jobs"][job_id]["steps"]

@@ -96,18 +96,17 @@ until someone looks at a broken README.
 the next test starting, it dumps every thread's stack and exits 1. A stall in
 the test or its `setUp`/`tearDown` is named by its unittest id; a later one
 (class teardown, interpreter exit) shows only its own stack. CI sets it to
-120 in the `unittest` and `speed` jobs; unset, it is off.
+120 in the `test` and `speed` jobs; unset, it is off.
 
-**`unittest discover` is the runner and stays the runner**, and pytest has
-nothing left to do here. The `speed` job in `tests.yml` counts deterministic
-statement counts with `scripts/ci/counter.py` and writes its own JUnit, since
-stdlib unittest cannot emit `--junitxml`. Every test file is stdlib unittest,
-so `unittest discover` imports the whole suite.
-`requirements/test.txt` still pins pytest for optional local `pytest` runs. CI installs that toolchain in
-the `unittest` and `speed` jobs but uses `unittest` rather than
-invoking pytest. Do not write a test against pytest fixtures or
-`assert`-rewriting — it would run in CI and then not run for anyone using
-the documented command.
+Every test file is stdlib unittest. The `test` job in `tests.yml` runs the
+suite through `Nitjsefnie-Actions/test-ratchet`'s `pytest` runner, which
+collects a plain `unittest` test case as pytest collects it and adds no other
+collection rule. The `speed` job runs `unittest discover` and counts
+deterministic statement counts with `scripts/ci/counter.py`, writing its own
+JUnit, since stdlib unittest cannot emit `--junitxml`. Do not write a test
+against pytest fixtures or `assert`-rewriting — it would run in the `test` job
+and then not run under `unittest discover`, in the `speed` job or for anyone
+using the documented command.
 
 ## CI
 
@@ -158,6 +157,12 @@ catches a doubling is derived from the current record. The baseline records
 an observed **range** per entry rather than a single number, because the
 raw CPU fallback path is not deterministic and a budget wide enough to cover
 its spread would be a gate that cannot fire.
+The `plan`, `test` and `report` jobs in `tests.yml` run the suite through
+`Nitjsefnie-Actions/test-ratchet`: `plan` splits the test files into shards
+balanced by recorded run time (`.github/test-times.json`), `test` runs one
+shard's tests with coverage measured in every OS × Python cell, and `report`
+combines the shards' coverage, gates it against a committed floor that only
+rises, and comments on the pull request.
 The aggregate job in `tests.yml` reports on every pull request and push to
 `main`, regardless of changed paths; branch protection requires
 it instead of the path-filtered gates. The `changes` job decides which gates
@@ -175,14 +180,14 @@ The other workflow files in `.github/workflows/` are:
 - `size-baseline.yml` — gates per-file line counts against committed records;
   its action commits tightened records on `main` pushes, and the aggregate
   check waits for its `size-baseline` job on the head SHA.
-- `coverage-ratchet.yml` — measures coverage on `main` and stages a strictly
-  higher floor for `ratchet-push.yml` after the successful run.
-- `ratchet-push.yml` — validates the coverage and speed artifacts as data,
-  then uses the protected `main-push` deploy key to commit a tightened record
-  to `main`.
+- `ratchet-push.yml` — validates the speed artifact as data, then uses the
+  protected `main-push` deploy key to commit a tightened record to `main`.
 - `comment-share.yml` — checks per-file comment shares; its action commits tightened
   records on `main` pushes.
-- `coverage-comment.yml` — posts patch coverage from the `tests.yml` `diff-coverage` job.
+- `test-ratchet-comment.yml` — once `tests` completes, runs test-ratchet's
+  `report` on that run's artifacts to comment on a fork's or Dependabot's pull
+  request, whose own `report` job cannot; it checks out the default branch and
+  runs nothing from the pull request.
 - `pr-gate.yml` — pull request policy checks.
 - `pin-guard.yml` — screens a pull request's test files for assertions that
   pin a dependency and reports candidates as review comments; not a gate.
@@ -207,10 +212,8 @@ is**, and that is the whole of what they cover:
 
 ```sh
 python3 -m unittest discover -v                                  # tests
-python3 -m coverage run --source=. --omit='tests/*' \
-  -m unittest discover && python3 -m coverage report \
-  && python3 -m coverage json -o coverage.json                  # coverage
-python3 scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
+python3 -m coverage run --source=. -m unittest discover \
+  && python3 -m coverage report                                 # coverage
 git ls-files -co --exclude-standard '*.py' | xargs pylint        # lint
 git ls-files -co --exclude-standard '*.py' | xargs pycodestyle   # lint
 pyright                                                          # types
@@ -241,27 +244,22 @@ is the only instruction here that has no local substitute.
 pinned toolchain. The coverage population is **every shipped source family**,
 `scripts/` included — the CI scripts and the bench harness all run in
 workflows, so leaving them out would report coverage for a smaller program than
-the one that ships. The floor lives in `gate/coverage-floor.json` as committed data.
-The recorded `measured` is the last measurement that raised or re-derived the
-record. `raise` writes only when a new measurement beats recorded `measured`
-by MORE than the 1.5-point hysteresis, and sets `floor = measured - 1.5`, the
-fixed calibration gap. An automated floor equal to measured would turn any
-0.1-point dip red. Lower and within-hysteresis measurements leave the record
-untouched. `coverage-ratchet.yml` stages only a strictly higher candidate floor
-and the SHA it measured. After
-the full workflow succeeds, `ratchet-push.yml` validates the artifact and
-commits the strictly higher floor to `main`. The `coverage-floor-candidate`
-artifact remains available to inspect; `scripts/ci/coverage_ratchet.py raise`
-keeps this hysteresis and fixed gap. Raise coverage by
-writing tests; never edit a floor to fit a result.
+the one that ships; `.coveragerc` leaves only `tests/` out. The floor is
+`coverage.python` in `.github/ci-thresholds.json`, measured on the
+`ubuntu-latest / 3.15` cell, and `report` compares the merged figure with the
+floor committed at the pull request's base. The records move only on a push to
+`main` whose gate passed and whose artifacts all passed and cover every shard
+of every cell: when the figure exceeds the recorded `measured` by more than the
+1.5-point hysteresis, `measured` becomes the figure and `floor` becomes the
+figure minus the 1.5-point gap, rounded down to one decimal, unless the old
+floor is higher. `report` commits the thresholds and times files as one commit,
+`chore(ratchet): update the test-ratchet records (automated)`, with the
+`main-push` deploy key. Raise coverage by writing tests; never edit a floor to
+fit a result.
 
-Adding or removing a source module moves the measured population. The `files`
-tripwire then fails until a person re-derives `gate/coverage-floor.json` for the
-new population, including its file count and basis. Both `gate` and `raise`
-refuse a measurement whose file count differs from the committed record, so the
-automatic push cannot hide that change. The feature-gated unit-suite raise
-above also stays human-reviewed: a person writes the raised envelope into a
-`feat:` change, and it must never be automated.
+The feature-gated unit-suite raise above stays human-reviewed: a person
+writes the raised envelope into a `feat:` change, and it must never be
+automated.
 
 The rest need GitHub: `codeql` (security analysis, Python only — this repo
 has no JS; weekly cron, because a query published today would otherwise
@@ -275,8 +273,8 @@ baseline committed it reports what
 it measured and exits 0, because no data is not a regression; elapsed time
 survives only as a gross smoke check that reports no number), `release`
 (tags `v<VERSION>` once every gate a `VERSION` push
-schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `unittest`,
-`aggregate` —
+schedules — `lint`, `pyright`, `speed`, `pip-audit`, `analyze`, `plan`,
+`test`, `report`, `aggregate` —
 has both *reported* and passed; a gate that never reports stops the release
 rather than shrinking the bar, and a `workflow_dispatch` may waive one by
 name, loudly), and the three bespoke `gitfame-*` / `targeted-blame-audit`
@@ -287,12 +285,11 @@ measured value strictly beats, and `ratchet-push.yml` validates and commits
 that data. The feature-gated unit-suite raise and the interpreter-move renderer
 raise above remain the only routes that move speed maxima UP.
 
-Both staging steps skip a landed window that changed only
-`gate/coverage-floor.json`, `gate/speed-baseline.json`,
-`.github/comment-share.json` and/or `.github/size-baseline.json`. This ends
-the feedback after one follow-up run,
-regardless of CPU noise. Coverage would already no-op on an unchanged measured
-floor; its skip is uniform with the other producers. Unknown comparisons and
+The speed staging step skips a landed window that changed only
+`gate/speed-baseline.json`, `.github/comment-share.json`,
+`.github/size-baseline.json`, `.github/ci-thresholds.json` and/or
+`.github/test-times.json`. This ends the feedback after one follow-up run,
+regardless of CPU noise. Unknown comparisons and
 missing/new-branch before SHAs stage normally; the push still checks staleness.
 
 ### Size baseline

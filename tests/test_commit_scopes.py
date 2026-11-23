@@ -77,8 +77,8 @@ class CommitScopesTests(unittest.TestCase):  # pylint: disable=too-many-public-m
         module = _load()
         assert module.workflow_name_set(ROOT) == {
             'tests', 'claim', 'pr gate', 'pr-gate', 'secrets', 'release',
-            'coverage comment', 'coverage-comment',
-            'coverage-ratchet', 'audit', 'codeql', 'scorecard',
+            'test-ratchet comment', 'test-ratchet-comment',
+            'audit', 'codeql', 'scorecard',
             'ratchet push', 'ratchet-push', 'pin test screen', 'pin-guard',
             'comment share', 'comment-share',
             'size baseline', 'size-baseline',

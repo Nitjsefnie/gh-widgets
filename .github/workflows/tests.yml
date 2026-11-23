@@ -7,10 +7,8 @@ name: tests
 # - the suite runs across the OS × Python matrix below, not just one
 #   environment (issue #6).
 # - no services and no network (gql_fn is injected): the suite is stdlib
-#   unittest. pytest is neither a suite dependency nor a CI tool any more:
-#   it was the speed job's timing harness, and that job counts deterministic
-#   statement counts now. The pinned requirement remains available to local
-#   pytest runs.
+#   unittest, run by Nitjsefnie-Actions/test-ratchet's pytest runner in the
+#   plan, test and report jobs.
 #
 # The changes job owns path applicability, so workflow triggers stay
 # unfiltered by paths. Push runs only on main; working branches receive CI
@@ -76,9 +74,29 @@ jobs:
           GH_WIDGETS_SCHEDULE: ${{ github.event.schedule }}
         run: python3 scripts/ci/changes_detect.py
 
-  unittest:
+  plan:
+    # test-ratchet's plan: one shard per cell, because a cell runs the whole
+    # suite in about two minutes. The `tests` gate skips this job, and so
+    # `test` and `report` with it.
     needs: changes
     if: needs.changes.outputs.tests == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        uses: Nitjsefnie-Actions/test-ratchet/plan@ad6505d6da67b129dddbecb326f03d19e834c74c # v1.0.0
+        with:
+          tests: tests/**/test_*.py
+          times: .github/test-times.json
+          shards: 1
+
+  test:
+    needs: plan
     runs-on: ${{ matrix.os }}
     # The slowest matrix cell takes 1m55s; 15 minutes caps a hung job below GitHub's 6-hour default.
     timeout-minutes: 15
@@ -86,9 +104,7 @@ jobs:
     defaults:
       run:
         # Pin bash on every OS. Windows would otherwise run these blocks
-        # under pwsh, and nothing here is shell-agnostic: the line
-        # continuations and the $GITHUB_STEP_SUMMARY writes assume POSIX
-        # shell. Git-bash ships with the hosted Windows runner.
+        # under pwsh. Git-bash ships with the hosted Windows runner.
         shell: bash
 
     strategy:
@@ -102,12 +118,10 @@ jobs:
         # older or newer.
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.14", "3.15"]
+        shard: ${{ fromJSON(needs.plan.outputs.matrix).shard }}
         include:
-          # The one cell that MEASURES the suite; every other cell just
-          # runs it. Coverage is comparable only within a single Python
-          # build, so the ratchet below stays calibrated to the one cell
-          # it was measured on rather than becoming six gates with six
-          # unknown floors.
+          # The cell `report` gates: coverage is comparable only within a
+          # single Python build. It also requires git-fame.
           - os: ubuntu-latest
             python-version: "3.15"
             measured: true
@@ -115,9 +129,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Nothing in this workflow pushes. Leaving the job token in
-          # .git/config lets any later step — or anything a dependency
-          # pulls in — reuse it.
           persist-credentials: false
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -125,15 +136,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install the test toolchain
-        id: install
-        # The renderer and suite are stdlib-only; coverage is needed on the
-        # measured cell. pytest is pinned only so a local run of the same
-        # files works; nothing in this workflow asks it for anything.
-        # Install requirements/test.txt on EVERY cell
-        # so every cell runs the whole suite with the same toolchain. Every
-        # run block uses `python`, not `python3`: hosted Windows runners have
-        # no python3 on PATH, and setup-python puts python on PATH on all
-        # three OSes.
+        # Every cell installs requirements/test.txt, so every cell runs the
+        # whole suite with the same toolchain. Every run block uses `python`,
+        # not `python3`: hosted Windows runners have no python3 on PATH, and
+        # setup-python puts python on PATH on all three OSes.
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/test.txt
@@ -145,64 +151,47 @@ jobs:
           python -m pip install "$FORK_PIN"
 
       - name: Run tests
-        id: unittest
-        # Still stdlib `unittest discover` (never pytest), under coverage on the
-        # measured cell. Below the job's limit: a hang fails this step (setup < 3 min).
+        # Below the job's limit: a hang fails this step (setup < 3 min).
         timeout-minutes: 12
         env:
-          # Undefined on the other five cells, so these read as "" there.
-          GH_WIDGETS_MEASURED: ${{ matrix.measured }}
+          # Undefined on the other five cells, so it reads as "" there.
           GH_WIDGETS_REQUIRE_GIT_FAME: ${{ matrix.measured }}
           GH_WIDGETS_TEST_TIMEOUT: "120"  # tests/_ghw_watchdog.py
-        run: |
-          if [ "$GH_WIDGETS_MEASURED" = "true" ]; then
-            # Every shipped source family is in the population, scripts/
-            # included: resolve-repo-pins.py, compare_counters.py and the
-            # three bench files all run in workflows below, so omitting them
-            # reported a coverage number for a smaller program than the one
-            # that ships. Only the tests themselves are left out — they are
-            # the instrument, not the subject.
-            python -m coverage run --source=. --omit='tests/*' \
-              -m unittest discover -v
-          else
-            python -m unittest discover -v
-          fi
-
-      - name: Coverage summary
-        # Renders whether or not the gate below passes — a coverage
-        # regression is only actionable if you can see WHICH file lost
-        # lines, and re-reading a scrolled CI log to find that is exactly
-        # the friction that gets a gate disabled.
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
-        run: |
-          {
-            echo '### Coverage'
-            echo
-            python -m coverage report --format=markdown --precision=1
-          } >> "$GITHUB_STEP_SUMMARY"
-          python -m coverage xml -o coverage.xml
-          # The gate step below reads this, not the human summary: it is the
-          # one surface that states the totals as data instead of as a table.
-          python -m coverage json -o coverage.json
-
-      - name: Upload coverage.xml
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: Nitjsefnie-Actions/test-ratchet/run@ad6505d6da67b129dddbecb326f03d19e834c74c # v1.0.0
         with:
-          # One measured cell, so one artifact — no per-matrix naming.
-          name: coverage-xml
-          path: coverage.xml
-          if-no-files-found: error
+          runner: pytest
+          tests: tests/**/test_*.py
+          times: .github/test-times.json
+          cell: ${{ matrix.os }} / ${{ matrix.python-version }}
+          shard: ${{ matrix.shard }}
+          # The whole tree; .coveragerc leaves tests/ out.
+          source: .
 
-      - name: Coverage gate
-        if: ${{ !cancelled() && steps.unittest.conclusion != 'skipped' && matrix.measured == true }}
-        # A RATCHET, not a target — and the floor is committed data now, not a
-        # literal in this file: gate/coverage-floor.json
-        # carries it, coverage-ratchet.yml stages a strict climb for
-        # ratchet-push.yml to land after the successful main run, and no
-        # automated code path lowers it.
-        # So this step only ever asks the question; it never answers it.
-        run: python scripts/ci/coverage_ratchet.py gate --coverage-json coverage.json
+  report:
+    # Gates the measured cell's coverage against .github/ci-thresholds.json
+    # and, on a push to main, commits the raised records with the main-push
+    # deploy key. A fork's pull request gets its comment from
+    # test-ratchet-comment.yml.
+    needs: [changes, test]
+    if: ${{ !cancelled() && needs.changes.outputs.tests == 'run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && format('{0}-push', github.event.repository.default_branch) || '' }}
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Nitjsefnie-Actions/test-ratchet/report@ad6505d6da67b129dddbecb326f03d19e834c74c # v1.0.0
+        with:
+          github-token: ${{ github.token }}
+          cell: ubuntu-latest / 3.15
+          times: .github/test-times.json
+          push-key: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
 
   lint:
     # Lint gate (issue #5): pylint + pycodestyle. Style is deliberately NOT
@@ -529,9 +518,8 @@ jobs:
     #
     # Install the pinned test toolchain before measuring. unittest discovery
     # imports every test_*.py module it collects, so the measuring environment
-    # needs the same requirements/test.txt as the unittest job. pytest is
-    # installed as part of that shared toolchain but unittest remains the
-    # runner. If collection/import fails, the comparator reports an environment
+    # needs the same requirements/test.txt as the test job. unittest is this
+    # job's runner. If collection/import fails, the comparator reports an environment
     # failure rather than calling it a measured regression.
 
     needs: changes
@@ -1350,73 +1338,6 @@ jobs:
         # both checks fetch main and must read the rebased head.
         run: python3 scripts/ci/commit_scopes.py
 
-  diff-coverage:
-    # INFORMATIONAL, never a gate — which is why it is deliberately absent
-    # from `aggregate` below. A comment that failed to post must not be able
-    # to block a merge, and the number it reports is one a reviewer judges:
-    # a refactor that only moves code, and a fix whose test lives behind an
-    # optional dependency, both read low for reasons a threshold cannot tell
-    # apart. The ratchet in `unittest` is the gate.
-    #
-    # Pull requests only, and only when the measured cell produced the
-    # coverage artifact this job consumes.
-    if: ${{ !cancelled() && needs.unittest.result == 'success'
-               && github.event_name == 'pull_request' }}
-    needs: [unittest]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    # This job reads the proposed tree, so it must not carry a token that can
-    # write conversation. The trusted workflow_run commenter owns that token.
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The merge commit the event named, and the exact SHA `unittest`
-          # measured. Resolving `refs/pull/N/merge` here instead could hand
-          # this job a different tree than the coverage report describes.
-          ref: ${{ github.sha }}
-          # Both parents of that merge commit, which the diff below needs.
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: coverage-xml
-
-      - name: Install the pinned statement analyzer
-        run: python3 -m pip install --requirement requirements/test.txt
-
-      - name: Measure the coverage of this change
-        # HEAD is the merge tree checked out above and HEAD^1 is, by
-        # construction, the base tip that was merged into it. The event
-        # payload's base.sha is not that: the base branch can advance between
-        # the event and checkout, and its later commits must not be attributed
-        # to this pull request.
-        run: |
-          git diff --text --no-ext-diff --no-textconv --unified=0 \
-            HEAD^1..HEAD > patch.diff
-          python3 scripts/ci/diff_coverage.py \
-            --coverage coverage.xml \
-            --diff patch.diff > body.md
-          cat body.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Package the comment for the trusted commenter
-        env:
-          GH_WIDGETS_PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: printf '%s\n' "$GH_WIDGETS_PR_NUMBER" > pr-number.txt
-
-      - name: Upload the comment for the trusted commenter
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: diff-coverage-comment
-          path: |
-            body.md
-            pr-number.txt
-          if-no-files-found: error
-
   aggregate:
     # The required check always reports on pull requests and main pushes,
     # including commits where every path-filtered gate is not applicable.
@@ -1428,7 +1349,7 @@ jobs:
         || github.event_name == 'workflow_dispatch'
         || (github.event_name == 'push'
             && github.ref == 'refs/heads/main')) }}
-    needs: [changes, unittest, lint, pyright, pip-audit, speed, analyze, actionlint, gates]
+    needs: [changes, plan, test, report, lint, pyright, pip-audit, speed, analyze, actionlint, gates]
     permissions:
       contents: read
       pull-requests: read

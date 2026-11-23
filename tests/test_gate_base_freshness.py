@@ -207,10 +207,9 @@ class GateBaseFreshnessTests(unittest.TestCase):  # pylint: disable=too-many-pub
         paths = module.gate_paths(ROOT)
         for path in ('.github/workflows/tests.yml',
                      'scripts/ci/aggregate_gate.py', 'scripts/ci/changes_detect.py',
-                     'scripts/ci/coverage_ratchet.py',
                      'scripts/ci/gate_base_freshness.py',
                      'scripts/ci/commit_scopes.py',
-                     'gate/coverage-floor.json', 'gate/speed-baseline.json'):
+                     'gate/speed-baseline.json'):
             self.assertIn(path, paths)
 
     def test_green_when_the_head_carries_every_gate_commit(self):

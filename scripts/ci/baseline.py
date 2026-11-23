@@ -12,7 +12,7 @@ Imported by path rather than as a package, for the same reason counter.py
 is: scripts/ci holds standalone CI entry points and deliberately has no
 __init__.py.
 
-Modelled on gate/coverage-floor.json: committed data rather than a literal in a
+Committed data rather than a literal in a
 workflow, a REQUIRED `basis` stating the current reason a number sits where
 it does (its history stays in git), a provenance pair, and a validator that refuses rather than
 degrades.

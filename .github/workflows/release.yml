@@ -175,16 +175,16 @@ jobs:
         # release, which is the opposite of what the old poll did.
         #
         # Each entry is the check-run NAME PREFIX a required job reports
-        # under. Among tests.yml's six entries, four report the job name;
-        # `unittest` is a six-leg matrix, so GitHub appends " (os, python)",
+        # under. Among tests.yml's eight entries, six report the job name;
+        # `test` is a matrix, so GitHub appends " (os, python, shard)",
         # and `analyze` reports its matrix name, "analyze (python)". Those
-        # six trigger on a VERSION push through tests.yml's unfiltered push.
+        # eight trigger on a VERSION push through tests.yml's unfiltered push.
         # The new `gitleaks` entry reports its job name and secrets.yml's
         # push-to-main trigger also includes that commit. Deliberately absent
         # from the manifest are the actionlint job (allow-lists
         # .github/workflows/**), claim.yml (issue_comment), pr-gate.yml
-        # (pull_request_target), ratchet-push.yml (workflow_run data-push,
-        # not a gate on the release commit's quality), comment-share.yml
+        # (pull_request_target), ratchet-push.yml and test-ratchet-comment.yml
+        # (workflow_run, not a gate on the release commit's quality), comment-share.yml
         # (VERSION pushes run tighten only; its check leg is PR-only), and
         # targeted-blame-audit.yml plus the two gitfame-* measurements
         # (schedule or dispatch only).
@@ -212,9 +212,8 @@ jobs:
         #
         # A complete successful tip manifest needs no ancestor checks. In a
         # comment-share-only gap, aggregate, gitleaks and size-baseline must
-        # still succeed at the tip; only code legs may skip and only
-        # coverage-ratchet may be absent; fill the gap from the nearest
-        # code window's manifest.
+        # still succeed at the tip; only code legs may skip; fill the gap
+        # from the nearest code window's manifest.
         # Unknown windows refuse; cancelled checks always refuse. Incidental
         # checks retain the wider success/skipped/neutral acceptance set.
         run: |
@@ -224,8 +223,9 @@ jobs:
             speed       # tests.yml, job `speed`
             pip-audit   # tests.yml, job `pip-audit`
             analyze     # tests.yml, job `analyze`
-            unittest    # tests.yml, job `unittest` (six-leg matrix)
-            coverage-ratchet  # coverage-ratchet.yml, job `measure` (renames its check run to `coverage-ratchet`)
+            plan        # tests.yml, job `plan`
+            test        # tests.yml, job `test` (six-cell matrix)
+            report      # tests.yml, job `report`
             aggregate   # tests.yml, job `aggregate`
             gitleaks    # secrets.yml, job `gitleaks`
             size-baseline  # size-baseline.yml, job `size-baseline`
@@ -368,10 +368,10 @@ jobs:
                 allow_missing=no
                 if [ "$data_window" = yes ]; then
                   case "$entry" in
-                    lint|pyright|speed|pip-audit|analyze|unittest) allow_skipped=yes ;;
+                    lint|pyright|speed|pip-audit|analyze|plan|test|report) allow_skipped=yes ;;
                   esac
                   # Intermediate records need not have been push tips.
-                  if [ "$check_sha" != "$GH_WIDGETS_SHA" ] || [ "$entry" = coverage-ratchet ]; then
+                  if [ "$check_sha" != "$GH_WIDGETS_SHA" ]; then
                     allow_missing=yes
                   fi
                 fi

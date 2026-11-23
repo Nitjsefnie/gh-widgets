@@ -21,7 +21,7 @@ def _needs(**results):
 def _all_success():
     needs = _needs(changes="success")
     needs.update({job: {"result": "success"}
-                  for job in ag.GATE_JOBS.values()})
+                  for jobs in ag.GATE_JOBS.values() for job in jobs})
     return needs
 
 
@@ -148,7 +148,7 @@ class NeedsClassificationTests(unittest.TestCase):
     def test_only_changes_is_strict(self):
         self.assertEqual(ag.STRICT, frozenset({"changes"}))
         self.assertEqual(ag.allowed_results("changes"), {"success"})
-        for job in ag.GATE_JOBS.values():
+        for job in (job for jobs in ag.GATE_JOBS.values() for job in jobs):
             with self.subTest(job=job):
                 self.assertEqual(ag.allowed_results(job),
                                  {"success", "skipped"})
@@ -183,7 +183,7 @@ class NeedsClassificationTests(unittest.TestCase):
 
     def test_applicable_skips_and_successful_nonapplicable_jobs_fail(self):
         needs = _all_success()
-        needs["unittest"]["result"] = "skipped"
+        needs["test"]["result"] = "skipped"
         result = ag.decide(needs, _applicability())
         self.assertEqual(result["tests"].verdict, ag.FAILED)
 
@@ -193,7 +193,8 @@ class NeedsClassificationTests(unittest.TestCase):
 
     def test_skips_pass_only_when_classification_says_skip(self):
         needs = _all_success()
-        needs["unittest"]["result"] = "skipped"
+        for job in ag.GATE_JOBS["tests"]:
+            needs[job]["result"] = "skipped"
         needs["actionlint"]["result"] = "skipped"
         result = ag.decide(
             needs, _applicability(tests="skip", actionlint="skip"))
@@ -208,6 +209,17 @@ class NeedsClassificationTests(unittest.TestCase):
                 result = ag.decide(needs, _applicability())
                 self.assertEqual(result["speed"].verdict, ag.FAILED)
                 self.assertEqual(result["tests"].verdict, ag.PASSED)
+
+    def test_a_gate_of_several_jobs_fails_when_any_of_them_fails(self):
+        for job in ag.GATE_JOBS["tests"]:
+            for state in ("failure", "skipped"):
+                needs = _all_success()
+                needs[job]["result"] = state
+                with self.subTest(job=job, state=state):
+                    rows = ag.decide(needs, _applicability())
+                    self.assertEqual(rows["tests"].verdict, ag.FAILED)
+                    self.assertIn(job, rows["tests"].detail)
+                    self.assertEqual(rows["lint"].verdict, ag.PASSED)
 
     def test_missing_and_extra_need_jobs_are_rejected(self):
         needs = _all_success()
@@ -234,9 +246,10 @@ class NeedsClassificationTests(unittest.TestCase):
     def test_docs_only_push_passes_with_unconditional_gates_success(self):
         applicability = cd.classify({'README.md'})
         needs = _all_success()
-        for gate, job in ag.GATE_JOBS.items():
+        for gate, jobs in ag.GATE_JOBS.items():
             if applicability[gate] == 'skip':
-                needs[job]['result'] = 'skipped'
+                for job in jobs:
+                    needs[job]['result'] = 'skipped'
         rows = ag.decide(needs, applicability)
         self.assertEqual(rows['gate-integrity'].verdict, ag.PASSED)
         self.assertTrue(all(row.verdict in ag.GREEN for row in rows.values()))

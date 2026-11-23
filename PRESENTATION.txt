@@ -79,6 +79,6 @@ Two more things that keep a scheduled renderer from lying to you quietly:
 :calendar: And the reason a full-year contribution query isn't one query: GitHub answers it with `RESOURCE_LIMITS_EXCEEDED`. A cold cache walks 12 sequential monthly windows; a warm one refetches only the trailing 7 days and merges onto the cached ones.
 
 Repository layout: src/ holds renderers and runtime helpers, tests/ holds the
-unittest package, gate/ holds coverage and speed records, and requirements/
+unittest package, gate/ holds the speed record, and requirements/
 holds pinned development tools. ghwidgets_data.py remains at the root for
 pinned consumers. Run python3 -m unittest discover -v from the repository root.

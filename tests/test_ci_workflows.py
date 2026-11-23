@@ -207,73 +207,6 @@ class TestGitFameForkPin(unittest.TestCase):
         self.assertEqual({sha for _, sha in arms}, documented, arms)
 
 
-class TestCoverageRatchetCellParity(unittest.TestCase):
-    """coverage-ratchet must measure the program tests.yml's cell measures.
-
-    A coverage floor is comparable only within one program-environment, not
-    just one interpreter build. The git-fame-gated classes in test_impact.py
-    skip when the tool is absent and GH_WIDGETS_REQUIRE_GIT_FAME is unset —
-    a green suite whose three check_git_fame() success-path statements go
-    unexecuted, moving the reading 903 -> 906 missing and 83.2 -> 83.1
-    against an unchanged 5385-statement floor. That reading turns the
-    ratchet red with no real coverage change on the tree.
-    """
-
-    @REQUIRES_POSIX_SHELL
-    def test_measure_matches_the_measured_cell_toolchain(self):
-        # The pin alone would measure correctly but fail silently if the
-        # install ever broke; the env alone would fail the run loudly but
-        # never measure. tests.yml's measured cell carries both, and this
-        # job's value is only the comparison against a floor measured in
-        # that cell's program, so both are required here. The install is
-        # judged at the process boundary, not by text: the decoded run
-        # scalar executes under bash with a recording python stub on
-        # PATH, so a commented or colon-prefixed "install" — any spelling
-        # that never invokes the interpreter — records nothing and fails,
-        # a wrong pin records a different ref and fails, and a wrapper
-        # that genuinely execs python still passes. The env is judged on
-        # Measure's own decoded mapping, because an env on a sibling step
-        # never reaches the unittest process. Each half is caught in its
-        # own direction: dropping, commenting or no-oping the install
-        # fails the recorded-call assertions; moving or dropping the env
-        # fails the measure-env one.
-        workflow = yaml.safe_load(
-            (WORKFLOWS / "coverage-ratchet.yml").read_text())
-        steps = workflow["jobs"]["measure"]["steps"]
-        measure_index = next(index for index, step in enumerate(steps)
-                             if "coverage run" in step.get("run", ""))
-        documented = set(DOCUMENTED_PIN.findall(
-            (REPO_ROOT / "CLAUDE.md").read_text()))
-        self.assertEqual(len(documented), 1, documented)
-        installs = [step for step in steps[:measure_index]
-                    if "FORK_PIN=" in step.get("run", "")]
-        self.assertTrue(installs,
-                        "no step before Measure assigns the pinned fork")
-        # The recorder keeps ARGV BOUNDARIES — one JSON array per python
-        # invocation, so arguments that arrive grouped into one string
-        # cannot masquerade as the separate `-m pip install <url>` shape.
-        # The install call is then the exact expected vector: the pin is
-        # the target requirement, not any substring of the call — a
-        # sibling invocation cannot lend the ref to the install, and an
-        # option value riding on the call (--cache-dir, --index-url)
-        # targets nothing. A wrapper that genuinely execs python records
-        # the same vector and passes.
-        vectors = _argv_calls_with_recording_python(installs)
-        install_vectors = [vector for vector in vectors
-                           if vector[:3] == ["-m", "pip", "install"]]
-        self.assertEqual(len(install_vectors), 1, vectors)
-        (sha,) = documented
-        self.assertEqual(
-            install_vectors[0],
-            ["-m", "pip", "install",
-             f"git+https://github.com/Nitjsefnie-OSC/git-fame@{sha}"],
-            install_vectors)
-        measure_env = steps[measure_index].get("env", {})
-        self.assertEqual(
-            measure_env.get("GH_WIDGETS_REQUIRE_GIT_FAME"), "true",
-            f"Measure must run with the require env set, got {measure_env}")
-
-
 class TestSecretsScanWorkflow(unittest.TestCase):
     """Pin the secret scan's trigger, history, and aggregate wiring."""
 
@@ -446,8 +379,8 @@ class TestConsolidatedCiControls(unittest.TestCase):
         assert needs is not None
         self.assertEqual(
             {name.strip() for name in needs.group(1).split(",")},
-            {"changes", "unittest", "lint", "pyright", "pip-audit",
-             "speed", "analyze", "actionlint", "gates"})
+            {"changes", "plan", "test", "report", "lint", "pyright",
+             "pip-audit", "speed", "analyze", "actionlint", "gates"})
         trigger = _trigger_block(self.workflow)
         self.assertNotRegex(trigger, r"(?m)^\s+paths(?:-ignore)?:")
         self.assertFalse((self.scripts / "aggregate_gates.py").exists())
@@ -786,293 +719,6 @@ class TestScorecardWorkflow(unittest.TestCase):
         })
 
 
-class TestPatchCoverageWorkflows(unittest.TestCase):
-    """Keep patch coverage informational and its writer trusted."""
-
-    def setUp(self):
-        self.tests_text = (WORKFLOWS / "tests.yml").read_text(encoding="utf-8")
-        self.tests = yaml.safe_load(self.tests_text)
-        self.jobs = self.tests["jobs"]
-        self._stub_interpreter = None
-
-    def _post_step_script(self):
-        workflow = yaml.safe_load(
-            (WORKFLOWS / "coverage-comment.yml").read_text(encoding="utf-8"))
-        return next(
-            step["run"]
-            for step in workflow["jobs"]["comment"]["steps"]
-            if step.get("name") == "Post or update the pull request comment")
-
-    def _run_post_step(self, *, claimed_number="42", current_sha=None,
-                       current_repo="owner/repo", comments=(), failure=None):
-        """Run the shipped writer script with an allow-listed offline gh stub."""
-        with _ghw_temp.tempdir(
-                prefix="diff-coverage-comment-") as directory:
-            cwd = Path(directory)
-            (cwd / "body.md").write_text(
-                "### Patch coverage of this change\n", encoding="utf-8")
-            (cwd / "pr-number.txt").write_text(
-                f"{claimed_number}\n", encoding="utf-8")
-            calls_path = cwd / "gh-calls.jsonl"
-            stub = cwd / "gh"
-            stub.with_suffix(".py").write_text(textwrap.dedent("""\
-                import json
-                import os
-                import sys
-
-                def refuse(message):
-                    print("strict gh stub refused: " + message, file=sys.stderr)
-                    raise SystemExit(90)
-
-                args = sys.argv[1:]
-                with open(os.environ["GH_CALLS"], "a", encoding="utf-8") as log:
-                    log.write(json.dumps(args) + "\\n")
-                if not args or args.pop(0) != "api":
-                    refuse("only gh api is allowed")
-                method = None
-                if "-X" in args:
-                    index = args.index("-X")
-                    if index + 1 >= len(args):
-                        refuse("missing method")
-                    method = args[index + 1]
-                    del args[index:index + 2]
-                endpoints = [arg for arg in args if arg.startswith("repos/")]
-                if len(endpoints) != 1:
-                    refuse("expected exactly one API endpoint")
-                endpoint = endpoints[0]
-                scenario = json.loads(os.environ["GH_SCENARIO"])
-
-                def require(condition, message):
-                    if not condition:
-                        refuse(message)
-
-                headers = ["-H", "Cache-Control: no-cache"]
-                if (endpoint == "repos/owner/repo/issues/42/comments"
-                        and method is None):
-                    require(method is None, "comment listing must be a read")
-                    require(args == headers + ["--paginate", endpoint,
-                            "--jq", ".[]"], "unexpected comment-list arguments")
-                    if scenario["failure"] == "comments":
-                        print("comment lookup failed", file=sys.stderr)
-                        raise SystemExit(17)
-                    for comment in scenario["comments"]:
-                        print(json.dumps(comment))
-                elif endpoint == "repos/owner/repo/pulls/42":
-                    require(method is None, "head lookup must be a read")
-                    require(args == headers + [endpoint, "--jq",
-                            '[.head.sha // "", .head.repo.full_name // ""] | @tsv'],
-                            "unexpected head-lookup arguments")
-                    if scenario["failure"] == "head":
-                        print("head lookup failed", file=sys.stderr)
-                        raise SystemExit(18)
-                    print(scenario["current_sha"] + "\\t" +
-                          scenario["current_repo"])
-                elif endpoint == "repos/owner/repo/issues/comments/314":
-                    require(method == "PATCH", "only marker PATCH is allowed")
-                    require(args == [endpoint, "-F", "body=@comment.md"],
-                            "unexpected PATCH arguments")
-                    require("<!-- gh-widgets-diff-coverage -->" in
-                            open("comment.md", encoding="utf-8").read(),
-                            "PATCH body lacks the marker")
-                elif (endpoint == "repos/owner/repo/issues/42/comments"
-                      and method == "POST"):
-                    require(method == "POST", "only comment POST is allowed")
-                    require(args == [endpoint, "-F", "body=@comment.md"],
-                            "unexpected POST arguments")
-                    require("<!-- gh-widgets-diff-coverage -->" in
-                            open("comment.md", encoding="utf-8").read(),
-                            "POST body lacks the marker")
-                else:
-                    refuse("unexpected endpoint " + endpoint)
-                raise SystemExit(0)
-                """), encoding="utf-8")
-            stub.write_text(
-                "#!/bin/sh\nexec " +
-                shlex.quote(str(self._stub_interpreter or sys.executable)) + " " +
-                shlex.quote(str(stub.with_suffix(".py"))) + ' "$@"\n',
-                encoding="utf-8")
-            stub.chmod(0o755)
-            expected_sha = "a" * 40
-            scenario = {
-                "current_sha": current_sha or expected_sha,
-                "current_repo": current_repo,
-                "comments": list(comments),
-                "failure": failure,
-            }
-            environment = dict(
-                os.environ,
-                PATH=f"{cwd}{os.pathsep}{os.environ['PATH']}",
-                GH_TOKEN="test-token",
-                GH_CALLS=str(calls_path),
-                GH_SCENARIO=json.dumps(scenario),
-                GH_WIDGETS_REPO="owner/repo",
-                GH_WIDGETS_HEAD_SHA=expected_sha,
-                GH_WIDGETS_HEAD_REPO="owner/repo",
-                GH_WIDGETS_PR_NUMBER="42")
-            result = subprocess.run(
-                ["bash", "-e", "-o", "pipefail", "-c",
-                 self._post_step_script()],
-                cwd=cwd, env=environment, capture_output=True, text=True,
-                check=False, timeout=10)
-            calls = ([json.loads(line) for line in
-                      calls_path.read_text(encoding="utf-8").splitlines()]
-                     if calls_path.exists() else [])
-            return result, calls
-
-    def test_diff_coverage_runs_only_for_successful_pull_request_tests(self):
-        job = self.jobs.get("diff-coverage")
-        self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
-        assert job is not None
-
-        self.assertEqual(job.get("needs"), ["unittest"])
-        condition = " ".join(job.get("if", "").split())
-        self.assertIn("needs.unittest.result == 'success'", condition)
-        self.assertIn("github.event_name == 'pull_request'", condition)
-        self.assertIn("!cancelled()", condition)
-        self.assertEqual(job.get("permissions"), {"contents": "read"})
-        self.assertNotIn("diff-coverage", self.jobs["aggregate"].get("needs", []))
-        self.assertLess(self.tests_text.index("\n  diff-coverage:"),
-                        self.tests_text.index("\n  aggregate:"))
-
-    def test_diff_coverage_measures_the_merge_commit(self):
-        job = self.jobs.get("diff-coverage")
-        self.assertIsNotNone(job, "tests.yml has no diff-coverage job")
-        assert job is not None
-        steps = job.get("steps", [])
-        measure = next(step for step in steps
-                       if step.get("name") == "Measure the coverage of this change")
-        run = measure.get("run", "")
-        self.assertIn("--text --no-ext-diff --no-textconv --unified=0", run)
-        self.assertIn("HEAD^1..HEAD", run)
-        self.assertIn("scripts/ci/diff_coverage.py", run)
-        self.assertNotIn("--js-coverage", run)
-        self.assertIn("$GITHUB_STEP_SUMMARY", run)
-
-    def test_coverage_comment_workflow_has_one_trusted_writer_and_updates_in_place(self):
-        path = WORKFLOWS / "coverage-comment.yml"
-        self.assertTrue(path.is_file(), "missing coverage-comment.yml")
-        text = path.read_text(encoding="utf-8")
-        workflow = yaml.safe_load(text)
-        trigger_key = "on" if "on" in workflow else True
-        self.assertEqual(workflow[trigger_key]["workflow_run"], {
-            "workflows": ["tests"], "types": ["completed"],
-        })
-        self.assertEqual(workflow.get("permissions"), {
-            "pull-requests": "write", "actions": "read",
-        })
-        self.assertRegex(text, r"(?m)^  workflow_run:  # zizmor: ignore\[dangerous-triggers\]$")
-        self.assertNotIn("actions/checkout", text)
-        self.assertEqual(set(workflow.get("jobs", {})), {"comment"})
-        job = workflow["jobs"]["comment"]
-        self.assertEqual(
-            " ".join(job.get("if", "").split()),
-            "github.event.workflow_run.event == 'pull_request'")
-        steps = job.get("steps", [])
-        self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@")
-                             for step in steps))
-        downloads = [step for step in steps
-                     if step.get("uses", "").startswith(
-                         "actions/download-artifact@")]
-        self.assertEqual(len(downloads), 1)
-
-        scripts = "\n".join(step.get("run", "") for step in steps)
-        artifact_lookup = next(step for step in steps
-                               if step.get("name") == "Check for the comment artifact")
-        self.assertIn("Cache-Control: no-cache", artifact_lookup.get("run", ""))
-        self.assertIn("--paginate", artifact_lookup.get("run", ""))
-        self.assertEqual([step["uses"] for step in steps if "uses" in step],
-                         [downloads[0]["uses"]])
-        self.assertIn("GH_WIDGETS_HEAD_REPO", scripts)
-        self.assertIn(".head.sha", scripts)
-        self.assertIn(".head.repo.full_name", scripts)
-        self.assertIn("test -f pr-number.txt", scripts)
-        self.assertIn('if [ "$claimed" != "$GH_WIDGETS_PR_NUMBER" ]; then', scripts)
-        self.assertIn("<!-- gh-widgets-diff-coverage -->", scripts)
-        self.assertIn("gh api -X POST", scripts)
-        self.assertIn("gh api -X PATCH", scripts)
-        self.assertIn("Cache-Control: no-cache", scripts)
-        self.assertIn("--paginate", scripts)
-        post_step = next(step for step in steps
-                         if step.get("name") == "Post or update the pull request comment")
-        post_script = post_step.get("run", "")
-        number_check = post_script.index(
-            'if [ "$claimed" != "$GH_WIDGETS_PR_NUMBER" ]; then')
-        self.assertLess(number_check, post_script.index("gh api -X POST"))
-        self.assertLess(number_check, post_script.index("gh api -X PATCH"))
-        self.assertRegex(
-            post_script,
-            r"gh api -H 'Cache-Control: no-cache' --paginate \\\n\s+\"repos/\$GH_WIDGETS_REPO/issues/\$GH_WIDGETS_PR_NUMBER/comments\"")
-        self.assertIn("[ \"$current_head_repo\" != \"$GH_WIDGETS_HEAD_REPO\" ]",
-                      post_script)
-
-    @REQUIRES_POSIX_SHELL
-    def test_trusted_writer_refuses_each_head_identity_mismatch(self):
-        mismatches = (
-            ("sha", "b" * 40, "owner/repo"),
-            ("repository", "a" * 40, "fork/repo"),
-        )
-        for identity, current_sha, current_repo in mismatches:
-            with self.subTest(identity=identity):
-                result, calls = self._run_post_step(
-                    current_sha=current_sha, current_repo=current_repo)
-
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertFalse([call for call in calls if "-X" in call], calls)
-
-    @REQUIRES_POSIX_SHELL
-    def test_trusted_writer_refuses_an_artifact_for_another_pull_request(self):
-        result, calls = self._run_post_step(claimed_number="43")
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("refusing to post", result.stderr)
-        self.assertFalse([call for call in calls if "-X" in call], calls)
-        self.assertEqual(calls, [])
-
-    @REQUIRES_POSIX_SHELL
-    def test_trusted_writer_refuses_comment_or_head_lookup_failures(self):
-        for failure in ("comments", "head"):
-            with self.subTest(failure=failure):
-                result, calls = self._run_post_step(failure=failure)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse([call for call in calls if "-X" in call], calls)
-
-    @REQUIRES_POSIX_SHELL
-    def test_trusted_writer_posts_or_patches_exactly_one_marker_comment(self):
-        cases = (
-            ("post", (), "POST", "repos/owner/repo/issues/42/comments"),
-            ("patch", ({
-                "id": 314,
-                "user": {"login": "github-actions[bot]"},
-                "body": "<!-- gh-widgets-diff-coverage --> previous report",
-            },), "PATCH", "repos/owner/repo/issues/comments/314"),
-        )
-        for action, comments, method, endpoint in cases:
-            with self.subTest(action=action):
-                result, calls = self._run_post_step(comments=comments)
-
-                self.assertEqual(result.returncode, 0, result.stderr)
-                writes = [call for call in calls if "-X" in call]
-                self.assertEqual(len(writes), 1, calls)
-                self.assertEqual(writes[0][writes[0].index("-X") + 1], method)
-                self.assertIn(endpoint, writes[0])
-
-    @REQUIRES_POSIX_SHELL
-    def test_trusted_writer_runs_stub_with_interpreter_path_containing_spaces(self):
-        with _ghw_temp.tempdir(prefix="python interpreter ") as root:
-            interpreter = Path(root) / "python"
-            interpreter.symlink_to(sys.executable)
-            self._stub_interpreter = str(interpreter)
-
-            result, calls = self._run_post_step(comments=())
-            del self._stub_interpreter
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        writes = [call for call in calls if "-X" in call]
-        self.assertEqual(len(writes), 1, calls)
-        self.assertEqual(writes[0][writes[0].index("-X") + 1], "POST")
-
-
 class TestRatchetPushWorkflow(unittest.TestCase):
     """The artifact push job stays data-only and main-scoped."""
 
@@ -1114,7 +760,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_workflow_run_trigger_and_push_guard_are_exact(self):
         self.assertEqual(self.workflow[self.trigger_key]["workflow_run"], {
-            "workflows": ["tests", "coverage-ratchet"],
+            "workflows": ["tests"],
             "types": ["completed"],
         })
         self.assertRegex(
@@ -1248,13 +894,13 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             data = Path(tmp) / "ratchet-data"
             data.mkdir()
             (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
-            (data / "coverage-floor.json").write_text("{}", encoding="utf-8")
+            (data / "speed-baseline.json").write_text("{}", encoding="utf-8")
             accepted = subprocess.run(
                 [sys.executable, "-c", script, str(data)],
                 capture_output=True, text=True, check=False)
             self.assertEqual(accepted.returncode, 0,
                              accepted.stdout + accepted.stderr)
-            self.assertEqual(accepted.stdout.strip(), "coverage-floor.json")
+            self.assertEqual(accepted.stdout.strip(), "speed-baseline.json")
 
             (data / "unexpected.txt").write_text("data", encoding="utf-8")
             refused = subprocess.run(
@@ -1273,7 +919,7 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             data = Path(tmp) / "ratchet-data"
             data.mkdir()
             (data / "base.txt").write_bytes(b"a" * 40 + b"\n")
-            for document_name in ("coverage-floor.json", "speed-baseline.json"):
+            for document_name in ("speed-baseline.json",):
                 with self.subTest(document=document_name):
                     mapped = subprocess.run(
                         ["bash", "-e", "-o", "pipefail", "-c",
@@ -1341,41 +987,6 @@ class TestRatchetPushWorkflow(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("rejected while main stood still", result.stderr)
         self.assertEqual(summary, "")
-
-    def test_inline_coverage_validator_enforces_hysteresis_gap_and_counts(self):
-        script = self._validator()
-        with _ghw_temp.tempdir(prefix="ghw-coverage-validator-") as tmp:
-            data, repo = Path(tmp) / "artifact", Path(tmp) / "main"
-            data.mkdir()
-            (repo / "gate").mkdir(parents=True)
-            coverage = json.loads((REPO_ROOT / "gate/coverage-floor.json").read_text())
-            coverage.update(statements=1000, missing=154, floor=84.6, measured=84.6)
-            (repo / "gate/coverage-floor.json").write_text(json.dumps(coverage))
-            (data / "base.txt").write_text("a" * 40 + "\n")
-            candidate = {**coverage, "measured_commit": "a" * 40,
-                         "measured_at": "2026-10-19T00:00:00Z",
-                         "floor": 98.5, "measured": 100, "missing": 0}
-            cases = (
-                ({}, 0, ""),
-                ({"floor": 84.7, "measured": 86.2, "missing": 138}, 0, ""),
-                ({"floor": 86.2, "measured": 86.2}, 1, "fixed gap"),
-                ({"floor": 84.4, "measured": 85.9}, 1, "hysteresis"),
-                ({"floor": 84.6, "measured": 86.1}, 1, "hysteresis"),
-                ({"floor": 84.8, "measured": 86.2}, 1, "fixed gap"),
-                ({"floor": 84.71, "measured": 86.21}, 1, "one decimal"),
-                ({"missing": 1001}, 1, "between zero and statements"),
-                ({"floor": 97.5, "measured": 99}, 1, "inconsistent with its counts"),
-                ({"floor": 99.5, "measured": 101}, 1, "at most 100"),
-                ({"measured_commit": "b" * 40}, 1, "differs from base.txt"),
-            )
-            for changes, status, message in cases:
-                with self.subTest(changes=changes):
-                    (data / "coverage-floor.json").write_text(json.dumps({**candidate, **changes}))
-                    result = self._run_validator(script, data, repo, "coverage-floor.json")
-                    self.assertEqual(result.returncode, status, result.stderr)
-                    self.assertIn(message, result.stderr)
-                    if status == 0:
-                        self.assertEqual(result.stdout.strip(), "coverage-floor.json")
 
     @staticmethod
     def _speed_documents():

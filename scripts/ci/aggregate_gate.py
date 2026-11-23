@@ -51,17 +51,19 @@ SKIPPED = "SKIPPED"
 SUPERSEDED = "SUPERSEDED"
 GREEN = frozenset({PASSED, SKIPPED, SUPERSEDED})
 
+# Each gate's jobs; a gate whose work spans several jobs passes only when each does.
 GATE_JOBS = {
-    "gate-integrity": "gates",
-    "tests": "unittest",
-    "lint": "lint",
-    "types": "pyright",
-    "audit": "pip-audit",
-    "speed": "speed",
-    "codeql": "analyze",
-    "actionlint": "actionlint",
+    "gate-integrity": ("gates",),
+    "tests": ("plan", "test", "report"),
+    "lint": ("lint",),
+    "types": ("pyright",),
+    "audit": ("pip-audit",),
+    "speed": ("speed",),
+    "codeql": ("analyze",),
+    "actionlint": ("actionlint",),
 }
-EXPECTED_NEEDS = frozenset({"changes", *GATE_JOBS.values()})
+EXPECTED_NEEDS = frozenset({"changes", *(job for jobs in GATE_JOBS.values()
+                                         for job in jobs)})
 
 
 class AggregationError(RuntimeError):
@@ -621,13 +623,16 @@ def decide(needs: dict[str, Any], applicability: dict[str, str], *,
     hard, cancelled = classify_needs(needs)
     hard_jobs = set(hard)
     cancelled_jobs = set(cancelled)
-    return {
-        gate: _gate_result(
+    results = {}
+    for gate, jobs in GATE_JOBS.items():
+        rows = [_gate_result(
             gate, job, needs[job].get("result"), applicability[gate],
             hard_jobs=hard_jobs, cancelled_jobs=cancelled_jobs,
-            superseded_by=superseded_by)
-        for gate, job in GATE_JOBS.items()
-    }
+            superseded_by=superseded_by) for job in jobs]
+        results[gate] = next((row for row in rows if row.verdict == FAILED),
+                             next((row for row in rows if row.verdict == SUPERSEDED),
+                                  rows[0]))
+    return results
 
 
 def evaluate(needs: dict[str, Any], applicability: dict[str, str], *,

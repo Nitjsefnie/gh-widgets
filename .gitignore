@@ -40,6 +40,7 @@
 !/install.sh
 !/pyrightconfig.json
 !/setup.cfg
+!/.coveragerc
 
 # ---- src/ — renderers and their shared runtime modules --------------------
 !/src/
@@ -51,10 +52,9 @@
 /tests/*
 !/tests/*.py
 
-# ---- gate/ — committed coverage and speed records ------------------------
+# ---- gate/ — committed speed record ---------------------------------------
 !/gate/
 /gate/*
-!/gate/coverage-floor.json
 !/gate/speed-baseline.json
 
 # ---- requirements/ — pinned development and CI toolchains ----------------
@@ -71,6 +71,8 @@
 !/.github/dependabot.yml
 !/.github/comment-share.json
 !/.github/size-baseline.json
+!/.github/ci-thresholds.json
+!/.github/test-times.json
 !/.github/PULL_REQUEST_TEMPLATE.md
 !/.github/ISSUE_TEMPLATE/
 /.github/ISSUE_TEMPLATE/*
@@ -121,11 +123,3 @@
 /units/*
 !/units/*.service
 !/units/*.timer
-
-# ---- fixtures/diff_coverage/ — offline patch-coverage inputs ---------------
-!/fixtures/
-/fixtures/*
-!/fixtures/diff_coverage/
-/fixtures/diff_coverage/*
-!/fixtures/diff_coverage/*.xml
-!/fixtures/diff_coverage/*.diff

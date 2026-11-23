@@ -221,7 +221,7 @@ class ClassificationTests(unittest.TestCase):
     def test_code_with_comment_share_and_other_ratchets_still_runs(self):
         windows = (
             {".github/comment-share.json", "src/render.py"},
-            {"gate/coverage-floor.json"},
+            {".github/ci-thresholds.json"},
             {"gate/speed-baseline.json"},
         )
         for paths in windows:
