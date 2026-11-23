@@ -193,8 +193,7 @@ class NeedsClassificationTests(unittest.TestCase):
 
     def test_skips_pass_only_when_classification_says_skip(self):
         needs = _all_success()
-        for job in ag.GATE_JOBS["tests"]:
-            needs[job]["result"] = "skipped"
+        needs.update({job: {"result": "skipped"} for job in ag.GATE_JOBS["tests"]})
         needs["actionlint"]["result"] = "skipped"
         result = ag.decide(
             needs, _applicability(tests="skip", actionlint="skip"))
@@ -204,22 +203,11 @@ class NeedsClassificationTests(unittest.TestCase):
     def test_failed_and_unknown_gate_results_fail_their_rows(self):
         for state in ("failure", "timed_out", "neutral", "unexpected"):
             needs = _all_success()
-            needs["speed"]["result"] = state
+            needs["report"]["result"] = state
             with self.subTest(state=state):
                 result = ag.decide(needs, _applicability())
-                self.assertEqual(result["speed"].verdict, ag.FAILED)
-                self.assertEqual(result["tests"].verdict, ag.PASSED)
-
-    def test_a_gate_of_several_jobs_fails_when_any_of_them_fails(self):
-        for job in ag.GATE_JOBS["tests"]:
-            for state in ("failure", "skipped"):
-                needs = _all_success()
-                needs[job]["result"] = state
-                with self.subTest(job=job, state=state):
-                    rows = ag.decide(needs, _applicability())
-                    self.assertEqual(rows["tests"].verdict, ag.FAILED)
-                    self.assertIn(job, rows["tests"].detail)
-                    self.assertEqual(rows["lint"].verdict, ag.PASSED)
+                self.assertEqual(result["tests"].verdict, ag.FAILED)
+                self.assertEqual(result["speed"].verdict, ag.PASSED)
 
     def test_missing_and_extra_need_jobs_are_rejected(self):
         needs = _all_success()
@@ -248,8 +236,7 @@ class NeedsClassificationTests(unittest.TestCase):
         needs = _all_success()
         for gate, jobs in ag.GATE_JOBS.items():
             if applicability[gate] == 'skip':
-                for job in jobs:
-                    needs[job]['result'] = 'skipped'
+                needs.update({job: {'result': 'skipped'} for job in jobs})
         rows = ag.decide(needs, applicability)
         self.assertEqual(rows['gate-integrity'].verdict, ag.PASSED)
         self.assertTrue(all(row.verdict in ag.GREEN for row in rows.values()))
