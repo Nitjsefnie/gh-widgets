@@ -1,13 +1,12 @@
 {
   "trees": {
-    "tests/": 28955
+    "tests/": 26391
   },
   "schema_version": 1,
   "baseline": {
-    ".github/workflows/ratchet-push.yml": 502,
     ".github/workflows/release.yml": 524,
-    ".github/workflows/tests.yml": 1455,
-    "scripts/ci/aggregate_gate.py": 770,
+    ".github/workflows/tests.yml": 1376,
+    "scripts/ci/aggregate_gate.py": 769,
     "scripts/ci/compare_counters.py": 991,
     "scripts/ci/counter.py": 781,
     "scripts/ci/gate_base_freshness.py": 799,
@@ -19,18 +18,18 @@
     "tests/test_aggregate_gate.py": 1204,
     "tests/test_baseline.py": 894,
     "tests/test_changes_detect.py": 745,
-    "tests/test_ci_workflows.py": 1580,
+    "tests/test_ci_workflows.py": 1191,
     "tests/test_common.py": 1297,
     "tests/test_compare_counters.py": 565,
     "tests/test_counter.py": 732,
     "tests/test_data.py": 891,
     "tests/test_e2e_bench.py": 637,
-    "tests/test_gate_base_freshness.py": 860,
+    "tests/test_gate_base_freshness.py": 859,
     "tests/test_impact.py": 1065,
     "tests/test_impact_loc.py": 975,
     "tests/test_impact_loc_coverage.py": 646,
     "tests/test_popularity.py": 594,
-    "tests/test_release_workflow.py": 1303,
+    "tests/test_release_workflow.py": 1301,
     "tests/test_render.py": 1253,
     "tests/test_responsiveness.py": 845,
     "tests/test_speed_ratchet.py": 990,
