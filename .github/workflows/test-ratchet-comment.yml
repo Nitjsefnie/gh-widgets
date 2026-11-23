@@ -1,10 +1,4 @@
 name: test-ratchet comment
-
-# A fork's pull request runs `tests` with a token that cannot write to this
-# repository, so its `report` job cannot comment. This workflow comments for
-# it once `tests` completes: it runs test-ratchet's `report` on the triggering
-# run's artifacts, checks out the default branch, and checks out and runs
-# nothing from the pull request.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers] nothing from the pull request is checked out or run
     workflows: [tests]
