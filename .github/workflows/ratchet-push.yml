@@ -1,10 +1,11 @@
 name: ratchet push
 
-# The privileged half of the coverage and speed ratchets:
-# gate/coverage-floor.json, gate/speed-baseline.json.
+# The privileged half of the speed ratchet: gate/speed-baseline.json.
 # The comment-share.yml and size-baseline.yml actions commit
-# .github/comment-share.json and .github/size-baseline.json themselves; those
-# records still count as data when judging an artifact's window.
+# .github/comment-share.json and .github/size-baseline.json themselves, and
+# tests.yml's test-ratchet report job commits .github/ci-thresholds.json and
+# .github/test-times.json; those records still count as data when judging an
+# artifact's window.
 # Measuring workflows run repository code with read-only access and publish only a
 # tightened JSON record plus the SHA it measured. This workflow treats those
 # bytes as data and pushes them from the protected main-push environment.
@@ -26,7 +27,7 @@ name: ratchet push
 # the job token. It checks out no repository and runs no repository code.
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
-    workflows: [tests, coverage-ratchet]
+    workflows: [tests]
     types: [completed]
 
 permissions: {}
@@ -127,11 +128,8 @@ jobs:
           if any(path.is_symlink() or not path.is_file() for path in files):
               refuse("the artifact must contain only regular files")
           names = {path.name for path in files}
-          coverage = {"base.txt", "coverage-floor.json"}
           speed = {"base.txt", "speed-baseline.json"}
-          if names == coverage:
-              document = "coverage-floor.json"
-          elif names == speed:
+          if names == speed:
               document = "speed-baseline.json"
           else:
               refuse("expected exactly base.txt and one known ratchet record")
@@ -203,9 +201,11 @@ jobs:
                           if not isinstance(previous, str) or not previous:
                               raise ValueError("rename has no previous filename")
                           changed.add(previous)
-              records = {"gate/coverage-floor.json", "gate/speed-baseline.json",
+              records = {"gate/speed-baseline.json",
                          ".github/comment-share.json",
-                         ".github/size-baseline.json"}
+                         ".github/size-baseline.json",
+                         ".github/ci-thresholds.json",
+                         ".github/test-times.json"}
               record_path = sys.argv[2]
               if record_path not in records:
                   raise ValueError("unknown ratchet record")
@@ -231,7 +231,7 @@ jobs:
                 echo "### Dropped ratchet artifact: a non-data path moved"
                 echo
                 echo "Window $base...$fetched for $record_path: $decision."
-                echo "Only the four records may move under a reusable artifact; no automatic retry is assumed."
+                echo "Only the five records may move under a reusable artifact; no automatic retry is assumed."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -318,59 +318,7 @@ jobs:
           data = Path(sys.argv[1])
           repo = Path(sys.argv[2])
           names = {path.name for path in data.iterdir()}
-          if names == {"base.txt", "coverage-floor.json"}:
-              name = "coverage-floor.json"
-              old = object_at(repo / "gate" / name)
-              # The merged document, not the raw artifact: the
-              # validator judges what will actually be installed.
-              new = object_at(Path(sys.argv[3]))
-              keys = {"schema", "basis", "population", "cell", "measured",
-                      "floor", "statements", "missing", "files",
-                      "measured_commit", "measured_at"}
-              if set(old) != keys or set(new) != keys:
-                  refuse("coverage-floor.json has an unexpected key set")
-              for key in ("schema", "basis", "population", "cell"):
-                  if not same(new[key], old[key]):
-                      refuse(f"coverage-floor.json changed authored key {key}")
-              try:
-                  measured_base = (data / "base.txt").read_text(
-                      encoding="ascii").strip()
-              except OSError as error:
-                  refuse(f"cannot read base.txt: {error}")
-              if new["measured_commit"] != measured_base:
-                  refuse("coverage measured_commit differs from base.txt")
-              if not isinstance(new["measured_at"], str) \
-                      or not new["measured_at"].strip():
-                  refuse("coverage measured_at must be a non-empty string")
-              if not number(new["floor"]) or not number(new["measured"]):
-                  refuse("coverage floor and measured must be finite numbers")
-              measured_tenths = round(new["measured"] * 10)
-              floor_tenths = round(new["floor"] * 10)
-              if measured_tenths / 10 != new["measured"] \
-                      or floor_tenths / 10 != new["floor"]:
-                  refuse("coverage floor and measured must have one decimal")
-              if measured_tenths - floor_tenths != 15:
-                  refuse("coverage must retain the 1.5-point fixed gap")
-              if new["measured"] > 100:
-                  refuse("coverage measured must be at most 100")
-              if not number(old["measured"]) \
-                      or measured_tenths <= round(old["measured"] * 10) + 15:
-                  refuse("coverage measured did not beat the 1.5-point hysteresis")
-              if not number(old["floor"]) or new["floor"] <= old["floor"]:
-                  refuse("coverage floor did not strictly improve")
-              for key in ("statements", "files"):
-                  if type(new[key]) is not int or new[key] <= 0:
-                      refuse(f"coverage {key} must be a positive integer")
-              if type(new["missing"]) is not int \
-                      or not 0 <= new["missing"] <= new["statements"]:
-                  refuse("coverage missing must be between zero and statements")
-              # Match coverage_ratchet.round_down on the measured percentage.
-              percent = 100 * (new["statements"] - new["missing"]) / new["statements"]
-              if new["measured"] != math.floor(percent * 10) / 10:
-                  refuse("coverage measured is inconsistent with its counts")
-              if type(old["files"]) is not int or new["files"] != old["files"]:
-                  refuse("coverage files count differs from fetched main")
-          elif names == {"base.txt", "speed-baseline.json"}:
+          if names == {"base.txt", "speed-baseline.json"}:
               name = "speed-baseline.json"
               old = object_at(repo / "gate" / name)
               # The merged document, not the raw artifact: the
@@ -474,7 +422,6 @@ jobs:
           git -C "$repo" config user.name 'github-actions[bot]'
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           case "$record_path" in
-            gate/coverage-floor.json) subject='chore(ratchet): raise the coverage floor (automated)' ;;
             gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;
             *) echo "no commit subject for $record_path" >&2; exit 1 ;;
           esac

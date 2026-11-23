@@ -11,15 +11,14 @@ from pathlib import Path
 import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
-from tests import test_coverage_ratchet as coverage_tests
 from tests import test_speed_ratchet as speed_tests
 from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
-RECORDS = {"gate/coverage-floor.json", "gate/speed-baseline.json",
-           ".github/comment-share.json", ".github/size-baseline.json"}
-DELIVERED = RECORDS - {".github/comment-share.json",
-                       ".github/size-baseline.json"}
+RECORDS = {"gate/speed-baseline.json", ".github/comment-share.json",
+           ".github/size-baseline.json", ".github/ci-thresholds.json",
+           ".github/test-times.json"}
+DELIVERED = {"gate/speed-baseline.json"}
 BASE, TIP = "a" * 40, "b" * 40
 
 
@@ -57,8 +56,7 @@ def boundaries(root):
         " sys.exit(0)\n"
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
-        "subject = {'gate/coverage-floor.json': 'chore(ratchet): raise the coverage floor (automated)',\n"
-        " 'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
+        "subject = {'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
         " ['config', 'user.name', 'github-actions[bot]'],\n"
         " ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],\n"
@@ -73,11 +71,7 @@ def boundaries(root):
 def records(record_path):
     old = json.loads((ROOT / record_path).read_text())
     new = json.loads(json.dumps(old))
-    if record_path == "gate/coverage-floor.json":
-        old.update(measured=84.6, floor=84.6)
-        new.update(measured=86.2, floor=84.7, statements=1000, missing=138,
-                   measured_commit=BASE)
-    elif record_path == "gate/speed-baseline.json":
+    if record_path == "gate/speed-baseline.json":
         entry = "counter::unit-suite"
         old["schema"] = 5  # schema 5 only: seeds instead of slopes
         for population in old["populations"].values():
@@ -101,21 +95,6 @@ def records(record_path):
 def canonical_document(document):
     """The byte shape every fixture record shares."""
     return (json.dumps(document, sort_keys=True, indent=2) + "\n").encode()
-
-
-def coverage_merge_case():
-    """Main edits the cell line; the artifact raises the floor.
-
-    The cell line sits between two lines the artifact never touches;
-    measured_at is sandwiched by artifact-edited lines and would conflict
-    in diff3, which is the other branch's drop case.
-    """
-    old_cov, new_cov = records("gate/coverage-floor.json")
-    main_cov = dict(old_cov, cell="fixture-cell")
-    merged_cov = dict(new_cov, cell="fixture-cell")
-    return ("gate/coverage-floor.json", (old_cov, new_cov),
-            canonical_document(main_cov), canonical_document(merged_cov),
-            lambda installed: json.loads(installed)["measured_at"])
 
 
 def speed_merge_case():
@@ -148,7 +127,7 @@ def speed_merge_case():
 
 class TestRatchetPushDelivery(unittest.TestCase):
     @staticmethod
-    def _prepare(root, record_path, documents, coverage, *, base_bytes=None,
+    def _prepare(root, record_path, documents, *, base_bytes=None,
                  main_bytes=None):
         old, new = documents or records(record_path)
         (root / "data").mkdir()
@@ -168,19 +147,17 @@ class TestRatchetPushDelivery(unittest.TestCase):
         (root / "data" / name).write_bytes(canonical_document(new))
         (root / "data/base.txt").write_bytes((BASE + "\n").encode())
         (root / "base-record").write_bytes(base_bytes)
-        if coverage is not None:
-            target.with_name("coverage-floor.json").write_bytes(coverage)
         return target
 
     # pylint: disable-next=too-many-locals
     def _drive(self, record_path, response, *, documents=None, body=None,
-               api_fail=False, coverage=None, base_bytes=None,
+               api_fail=False, base_bytes=None,
                main_bytes=None, show_fail=False):
         real_git = shutil.which("git")
         assert real_git is not None
         with _ghw_temp.tempdir(prefix="ratchet delivery ") as tmp:
             root = Path(tmp)
-            target = self._prepare(root, record_path, documents, coverage,
+            target = self._prepare(root, record_path, documents,
                                    base_bytes=base_bytes,
                                    main_bytes=main_bytes)
             env = dict(os.environ, PATH=str(boundaries(root)) + os.pathsep + os.environ["PATH"],
@@ -247,11 +224,11 @@ class TestRatchetPushDelivery(unittest.TestCase):
     def test_uncertain_comparisons_and_source_renames_drop_green(self):
         cases = (None, [], [{"status": "diverged", "files": []}],
                  [{"status": "ahead"}], [{"status": "ahead", "files": [{}]}],
-                 [{"status": "ahead", "files": [{"filename": "gate/coverage-floor.json",
+                 [{"status": "ahead", "files": [{"filename": ".github/ci-thresholds.json",
                                                  "status": "renamed"}]}],
-                 [{"status": "ahead", "files": [{"filename": "gate/coverage-floor.json",
+                 [{"status": "ahead", "files": [{"filename": ".github/ci-thresholds.json",
                                                  "status": "renamed", "previous_filename": "src/old.py"}]}],
-                 self._comparison(["gate/coverage-floor.json"] * 300))
+                 self._comparison([".github/ci-thresholds.json"] * 300))
         for response in cases:
             with self.subTest(response=response):
                 result, calls, _written, summary = self._drive("gate/speed-baseline.json", response)
@@ -320,16 +297,14 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self.assertIn("does not parse as JSON", result.stdout)
 
     @REQUIRES_POSIX_SHELL
-    def test_the_merge_preserves_main_tighten_for_coverage_and_speed(self):
-        for record_path, documents, main_bytes, merged_bytes, read in (
-                coverage_merge_case(), speed_merge_case()):
-            with self.subTest(record=record_path):
-                result, calls, written, _summary = self._drive(
-                    record_path, self._comparison({record_path}),
-                    documents=documents, main_bytes=main_bytes)
-                self._assert_delivery(result, calls, True)
-                self.assertEqual(written, merged_bytes)
-                self.assertEqual(read(written), read(merged_bytes))
+    def test_the_merge_preserves_main_tighten_for_speed(self):
+        record_path, documents, main_bytes, merged_bytes, read = speed_merge_case()
+        result, calls, written, _summary = self._drive(
+            record_path, self._comparison({record_path}),
+            documents=documents, main_bytes=main_bytes)
+        self._assert_delivery(result, calls, True)
+        self.assertEqual(written, merged_bytes)
+        self.assertEqual(read(written), read(merged_bytes))
 
     @REQUIRES_POSIX_SHELL
     def test_an_unreachable_base_record_drops_green(self):
@@ -344,7 +319,7 @@ class TestRatchetPushDelivery(unittest.TestCase):
         self.assertIn("no record to merge against", summary)
 
     @REQUIRES_POSIX_SHELL
-    def test_real_writer_output_survives_an_intervening_coverage_raise_and_is_delivered(self):
+    def test_real_writer_output_survives_an_intervening_test_ratchet_records_commit(self):
         fixture = speed_tests.TestSpeedRatchetTightening()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -359,17 +334,10 @@ class TestRatchetPushDelivery(unittest.TestCase):
         written = fixture._run()
         self.assertEqual(written.returncode, 0, written.stdout + written.stderr)
         candidate = json.loads(fixture.output_path.read_bytes())
-        with _ghw_temp.tempdir() as tmp:
-            coverage = Path(tmp) / "coverage-floor.json"
-            document = json.loads((ROOT / "gate/coverage-floor.json").read_bytes())
-            document.update(measured=84.6, floor=84.6)
-            coverage.write_bytes(json.dumps(document).encode())
-            measurement = coverage_tests.ratchet.Measurement(86.2, 1000, 138, document["files"])
-            self.assertEqual(coverage_tests.ratchet.raise_floor(measurement, coverage, BASE), 0)
-            self.assertEqual(json.loads(coverage.read_bytes())["floor"], 84.7)
-            result, calls, installed, _summary = self._drive(
-                "gate/speed-baseline.json", self._comparison(["gate/coverage-floor.json"]),
-                documents=(fixture.baseline, candidate), coverage=coverage.read_bytes())
+        result, calls, installed, _summary = self._drive(
+            "gate/speed-baseline.json",
+            self._comparison([".github/ci-thresholds.json", ".github/test-times.json"]),
+            documents=(fixture.baseline, candidate))
         self._assert_delivery(result, calls, True)
         self.assertEqual(json.loads(installed), candidate)
         self.assertEqual(candidate["populations"]["unit-suite"]["entries"]

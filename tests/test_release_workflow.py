@@ -71,12 +71,12 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
     OTHER_SHA = "1111111111111111111111111111111111111111"
     TAG = "v9.9.9"
     MANIFEST = ["lint", "pyright", "speed", "pip-audit", "analyze",
-                "unittest", "coverage-ratchet", "aggregate", "gitleaks",
+                "plan", "test", "report", "aggregate", "gitleaks",
                 "size-baseline"]
 
     # The whole manifest, matrix legs and all, as the check-runs API
-    # reports it: "status<TAB>conclusion<TAB>name". Four jobs report their
-    # bare name; `analyze` and `unittest` have matrix names, while `gitleaks`
+    # reports it: "status<TAB>conclusion<TAB>name". Most jobs report their
+    # bare name; `analyze` and `test` have matrix names, while `gitleaks`
     # reports its job name. The "name (" form is load-bearing for the matrix
     # cases here.
     ALL_GREEN = [
@@ -85,15 +85,14 @@ class _ReleaseWorkflowFixture(unittest.TestCase):
         ("completed", "success", "speed"),
         ("completed", "success", "pip-audit"),
         ("completed", "success", "analyze (python)"),
-        ("completed", "success", "unittest (ubuntu-latest, 3.14)"),
-        ("completed", "success", "unittest (ubuntu-latest, 3.15)"),
-        ("completed", "success", "unittest (macos-latest, 3.14)"),
-        ("completed", "success", "unittest (macos-latest, 3.15)"),
-        ("completed", "success", "unittest (windows-latest, 3.14)"),
-        ("completed", "success", "unittest (windows-latest, 3.15)"),
-        # One leg, because the job renames ITSELF to `coverage-ratchet`; the
-        # manifest entry is written against that string, not the job key.
-        ("completed", "success", "coverage-ratchet"),
+        ("completed", "success", "plan"),
+        ("completed", "success", "test (ubuntu-latest, 3.14, 1/1)"),
+        ("completed", "success", "test (ubuntu-latest, 3.15, 1/1)"),
+        ("completed", "success", "test (macos-latest, 3.14, 1/1)"),
+        ("completed", "success", "test (macos-latest, 3.15, 1/1)"),
+        ("completed", "success", "test (windows-latest, 3.14, 1/1)"),
+        ("completed", "success", "test (windows-latest, 3.15, 1/1)"),
+        ("completed", "success", "report"),
         ("completed", "success", "aggregate"),
         ("completed", "success", "gitleaks"),
         ("completed", "success", "size-baseline"),
@@ -277,8 +276,8 @@ exit 1
         job follows the tests instead of silently leaving them asserting a
         name nothing reports. The check-runs API reports a job's own
         `name:` when it has one and its job id when it does not — verified
-        live against this repository, where `measure` arrives as
-        `coverage-ratchet`, `analyze` as `analyze (python)`, and the jobs with
+        live against this repository, where `analyze` arrives as
+        `analyze (python)`, and the jobs with
         no override as themselves. There is no `workflow / job` form; the
         fixture that used to use one was wrong about the API, not the code
         under test.
@@ -443,8 +442,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
             self._check_runs(self.ALL_GREEN), encoding="utf-8")
         runs = [(status, "skipped" if name.split(" ", maxsplit=1)[0] not in
                  ("aggregate", "gitleaks", "size-baseline") else conclusion, name)
-                for status, conclusion, name in self.ALL_GREEN
-                if name != "coverage-ratchet"]
+                for status, conclusion, name in self.ALL_GREEN]
         self._write_runs(runs)
         return anchor
 
@@ -467,7 +465,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
                 with self.subTest(gate=gate, state=state):
                     self.setUp()
                     self._comment_share_tip()
-                    runs = self._without(gate, "coverage-ratchet")
+                    runs = self._without(gate)
                     if state != "missing":
                         runs.append(("in_progress" if state == "pending" else
                                      "completed", "" if state == "pending" else
@@ -569,7 +567,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "the gh stub runs jq")
     def test_comment_share_tolerance_requires_an_exclusive_window(self):
         for paths in ([".github/comment-share.json", "src/render.py"],
-                      ["gate/coverage-floor.json"],
+                      [".github/ci-thresholds.json"],
                       ["gate/speed-baseline.json"]):
             with self.subTest(paths=paths):
                 self.setUp()
@@ -626,9 +624,9 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("expected gates: lint pyright speed pip-audit analyze "
-                      "unittest", done.stdout)
+                      "plan test report", done.stdout)
         self.assertIn("required gates: lint pyright speed pip-audit analyze "
-                      "unittest", done.stdout)
+                      "plan test report", done.stdout)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -654,12 +652,12 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_decorated_check_run_name_still_matches_its_entry(self):
-        # The manifest says `unittest`; the check runs say
-        # `unittest (ubuntu-latest, 3.14)`. Matching has to bridge that,
+        # The manifest says `test`; the check runs say
+        # `test (ubuntu-latest, 3.14, 1/1)`. Matching has to bridge that,
         # and codeql renames its job to `analyze (python)` the same way.
         # A job that reports its bare id must match too.
-        for entry, name in (("unittest", "unittest (ubuntu-latest, 3.14)"),
-                            ("unittest", "unittest"),
+        for entry, name in (("test", "test (ubuntu-latest, 3.14, 1/1)"),
+                            ("test", "test"),
                             ("analyze", "analyze (python)"),
                             ("analyze", "analyze")):
             with self.subTest(entry=entry, check_run=name):
@@ -699,8 +697,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_still_running_gate_is_waited_for_until_it_passes(self):
         self._write_runs(
-            [("in_progress", "", "unittest (ubuntu-latest, 3.14)")]
-            + self._without("unittest (ubuntu-latest, 3.14)"),
+            [("in_progress", "", "test (ubuntu-latest, 3.14, 1/1)")]
+            + self._without("test (ubuntu-latest, 3.14, 1/1)"),
             **{"polls-remaining": "2",
                "check-runs-after": self._check_runs(self.ALL_GREEN)})
         done = self._execute("Wait for the other gates on this commit",
@@ -708,7 +706,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("still running", done.stdout)
-        self.assertIn("unittest (ubuntu-latest, 3.14)", done.stdout)
+        self.assertIn("test (ubuntu-latest, 3.14, 1/1)", done.stdout)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -797,7 +795,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_a_red_matrix_leg_refuses_and_every_red_leg_is_named(self):
-        # `unittest` is six legs and the manifest entry is one name, so
+        # `test` is six legs and the manifest entry is one name, so
         # "every leg has to land" is a claim about six checks rather than
         # one. Judging only the first leg leaves the other cases green,
         # which is what the naming fixtures above would not catch: they
@@ -806,7 +804,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         # Two red legs, not one, so a scan that reads only the first bad
         # leg is caught too — and it should be: an operator looking at a
         # six-leg matrix needs to know which of them to look at.
-        red = ("unittest (ubuntu-latest, 3.14)", "unittest (windows-latest, 3.15)")
+        red = ("test (ubuntu-latest, 3.14, 1/1)", "test (windows-latest, 3.15, 1/1)")
         runs = [("completed", "failure", name) for name in red] + [
             (status, conclusion, name)
             for status, conclusion, name in self.ALL_GREEN
@@ -818,7 +816,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         for name in red:
             self.assertIn(name, done.stderr)
         # A green leg is never named as a problem.
-        self.assertNotIn("unittest (macos-latest, 3.14)", done.stderr)
+        self.assertNotIn("test (macos-latest, 3.14, 1/1)", done.stderr)
 
     @requires_bash
     @unittest.skipUnless(shutil.which("jq"), "see above")
@@ -913,8 +911,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         cases = [
             # (waive input, gates still missing a check run, returncode)
             ("speed", (), 0),
-            ("speed,unittest", (), 0),
-            ("speed, unittest", (), 0),
+            ("speed,test", (), 0),
+            ("speed, test", (), 0),
             # A name that is not in the manifest waives nothing at all.
             ("speed, lint-docs", (), 0),
             # Waiving speed must not also waive lint.
@@ -958,8 +956,8 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
     @unittest.skipUnless(shutil.which("jq"), "see above")
     def test_giving_up_names_the_gate_that_never_reported(self):
         self._write_runs(
-            [("in_progress", "", "unittest (ubuntu-latest, 3.14)")]
-            + self._without("speed", "unittest (ubuntu-latest, 3.14)"),
+            [("in_progress", "", "test (ubuntu-latest, 3.14, 1/1)")]
+            + self._without("speed", "test (ubuntu-latest, 3.14, 1/1)"),
             **{"polls-remaining": "1"})
         done = self._execute("Wait for the other gates on this commit",
                              **self.NO_WAIT)
@@ -1020,7 +1018,7 @@ Every case runs the shipped `run:` block against a stubbed `gh`; the
         excluded = {"claim.yml", "pr-gate.yml", "audit.yml", "codeql.yml",
                     "targeted-blame-audit.yml", "gitfame-pool-probe.yml",
                     "gitfame-resync-memory.yml", "release.yml",
-                    "scorecard.yml", "coverage-comment.yml",
+                    "scorecard.yml", "test-ratchet-comment.yml",
                     "ratchet-push.yml", "comment-share.yml", "pin-guard.yml"}
 
         for name, workflow_file, job in entries:

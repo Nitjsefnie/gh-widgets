@@ -185,7 +185,7 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
     def test_every_push_workflow_is_enumerated(self):
         self.assertLessEqual(
             {"tests.yml", "secrets.yml", "size-baseline.yml",
-             "comment-share.yml", "coverage-ratchet.yml", "release.yml"},
+             "comment-share.yml", "release.yml"},
             set(push_workflows()))
 
     def test_a_ratchet_run_shares_no_group_with_any_other_push_run(self):
@@ -199,12 +199,10 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
                     self.assertTrue(ratchet)
                     self.assertNotIn(ratchet, others)
                     checked += 1
-        self.assertGreaterEqual(checked, 6)
+        self.assertGreaterEqual(checked, 5)
 
     def test_other_pushes_keep_their_workflow_group(self):
         expected = {"secrets.yml": "secrets-refs/heads/main",
-                    "coverage-ratchet.yml":
-                        "coverage-ratchet-refs/heads/main",
                     "release.yml": "release"}
         workflows = push_workflows()
         for name, group in expected.items():
@@ -215,7 +213,7 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
                                context), group)
 
     def test_the_suffix_is_the_shared_spelling(self):
-        for name in ("secrets.yml", "coverage-ratchet.yml", "release.yml"):
+        for name in ("secrets.yml", "release.yml"):
             with self.subTest(workflow=name):
                 self.assertTrue(push_workflows()[name]["concurrency"]["group"]
                                 .endswith(RATCHET_SUFFIX))

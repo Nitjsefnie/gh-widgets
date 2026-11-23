@@ -26,7 +26,7 @@ required job. Thus `aggregate` includes the unit, coverage, speed, lint and
 integrity checks whose outcomes it judges. Named inputs in their run commands
 and workflow/job/step parameters are included, followed by static imports of
 tracked Python modules and exact tracked-file string literals in those modules
-(for example the coverage floor's default filename). `changes_detect.py`, which
+(for example the speed baseline's default filename). `changes_detect.py`, which
 defines applicability, is included without a second hand-held path list.
 
 WHAT IT CANNOT SEE. The derivation reads workflow text and static Python ASTs:
@@ -541,7 +541,7 @@ def python_references(tree, path):
 
     A literal contributes only when it names a tracked file exactly; directory
     strings do not expand the tree. Constructed paths and runtime file discovery
-    remain outside this derivation. Defaults such as `gate/coverage-floor.json` are
+    remain outside this derivation. Defaults such as `gate/speed-baseline.json` are
     included even when the workflow relies on the script's default argument.
     """
     modules, literals = [], []
