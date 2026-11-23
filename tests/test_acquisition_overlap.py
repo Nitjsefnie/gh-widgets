@@ -17,6 +17,12 @@ from tests import test_render
 from tests import _ghw_temp
 
 
+def _profile_kind(query):
+    if 'contributionCalendar' in query:
+        return 'calendar'
+    return 'walk' if 'organizations' in query or 'repositories' in query else 'authored'
+
+
 class DelayedAPI(CountingAPI):
     """Count real client attempts with fixed transport latency."""
 
@@ -39,22 +45,12 @@ class DelayedAPI(CountingAPI):
                 self.active -= 1
                 self.spans.append((json.loads(request.data)['query'], start, time.monotonic()))
 
-    @property
-    def durations(self):
-        return [(query, end - start) for query, start, end in self.spans]
-
-    def report(self, timing):
+    def report(self, timing, kind=_profile_kind):
         """Every request's kind, start offset and duration, for a failure message."""
         origin = min((start for _, start, _ in self.spans), default=0)
-        rows = [f"{_profile_kind(query)} +{start - origin:.3f}s {end - start:.3f}s"
+        rows = [f"{kind(query)} +{start - origin:.3f}s {end - start:.3f}s"
                 for query, start, end in sorted(self.spans, key=lambda span: span[1])]
         return f"peak={self.peak}; {timing}; " + ", ".join(rows)
-
-
-def _profile_kind(query):
-    if 'contributionCalendar' in query:
-        return 'calendar'
-    return 'walk' if 'organizations' in query or 'repositories' in query else 'authored'
 
 
 class AcquisitionOverlap(unittest.TestCase):
@@ -119,24 +115,28 @@ class AcquisitionOverlap(unittest.TestCase):
                 mock.patch.object(impact.common, "timing_sleep") as pacing:
             recorder = impact.common.TimingRecorder()
             with mock.patch.object(impact.common, "timing", recorder):
-                start = time.monotonic()
                 totals = impact.fetch_repo_totals("t", repos)
-                elapsed = time.monotonic() - start
             text = io.StringIO()
             with contextlib.redirect_stdout(text):
                 recorder.report("impact")
-        self.assertEqual(set(totals), set(repos))
-        self.assertEqual(sum(api.counts.values()), 3)
-        # Three independent calls need two rounds. Keep scheduler allowance
-        # below the shortest (.08 s) request, even with uneven overshoot.
-        self.assertLess(elapsed, sum(sorted(duration for _, duration in api.durations)[1:]) + .04)
-        self.assertEqual(api.peak, 2)
-        self.assertEqual(pacing.call_args_list, [mock.call(.3, 'pacing')] * 3)
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
+        observed = api.report(line.strip(), kind=lambda _query: 'totals')
+        self.assertEqual(set(totals), set(repos))
+        self.assertEqual(sum(api.counts.values()), 3, observed)
+        self.assertEqual(api.peak, 2, observed)
+        # Three independent groups under the cap of two need two rounds, so two
+        # requests share an interval; read that off the stub's spans, never a
+        # wall-clock sum, which a runner stall outside the requests can break.
+        spans = sorted((start, end) for _, start, end in api.spans)
+        self.assertTrue(any(start < other_end and other_start < end
+                            for i, (start, end) in enumerate(spans)
+                            for other_start, other_end in spans[i + 1:]),
+                        f"no two totals groups were in flight together: {observed}")
+        self.assertEqual(pacing.call_args_list, [mock.call(.3, 'pacing')] * 3)
         self.assertIn('count=3', line)
         concurrent = re.search(r'concurrent=([\d.]+)s', line)
         assert concurrent is not None
-        self.assertGreater(float(concurrent[1]), 0)
+        self.assertGreater(float(concurrent[1]), 0, observed)
 
     def test_totals_cover_the_full_shared_pr_and_issue_union(self):
         nodes = []
