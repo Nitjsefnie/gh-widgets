@@ -28,7 +28,8 @@
       ],
       "tests/test_ci_workflows.py": [
         3.61,
-        5.23
+        5.23,
+        2.42
       ],
       "tests/test_commit_scopes.py": [
         13.14,
@@ -150,7 +151,8 @@
         22.6
       ],
       "tests/test_speed_seeding.py": [
-        3.74
+        3.74,
+        2.66
       ],
       "tests/test_speed_text.py": [
         0.05
@@ -303,7 +305,8 @@
         1.77
       ],
       "tests/test_secrecy_check.py": [
-        2.42
+        2.42,
+        1.14
       ],
       "tests/test_secrets_download.py": [
         0.04
@@ -721,7 +724,8 @@
         0.14
       ],
       "tests/test_ci_workflows.py": [
-        4.56
+        4.56,
+        3.23
       ],
       "tests/test_commit_scopes.py": [
         39.84
@@ -742,7 +746,8 @@
         1.29
       ],
       "tests/test_e2e_bench.py": [
-        69.47
+        69.47,
+        94.89
       ],
       "tests/test_extra_orgs.py": [
         0.11
@@ -763,7 +768,8 @@
         0.14
       ],
       "tests/test_impact_loc.py": [
-        9.38
+        9.38,
+        11.85
       ],
       "tests/test_impact_loc_coverage.py": [
         12.38
@@ -830,7 +836,8 @@
         1.05
       ],
       "tests/test_speed_ratchet.py": [
-        4.89
+        4.89,
+        3.21
       ],
       "tests/test_speed_seeding.py": [
         0.2
@@ -839,7 +846,8 @@
         0.03
       ],
       "tests/test_speed_workflow.py": [
-        27.8
+        27.8,
+        35.78
       ],
       "tests/test_stars.py": [
         0.86
