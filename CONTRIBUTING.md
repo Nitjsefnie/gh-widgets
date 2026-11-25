@@ -198,14 +198,18 @@ The other workflow files in `.github/workflows/` are:
 
 A run of an automated ratchet commit (committer
 `41898282+github-actions[bot]@users.noreply.github.com`) gets a concurrency
-group of its own in every workflow a push triggers: its group ends in
-`-ratchet-<run id>`, or is the bare run id in `tests.yml`, which keys every push
-run that way; `comment-share.yml` and `size-baseline.yml`, their actions'
-install blocks, key every push run by its branch and commit. A shared group
-would let it cancel the in-progress run of the commit it follows, or evict that run while it is pending, since the default
-queue keeps only the newest pending run. Pushes by anyone else keep their
-workflow's group. `tests/test_ratchet_concurrency.py` evaluates the group of
-every push-triggered workflow, so a new one cannot miss the rule.
+group of its own in every workflow a push triggers, and no later push cancels
+or evicts a run whose verdict the aggregate folds: `tests.yml` keys every push
+run by its bare run id; `secrets.yml`, and `comment-share.yml` and
+`size-baseline.yml` through their actions' install blocks, key every push run
+by its branch and commit; `release.yml`, which serializes releases, gives a
+ratchet run a group ending in `-ratchet-<run id>` and every other push its
+`release` group. A shared group would let a push cancel the in-progress run of
+the commit it follows, or evict that run while it is pending, since the default
+queue keeps only the newest pending run. `tests/test_ratchet_concurrency.py`
+evaluates the group of every push-triggered workflow for the ratchet rule, and
+for the aggregate rule checks each workflow `scripts/ci/aggregate_gate.py`
+names.
 
 These checks can run locally — **on ONE platform, whatever platform that
 is**, and that is the whole of what they cover:
