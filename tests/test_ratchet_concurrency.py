@@ -1,4 +1,5 @@
-"""An automated ratchet commit never cancels a run of the commit it follows.
+"""An automated ratchet commit never cancels a run of the commit it follows,
+and no later push cancels or evicts a run whose verdict the aggregate folds.
 
 Every workflow a push triggers is checked, including ones added later: its
 concurrency groups are evaluated for a ratchet push and for the pushes around
@@ -12,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import yaml
+from scripts.ci import aggregate_gate
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
@@ -147,6 +149,8 @@ RATCHET = push("102", BOT_EMAIL)
 NEXT_RATCHET = push("103", BOT_EMAIL)
 NO_HEAD_COMMIT = {"github": dict(HUMAN["github"], run_id="104",
                                  event={"head_commit": None})}
+LATER = {"github": dict(HUMAN["github"], run_id="105", sha="sha-105")}
+FOLDED = {aggregate_gate.WORKFLOW_FILE, aggregate_gate.SECRETS_WORKFLOW, aggregate_gate.SIZE_WORKFLOW}
 
 
 def _rule_sections(text):
@@ -157,7 +161,7 @@ def _rule_sections(text):
         return yaml.safe_load(text)
     return yaml.safe_load("".join(
         chunk for chunk in re.split(r"(?m)^(?=[^\s#])", text)
-        if re.match(r"[\"']?(on|concurrency)[\"']?:", chunk))) or {}
+        if re.match(r"[\"']?(name|on|concurrency)[\"']?:", chunk))) or {}
 
 
 @functools.cache
@@ -198,25 +202,21 @@ class TestRatchetPushesHaveTheirOwnGroup(unittest.TestCase):
                               (HUMAN, NEXT_RATCHET, NO_HEAD_COMMIT)}
                     self.assertTrue(ratchet)
                     self.assertNotIn(ratchet, others)
+                    if name in FOLDED:  # github.workflow selects size-baseline.yml's non-called group
+                        self.assertNotEqual(*(render(group, {"github": dict(ctx["github"], workflow=workflow["name"])}) for ctx in (HUMAN, LATER)))
                     checked += 1
         self.assertGreaterEqual(checked, 5)
 
     def test_other_pushes_keep_their_workflow_group(self):
-        expected = {"secrets.yml": "secrets-refs/heads/main",
-                    "release.yml": "release"}
+        expected = {"secrets.yml": "secrets-refs/heads/main-sha-101", "release.yml": "release"}
         workflows = push_workflows()
         for name, group in expected.items():
             for context in (HUMAN, NO_HEAD_COMMIT):
                 with self.subTest(workflow=name, run=context["github"]["run_id"]):
-                    self.assertEqual(
-                        render(workflows[name]["concurrency"]["group"],
-                               context), group)
+                    self.assertEqual(render(workflows[name]["concurrency"]["group"], context), group)
 
     def test_the_suffix_is_the_shared_spelling(self):
-        for name in ("secrets.yml", "release.yml"):
-            with self.subTest(workflow=name):
-                self.assertTrue(push_workflows()[name]["concurrency"]["group"]
-                                .endswith(RATCHET_SUFFIX))
+        self.assertTrue(push_workflows()["release.yml"]["concurrency"]["group"].endswith(RATCHET_SUFFIX))
 
     def test_the_evaluator_follows_github_operator_semantics(self):
         ctx = {"github": {"a": "X", "n": None}}
