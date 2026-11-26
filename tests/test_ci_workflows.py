@@ -314,13 +314,13 @@ class TestSecretsScanWorkflow(unittest.TestCase):
                 return subprocess.run(["bash", "-e", "-c", script], cwd=repo, check=False, text=True,
                                       capture_output=True, env=dict(os.environ, RUNNER_TEMP=str(repo / "run"), **env))
             subprocess.run(git + ["update-ref", "refs/remotes/origin/main", base], check=True)
-            for event, key in (("pull_request", {"BASE_SHA": base}), ("push", {"BEFORE_SHA": base}), ("schedule", {})):
-                done = step(trusted, **{"EVENT_NAME": event, "BASE_SHA": "", "BEFORE_SHA": "", **key})
+            for event, key in (("pull_request", {"GH_WIDGETS_BASE_SHA": base}), ("push", {"GH_WIDGETS_BEFORE_SHA": base}), ("schedule", {})):
+                done = step(trusted, **{"GH_WIDGETS_EVENT_NAME": event, "GH_WIDGETS_BASE_SHA": "", "GH_WIDGETS_BEFORE_SHA": "", **key})
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual(("useDefault" in (repo / "run/gitleaks-trusted/.gitleaks.toml").read_text(), (repo / "run/gitleaks-trusted/.gitleaksignore").read_text()), (True, ""))
-            refused = step(trusted, EVENT_NAME="pull_request", BASE_SHA=head, BEFORE_SHA="")
+            refused = step(trusted, GH_WIDGETS_EVENT_NAME="pull_request", GH_WIDGETS_BASE_SHA=head, GH_WIDGETS_BEFORE_SHA="")
             self.assertNotEqual(refused.returncode, 0, "a trusted [extend] path must be refused")
-            done = step(scan, EVENT_NAME="push", BASE_SHA="", BEFORE_SHA=base)
+            done = step(scan, GH_WIDGETS_EVENT_NAME="push", GH_WIDGETS_BASE_SHA="", GH_WIDGETS_BEFORE_SHA=base)
             self.assertEqual(done.returncode, 0, done.stderr)
             saw = (repo / "run/argv").read_text().splitlines()
             self.assertNotIn("ignore-present", saw, "the judged tree's .gitleaksignore must go")
