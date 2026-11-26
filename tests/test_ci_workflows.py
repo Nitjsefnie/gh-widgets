@@ -262,18 +262,13 @@ class TestSecretsScanWorkflow(unittest.TestCase):
 
     def test_secrets_scan_uses_a_read_only_full_history_job(self):
         self.assertTrue(self.gitleaks_job)
-        self.assertRegex(self.secrets_text,
-                         r"(?m)^permissions:\n  contents: read\n\n")
-        self.assertRegex(
-            self.secrets_text, "(?m)^concurrency:\n  group: " + re.escape(
-                "secrets-${{ github.ref }}${{ github.event_name == 'push' && format('-{0}', github.sha) || '' }}")
+        self.assertRegex(self.secrets_text, r"(?m)^permissions:\n  contents: read\n\n")
+        self.assertRegex(self.secrets_text, "(?m)^concurrency:\n  group: " + re.escape(
+            "secrets-${{ github.ref }}${{ github.event_name == 'push' && format('-{0}', github.sha) || '' }}")
             + r"\n  cancel-in-progress: true\n\n")
-        self.assertRegex(self.gitleaks_job,
-                         r"(?m)^    runs-on: ubuntu-latest$")
-        self.assertRegex(self.gitleaks_job,
-                         r"(?m)^    timeout-minutes: 10$")
-        steps = _steps_block(self.gitleaks_job)
-        checkouts = [index for index, line in enumerate(steps)
+        self.assertRegex(self.gitleaks_job, r"(?m)^    runs-on: ubuntu-latest$")
+        self.assertRegex(self.gitleaks_job, r"(?m)^    timeout-minutes: 10$")
+        checkouts = [index for index, line in enumerate(_steps_block(self.gitleaks_job))
                      if line.startswith("      - uses: actions/checkout@")]
         self.assertEqual(len(checkouts), 1)
         download = self._named_step(
@@ -289,23 +284,44 @@ class TestSecretsScanWorkflow(unittest.TestCase):
                             line.strip())]
         self.assertEqual(len(digest_lines), 1,
                          "the download must verify a sha256 digest")
-        scan = self._named_step(
-            self.gitleaks_job, "Scan the tree and the history")
-        self.assertRegex(
-            scan, r"(?m)^          \./gitleaks detect --verbose --redact "
-                  r"--ignore-gitleaks-allow \\$")
-        self.assertNotRegex(scan, r"(?m)^\s+if:")
-        # The judged tree must not supply its own exemptions: the config, the
-        # ignore list and an inline marker all come from the trusted commit.
-        trusted = self._named_step(
-            self.gitleaks_job,
-            "Take the scan's config and ignore list from the trusted commit")
-        for source in (r"\$\{\{ github\.event\.pull_request\.base\.sha \}\}",
-                       r"\$\{\{ github\.event\.before \}\}",
-                       r"refs/remotes/origin/main"):
-            self.assertRegex(trusted, source, source)
-        self.assertRegex(scan, r'(?m)^\s+--config "\$RUNNER_TEMP/gitleaks-trusted/\.gitleaks\.toml"')
-        self.assertRegex(scan, r'(?m)^\s+--gitleaks-ignore-path "\$RUNNER_TEMP/gitleaks-trusted"')
+        self.assertNotRegex(self._named_step(self.gitleaks_job, "Scan the tree and the history"), r"(?m)^\s+if:")
+
+    @REQUIRES_POSIX_SHELL
+    def test_the_scan_steps_refuse_the_judged_tree_s_own_exemptions(self):
+        steps = {step["name"]: step["run"] for step in yaml.safe_load(self.secrets_text)["jobs"]["gitleaks"]["steps"] if "run" in step}
+        trusted, scan = (steps["Take the scan's config and ignore list from the trusted commit"], steps["Scan the tree and the history"])
+        with _ghw_temp.tempdir(prefix="gitleaks-steps-") as tmp:
+            repo = Path(tmp)
+            (repo / "run").mkdir()
+            (repo / "gitleaks").write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$RUNNER_TEMP/argv\"\n[ -e .gitleaksignore ] && echo ignore-present >> \"$RUNNER_TEMP/argv\"\nprintf '%s\\n' \"$(cat .git/info/attributes)\" >> \"$RUNNER_TEMP/argv\"\n")
+            (repo / "gitleaks").chmod(0o755)
+            git = ["git", "-C", str(repo)]
+            subprocess.run(git + ["init", "-q"], check=True)
+            (repo / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
+            subprocess.run(git + ["add", "-A"], check=True)
+            subprocess.run(git + ["commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+            (repo / ".gitleaks.toml").write_text('[extend]\npath = "x"\n')
+            (repo / ".gitleaksignore").write_text("judged\n")
+            subprocess.run(git + ["add", "-A"], check=True)
+            subprocess.run(git + ["commit", "-qm", "head"], check=True)
+            head = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+
+            def step(script, **env):
+                return subprocess.run(["bash", "-e", "-c", script], cwd=repo, check=False, text=True,
+                                      capture_output=True, env=dict(os.environ, RUNNER_TEMP=str(repo / "run"), **env))
+            for event, key in (("pull_request", {"BASE_SHA": base}), ("push", {"BEFORE_SHA": base})):
+                done = step(trusted, **{"EVENT_NAME": event, "BASE_SHA": "", "BEFORE_SHA": "", **key})
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("useDefault", (repo / "run/gitleaks-trusted/.gitleaks.toml").read_text())
+            refused = step(trusted, EVENT_NAME="pull_request", BASE_SHA=head, BEFORE_SHA="")
+            self.assertNotEqual(refused.returncode, 0, "a trusted [extend] path must be refused")
+            done = step(scan, EVENT_NAME="push", BASE_SHA="", BEFORE_SHA=base)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            saw = (repo / "run/argv").read_text().splitlines()
+            self.assertNotIn("ignore-present", saw, "the judged tree's .gitleaksignore must go")
+            self.assertEqual((saw[-1], "--ignore-gitleaks-allow" in saw[0]), ("* diff", True))
+            self.assertIn(f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", saw[0])
 
     @REQUIRES_POSIX_SHELL
     def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
@@ -376,10 +392,9 @@ class TestConsolidatedCiControls(unittest.TestCase):
         needs = re.search(r"(?m)^    needs:\s*\[([^]]+)\]$",
                           self.aggregate)
         assert needs is not None
-        self.assertEqual(
-            {name.strip() for name in needs.group(1).split(",")},
-            {"changes", "plan", "test", "report", "lint", "pyright", "pip-audit",
-             "speed", "analyze", "actionlint", "gates"})
+        self.assertEqual({name.strip() for name in needs.group(1).split(",")},
+                         {"changes", "plan", "test", "report", "lint", "pyright", "pip-audit",
+                          "speed", "analyze", "actionlint", "gates"})
         trigger = _trigger_block(self.workflow)
         self.assertNotRegex(trigger, r"(?m)^\s+paths(?:-ignore)?:")
         self.assertFalse((self.scripts / "aggregate_gates.py").exists())
@@ -408,10 +423,8 @@ class TestConsolidatedCiControls(unittest.TestCase):
                               self.aggregate, re.DOTALL)
         assert condition is not None
         normalized = " ".join(condition.group(1).split())
-        self.assertEqual(
-            normalized,
-            "always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || "
-            "(github.event_name == 'push' && github.ref == 'refs/heads/main'))")
+        self.assertEqual(normalized, "always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || "
+                                     "(github.event_name == 'push' && github.ref == 'refs/heads/main'))")
 
     def test_policy_timestamp_filter_is_absent(self):
         forbidden = ("created_after", "GATE_POLICY_UPDATED_AT", "updated_at")
@@ -507,10 +520,7 @@ class TestConsolidatedCiControls(unittest.TestCase):
         group = re.search(
             r"(?ms)^  group:\s*\$\{\{(.*?)\}\}\s*$", block.group(1))
         assert group is not None
-        self.assertEqual(
-            " ".join(group.group(1).split()),
-            "github.event_name == 'pull_request' && format('tests-pr-{0}', "
-            "github.event.pull_request.number) || github.run_id")
+        self.assertEqual(" ".join(group.group(1).split()), "github.event_name == 'pull_request' && format('tests-pr-{0}', github.event.pull_request.number) || github.run_id")
 
     def test_tests_cancel_in_progress_only_for_pull_requests(self):
         block = re.search(r"(?ms)^concurrency:\n(.*?)(?=^jobs:)",
@@ -617,24 +627,22 @@ class TestDependabotActionGroups(unittest.TestCase):
 class TestMeasuredCellName(unittest.TestCase):
     """One spelling for the cell `report` gates, wherever it is named."""
 
-    CELL = "ubuntu-latest-py3.15"
-
     def test_every_site_holds_that_cell_name(self):
         def cell(path, job, action):
             workflow = yaml.safe_load((WORKFLOWS / path).read_text(encoding="utf-8"))
             return next(step["with"]["cell"] for step in workflow["jobs"][job]["steps"]
                         if f"test-ratchet/{action}@" in step.get("uses", ""))
 
-        self.assertEqual(cell("tests.yml", "test", "run"),
-                         "${{ matrix.os }}-py${{ matrix.python-version }}")
-        self.assertEqual(cell("tests.yml", "report", "report"), self.CELL)
-        self.assertEqual(cell("test-ratchet-comment.yml", "comment", "report"), self.CELL)
+        name = "ubuntu-latest-py3.15"
+        self.assertEqual(cell("tests.yml", "test", "run"), "${{ matrix.os }}-py${{ matrix.python-version }}")
+        self.assertEqual(cell("tests.yml", "report", "report"), name)
+        self.assertEqual(cell("test-ratchet-comment.yml", "comment", "report"), name)
         thresholds = json.loads((REPO_ROOT / ".github/ci-thresholds.json").read_text(encoding="utf-8"))
         times = json.loads((REPO_ROOT / ".github/test-times.json").read_text(encoding="utf-8"))
-        self.assertEqual(thresholds["coverage"]["python"]["cell"], self.CELL)
+        self.assertEqual(thresholds["coverage"]["python"]["cell"], name)
         # A recorded key must be spelled as the run step reports it, or the
         # timings stop matching the cell they measured.
-        self.assertEqual([key for key in times["cells"] if " / " in key], [])
+        self.assertEqual(sorted(times["cells"]), [f"{os}-py{v}" for os in ("macos-latest", "ubuntu-latest", "windows-latest") for v in ("3.14", "3.15")])
 
 
 class TestClaimWorkflowShape(unittest.TestCase):
@@ -648,10 +656,8 @@ class TestClaimWorkflowShape(unittest.TestCase):
 
     def test_condition_filters_only_bots_and_non_commands(self):
         condition = " ".join(self.job["if"].split())
-        self.assertEqual(
-            condition,
-            "github.event.comment.user.type != 'Bot' && (contains(github.event.comment.body, '/claim') || "
-            "contains(github.event.comment.body, '/unclaim') || contains(github.event.comment.body, '/release'))")
+        self.assertEqual(condition, "github.event.comment.user.type != 'Bot' && (contains(github.event.comment.body, '/claim') || "
+                                    "contains(github.event.comment.body, '/unclaim') || contains(github.event.comment.body, '/release'))")
         self.assertNotIn("github.event.issue.pull_request", condition)
         self.assertNotIn("github.event.issue.state", condition)
 
@@ -701,11 +707,9 @@ class TestScorecardWorkflow(unittest.TestCase):
 
     def test_guard_skips_forks_and_non_default_branches(self):
         condition = " ".join(self.job.get("if", "").split())
-        self.assertEqual(
-            condition,
-            "${{ !github.event.repository.fork && "
-            "github.ref == format('refs/heads/{0}', "
-            "github.event.repository.default_branch) }}")
+        self.assertEqual(condition, "${{ !github.event.repository.fork && "
+                                    "github.ref == format('refs/heads/{0}', "
+                                    "github.event.repository.default_branch) }}")
 
     def test_permissions_and_job_timeout_are_scoped(self):
         self.assertEqual(self.workflow.get("name"), "scorecard")
@@ -779,13 +783,10 @@ class TestRatchetPushWorkflow(unittest.TestCase):
             "group": "ratchet-push", "cancel-in-progress": False,
             "queue": "max",
         })
-        self.assertEqual(
-            " ".join(self.job["if"].split()),
-            "github.event.workflow_run.event == 'push' && "
-            "github.event.workflow_run.head_branch == 'main' && "
-            "github.event.workflow_run.conclusion == 'success' && "
-            "github.event.workflow_run.head_repository.full_name == "
-            "github.repository")
+        self.assertEqual(" ".join(self.job["if"].split()),
+                         "github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && "
+                         "github.event.workflow_run.conclusion == 'success' && "
+                         "github.event.workflow_run.head_repository.full_name == github.repository")
         self.assertEqual(self.job["environment"], "main-push")
         self.assertEqual(self.job["timeout-minutes"], 15)
         self.assertEqual(self.job["permissions"], {"actions": "read", "contents": "read"})
@@ -843,9 +844,8 @@ class TestRatchetPushWorkflow(unittest.TestCase):
 
     def test_privileged_job_checks_out_and_runs_no_repository_code(self):
         self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in self.steps))
-        self.assertEqual(
-            [step["uses"].split("@", maxsplit=1)[0] for step in self.steps if "uses" in step],
-            ["actions/download-artifact"])
+        self.assertEqual([step["uses"].split("@", maxsplit=1)[0] for step in self.steps if "uses" in step],
+                         ["actions/download-artifact"])
         for step in self.steps:
             run = step.get("run", "")
             self.assertNotIn("scripts/ci/", run)
@@ -1181,8 +1181,7 @@ class TestActionFamiliesShareOneRef(unittest.TestCase):
         self.assertTrue(refs, "no external action reference found")
         split = {family: where for family, where in refs.items()
                  if len(where) > 1}
-        self.assertFalse(
-            split, "an action family must use one revision across the workflows: " f"{split}")
+        self.assertFalse(split, "an action family must use one revision across the workflows: " f"{split}")
 
 
 if __name__ == "__main__":
