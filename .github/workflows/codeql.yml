@@ -15,10 +15,6 @@ name: codeql
 # updated continuously, and a new query only ever runs against code that
 # has changed since it shipped. Without the cron, a rule published today
 # would never be applied to a file last touched last year.
-#
-# CONCURRENCY. The shared form appends the SHA for a push; with no push
-# trigger here it degenerates to one group per ref, which is what this file
-# carries. The trigger difference is the paragraph above.
 
 on:
   schedule:
@@ -28,11 +24,10 @@ on:
     - cron: '47 3 * * 3'
   workflow_dispatch:
 
-# No scope applies workflow-wide; the analyze job's grant is the whole of it.
 permissions: {}
 
 concurrency:
-  group: codeql-${{ github.ref }}
+  group: codeql-${{ github.ref }}${{ github.event_name == 'push' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: true
 
 jobs:
