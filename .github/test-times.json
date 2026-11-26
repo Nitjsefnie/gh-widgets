@@ -53,14 +53,16 @@
       ],
       "tests/test_e2e_bench.py": [
         18.82,
-        25.43
+        25.43,
+        13.37
       ],
       "tests/test_extra_orgs.py": [
         0.03
       ],
       "tests/test_gate_base_freshness.py": [
         38.54,
-        59.16
+        59.16,
+        27.98
       ],
       "tests/test_gql_retry.py": [
         0.02
@@ -91,7 +93,8 @@
         0.04
       ],
       "tests/test_install.py": [
-        6.33
+        6.33,
+        4.11
       ],
       "tests/test_install_python.py": [
         0.0
@@ -134,7 +137,8 @@
         0.08
       ],
       "tests/test_resync_memory.py": [
-        2.64
+        2.64,
+        1.12
       ],
       "tests/test_secrecy_check.py": [
         2.31,
@@ -148,7 +152,8 @@
       ],
       "tests/test_speed_ratchet.py": [
         16.04,
-        22.6
+        22.6,
+        10.88
       ],
       "tests/test_speed_seeding.py": [
         3.74,
@@ -206,10 +211,12 @@
         0.05
       ],
       "tests/test_ci_workflows.py": [
-        2.65
+        2.65,
+        5.3
       ],
       "tests/test_commit_scopes.py": [
-        12.36
+        12.36,
+        19.79
       ],
       "tests/test_common.py": [
         0.3
@@ -218,7 +225,8 @@
         0.12
       ],
       "tests/test_counter.py": [
-        3.15
+        3.15,
+        5.53
       ],
       "tests/test_counter_timeout.py": [
         6.56
@@ -227,13 +235,15 @@
         0.54
       ],
       "tests/test_e2e_bench.py": [
-        16.16
+        16.16,
+        28.61
       ],
       "tests/test_extra_orgs.py": [
         0.03
       ],
       "tests/test_gate_base_freshness.py": [
-        30.83
+        30.83,
+        43.43
       ],
       "tests/test_gql_retry.py": [
         0.02
@@ -251,7 +261,8 @@
         4.9
       ],
       "tests/test_impact_loc_coverage.py": [
-        8.38
+        8.38,
+        11.36
       ],
       "tests/test_impact_quoted_paths.py": [
         0.0
@@ -263,7 +274,8 @@
         0.03
       ],
       "tests/test_install.py": [
-        4.62
+        4.62,
+        6.78
       ],
       "tests/test_install_python.py": [
         0.0
@@ -278,13 +290,15 @@
         1.16
       ],
       "tests/test_population_digest.py": [
-        1.72
+        1.72,
+        3.08
       ],
       "tests/test_ratchet_concurrency.py": [
         0.04
       ],
       "tests/test_ratchet_push_delivery.py": [
-        13.51
+        13.51,
+        17.02
       ],
       "tests/test_ratchet_staging.py": [
         1.89
@@ -315,16 +329,19 @@
         0.21
       ],
       "tests/test_speed_ratchet.py": [
-        10.79
+        10.79,
+        16.07
       ],
       "tests/test_speed_seeding.py": [
-        2.01
+        2.01,
+        3.42
       ],
       "tests/test_speed_text.py": [
         0.01
       ],
       "tests/test_speed_workflow.py": [
-        29.83
+        29.83,
+        51.12
       ],
       "tests/test_stars.py": [
         0.36
