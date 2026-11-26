@@ -1,6 +1,4 @@
 # test-ratchet's `source: .` measures the whole tree; the tests are the
-# instrument, not the subject. `*/tests/*`, not `tests/*`: a relative pattern
-# resolves against each measured process's working directory, and the child
-# processes the tests start run in other directories.
+# instrument, not the subject.
 [run]
-omit = */tests/*
+omit = tests/*
