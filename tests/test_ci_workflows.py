@@ -324,7 +324,7 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
             saw = (repo / "run/argv").read_text().splitlines()
             self.assertNotIn("ignore-present", saw, "the judged tree's .gitleaksignore must go")
-            self.assertEqual((saw[-1], [f for f in ("--ignore-gitleaks-allow", "--redact", f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", f"--gitleaks-ignore-path {repo}/run/gitleaks-trusted") if f not in saw[0]]), ("* diff", []))
+            self.assertEqual((saw[-1], [f for f in ("--ignore-gitleaks-allow", "--redact", f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", f"--gitleaks-ignore-path {repo}/run/gitleaks-trusted", "--log-opts=--full-history --all --diff-filter=uxdb --diff-merges=remerge") if f not in saw[0]]), ("* diff", []))
 
     @REQUIRES_POSIX_SHELL
     def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
