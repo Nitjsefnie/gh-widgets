@@ -422,7 +422,7 @@ jobs:
           git -C "$repo" config user.name 'github-actions[bot]'
           git -C "$repo" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           case "$record_path" in
-            gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline (automated)' ;;
+            gate/speed-baseline.json) subject='chore(ratchet): tighten the speed baseline' ;;
             *) echo "no commit subject for $record_path" >&2; exit 1 ;;
           esac
           git -C "$repo" commit -m "$subject"
