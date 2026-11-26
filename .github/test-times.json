@@ -789,7 +789,8 @@
       ],
       "tests/test_impact_loc.py": [
         9.38,
-        11.85
+        11.85,
+        6.96
       ],
       "tests/test_impact_loc_coverage.py": [
         12.38
@@ -820,7 +821,8 @@
       ],
       "tests/test_population_digest.py": [
         3.68,
-        4.83
+        4.83,
+        14.15
       ],
       "tests/test_ratchet_concurrency.py": [
         0.06
@@ -832,7 +834,8 @@
         0.4
       ],
       "tests/test_release_workflow.py": [
-        0.42
+        0.42,
+        10.62
       ],
       "tests/test_render.py": [
         1.01
@@ -915,7 +918,8 @@
       ],
       "tests/test_ci_workflows.py": [
         4.15,
-        2.26
+        2.26,
+        5.57
       ],
       "tests/test_commit_scopes.py": [
         37.39,
