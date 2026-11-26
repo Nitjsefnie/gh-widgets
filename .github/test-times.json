@@ -770,7 +770,8 @@
         94.89
       ],
       "tests/test_extra_orgs.py": [
-        0.11
+        0.11,
+        1.33
       ],
       "tests/test_gate_base_freshness.py": [
         125.54
