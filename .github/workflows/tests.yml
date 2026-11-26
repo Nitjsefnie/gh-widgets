@@ -89,7 +89,7 @@ jobs:
         with:
           persist-credentials: false
       - id: plan
-        uses: Nitjsefnie-Actions/test-ratchet/plan@0ad0b0b5bdb6f63c567b3490b701ec171ca5e546 # v2.3.2
+        uses: Nitjsefnie-Actions/test-ratchet/plan@916a819580fdb4133805bd7e4f46608849f05c7f # v2.4.0
         with:
           tests: tests/**/test_*.py
           times: .github/test-times.json
@@ -157,7 +157,7 @@ jobs:
           # Undefined on the other five cells, so it reads as "" there.
           GH_WIDGETS_REQUIRE_GIT_FAME: ${{ matrix.measured }}
           GH_WIDGETS_TEST_TIMEOUT: "120"  # tests/_ghw_watchdog.py
-        uses: Nitjsefnie-Actions/test-ratchet/run@0ad0b0b5bdb6f63c567b3490b701ec171ca5e546 # v2.3.2
+        uses: Nitjsefnie-Actions/test-ratchet/run@916a819580fdb4133805bd7e4f46608849f05c7f # v2.4.0
         with:
           runner: pytest
           tests: tests/**/test_*.py
@@ -186,7 +186,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: Nitjsefnie-Actions/test-ratchet/report@0ad0b0b5bdb6f63c567b3490b701ec171ca5e546 # v2.3.2
+      - uses: Nitjsefnie-Actions/test-ratchet/report@916a819580fdb4133805bd7e4f46608849f05c7f # v2.4.0
         with:
           github-token: ${{ github.token }}
           cell: ubuntu-latest / 3.15
