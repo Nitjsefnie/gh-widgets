@@ -1,35 +1,11 @@
 name: claim
-
-# Lets a contributor take an issue without repository write access. GitHub's
-# built-in slash commands do not include assignment, so self-assignment
-# otherwise needs someone with write access to use the assignee control.
-#
-# `/claim` assigns the commenter to an unassigned open issue. `/unclaim` and
-# `/release` are the same command under two names — both remove the
-# commenter's OWN assignment and nobody else's, a DELETE naming exactly one
-# login, so a second assignee is left in place. Two names because the
-# reference implementation this was modelled on calls it `/release` and people
-# arrive expecting that word.
-#
-# The action handles the attacker-controlled comment body without
-# interpolating it into shell source. The `if:` below is only a cheap
-# expression check; the exact match happens in the action, because expressions
-# have no trim(). It filters only bot commenters and comments without one of
-# the commands. Commands the action declines on pull requests or closed issues
-# get an explicit reply instead of silence.
-
 on:
   issue_comment:  # zizmor: ignore[dangerous-triggers]
     types: [created]
-
 concurrency:
-  # Per issue, and NOT cancel-in-progress. Two people claiming at once must
-  # both get an answer: cancelling the first would leave the loser of the race
-  # with silence, and cancelling the second would leave it unanswered.
   group: claim-${{ github.event.issue.number }}
   cancel-in-progress: false
   queue: max
-
 jobs:
   claim:
     if: >-
@@ -39,15 +15,9 @@ jobs:
           || contains(github.event.comment.body, '/release'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # The narrowest token that can assign. Nothing here reads the tree, so
-    # there is no contents: read and no checkout: the job talks to the API only.
-    # `pull-requests: write` exists for the decline reply: the action never
-    # assigns a pull request; it answers a PR command by posting that it has
-    # no effect there. Without the grant, the reply fails with HTTP 403.
     permissions:
       issues: write
       pull-requests: write
-
     steps:
       - uses: Nitjsefnie-Actions/claim@31261cf9310ad42718c6843305d5992530529d87 # v3.0.3
         with:
