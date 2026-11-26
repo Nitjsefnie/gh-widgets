@@ -295,9 +295,29 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             self.gitleaks_job, "Scan the tree and the history")
         self.assertRegex(
             scan,
-            r"(?m)^        run: ./gitleaks detect --verbose --redact "
-            r"--config \.gitleaks\.toml$")
+            r"(?m)^          \./gitleaks detect --verbose --redact "
+            r"--ignore-gitleaks-allow \\$")
         self.assertNotRegex(scan, r"(?m)^\s+if:")
+
+    def test_scan_exemptions_come_from_the_trusted_commit(self):
+        # Read from the judged tree, a change could exempt its own finding:
+        # the config and the ignore list are read from a commit the change
+        # cannot edit, and an inline `gitleaks:allow` in the judged change
+        # is ignored.
+        trusted = self._named_step(
+            self.gitleaks_job,
+            "Take the scan's config and ignore list from the trusted commit")
+        self.assertRegex(
+            trusted,
+            r"\$\{\{ github\.event\.pull_request\.base\.sha \}\}")
+        self.assertRegex(trusted, r"\$\{\{ github\.event\.before \}\}")
+        self.assertRegex(trusted, r"refs/remotes/origin/main")
+        scan = self._named_step(
+            self.gitleaks_job, "Scan the tree and the history")
+        self.assertRegex(scan, r"(?m)^\s+--config "
+                                r"\"\$RUNNER_TEMP/gitleaks-trusted/\.gitleaks\.toml\"")
+        self.assertRegex(scan, r"(?m)^\s+--gitleaks-ignore-path "
+                                r"\"\$RUNNER_TEMP/gitleaks-trusted\"")
 
     @REQUIRES_POSIX_SHELL
     def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
