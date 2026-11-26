@@ -258,7 +258,8 @@
         0.05
       ],
       "tests/test_impact_loc.py": [
-        4.9
+        4.9,
+        6.5
       ],
       "tests/test_impact_loc_coverage.py": [
         8.38,
@@ -334,7 +335,8 @@
       ],
       "tests/test_speed_seeding.py": [
         2.01,
-        3.42
+        3.42,
+        4.57
       ],
       "tests/test_speed_text.py": [
         0.01
@@ -420,7 +422,8 @@
       ],
       "tests/test_gate_base_freshness.py": [
         7.56,
-        10.1
+        10.1,
+        5.63
       ],
       "tests/test_gql_retry.py": [
         0.01
@@ -916,7 +919,8 @@
       ],
       "tests/test_commit_scopes.py": [
         37.39,
-        25.79
+        25.79,
+        52.55
       ],
       "tests/test_common.py": [
         0.57
@@ -949,7 +953,8 @@
       ],
       "tests/test_impact.py": [
         13.21,
-        8.67
+        8.67,
+        18.84
       ],
       "tests/test_impact_bots.py": [
         0.21
@@ -959,7 +964,8 @@
       ],
       "tests/test_impact_loc.py": [
         10.87,
-        7.31
+        7.31,
+        14.51
       ],
       "tests/test_impact_loc_coverage.py": [
         11.4,
