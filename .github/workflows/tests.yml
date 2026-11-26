@@ -162,7 +162,7 @@ jobs:
           runner: pytest
           tests: tests/**/test_*.py
           times: .github/test-times.json
-          cell: ${{ matrix.os }} / ${{ matrix.python-version }}
+          cell: ${{ matrix.os }}-py${{ matrix.python-version }}
           shard: ${{ matrix.shard }}
           # The whole tree; .coveragerc leaves tests/ out.
           source: .
@@ -189,7 +189,7 @@ jobs:
       - uses: Nitjsefnie-Actions/test-ratchet/report@972529077c00a9331f0481c0a434a171d502c402 # v2.4.1
         with:
           github-token: ${{ github.token }}
-          cell: ubuntu-latest / 3.15
+          cell: ubuntu-latest-py3.15
           times: .github/test-times.json
           push-key: ${{ secrets.MASTER_PUSH_DEPLOY_KEY }}
 
