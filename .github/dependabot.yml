@@ -25,8 +25,6 @@ updates:
     commit-message:
       prefix: "build"
       include: scope
-    labels:
-      - dependencies
 
   # The workflows pin every action to a commit SHA with the version in a
   # trailing comment. A SHA pin does not move at all — which is the point,
@@ -44,8 +42,6 @@ updates:
     commit-message:
       prefix: "ci"
       include: scope
-    labels:
-      - dependencies
     # github/codeql-action/init and .../analyze are separate dependencies to
     # Dependabot, so ungrouped it files ONE HALF-BUMP PR PER PIN, and a tree
     # whose init and analyze pins disagree fails every CodeQL run with a
@@ -54,7 +50,7 @@ updates:
     # and the security-update group does the same for every action security
     # bump. The in-tree tripwire is test_ci_workflows.py.
     groups:
-      actions:
+      github-actions:
         applies-to: version-updates
         patterns:
           - "*"
