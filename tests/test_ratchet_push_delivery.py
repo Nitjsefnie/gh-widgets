@@ -56,7 +56,7 @@ def boundaries(root):
         " sys.exit(0)\n"
         "with open(os.environ['GIT_CALLS'], 'a', encoding='utf-8') as handle:\n"
         " handle.write(json.dumps(args) + '\\n')\n"
-        "subject = {'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline (automated)'}[os.environ['record_path']]\n"
+        "subject = {'gate/speed-baseline.json': 'chore(ratchet): tighten the speed baseline'}[os.environ['record_path']]\n"
         "allowed = [['add', '--', os.environ['record_path']],\n"
         " ['config', 'user.name', 'github-actions[bot]'],\n"
         " ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'],\n"
