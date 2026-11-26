@@ -1003,7 +1003,8 @@
       ],
       "tests/test_population_digest.py": [
         4.0,
-        2.44
+        2.44,
+        5.09
       ],
       "tests/test_ratchet_concurrency.py": [
         0.04
