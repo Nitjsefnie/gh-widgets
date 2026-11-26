@@ -250,7 +250,7 @@ pinned toolchain. The coverage population is **every shipped source family**,
 workflows, so leaving them out would report coverage for a smaller program than
 the one that ships; `.coveragerc` leaves only `tests/` out. The floor is
 `coverage.python` in `.github/ci-thresholds.json`, measured on the
-`ubuntu-latest / 3.15` cell, and `report` compares the merged figure with the
+`ubuntu-latest-py3.15` cell, and `report` compares the merged figure with the
 floor committed at the pull request's base. The records move only on a push to
 `main` whose gate passed and whose artifacts all passed and cover every shard
 of every cell: when the figure exceeds the recorded `measured` by more than the

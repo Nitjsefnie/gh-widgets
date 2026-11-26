@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "cells": {
-    "macos-latest / 3.14": {
+    "macos-latest-py3.14": {
       "tests/test_acquisition_overlap.py": [
         2.55
       ],
@@ -185,7 +185,7 @@
         0.09
       ]
     },
-    "macos-latest / 3.15": {
+    "macos-latest-py3.15": {
       "tests/test_acquisition_overlap.py": [
         2.65
       ],
@@ -364,7 +364,7 @@
         0.08
       ]
     },
-    "ubuntu-latest / 3.14": {
+    "ubuntu-latest-py3.14": {
       "tests/test_acquisition_overlap.py": [
         1.74
       ],
@@ -541,7 +541,7 @@
         0.03
       ]
     },
-    "ubuntu-latest / 3.15": {
+    "ubuntu-latest-py3.15": {
       "tests/test_acquisition_overlap.py": [
         1.66
       ],
@@ -718,7 +718,7 @@
         0.04
       ]
     },
-    "windows-latest / 3.14": {
+    "windows-latest-py3.14": {
       "tests/test_acquisition_overlap.py": [
         1.83
       ],
@@ -891,7 +891,7 @@
         0.27
       ]
     },
-    "windows-latest / 3.15": {
+    "windows-latest-py3.15": {
       "tests/test_acquisition_overlap.py": [
         1.82
       ],

@@ -651,6 +651,50 @@ class TestDependabotActionGroups(unittest.TestCase):
              if "labels" in update], [])
 
 
+class TestMeasuredCellName(unittest.TestCase):
+    """One spelling for the cell `report` gates, wherever it is named."""
+
+    CELL = "ubuntu-latest-py3.15"
+
+    def _step_using(self, workflow, job, action):
+        return next(step for step in workflow["jobs"][job]["steps"]
+                    if f"test-ratchet/{action}@" in step.get("uses", ""))
+
+    def test_test_job_names_the_cell_from_the_matrix(self):
+        workflow = yaml.safe_load(
+            (WORKFLOWS / "tests.yml").read_text(encoding="utf-8"))
+        step = self._step_using(workflow, "test", "run")
+        self.assertEqual(step["with"]["cell"],
+                         "${{ matrix.os }}-py${{ matrix.python-version }}")
+
+    def test_report_and_comment_name_the_same_cell(self):
+        tests = yaml.safe_load(
+            (WORKFLOWS / "tests.yml").read_text(encoding="utf-8"))
+        comment = yaml.safe_load(
+            (WORKFLOWS / "test-ratchet-comment.yml").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            self._step_using(tests, "report", "report")["with"]["cell"],
+            self.CELL)
+        self.assertEqual(
+            self._step_using(comment, "comment", "report")["with"]["cell"],
+            self.CELL)
+
+    def test_the_gated_floor_and_the_times_file_hold_that_cell(self):
+        thresholds = json.loads(
+            (REPO_ROOT / ".github/ci-thresholds.json").read_text(
+                encoding="utf-8"))
+        times = json.loads(
+            (REPO_ROOT / ".github/test-times.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(thresholds["coverage"]["python"]["cell"], self.CELL)
+        self.assertIn(self.CELL, times["cells"])
+        # Every matrix cell's recorded timings carry the same spelling the
+        # run step reports, so a key stays matched to the cell it measures.
+        self.assertEqual(
+            [key for key in times["cells"] if " / " in key], [])
+
+
 class TestClaimWorkflowShape(unittest.TestCase):
     """Pin the claim workflow's command filter, permissions and action input."""
 
