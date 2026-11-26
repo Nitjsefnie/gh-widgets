@@ -297,6 +297,9 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             (repo / "gitleaks").chmod(0o755)
             git = ["git", "-C", str(repo)]
             subprocess.run(git + ["init", "-q"], check=True)
+            # The runner has no configured identity; a fixture commit needs one.
+            subprocess.run(git + ["config", "user.name", "fixture"], check=True)
+            subprocess.run(git + ["config", "user.email", "fixture@example.com"], check=True)
             (repo / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
             subprocess.run(git + ["add", "-A"], check=True)
             subprocess.run(git + ["commit", "-qm", "base"], check=True)
@@ -637,8 +640,7 @@ class TestMeasuredCellName(unittest.TestCase):
         self.assertEqual(cell("tests.yml", "test", "run"), "${{ matrix.os }}-py${{ matrix.python-version }}")
         self.assertEqual(cell("tests.yml", "report", "report"), name)
         self.assertEqual(cell("test-ratchet-comment.yml", "comment", "report"), name)
-        thresholds = json.loads((REPO_ROOT / ".github/ci-thresholds.json").read_text(encoding="utf-8"))
-        times = json.loads((REPO_ROOT / ".github/test-times.json").read_text(encoding="utf-8"))
+        thresholds, times = (json.loads((REPO_ROOT / path).read_text(encoding="utf-8")) for path in (".github/ci-thresholds.json", ".github/test-times.json"))
         self.assertEqual(thresholds["coverage"]["python"]["cell"], name)
         # A recorded key must be spelled as the run step reports it, or the
         # timings stop matching the cell they measured.
