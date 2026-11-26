@@ -313,18 +313,18 @@ class TestSecretsScanWorkflow(unittest.TestCase):
             def step(script, **env):
                 return subprocess.run(["bash", "-e", "-c", script], cwd=repo, check=False, text=True,
                                       capture_output=True, env=dict(os.environ, RUNNER_TEMP=str(repo / "run"), **env))
-            for event, key in (("pull_request", {"BASE_SHA": base}), ("push", {"BEFORE_SHA": base})):
+            subprocess.run(git + ["update-ref", "refs/remotes/origin/main", base], check=True)
+            for event, key in (("pull_request", {"BASE_SHA": base}), ("push", {"BEFORE_SHA": base}), ("schedule", {})):
                 done = step(trusted, **{"EVENT_NAME": event, "BASE_SHA": "", "BEFORE_SHA": "", **key})
                 self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertIn("useDefault", (repo / "run/gitleaks-trusted/.gitleaks.toml").read_text())
+                self.assertEqual(("useDefault" in (repo / "run/gitleaks-trusted/.gitleaks.toml").read_text(), (repo / "run/gitleaks-trusted/.gitleaksignore").read_text()), (True, ""))
             refused = step(trusted, EVENT_NAME="pull_request", BASE_SHA=head, BEFORE_SHA="")
             self.assertNotEqual(refused.returncode, 0, "a trusted [extend] path must be refused")
             done = step(scan, EVENT_NAME="push", BASE_SHA="", BEFORE_SHA=base)
             self.assertEqual(done.returncode, 0, done.stderr)
             saw = (repo / "run/argv").read_text().splitlines()
             self.assertNotIn("ignore-present", saw, "the judged tree's .gitleaksignore must go")
-            self.assertEqual((saw[-1], "--ignore-gitleaks-allow" in saw[0]), ("* diff", True))
-            self.assertIn(f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", saw[0])
+            self.assertEqual((saw[-1], [f for f in ("--ignore-gitleaks-allow", "--redact", f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", f"--gitleaks-ignore-path {repo}/run/gitleaks-trusted") if f not in saw[0]]), ("* diff", []))
 
     @REQUIRES_POSIX_SHELL
     def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
