@@ -29,7 +29,7 @@ import xml.etree.ElementTree as ET
 
 from scripts.bench.bench_platform import REQUIRES_BENCH, REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import WORKFLOWS, StepRunner
-from tests.test_gate_base_freshness import _config
+from tests.test_commit_scopes import _config
 from tests.test_e2e_bench import REQUIRES_STATEMENT
 from tests import _ghw_temp
 REPO_ROOT = Path(__file__).resolve().parents[1]

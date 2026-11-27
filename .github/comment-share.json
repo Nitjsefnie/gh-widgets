@@ -83,10 +83,6 @@
     363,
     859
   ],
-  "scripts/ci/gate_base_freshness.py": [
-    11894,
-    26214
-  ],
   "scripts/ci/ratchet_declarations.py": [
     1243,
     6273
