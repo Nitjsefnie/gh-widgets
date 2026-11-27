@@ -141,9 +141,6 @@
         3.73,
         1.3
       ],
-      "tests/test_secrets_download.py": [
-        0.03
-      ],
       "tests/test_share.py": [
         0.18
       ],
@@ -320,9 +317,6 @@
         2.42,
         1.14
       ],
-      "tests/test_secrets_download.py": [
-        0.04
-      ],
       "tests/test_share.py": [
         0.21
       ],
@@ -494,9 +488,6 @@
       "tests/test_secrecy_check.py": [
         0.34
       ],
-      "tests/test_secrets_download.py": [
-        0.01
-      ],
       "tests/test_share.py": [
         0.13
       ],
@@ -666,9 +657,6 @@
       ],
       "tests/test_secrecy_check.py": [
         0.31
-      ],
-      "tests/test_secrets_download.py": [
-        0.01
       ],
       "tests/test_share.py": [
         0.11
@@ -847,9 +835,6 @@
       "tests/test_secrecy_check.py": [
         0.02
       ],
-      "tests/test_secrets_download.py": [
-        0.0
-      ],
       "tests/test_share.py": [
         1.05
       ],
@@ -1026,9 +1011,6 @@
       ],
       "tests/test_secrecy_check.py": [
         0.01
-      ],
-      "tests/test_secrets_download.py": [
-        0.0
       ],
       "tests/test_share.py": [
         0.92

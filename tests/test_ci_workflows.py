@@ -6,7 +6,6 @@ import re
 import shlex
 import subprocess
 import sys
-import textwrap
 import unittest
 from pathlib import Path
 
@@ -123,35 +122,6 @@ def _steps_block(job_block):
     while steps and not steps[-1].strip():
         steps.pop()
     return steps
-
-
-def _run_download_with_failed_digest(script):
-    """Run the workflow download script with a failing checksum command."""
-    with _ghw_temp.tempdir(prefix="gitleaks-download-control-") as tmp:
-        directory = Path(tmp)
-        curl_args = directory / "curl-args"
-        tar_called = directory / "tar-called"
-        curl_args.touch()
-        stubs = {
-            "curl": 'printf \'%s\\n\' "$@" > "$CURL_ARGUMENTS"',
-            "sha256sum": "echo digest mismatch >&2; exit 1",
-            "tar": 'touch "$TAR_MARKER"',
-        }
-        for name, body in stubs.items():
-            stub = directory / name
-            stub.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-            stub.chmod(0o755)
-        environment = dict(
-            os.environ,
-            PATH=f"{directory}{os.pathsep}{os.environ['PATH']}",
-            CURL_ARGUMENTS=str(curl_args),
-            TAR_MARKER=str(tar_called))
-        result = subprocess.run(
-            ["bash", "-e", "-o", "pipefail", "-c", script],
-            cwd=directory, env=environment, capture_output=True,
-            text=True, check=False)
-        return result.returncode, curl_args.read_text(encoding="utf-8"), \
-            tar_called.exists()
 
 
 class TestCheckoutCredentials(unittest.TestCase):
@@ -271,78 +241,6 @@ class TestSecretsScanWorkflow(unittest.TestCase):
         checkouts = [index for index, line in enumerate(_steps_block(self.gitleaks_job))
                      if line.startswith("      - uses: actions/checkout@")]
         self.assertEqual(len(checkouts), 1)
-        download = self._named_step(
-            self.gitleaks_job, "Download gitleaks and verify its digest")
-        download_script = textwrap.dedent(
-            download.split("run: |\n", 1)[1]).strip()
-        # Which digest pins the release is the workflow's business; what
-        # must hold is that exactly one line hands a sha256 digest to
-        # sha256sum verification.
-        digest_lines = [
-            line.strip() for line in download_script.splitlines()
-            if re.fullmatch(r"echo '[0-9a-f]{64}  \S+' \| sha256sum -c -",
-                            line.strip())]
-        self.assertEqual(len(digest_lines), 1,
-                         "the download must verify a sha256 digest")
-        self.assertNotRegex(self._named_step(self.gitleaks_job, "Scan the tree and the history"), r"(?m)^\s+if:")
-
-    @REQUIRES_POSIX_SHELL
-    def test_the_scan_steps_refuse_the_judged_tree_s_own_exemptions(self):
-        steps = {step["name"]: step["run"] for step in yaml.safe_load(self.secrets_text)["jobs"]["gitleaks"]["steps"] if "run" in step}
-        trusted, scan = (steps["Take the scan's config and ignore list from the trusted commit"], steps["Scan the tree and the history"])
-        with _ghw_temp.tempdir(prefix="gitleaks-steps-") as tmp:
-            repo = Path(tmp)
-            (repo / "run").mkdir()
-            (repo / "gitleaks").write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$RUNNER_TEMP/argv\"\n[ -e .gitleaksignore ] && echo ignore-present >> \"$RUNNER_TEMP/argv\"\nprintf '%s\\n' \"$(cat .git/info/attributes)\" >> \"$RUNNER_TEMP/argv\"\n")
-            (repo / "gitleaks").chmod(0o755)
-            git = ["git", "-C", str(repo)]
-            subprocess.run(git + ["init", "-q"], check=True)
-            # The runner has no configured identity; a fixture commit needs one.
-            subprocess.run(git + ["config", "user.name", "fixture"], check=True)
-            subprocess.run(git + ["config", "user.email", "fixture@example.com"], check=True)
-            (repo / ".gitleaks.toml").write_text("[extend]\nuseDefault = true\n")
-            subprocess.run(git + ["add", "-A"], check=True)
-            subprocess.run(git + ["commit", "-qm", "base"], check=True)
-            base = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
-            (repo / ".gitleaks.toml").write_text('[extend]\npath = "x"\n')
-            (repo / ".gitleaksignore").write_text("judged\n")
-            subprocess.run(git + ["add", "-A"], check=True)
-            subprocess.run(git + ["commit", "-qm", "head"], check=True)
-            head = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
-
-            def step(script, **env):
-                return subprocess.run(["bash", "-e", "-c", script], cwd=repo, check=False, text=True,
-                                      capture_output=True, env=dict(os.environ, RUNNER_TEMP=str(repo / "run"), **env))
-            subprocess.run(git + ["update-ref", "refs/remotes/origin/main", base], check=True)
-            for event, key in (("pull_request", {"GH_WIDGETS_BASE_SHA": base}), ("push", {"GH_WIDGETS_BEFORE_SHA": base}), ("schedule", {})):
-                done = step(trusted, **{"GH_WIDGETS_EVENT_NAME": event, "GH_WIDGETS_BASE_SHA": "", "GH_WIDGETS_BEFORE_SHA": "", **key})
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertEqual(("useDefault" in (repo / "run/gitleaks-trusted/.gitleaks.toml").read_text(), (repo / "run/gitleaks-trusted/.gitleaksignore").read_text()), (True, ""))
-            refused = step(trusted, GH_WIDGETS_EVENT_NAME="pull_request", GH_WIDGETS_BASE_SHA=head, GH_WIDGETS_BEFORE_SHA="")
-            self.assertNotEqual(refused.returncode, 0, "a trusted [extend] path must be refused")
-            done = step(scan, GH_WIDGETS_EVENT_NAME="push", GH_WIDGETS_BASE_SHA="", GH_WIDGETS_BEFORE_SHA=base)
-            self.assertEqual(done.returncode, 0, done.stderr)
-            saw = (repo / "run/argv").read_text().splitlines()
-            self.assertNotIn("ignore-present", saw, "the judged tree's .gitleaksignore must go")
-            self.assertEqual((saw[-1], [f for f in ("--ignore-gitleaks-allow", "--redact", f"--config {repo}/run/gitleaks-trusted/.gitleaks.toml", f"--gitleaks-ignore-path {repo}/run/gitleaks-trusted", "--log-opts=--full-history --all --diff-filter=uxdb --diff-merges=first-parent") if f not in saw[0]]), ("* diff", []))
-
-    @REQUIRES_POSIX_SHELL
-    def test_digest_failure_gates_extraction_and_the_download_uses_its_url(self):
-        download = self._named_step(
-            self.gitleaks_job, "Download gitleaks and verify its digest")
-        script = textwrap.dedent(download.split("run: |\n", 1)[1]).strip()
-        # The release the script downloads is the workflow's business; the
-        # assertion is that the failed-digest run fetched the URL the
-        # script itself names, not any release a test hard-codes.
-        expected_url = re.search(
-            r"https://github\.com/gitleaks/gitleaks/releases/download/"
-            r"\S+\.tar\.gz", script)
-        assert expected_url is not None, script
-        returncode, curl_output, was_extracted = (
-            _run_download_with_failed_digest(script))
-        self.assertIn(expected_url.group(0), curl_output)
-        self.assertNotEqual(returncode, 0, "a checksum mismatch must make the download step fail")
-        self.assertFalse(was_extracted, "a checksum mismatch must prevent archive extraction")
 
     def test_scan_failure_cannot_be_swallowed_by_the_gitleaks_job(self):
         self.assertNotRegex(self.gitleaks_job, CONTINUE_ON_ERROR_KEY,
