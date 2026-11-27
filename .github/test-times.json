@@ -202,7 +202,8 @@
         0.01
       ],
       "tests/test_audit_shards.py": [
-        0.4
+        0.4,
+        1.59
       ],
       "tests/test_baseline.py": [
         0.28
@@ -215,7 +216,8 @@
       ],
       "tests/test_ci_workflows.py": [
         2.65,
-        5.3
+        5.3,
+        8.43
       ],
       "tests/test_commit_scopes.py": [
         12.36,
@@ -347,7 +349,8 @@
       ],
       "tests/test_speed_workflow.py": [
         29.83,
-        51.12
+        51.12,
+        66.66
       ],
       "tests/test_stars.py": [
         0.36
@@ -359,7 +362,8 @@
         0.0
       ],
       "tests/test_timing.py": [
-        0.93
+        0.93,
+        2.63
       ],
       "tests/test_unit_runner.py": [
         0.0
