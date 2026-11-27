@@ -60,11 +60,6 @@
       "tests/test_extra_orgs.py": [
         0.03
       ],
-      "tests/test_gate_base_freshness.py": [
-        38.54,
-        59.16,
-        27.98
-      ],
       "tests/test_gql_retry.py": [
         0.02
       ],
@@ -246,10 +241,6 @@
       "tests/test_extra_orgs.py": [
         0.03
       ],
-      "tests/test_gate_base_freshness.py": [
-        30.83,
-        43.43
-      ],
       "tests/test_gql_retry.py": [
         0.02
       ],
@@ -428,11 +419,6 @@
       "tests/test_extra_orgs.py": [
         0.03
       ],
-      "tests/test_gate_base_freshness.py": [
-        7.56,
-        10.1,
-        5.63
-      ],
       "tests/test_gql_retry.py": [
         0.01
       ],
@@ -604,10 +590,6 @@
       ],
       "tests/test_extra_orgs.py": [
         0.03
-      ],
-      "tests/test_gate_base_freshness.py": [
-        6.0,
-        10.07
       ],
       "tests/test_gql_retry.py": [
         0.01
@@ -783,10 +765,6 @@
       "tests/test_extra_orgs.py": [
         0.11,
         1.33
-      ],
-      "tests/test_gate_base_freshness.py": [
-        125.54,
-        80.46
       ],
       "tests/test_gql_retry.py": [
         0.02
@@ -967,10 +945,6 @@
       ],
       "tests/test_extra_orgs.py": [
         0.1
-      ],
-      "tests/test_gate_base_freshness.py": [
-        120.78,
-        82.67
       ],
       "tests/test_gql_retry.py": [
         0.01

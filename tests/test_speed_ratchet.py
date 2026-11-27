@@ -17,7 +17,7 @@ import yaml
 
 from scripts.bench.bench_platform import REQUIRES_POSIX_SHELL
 from scripts.ci.speed_workflow_steps import StepRunner
-from tests.test_gate_base_freshness import _config
+from tests.test_commit_scopes import _config
 from tests.test_speed_workflow import CarrierFixture
 from tests import _ghw_temp
 

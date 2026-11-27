@@ -1,9 +1,8 @@
 """The commit-scope gate: scripts/ci/commit_scopes.py.
 
-Fixtures are real git repositories with a local bare origin, as in
-test_gate_base_freshness.py: the outgoing-range comparison runs
-against a filesystem remote, never the network, and never against this
-repository or any of its worktrees.
+Fixtures are real git repositories with a local bare origin: the
+outgoing-range comparison runs against a filesystem remote, never the
+network, and never against this repository or any of its worktrees.
 """
 import contextlib
 import importlib.util
@@ -16,10 +15,38 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.test_gate_base_freshness import _git, _config, _commit
 from tests import _ghw_temp
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _git(root, *arguments):
+    done = subprocess.run(
+        ['git', '-C', str(root), *arguments], check=True,
+        capture_output=True, text=True)
+    return done.stdout
+
+
+def _config(repo):
+    # Identity by per-repo config, never by flags or environment: this
+    # repository's discipline forbids -c user.name/-c user.email and
+    # GIT_AUTHOR_*/GIT_COMMITTER_* on its own commits, and the fixtures
+    # keep the same shape.
+    _git(repo, 'config', 'user.name', 'fixture')
+    _git(repo, 'config', 'user.email', 'fixture@example.com')
+    _git(repo, 'config', 'commit.gpgsign', 'false')
+    # Reap automatic maintenance before TemporaryDirectory removes the repo.
+    _git(repo, 'config', 'gc.autoDetach', 'false')
+    _git(repo, 'config', 'maintenance.autoDetach', 'false')
+
+
+def _commit(repo, subject, files):
+    for relative, text in files.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8', newline='\n')
+    _git(repo, 'add', '--', *files)
+    _git(repo, 'commit', '-m', subject)
 
 
 def _load():

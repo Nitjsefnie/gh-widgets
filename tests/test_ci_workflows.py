@@ -568,8 +568,8 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
             self.assertNotIn('if', step)
             self.assertNotIn('continue-on-error', step)
         self.assertEqual(steps[1]['shell'], 'bash')
-        self.assertEqual(shlex.split(steps[2]['run']),
-                         ['python3', 'scripts/ci/gate_base_freshness.py'])
+        self.assertEqual((steps[2].get('run'), steps[2]['uses'].split('@')[0]),
+                         (None, 'Nitjsefnie-Actions/pr-gate/freshness'))
         self.assertEqual(shlex.split(steps[3]['run']),
                          ['python3', 'scripts/ci/commit_scopes.py'])
 

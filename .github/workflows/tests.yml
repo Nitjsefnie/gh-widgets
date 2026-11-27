@@ -1330,7 +1330,7 @@ jobs:
       - name: Require this head to carry main's gate-defining commits
         # Freshness first: work judged against a base main has already moved
         # on from is work whose verdict does not carry.
-        run: python3 scripts/ci/gate_base_freshness.py
+        uses: Nitjsefnie-Actions/pr-gate/freshness@eb4991d7f92be7d2e55bb8b47aaaa24f09e98ca2 # v3.3.0
 
       - name: Refuse a commit whose scope names a workflow outside the ci type
         # CONTRIBUTING.md allows workflow-name or file-stem scopes only with
