@@ -174,7 +174,8 @@ The other workflow files in `.github/workflows/` are:
 
 - `release.yml` — waits for gates, then tags and publishes releases.
 - `secrets.yml` — checks whether the tree or full Git history carries a
-  credential using digest-pinned Gitleaks 8.30.1 with `--redact`. Its daily cron
+  credential with `Nitjsefnie-Actions/secret-scan`, which runs gitleaks 8.30.1
+  with no file exempt by its path alone. Its daily cron
   catches commits no workflow saw, and the aggregate check waits for its
   `gitleaks` job on the head SHA.
 - `size-baseline.yml` — gates per-file line counts against committed records;
