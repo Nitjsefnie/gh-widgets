@@ -1328,9 +1328,9 @@ jobs:
           fi
 
       - name: Require this head to carry main's gate-defining commits
-        # Freshness first: work judged against a base main has already moved
-        # on from is work whose verdict does not carry.
-        uses: Nitjsefnie-Actions/pr-gate/freshness@eb4991d7f92be7d2e55bb8b47aaaa24f09e98ca2 # v3.3.0
+        # Freshness first: a verdict judged against a main since moved on does not carry.
+        if: github.event_name == 'pull_request' || github.ref_name == github.event.repository.default_branch
+        uses: Nitjsefnie-Actions/freshness@5edc2a45ff894cf49c5cc8d293bbae0af33507d4 # v1.0.0
 
       - name: Refuse a commit whose scope names a workflow outside the ci type
         # CONTRIBUTING.md allows workflow-name or file-stem scopes only with

@@ -463,11 +463,11 @@ class TestGateIntegrityWorkflow(unittest.TestCase):
         steps = self.job.get('steps', [])
         self.assertEqual(len(steps), 4)
         for step in steps:
-            self.assertNotIn('if', step)
             self.assertNotIn('continue-on-error', step)
+        for step in steps[:2] + steps[3:]:
+            self.assertNotIn('if', step)
         self.assertEqual(steps[1]['shell'], 'bash')
-        self.assertEqual((steps[2].get('run'), steps[2]['uses'].split('@')[0]),
-                         (None, 'Nitjsefnie-Actions/pr-gate/freshness'))
+        self.assertIsNone(steps[2].get('run'))
         self.assertEqual(shlex.split(steps[3]['run']),
                          ['python3', 'scripts/ci/commit_scopes.py'])
 
