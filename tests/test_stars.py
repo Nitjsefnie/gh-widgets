@@ -37,7 +37,7 @@ def page(dates, total=2, more=False, cursor=None, private=False):
 
 
 class Acquisition(unittest.TestCase):
-    def test_pages_all_dates_in_order_and_keeps_a_larger_count(self):
+    def test_pages_all_dates_in_order(self):
         with mock.patch.object(stars, 'gql', side_effect=[
                 page(DATES[:1], 3, True, 'next'), page(DATES[1:], 3)]) as gql:
             history = stars.fetch_stars('secret', 'owner/repo')
@@ -82,7 +82,7 @@ class Acquisition(unittest.TestCase):
         self.assertEqual(history['total'], 40005)
         self.assertEqual(gql.call_count, 400)
 
-    def test_overlong_and_malformed_results_fail(self):
+    def test_incomplete_and_malformed_results_fail(self):
         for response in (page(['nonsense'], total=1),
                          page(['2026-09-04'], total=1),
                          page(DATES, total=1)):
