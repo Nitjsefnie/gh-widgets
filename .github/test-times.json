@@ -35,7 +35,8 @@
       ],
       "tests/test_commit_scopes.py": [
         13.14,
-        19.34
+        19.34,
+        7.66
       ],
       "tests/test_common.py": [
         0.38
@@ -68,7 +69,8 @@
       ],
       "tests/test_impact.py": [
         3.2,
-        4.64
+        4.64,
+        2.09
       ],
       "tests/test_impact_bots.py": [
         0.05
@@ -81,7 +83,8 @@
         6.43
       ],
       "tests/test_impact_loc_coverage.py": [
-        10.07
+        10.07,
+        7.48
       ],
       "tests/test_impact_quoted_paths.py": [
         0.0
@@ -118,7 +121,8 @@
       ],
       "tests/test_ratchet_push_delivery.py": [
         14.89,
-        26.35
+        26.35,
+        9.27
       ],
       "tests/test_ratchet_staging.py": [
         1.68,
@@ -464,7 +468,8 @@
         0.47
       ],
       "tests/test_population_digest.py": [
-        1.81
+        1.81,
+        2.94
       ],
       "tests/test_ratchet_concurrency.py": [
         0.03
@@ -777,7 +782,8 @@
       "tests/test_impact_loc.py": [
         9.38,
         11.85,
-        6.96
+        6.96,
+        14.83
       ],
       "tests/test_impact_loc_coverage.py": [
         12.38,
@@ -839,7 +845,8 @@
         0.3
       ],
       "tests/test_resync_memory.py": [
-        1.08
+        1.08,
+        5.1
       ],
       "tests/test_secrecy_check.py": [
         0.02
@@ -988,7 +995,8 @@
       ],
       "tests/test_popularity.py": [
         5.68,
-        3.89
+        3.89,
+        7.73
       ],
       "tests/test_population_digest.py": [
         4.0,
