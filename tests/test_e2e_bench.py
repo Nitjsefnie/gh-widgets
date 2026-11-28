@@ -198,6 +198,11 @@ class TestPayloadDispatcher(unittest.TestCase):
         self.assertIn("name", user)
         self.assertIn("pageInfo", user["organizations"])
 
+    def test_dispatches_the_starred_query_as_one_empty_page(self):
+        query = "query { user { starredRepositories(first: 100) { nodes { nameWithOwner } } } }"
+        self.assertEqual(self.graphql(query)["data"]["user"]["starredRepositories"],
+                         {"pageInfo": {"hasNextPage": False}, "nodes": []})
+
     def test_dispatches_both_profile_org_pages(self):
         # A fixture that only ever answers hasNextPage: false cannot tell a
         # renderer that walks the connection from one that stops at page one.
