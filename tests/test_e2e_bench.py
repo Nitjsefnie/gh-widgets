@@ -81,10 +81,8 @@ class TestFixtureSetup(unittest.TestCase):
             heads_second = fixture_setup.build(second)
 
             self.assertEqual(heads_first, heads_second)
-            self.assertEqual(file_bytes(first, "payloads"),
-                             file_bytes(second, "payloads"))
-            self.assertEqual(file_bytes(first, "caches"),
-                             file_bytes(second, "caches"))
+            self.assertEqual(file_bytes(first, "payloads"), file_bytes(second, "payloads"))
+            self.assertEqual(file_bytes(first, "caches"), file_bytes(second, "caches"))
 
     def test_seeded_ourloc_count_differs_from_live_fixture_count(self):
         with _ghw_temp.tempdir(prefix="ghw-bench-stale-count-") as td:
@@ -101,12 +99,10 @@ class TestFixtureSetup(unittest.TestCase):
 class TestPayloadDispatcher(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.fixture_root = class_temp_path(
-            cls, "ghw-bench-dispatch-") / "fixture"
+        cls.fixture_root = class_temp_path(cls, "ghw-bench-dispatch-") / "fixture"
         fixture_setup.build(cls.fixture_root)
         cls.payloads = cls.fixture_root / "payloads"
-        cls.shim = load_module("bench_sitecustomize_test",
-                               BENCH_DIR / "sitecustomize.py")
+        cls.shim = load_module("bench_sitecustomize_test", BENCH_DIR / "sitecustomize.py")
 
     def graphql(self, query, variables=None):
         request = urllib.request.Request(
@@ -142,8 +138,7 @@ class TestPayloadDispatcher(unittest.TestCase):
         first_page = self.graphql(query, {"cursor": None})
         connection = first_page["data"]["user"]["pullRequests"]
         self.assertTrue(connection["pageInfo"]["hasNextPage"])
-        second_page = self.graphql(
-            query, {"cursor": connection["pageInfo"]["endCursor"]})
+        second_page = self.graphql(query, {"cursor": connection["pageInfo"]["endCursor"]})
         self.assertFalse(second_page["data"]["user"]["pullRequests"]
                          ["pageInfo"]["hasNextPage"])
 
@@ -152,8 +147,7 @@ class TestPayloadDispatcher(unittest.TestCase):
         first_page = self.graphql(query, {"cursor": None})
         connection = first_page["data"]["user"]["issues"]
         self.assertTrue(connection["pageInfo"]["hasNextPage"])
-        second_page = self.graphql(
-            query, {"cursor": connection["pageInfo"]["endCursor"]})
+        second_page = self.graphql(query, {"cursor": connection["pageInfo"]["endCursor"]})
         self.assertFalse(second_page["data"]["user"]["issues"]
                          ["pageInfo"]["hasNextPage"])
 
