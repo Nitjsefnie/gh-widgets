@@ -441,13 +441,13 @@ class Overlap(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, b'refs', b'')
             return subprocess.CompletedProcess(command, 0, b'Real\x1freal@example.org\0', b'')
 
-        with mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=fetch), \
+        with _ghw_temp.tempdir() as scratch, mock.patch.object(tempfile, 'tempdir', scratch), \
+                mock.patch.object(popularity.urllib.request, 'urlopen', side_effect=fetch), \
                 mock.patch.object(popularity.subprocess, 'run', side_effect=git):
             with self.assertRaisesRegex(RuntimeError, 'Owner/A.*traffic/clones'):
                 popularity.fetch_scores('t')
-        self.assertEqual(len(parents), 1)
-        self.assertTrue(all(not parent.exists() for parent in parents))
-        self.assertEqual(list(Path(tempfile.gettempdir()).glob('ghwidgets-popularity-*')), [])
+            self.assertEqual([parent.parent for parent in parents], [Path(scratch)])
+            self.assertEqual(list(Path(scratch).iterdir()), [])
 
 
 class CardAndCLI(unittest.TestCase):
