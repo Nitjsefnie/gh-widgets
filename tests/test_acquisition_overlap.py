@@ -20,7 +20,7 @@ from tests import _ghw_temp
 def _profile_kind(query):
     if 'contributionCalendar' in query:
         return 'calendar'
-    return 'walk' if 'organizations' in query or 'repositories' in query else 'authored'
+    return 'walk' if any(name in query for name in ('organizations', 'repositories', 'starredRepositories')) else 'authored'
 
 
 class DelayedAPI(CountingAPI):
@@ -70,8 +70,8 @@ class AcquisitionOverlap(unittest.TestCase):
                 recorder.report("profile")
         line = next(line for line in text.getvalue().splitlines() if 'graphql /graphql:' in line)
         observed = api.report(line.strip())
-        # 2 profile requests + 12 sequential calendar windows + 2 PR + 2 issue pages.
-        self.assertEqual(sum(api.counts.values()), 18, observed)
+        # 3 profile requests + 12 sequential calendar windows + 2 PR + 2 issue pages.
+        self.assertEqual(sum(api.counts.values()), 19, observed)
         self.assertEqual(len(prs), 4)
         self.assertEqual(len(issues), 2)
         self.assertEqual(user["login"], "me")
@@ -85,7 +85,7 @@ class AcquisitionOverlap(unittest.TestCase):
                        if _profile_kind(query) == 'authored'
                        and any(start < other_end and other_start < end for other_start, other_end in own)]
         self.assertTrue(overlapping, f"no authored request overlapped the profile walks: {observed}")
-        self.assertIn('count=18', line)
+        self.assertIn('count=19', line)
         concurrent = re.search(r'concurrent=([\d.]+)s', line)
         assert concurrent is not None
         self.assertGreater(float(concurrent[1]), 0, observed)
@@ -101,8 +101,8 @@ class AcquisitionOverlap(unittest.TestCase):
         observed = api.report("profile.fetch")
         orgs = [(start, end) for query, start, end in api.spans if query == profile.ORG_QUERY]
         repos = [(start, end) for query, start, end in api.spans if query == profile.REPO_QUERY]
-        # Two walk requests and the one trailing calendar window.
-        self.assertEqual((len(orgs), len(repos), len(api.spans)), (1, 1, 3), observed)
+        # Three walk requests (organizations, repositories, stars) and the one trailing calendar window.
+        self.assertEqual((len(orgs), len(repos), len(api.spans)), (1, 1, 4), observed)
         self.assertTrue(any(start < other_end and other_start < end
                             for start, end in orgs for other_start, other_end in repos),
                         f"the organizations and repositories walks ran one at a time: {observed}")

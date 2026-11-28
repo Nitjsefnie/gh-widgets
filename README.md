@@ -88,7 +88,7 @@ a name.
 
 The two identity overrides are **additive** — neither can remove something
 the API reported. `GH_WIDGETS_GH_EXTRA_ORGS` separately adds public organization repos to
-the stats card.
+the stats card. Its stars received leave out the account's own stars on the repos it counts.
 
 | Variable | Use it for |
 |---|---|

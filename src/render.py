@@ -218,6 +218,7 @@ query($login: String!, $cursor: String) {
       totalCount
       pageInfo { hasNextPage endCursor }
       nodes {
+        nameWithOwner
         stargazerCount
         forkCount
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
@@ -238,7 +239,19 @@ query($login: String!, $cursor: String) {
     repositories(first: 100, after: $cursor, isFork: false, privacy: PUBLIC) {
       totalCount
       pageInfo { hasNextPage endCursor }
-      nodes { stargazerCount forkCount }
+      nodes { nameWithOwner stargazerCount forkCount }
+    }
+  }
+}
+"""
+
+# The account's own stars: one on a repository the stats card counts is not a star received.
+STARRED_QUERY = """
+query($login: String!, $cursor: String) {
+  user(login: $login) {
+    starredRepositories(first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes { nameWithOwner }
     }
   }
 }
@@ -380,25 +393,22 @@ def extra_org_logins():
 
 def fetch_extra_org_stats(token, org_logins,
                           max_pages=PROFILE_MAX_PAGES):
-    """Fetch the public repository count, stars, and forks for each org."""
+    """Fetch the public repository count, stars, forks and names for each org."""
     total_count = 0
-    total_stars = 0
-    total_forks = 0
+    nodes = []
     with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
         walks = [pool.submit(page_organization_repositories, token, login, max_pages)
                  for login in org_logins]
         for walk in walks:
             repositories = walk.result()
             total_count += repositories["totalCount"]
-            total_stars += sum(repo["stargazerCount"]
-                               for repo in repositories["nodes"])
-            total_forks += sum(repo["forkCount"]
-                               for repo in repositories["nodes"])
+            nodes += repositories["nodes"]
     return {
         "orgs": org_logins,
         "totalCount": total_count,
-        "totalStars": total_stars,
-        "totalForks": total_forks,
+        "totalStars": sum(repo["stargazerCount"] for repo in nodes),
+        "totalForks": sum(repo["forkCount"] for repo in nodes),
+        "names": [repo["nameWithOwner"] for repo in nodes],
     }
 
 
@@ -415,22 +425,28 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
     # exact shape the renderers already consume. Returns (user, days); `days`
     # is the merged date -> count map to persist in the cache.
     #
-    # The profile is two paginated connections rather than one query, because
-    # each is walked to its own end, and a combined query would re-send the
-    # whole of one connection on every page of the other. The helper returns
-    # the `user` payload with the connection it walked already merged into it,
-    # so organizations is in place; ORG_QUERY's payload carries no repositories
-    # key at all, which is why the second walk's result is grafted on rather
-    # than merely read.
+    # The profile is three paginated connections (organizations, repositories,
+    # stars) rather than one query, because each is walked to its own end, and
+    # a combined query would re-send the whole of one connection on every page
+    # of another. The helper returns the `user` payload with the connection it
+    # walked already merged into it, so organizations is in place; ORG_QUERY's
+    # payload carries no repositories key at all, which is why the second
+    # walk's result is grafted on rather than merely read.
     with futures.ThreadPoolExecutor(common.share.MAX_IN_FLIGHT) as pool:
         tasks = [pool.submit(page_profile_connection,
                              token, ORG_QUERY, "organizations", login, max_pages),
                  pool.submit(page_profile_connection,
                              token, REPO_QUERY, "repositories", login, max_pages),
-                 pool.submit(fetch_extra_org_stats, token, extra_org_logins(), max_pages)]
+                 pool.submit(fetch_extra_org_stats, token, extra_org_logins(), max_pages),
+                 pool.submit(page_profile_connection,
+                             token, STARRED_QUERY, "starredRepositories", login, max_pages)]
         user = tasks[0].result()[0]
         user["repositories"] = tasks[1].result()[1]
         user["extraOrgStats"] = tasks[2].result()
+        # The names only match stars to counted repositories; the cache keeps the totals.
+        user["selfStars"] = len({repo["nameWithOwner"].casefold() for repo in tasks[3].result()[1]["nodes"]}
+                                & {name.casefold() for name in user["extraOrgStats"].pop("names")
+                                   + [repo["nameWithOwner"] for repo in user["repositories"]["nodes"]]})
     now = datetime.now(timezone.utc)
     q_window = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
@@ -926,7 +942,7 @@ def build_svgs(C, user, prs, issues):
                    + extra_org_stats.get("totalCount", 0))
     total_stars = (sum(r["stargazerCount"]
                        for r in user["repositories"]["nodes"])
-                   + extra_org_stats.get("totalStars", 0))
+                   + extra_org_stats.get("totalStars", 0) - user.get("selfStars", 0))
     total_forks = (sum(r["forkCount"] for r in user["repositories"]["nodes"])
                    + extra_org_stats.get("totalForks", 0))
     cal = user["contributionsCollection"]["contributionCalendar"]
