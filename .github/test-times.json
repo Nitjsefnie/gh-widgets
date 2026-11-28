@@ -30,7 +30,8 @@
       "tests/test_ci_workflows.py": [
         3.61,
         5.23,
-        2.42
+        2.42,
+        6.94
       ],
       "tests/test_commit_scopes.py": [
         13.14,
@@ -45,7 +46,8 @@
       "tests/test_counter.py": [
         3.79,
         5.11,
-        2.56
+        2.56,
+        6.67
       ],
       "tests/test_counter_timeout.py": [
         6.52
@@ -802,7 +804,8 @@
       ],
       "tests/test_popularity.py": [
         5.48,
-        4.09
+        4.09,
+        8.37
       ],
       "tests/test_population_digest.py": [
         3.68,
