@@ -189,7 +189,7 @@ CORE_USER = {
     "followers": {"totalCount": 5},
     "organizations": {"nodes": []},
     "repositories": {"totalCount": 1, "nodes": [{
-        "stargazerCount": 3,
+        "nameWithOwner": "me/core", "stargazerCount": 3,
         "forkCount": 2,
         "languages": {"edges": [
             {"size": 100, "node": {"name": "Python", "color": "#3572A5"}}]},
@@ -215,9 +215,9 @@ def complete_cache():
     }
 
 
-def repo_node(stars=0, forks=0, edges=()):
+def repo_node(stars=0, forks=0, edges=(), name="me/repo"):
     """One repositories-connection node. `edges` is (size, name, color)."""
-    return {"stargazerCount": stars, "forkCount": forks,
+    return {"nameWithOwner": name, "stargazerCount": stars, "forkCount": forks,
             "languages": {"edges": [
                 {"size": size, "node": {"name": name, "color": color}}
                 for size, name, color in edges]}}
@@ -241,6 +241,7 @@ class FakeAPI:
         self.fail = False
         self.org_pages = []       # one nodes list per organizations call
         self.repo_pages = []      # one nodes list per repositories call
+        self.starred = []         # starredRepositories nodes
         self.extra_org_pages = {}  # org login -> repository pages
         self.extra_org_totals = {}  # org login -> repositories.totalCount
         self.extra_org_errors = set()
@@ -309,6 +310,9 @@ class FakeAPI:
             }
         return {"organization": {"repositories": connection}}
 
+    def _starred(self, _variables):
+        return {"user": {"starredRepositories": {"pageInfo": self.page_info(0), "nodes": self.starred}}}
+
     def _user_repositories(self, _variables):
         if self.repo_pages:
             nodes = self.repo_pages.pop(0)
@@ -328,6 +332,7 @@ class FakeAPI:
         variables = variables or {}
         self.calls.append((query, variables))
         routes = (
+            ("starredRepositories", self._starred),
             ("pullRequests", self._pull_requests),
             ("issues", self._issues),
             ("contributionCalendar", self._calendar),
@@ -761,7 +766,7 @@ class ProfilePagination(unittest.TestCase):
 
     def stalling_gql(self, repos_pages, limit=10):
         """A gql that serves `repos_pages` — one repositories connection per
-        entry, the last one repeated forever — and answers organizations and
+        entry, the last one repeated forever — and answers organizations, stars and
         the calendar from their first page.
 
         The call limit is not decoration: with a stall guard deleted the walk
@@ -783,6 +788,8 @@ class ProfilePagination(unittest.TestCase):
                                      "pageInfo": {"hasNextPage": False,
                                                   "endCursor": None},
                                      "nodes": []}}}
+            if "starredRepositories" in query:
+                return {"user": {"starredRepositories": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}
             cursors.append((variables or {}).get("cursor"))
             if len(cursors) > limit:
                 raise AssertionError(

@@ -87,7 +87,7 @@ class CountingAPI(test_render.FakeAPI):
                             "pullRequests": {"totalCount": 10}}
                     for alias in re.findall(r"(a\d+): repository", query)}
         else:
-            kinds = ("organizations", "repositories", "contributionCalendar")
+            kinds = ("starredRepositories", "organizations", "repositories", "contributionCalendar")
             kind = next((name for name in kinds if name in query), None)
             if kind is None:
                 raise AssertionError(f"unmodelled query: {query}")

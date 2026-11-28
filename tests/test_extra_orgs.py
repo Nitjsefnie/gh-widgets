@@ -44,6 +44,18 @@ class ExtraOrganizationStats(unittest.TestCase):
                 rows[y] = text.text or ""
         return rows["115"], rows["138"], rows["161"]
 
+    def test_stars_received_leave_out_the_accounts_own_stars(self):
+        api = FakeAPI()
+        api.repo_pages = [[repo_node(3, name="me/a"), repo_node(2, name="me/b")]]
+        api.extra_org_pages["Example"] = [[repo_node(4, name="Example/c")]]
+        # Matched case-blind; a star on a repository the card does not count stays out.
+        api.starred = [{"nameWithOwner": "ME/A"}, {"nameWithOwner": "example/c"}, {"nameWithOwner": "other/x"}]
+        user = self.fetched_user(api, "Example")
+        _svgs, (total_stars, *_rest) = render.build_svgs(self.C, user, [], [])
+        self.assertEqual((user["selfStars"], total_stars), (2, 3 + 2 + 4 - 2))
+        # The repository, organization and starred walks each ask GitHub for the names matched.
+        self.assertEqual(sum("nameWithOwner" in query for query, _variables in api.calls), 3)
+
     def test_empty_default_preserves_stats_svg_bytes_and_skips_org_queries(self):
         with _ghw_temp.tempdir() as td:
             api = FakeAPI()

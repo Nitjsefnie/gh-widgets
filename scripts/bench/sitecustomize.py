@@ -148,8 +148,11 @@ def _graphql_dispatch(request, parsed_url, payload_dir):
         return (_repository_pr_authors(variables, payload_dir)
                 if "author { __typename }" in compact else
                 _dispatch_totals(compact, payload_dir))
-    if "repositories(" in compact:
-        profile = _read_json(payload_dir, "profile-core.json")
+    if "repositories(" in compact or "starredRepositories(" in compact:
+        profile = (_read_json(payload_dir, "profile-core.json")
+                   if "repositories(" in compact else
+                   {"user": {"starredRepositories": {
+                       "pageInfo": {"hasNextPage": False}, "nodes": []}}})
         return _json_bytes({"data": profile})
     if "followers" in compact and "repositories" not in compact:
         # ORG_QUERY: the profile's own fields and the org connection, with no
