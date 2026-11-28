@@ -61,14 +61,12 @@ class ExtraOrganizationStats(unittest.TestCase):
             api = FakeAPI()
             api.full_calendar = recent_days(3)
             out = Path(td) / "out"
-            stdout, stderr = run_main_capturing_output(
-                api, out, Path(td) / "cache.json")
+            stdout, stderr = run_main_capturing_output(api, out, Path(td) / "cache.json")
             svg = (out / "stats.svg").read_text(encoding="utf-8")
 
         self.assertIn("wrote ", stdout)
         self.assertEqual(stderr, "")
-        self.assertFalse(any("organization(login:" in query
-                             for query, _variables in api.calls))
+        self.assertFalse(any("organization(login:" in query for query, _variables in api.calls))
         self.assertEqual(self.visible_stat_values(svg), ("1", "3", "2"))
         self.assertEqual(
             hashlib.sha256(svg.encode("utf-8")).hexdigest(),
@@ -78,16 +76,14 @@ class ExtraOrganizationStats(unittest.TestCase):
     def test_org_totals_add_to_stats_without_changing_languages(self):
         api = FakeAPI()
         api.full_calendar = recent_days(3)
-        api.extra_org_pages["Example"] = [
-            [repo_node(7, 3), repo_node(2, 1)], [repo_node(4, 2)]]
+        api.extra_org_pages["Example"] = [[repo_node(7, 3), repo_node(2, 1)], [repo_node(4, 2)]]
         api.extra_org_totals["Example"] = 3
 
         user = self.fetched_user(api, " Example ")
         svgs, summary = render.build_svgs(self.C, user, [], [])
         desc = self.stats_desc(svgs["stats.svg"])
 
-        self.assertEqual(self.visible_stat_values(svgs["stats.svg"]),
-                         ("4", "16", "8"))
+        self.assertEqual(self.visible_stat_values(svgs["stats.svg"]), ("4", "16", "8"))
         self.assertIn("public repositories: 4", desc)
         self.assertIn("stars received: 16", desc)
         self.assertIn("forks received: 8", desc)
@@ -96,9 +92,7 @@ class ExtraOrganizationStats(unittest.TestCase):
         self.assertEqual(summary[0:2], (16, 8))
         self.assertEqual(user["repositories"]["totalCount"], 1)
         self.assertEqual(len(user["repositories"]["nodes"]), 1)
-        self.assertEqual(
-            render.aggregate_languages(user["repositories"]["nodes"])[0][0],
-            "Python")
+        self.assertEqual(render.aggregate_languages(user["repositories"]["nodes"])[0][0], "Python")
         org_calls = [(query, variables) for query, variables in api.calls
                      if "organization(login:" in query]
         self.assertEqual([variables["cursor"] for _query, variables in org_calls],
@@ -124,14 +118,12 @@ class ExtraOrganizationStats(unittest.TestCase):
         org_calls = [(query, variables) for query, variables in api.calls
                      if "organization(login:" in query]
 
-        self.assertEqual([variables["login"] for _query, variables in org_calls],
-                         ["Acme", "Beta"])
+        self.assertEqual([variables["login"] for _query, variables in org_calls], ["Acme", "Beta"])
         self.assertEqual(user["extraOrgStats"]["orgs"], ["Acme", "Beta"])
 
     def test_page_limit_is_applied_separately_to_each_org(self):
         api = FakeAPI()
-        api.extra_org_pages = {"First": [[repo_node(1, 1)]],
-                               "Second": [[repo_node(2, 2)]]}
+        api.extra_org_pages = {"First": [[repo_node(1, 1)]], "Second": [[repo_node(2, 2)]]}
 
         user = self.fetched_user(api, "First,Second", max_pages=1)
 
@@ -200,13 +192,10 @@ class ExtraOrganizationStats(unittest.TestCase):
             api = FakeAPI()
             api.fail = True
 
-            stdout, stderr = run_main_capturing_output(
-                api, out, cache_file, extra_orgs="Example")
-            desc = self.stats_desc(
-                (out / "stats.svg").read_text(encoding="utf-8"))
+            stdout, stderr = run_main_capturing_output(api, out, cache_file, extra_orgs="Example")
+            desc = self.stats_desc((out / "stats.svg").read_text(encoding="utf-8"))
 
-            self.assertIn("fetch failed at fetch: simulated fetch failure",
-                          stdout)
+            self.assertIn("fetch failed at fetch: simulated fetch failure", stdout)
             self.assertEqual(stderr, "")
             self.assertIn("public repositories: 3", desc)
             self.assertIn("stars received: 10", desc)

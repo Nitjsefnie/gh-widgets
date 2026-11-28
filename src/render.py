@@ -319,16 +319,13 @@ def page_profile_connection(token, query, field, login, max_pages):
     seen_cursors = {None}
     pages = 0
     while True:
-        _next_pagination_cursor(
-            field, cursor, pages, max_pages, seen_cursors,
-            before_request=True)
+        _next_pagination_cursor(field, cursor, pages, max_pages, seen_cursors, before_request=True)
         user = common.account_query(gql, token, query, {"login": login, "cursor": cursor}, login)["user"]
         pages += 1
         connection = user.get(field) or {}
         if head is None:
             head = user
-            head[field] = {k: v for k, v in connection.items()
-                           if k != "pageInfo"}
+            head[field] = {k: v for k, v in connection.items() if k != "pageInfo"}
         nodes.extend(connection.get("nodes") or [])
         page_info = connection.get("pageInfo")
         next_cursor = _next_pagination_cursor(
@@ -340,8 +337,7 @@ def page_profile_connection(token, query, field, login, max_pages):
     return head, head[field]
 
 
-def page_organization_repositories(
-        token, login, max_pages=PROFILE_MAX_PAGES):
+def page_organization_repositories(token, login, max_pages=PROFILE_MAX_PAGES):
     """Return every public, non-fork repository in one named organization.
 
     The organization connection uses the same pagination safety checks as the
@@ -355,15 +351,11 @@ def page_organization_repositories(
     pages = 0
     field = f"organization {login!r} repositories"
     while True:
-        _next_pagination_cursor(
-            field, cursor, pages, max_pages, seen_cursors,
-            before_request=True)
-        response = gql(token, ORG_REPO_QUERY,
-                       {"login": login, "cursor": cursor})
+        _next_pagination_cursor(field, cursor, pages, max_pages, seen_cursors, before_request=True)
+        response = gql(token, ORG_REPO_QUERY, {"login": login, "cursor": cursor})
         organization = response.get("organization")
         if organization is None:
-            raise RuntimeError(
-                f"organization {login!r} was not returned by GitHub")
+            raise RuntimeError(f"organization {login!r} was not returned by GitHub")
         connection = organization.get("repositories") or {}
         pages += 1
         if head is None:
@@ -391,8 +383,7 @@ def extra_org_logins():
     return logins
 
 
-def fetch_extra_org_stats(token, org_logins,
-                          max_pages=PROFILE_MAX_PAGES):
+def fetch_extra_org_stats(token, org_logins, max_pages=PROFILE_MAX_PAGES):
     """Fetch the public repository count, stars, forks and names for each org."""
     total_count = 0
     nodes = []
@@ -487,8 +478,7 @@ def fetch(token, login, cached_days=None, max_pages=PROFILE_MAX_PAGES):
             for d in w["contributionDays"]:
                 days[d["date"]] = d["contributionCount"]
     days = prune_days(days, now)
-    user["contributionsCollection"] = {
-        "contributionCalendar": calendar_from_days(days)}
+    user["contributionsCollection"] = {"contributionCalendar": calendar_from_days(days)}
     return user, days
 
 
@@ -498,8 +488,7 @@ PR_QUERY = common.PR_QUERY
 def fetch_pull_requests(token, login, cached_prs=None, max_pages=1000):
     """Thin wrapper over the shared implementation, passing THIS module's
     `gql` so the test suite's patch of it still intercepts the calls."""
-    return common.fetch_pull_requests(token, login, cached_prs, max_pages,
-                                      gql_fn=gql)
+    return common.fetch_pull_requests(token, login, cached_prs, max_pages, gql_fn=gql)
 
 
 def fetch_issues(token, login, max_pages=1000):
@@ -621,8 +610,7 @@ def render_stats(C, user, total_repos, total_stars, total_forks,
     if orgs_counted:
         desc += (" Followers count the account only; organization followers "
                  "are not included.")
-    return base_card(C, 420, 203, body, card="stats", title="GitHub stats",
-                     desc=desc)
+    return base_card(C, 420, 203, body, card="stats", title="GitHub stats", desc=desc)
 
 
 def render_streak(C, current, longest, total):
@@ -645,12 +633,10 @@ def render_streak(C, current, longest, total):
   <line x1="{sep_xs[1]}" y1="90" x2="{sep_xs[1]}" y2="135" stroke="{C['border']}"/>"""
     desc = (f"Current streak: {current} days; longest streak: {longest} days; "
             f"total contributions: {total:,}.")
-    return base_card(C, 420, 170, body, card="streak",
-                     title="Contribution streak", desc=desc)
+    return base_card(C, 420, 170, body, card="streak", title="Contribution streak", desc=desc)
 
 
-def render_external(C, pr_opened, pr_merged, pr_repos,
-                    iss_opened, iss_accepted, iss_repos):
+def render_external(C, pr_opened, pr_merged, pr_repos, iss_opened, iss_accepted, iss_repos):
     col_centers = (84, 210, 336)
     sep_xs = (147, 273)
     merge_rate = f"{pr_merged / pr_opened * 100:.0f}% merged" if pr_opened else "no external PRs yet"
@@ -863,8 +849,7 @@ def load_inputs(args, token, cache_file):
         # Both unit caches contribute history before the one warm acquisition.
         prs_by_id = common.load_cache(
             Path(cache_file).with_name("impact-cache.json"), 1).get("prs") or {}
-        prs_by_id = {**prs_by_id,
-                     **(load_cache(cache_file).get("prs") or {})}
+        prs_by_id = {**prs_by_id, **(load_cache(cache_file).get("prs") or {})}
     # `phase` is set to the acquisition about to run, so the except clause
     # knows which one raised without having to infer it after the fact.
     phase = "fetch"
@@ -928,10 +913,8 @@ def external_counts(user, prs, issues):
     issue opened/accepted/repos."""
     orgs = [o["login"] for o in common.admin_orgs(user["organizations"]["nodes"])]
     opened, merged, repos = external_contributions(prs, user["login"], orgs)
-    iss_opened, iss_accepted, iss_repos = external_issues(
-        issues, user["login"], orgs)
-    return ExternalCounts(opened, merged, repos,
-                          iss_opened, iss_accepted, iss_repos)
+    iss_opened, iss_accepted, iss_repos = external_issues(issues, user["login"], orgs)
+    return ExternalCounts(opened, merged, repos, iss_opened, iss_accepted, iss_repos)
 
 
 def build_svgs(C, user, prs, issues):

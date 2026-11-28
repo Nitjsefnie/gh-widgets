@@ -317,10 +317,8 @@ class FakeAPI:
         if self.repo_pages:
             nodes = self.repo_pages.pop(0)
         else:
-            nodes = json.loads(json.dumps(
-                CORE_USER["repositories"]["nodes"]))
-        total = (self.repo_total if self.repo_total is not None
-                 else len(nodes))
+            nodes = json.loads(json.dumps(CORE_USER["repositories"]["nodes"]))
+        total = (self.repo_total if self.repo_total is not None else len(nodes))
         return {"user": {"repositories": {
             "totalCount": total,
             "pageInfo": self.page_info(len(self.repo_pages)),
@@ -745,8 +743,7 @@ class ProfilePagination(unittest.TestCase):
         # replaces.
         def gql_fn(_token, query, variables=None, **_kwargs):
             if "repositories" in query:
-                return {"user": {"repositories": {
-                    "totalCount": 101, "nodes": [repo_node()]}}}
+                return {"user": {"repositories": {"totalCount": 101, "nodes": [repo_node()]}}}
             if "contributionCalendar" in query:
                 return {"user": {"contributionsCollection": {
                     "contributionCalendar": {"totalContributions": 0,
@@ -792,8 +789,7 @@ class ProfilePagination(unittest.TestCase):
                 return {"user": {"starredRepositories": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}
             cursors.append((variables or {}).get("cursor"))
             if len(cursors) > limit:
-                raise AssertionError(
-                    f"the repositories walk did not stop after {limit} pages")
+                raise AssertionError(f"the repositories walk did not stop after {limit} pages")
             return {"user": {"repositories": {
                 "totalCount": 101,
                 **pages[min(len(cursors) - 1, len(pages) - 1)]}}}
@@ -835,8 +831,7 @@ class ProfilePagination(unittest.TestCase):
         for connection in ("repositories", "organizations"):
             self.assertNotIn("pageInfo", user[connection])
         self.assertIn("totalCount", user["repositories"])
-        self.assertEqual(
-            set(user["repositories"]), {"totalCount", "nodes"})
+        self.assertEqual(set(user["repositories"]), {"totalCount", "nodes"})
 
 
 class PullRequestCache(unittest.TestCase):
@@ -938,8 +933,7 @@ class ForksReceived(unittest.TestCase):
             self.assertIn("(stars=8 forks=5", stdout)
             self.assertEqual(stderr, "")
 
-            calendar_vars = [v for q, v in api.calls
-                             if "contributionCalendar" in q]
+            calendar_vars = [v for q, v in api.calls if "contributionCalendar" in q]
             self.assertEqual(len(calendar_vars), 12)  # cold backfill, not warm
             svg = (out / "stats.svg").read_text()
             self.assertIn("forks received", svg)
@@ -947,8 +941,7 @@ class ForksReceived(unittest.TestCase):
             self.assertIn("stars received: 8", svg)
             self.assertIn("forks received: 5", svg)
             self.assertIn("organization followers are not included", svg)
-            self.assertEqual(render.load_cache(cache_file)["version"],
-                             render.CACHE_VERSION)
+            self.assertEqual(render.load_cache(cache_file)["version"], render.CACHE_VERSION)
             self.assertEqual(
                 render.load_cache(cache_file)["user"]["extraOrgStats"],
                 {"orgs": ["Example"], "totalCount": 1,
@@ -967,8 +960,7 @@ class CorruptCache(unittest.TestCase):
                               "repository": EXTERNAL_REPO}]]
             run_main(api, out, cache_file)
 
-            calendar_vars = [v for q, v in api.calls
-                             if "contributionCalendar" in q]
+            calendar_vars = [v for q, v in api.calls if "contributionCalendar" in q]
             # A cold cache backfills the whole year in 12 monthly windows.
             self.assertEqual(len(calendar_vars), 12)
             for v in calendar_vars:
@@ -978,8 +970,7 @@ class CorruptCache(unittest.TestCase):
             for name in ("stats.svg", "streak.svg", "languages.svg", "external.svg"):
                 self.assertTrue((out / name).exists())
             # The successful run rewrites a clean, current-version cache.
-            self.assertEqual(render.load_cache(cache_file)["version"],
-                             render.CACHE_VERSION)
+            self.assertEqual(render.load_cache(cache_file)["version"], render.CACHE_VERSION)
 
 
 class LanguageColors(unittest.TestCase):
