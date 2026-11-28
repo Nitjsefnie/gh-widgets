@@ -77,7 +77,8 @@
         0.03
       ],
       "tests/test_impact_loc.py": [
-        5.08
+        5.08,
+        6.43
       ],
       "tests/test_impact_loc_coverage.py": [
         10.07
@@ -473,7 +474,8 @@
         16.69
       ],
       "tests/test_ratchet_staging.py": [
-        1.41
+        1.41,
+        2.51
       ],
       "tests/test_release_workflow.py": [
         61.68
