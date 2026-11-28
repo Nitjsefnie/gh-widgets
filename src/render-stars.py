@@ -145,9 +145,10 @@ def render_stars(C, repo, history, now=None):
             f'<text x="44" y="{y + 4:.2f}" text-anchor="end" fill="{C["dim"]}" font-size="10">{common.fmt_short(count)}</text>')
     parts.append(f'<path d="{" ".join(path)}" fill="none" stroke="{C["green"]}" stroke-width="2"/>')
     if not dates:
-        parts.append(f'<text x="276" y="150" text-anchor="middle" fill="{C["dim"]}" font-size="11">no stars yet</text>')
+        empty = 'GitHub lists none of these stargazers' if total else 'no stars yet'
+        parts.append(f'<text x="276" y="150" text-anchor="middle" fill="{C["dim"]}" font-size="11">{empty}</text>')
     note = 'current stargazers only'
-    if total > MAX_STARS:
+    if len(dates) == MAX_STARS < total:
         note += '; first 40,000 shown (GitHub cap)'
     parts.extend([
         f'<text x="{left}" y="244" fill="{C["dim"]}" font-size="10">{start:%Y-%m-%d}</text>',
