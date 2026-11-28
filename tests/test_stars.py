@@ -37,12 +37,12 @@ def page(dates, total=2, more=False, cursor=None, private=False):
 
 
 class Acquisition(unittest.TestCase):
-    def test_pages_all_dates_in_order(self):
+    def test_pages_all_dates_in_order_and_keeps_a_larger_count(self):
         with mock.patch.object(stars, 'gql', side_effect=[
-                page(DATES[:1], more=True, cursor='next'), page(DATES[1:])]) as gql:
+                page(DATES[:1], 3, True, 'next'), page(DATES[1:], 3)]) as gql:
             history = stars.fetch_stars('secret', 'owner/repo')
         self.assertEqual(history['starred_at'], DATES)
-        self.assertEqual(history['total'], 2)
+        self.assertEqual(history['total'], 3)
         self.assertEqual(gql.call_args_list[1].args[2]['cursor'], 'next')
         self.assertIn('STARRED_AT', gql.call_args.args[1])
         self.assertNotIn('secret', json.dumps(history))
@@ -82,15 +82,7 @@ class Acquisition(unittest.TestCase):
         self.assertEqual(history['total'], 40005)
         self.assertEqual(gql.call_count, 400)
 
-    def test_listing_short_of_count_is_published_with_current_total(self):
-        with mock.patch.object(stars, 'gql', side_effect=[
-                page(DATES[:1], total=3, more=True, cursor='next'),
-                page(DATES[1:], total=3)]):
-            history = stars.fetch_stars('t', 'o/r')
-        self.assertEqual((history['total'], history['starred_at']), (3, DATES))
-        stars.validate_history(history)
-
-    def test_incomplete_and_malformed_results_fail(self):
+    def test_overlong_and_malformed_results_fail(self):
         for response in (page(['nonsense'], total=1),
                          page(['2026-09-04'], total=1),
                          page(DATES, total=1)):
@@ -358,9 +350,9 @@ class InputsAndCLI(unittest.TestCase):
         self.assertEqual(output.read_text(encoding='utf-8'), 'previous SVG')
 
     def test_bad_cache_dates_and_counts_cannot_stand_in(self):
-        for total, dates, stamp in ((True, DATES, DATES[0]),
-                                    (-1, [], DATES[0]),
+        for total, dates, stamp in ((True, DATES, DATES[0]), (-1, [], DATES[0]),
                                     (1, ['invalid'], DATES[0]),
+                                    (40005, [DATES[0]] * 40001, DATES[0]),
                                     (2, DATES, 'invalid')):
             self.cache.write_text(json.dumps({'version': 1, 'o/r': {
                 'total': total, 'starred_at': dates, 'fetched_at': stamp}}), encoding='utf-8')
