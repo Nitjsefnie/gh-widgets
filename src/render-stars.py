@@ -74,11 +74,15 @@ def parse_ts(value):
 
 
 def validate_history(history):
-    """Reject incomplete/corrupt data before rendering or caching it."""
+    """Reject corrupt data before rendering or caching it.
+
+    GitHub can list fewer stargazers than it counts, so a listing followed to
+    its last page may fall short of the total; more than the total is corrupt.
+    """
     total = history['total']
     dates = history['starred_at']
     if (isinstance(total, bool) or not isinstance(total, int) or total < 0
-            or not isinstance(dates, list) or len(dates) != min(total, MAX_STARS)):
+            or not isinstance(dates, list) or len(dates) > min(total, MAX_STARS)):
         raise ValueError('incomplete star history')
     for date in dates:
         parse_ts(date)

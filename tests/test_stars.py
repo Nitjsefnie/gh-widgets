@@ -82,8 +82,16 @@ class Acquisition(unittest.TestCase):
         self.assertEqual(history['total'], 40005)
         self.assertEqual(gql.call_count, 400)
 
+    def test_listing_short_of_count_is_published_with_current_total(self):
+        with mock.patch.object(stars, 'gql', side_effect=[
+                page(DATES[:1], total=3, more=True, cursor='next'),
+                page(DATES[1:], total=3)]):
+            history = stars.fetch_stars('t', 'o/r')
+        self.assertEqual((history['total'], history['starred_at']), (3, DATES))
+        stars.validate_history(history)
+
     def test_incomplete_and_malformed_results_fail(self):
-        for response in (page(DATES[:1]), page(['nonsense'], total=1),
+        for response in (page(['nonsense'], total=1),
                          page(['2026-09-04'], total=1),
                          page(DATES, total=1)):
             with self.subTest(response=response), mock.patch.object(
