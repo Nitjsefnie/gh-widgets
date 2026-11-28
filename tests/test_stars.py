@@ -60,10 +60,10 @@ class Acquisition(unittest.TestCase):
 
     def test_cursor_failures_do_not_publish_partial_history(self):
         for cursor in (None, '', 'same'):
-            with mock.patch.object(stars, 'gql', return_value=page(
-                    DATES[:1], more=True, cursor=cursor)):
+            with mock.patch.object(stars, 'gql', return_value=page(DATES[:1], more=True, cursor=cursor)) as gql:
                 with self.assertRaisesRegex(common_pagination_error(), 'did not advance'):
                     stars.fetch_stars('t', 'o/r')
+            self.assertEqual(gql.call_count, 2 if cursor == 'same' else 1)
 
     def test_cap_stops_at_40000_and_retains_current_total(self):
         response = page([DATES[0]] * 100, total=40005, more=True)
