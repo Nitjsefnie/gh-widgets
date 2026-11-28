@@ -123,11 +123,11 @@ class ExtraOrganizationStats(unittest.TestCase):
 
     def test_page_limit_is_applied_separately_to_each_org(self):
         api = FakeAPI()
-        api.extra_org_pages = {"First": [[repo_node(1, 1)]], "Second": [[repo_node(2, 2)]]}
+        api.extra_org_pages = {"First": [[repo_node(1, 4)]], "Second": [[repo_node(2, 8)]]}
 
         user = self.fetched_user(api, "First,Second", max_pages=1)
 
-        self.assertEqual(user["extraOrgStats"]["totalCount"], 2)
+        self.assertEqual(user["extraOrgStats"], {"orgs": ["First", "Second"], "totalCount": 2, "totalStars": 3, "totalForks": 12})
 
     def test_org_page_limit_raises_instead_of_truncating(self):
         api = FakeAPI()
