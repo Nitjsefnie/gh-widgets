@@ -498,6 +498,6 @@ everything, so it takes far longer than an incremental run.
 
 > The token file holds the **`gh` CLI's own OAuth token** (`gh auth token`,
 > scopes incl. `repo`), not a narrow PAT. Safe only because the renderer filters
-> at the query (`privacy: PUBLIC`, `src/render.py:227`) and skips `isPrivate` PRs —
+> at the query (`privacy: PUBLIC` in `src/render.py`'s `REPO_QUERY` and `ORG_REPO_QUERY`) and skips `isPrivate` PRs —
 > keep that filter, or private repos leak into public SVGs. Swap in a
 > `read:user`+`public_repo` PAT if you want least privilege.
