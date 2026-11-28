@@ -59,15 +59,11 @@ class Acquisition(unittest.TestCase):
                     stars.fetch_stars('t', 'o/r')
 
     def test_cursor_failures_do_not_publish_partial_history(self):
-        for cursor in (None, ''):
+        for cursor in (None, '', 'same'):
             with mock.patch.object(stars, 'gql', return_value=page(
                     DATES[:1], more=True, cursor=cursor)):
-                with self.assertRaises(common_pagination_error()):
+                with self.assertRaisesRegex(common_pagination_error(), 'did not advance'):
                     stars.fetch_stars('t', 'o/r')
-        with mock.patch.object(stars, 'gql', return_value=page(
-                DATES[:1], more=True, cursor='same')):
-            with self.assertRaises(common_pagination_error()):
-                stars.fetch_stars('t', 'o/r')
 
     def test_cap_stops_at_40000_and_retains_current_total(self):
         response = page([DATES[0]] * 100, total=40005, more=True)
@@ -137,12 +133,16 @@ class Graph(unittest.TestCase):
                 self.assertNotIn('nan', svg)
                 self.assertNotIn('inf', svg)
         self.assertIn('no stars yet', self.render([], 0))
+        self.assertIn('GitHub lists none of these', self.render([], 5))
 
     def test_cap_is_disclosed_and_total_is_separate_from_sample(self):
         svg = self.render([DATES[0]] * 40000, 50000)
         self.assertIn('50,000 stars', svg)
         self.assertIn('first 40,000', svg)
         self.assertIn('current stargazers only', svg)
+        self.assertIn('V 110.40 H 500.00', svg)
+        with mock.patch.object(stars, 'MAX_STARS', 2):
+            self.assertEqual(['GitHub cap' in self.render(*case) for case in ((DATES, 2), (DATES[:1], 3), (DATES, 3))], [False, False, True])
 
     def test_all_themes_and_escaped_long_repo_names(self):
         for colors in stars.THEMES.values():
